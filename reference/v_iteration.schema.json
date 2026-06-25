@@ -1,0 +1,70 @@
+{
+  "version": "v<N>",
+  "masked": false,
+  "timestamp": "<ISO 8601>",
+  "performance": {
+    "latency_us": null,
+    "tflops": null,
+    "bandwidth_gbps": null,
+    "tflops_peak_utilization_pct": null,
+    "bandwidth_peak_utilization_pct": null,
+    "comparison_with_previous": {
+      "latency_delta": null,
+      "tflops_delta": null,
+      "bandwidth_delta": null
+    }
+  },
+  "optimization": {
+    "action_category": "<e.g. vectorized_load / swizzle / double_buffering / baseline>",
+    "action_description": "<what changed in this iteration>",
+    "expected_impact": "<how the action improves the bottleneck>",
+    "risks_and_rollback": "<why it might fail and rollback plan>"
+  },
+  "profile_evidence": {
+    "tool_used": "<ncu / profile_kernel.sh>",
+    "evidence_summary": "<key profile metrics>",
+    "bottleneck_type": "<compute_bound / memory_bound>",
+    "evidence_chain": "<evidence -> inference -> action>"
+  },
+  "correctness": {
+    "rel_err": null,
+    "status": "<PASS / FAIL / TIMEOUT_FAIL>"
+  },
+  "isa_metric_progress": [
+    {
+      "metric": "<metric name>",
+      "target": "<target value>",
+      "current": "<current value>",
+      "met": false
+    }
+  ],
+  "search_log": [
+    {
+      "source": "<gpu-wiki / ref-project / public-web>",
+      "query": "<search query>",
+      "finding": "<what was found>",
+      "actionability": "<how it applies>"
+    }
+  ],
+  "pitfalls_and_fixes": [
+    {
+      "error_type": "<compilation / runtime / accuracy / performance / timeout>",
+      "error_message": "<error details>",
+      "root_cause": "<diagnosed cause>",
+      "fix_applied": "<how it was fixed>",
+      "lesson": "<takeaway for future iterations>"
+    }
+  ],
+  "references": [
+    {
+      "source_type": "<gpu-wiki / ref-project / public-web / user-input>",
+      "path_or_url": "<file path or URL>",
+      "description": "<what was referenced and why>"
+    }
+  ],
+  "quality_gate": {
+    "result": "<PASS / FAIL / TIMEOUT_FAIL>",
+    "failure_reason": null
+  },
+  "git_commit_hash": null
+}

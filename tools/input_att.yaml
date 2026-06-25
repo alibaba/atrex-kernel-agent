@@ -1,0 +1,28 @@
+# Thread Trace (ATT) configuration — for CLI instruction-level analysis
+#
+# ⚠️ Pitfall notes:
+#   1. Do not add multiple jobs — each job runs the Python script end-to-end and doubles runtime
+#      collect PMC counters separately with rocprofv3 --pmc; do not mix them into the ATT YAML
+#   2. output_format must not include otf2/pftrace — they generate ~340MB large files that CLI analysis does not need
+#      json + csv is enough for CLI analysis (stats_*.csv + ui_output_*/code.json + se*.json)
+#   3. sys_trace keep disabled — it also collects HIP/HSA API traces and increases finalization time
+#   4. output_directory is relative to CWD — rocprofv3 must be run from the tools/ directory
+#
+# Before optimization: kernel runtime ~3s + finalization ~16s + Output ~470MB
+# After optimization: kernel runtime ~3s + finalization ~5s  + Output ~30MB
+#
+jobs:
+    -
+        kernel_iteration_range: "[1]"        # trace only the second dispatch (skip compilation-time dispatches)
+        output_file: out
+        output_directory: tt_test            # ⚠️ relative path,  tools/ runtime
+        output_format: [json, csv]           # CLI analysis only needs json + csv
+        truncate_kernels: true
+        sys_trace: false                     # disable system-level tracing (saves ~340MB + ~10s)
+        advanced_thread_trace: true
+        att_target_cu: 1
+        att_shader_engine_mask: "0xf"        # collect one CU on each of the four SEs
+        att_simd_select: "0xf"               # collect four SIMDs on one CU
+        att_buffer_size: "0x6000000"         # 96MB trace buffer
+    # ⚠️ Do not add a second PMC job here; it will run Python twice
+    # Collect PMC counters separately: rocprofv3 --pmc SQ_WAVES,FETCH_SIZE -d ./pmc_output -- python <kernel.py>

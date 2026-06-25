@@ -1,0 +1,152 @@
+Atrex Kernel Agent
+Copyright 2026 Alibaba Group
+
+This product includes software developed by third parties.
+
+================================================================================
+Third-Party Code in gpu-wiki/reference-kernels/
+================================================================================
+
+The gpu-wiki/reference-kernels/ directory contains reference kernel
+implementations from various open-source projects. These files retain their
+original copyright headers and license terms as listed below.
+
+--------------------------------------------------------------------------------
+NVIDIA CUTLASS / CuTe DSL
+--------------------------------------------------------------------------------
+Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause
+
+Source: https://github.com/NVIDIA/cutlass
+Files: gpu-wiki/reference-kernels/nvidia/*/cutedsl/cutlass/
+
+--------------------------------------------------------------------------------
+Flash Attention (Tri Dao et al.)
+--------------------------------------------------------------------------------
+Copyright (c) 2023-2026, Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar,
+Pradeep Ramani, Tri Dao.
+SPDX-License-Identifier: BSD-3-Clause
+
+Source: https://github.com/Dao-AILab/flash-attention
+Files: gpu-wiki/reference-kernels/*/cutedsl/flash-attention/
+
+--------------------------------------------------------------------------------
+QuACK (Tri Dao et al.)
+--------------------------------------------------------------------------------
+Copyright (c) 2025-2026, Tri Dao, Wentao Guo, Ted Zadouri, Vijay Thakkar,
+Mayank Mishra.
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/Dao-AILab/quack
+Files: gpu-wiki/reference-kernels/nvidia/hopper/cutedsl/quack/
+
+--------------------------------------------------------------------------------
+FlashInfer
+--------------------------------------------------------------------------------
+Copyright (c) 2024-2025 by FlashInfer team.
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/flashinfer-ai/flashinfer
+Files: gpu-wiki/reference-kernels/*/cutedsl/flashinfer/
+       gpu-wiki/reference-kernels/generic/triton/flashinfer/
+
+--------------------------------------------------------------------------------
+TileLang (Tile-AI Corporation)
+--------------------------------------------------------------------------------
+Copyright (c) Tile-AI Corporation.
+SPDX-License-Identifier: MIT
+
+Source: https://github.com/tile-ai/tilelang
+Files: gpu-wiki/reference-kernels/nvidia/hopper/cutedsl/tilelang/
+
+--------------------------------------------------------------------------------
+FlyDSL
+--------------------------------------------------------------------------------
+Copyright (c) 2025 FlyDSL Project Contributors
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/ROCm/FlyDSL
+Files: gpu-wiki/reference-kernels/amd/*/flydsl/FlyDSL/
+
+--------------------------------------------------------------------------------
+AMD AITER
+--------------------------------------------------------------------------------
+Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
+
+Source: https://github.com/ROCm/aiter
+Files: gpu-wiki/reference-kernels/amd/cdna/triton/aiter/
+
+--------------------------------------------------------------------------------
+Triton Tutorials
+--------------------------------------------------------------------------------
+Copyright (c) 2023-2025 NVIDIA Corporation & Affiliates. All rights reserved.
+SPDX-License-Identifier: MIT
+
+Source: https://github.com/triton-lang/triton
+Files: gpu-wiki/reference-kernels/generic/triton/triton-tutorials/
+
+--------------------------------------------------------------------------------
+Flash Attention Triton (Tri Dao)
+--------------------------------------------------------------------------------
+Copyright (c) 2023-2025, Tri Dao.
+SPDX-License-Identifier: BSD-3-Clause
+
+Source: https://github.com/Dao-AILab/flash-attention
+Files: gpu-wiki/reference-kernels/generic/triton/flash-attention/
+
+--------------------------------------------------------------------------------
+Flash Linear Attention / chunk_gdn (Songlin Yang, Yu Zhang)
+--------------------------------------------------------------------------------
+Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
+SPDX-License-Identifier: MIT
+
+Source: https://github.com/fla-org/flash-linear-attention
+Files: gpu-wiki/reference-kernels/amd/cdna/triton/chunk_gdn/
+
+--------------------------------------------------------------------------------
+Facebook Research (xFormers)
+--------------------------------------------------------------------------------
+Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause
+
+Files: gpu-wiki/reference-kernels/generic/triton/flash-attention/k_activations.py
+
+--------------------------------------------------------------------------------
+SGLang
+--------------------------------------------------------------------------------
+Copyright (C) 2023-2026 SGLang Team
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/sgl-project/sglang
+Files: gpu-wiki/reference-kernels/generic/triton/triton-kernels/
+
+--------------------------------------------------------------------------------
+vLLM
+--------------------------------------------------------------------------------
+Copyright (C) 2024-2026, The vLLM team.
+SPDX-License-Identifier: Apache-2.0
+
+Source: https://github.com/vllm-project/vllm
+Files: gpu-wiki/reference-kernels/amd/cdna/triton/aiter/ (select files)
+
+--------------------------------------------------------------------------------
+AMD Gluon Reference Kernels (RDNA4)
+--------------------------------------------------------------------------------
+Copyright (C) 2026, Advanced Micro Devices, Inc. All rights reserved.
+SPDX-License-Identifier: MIT
+
+Source: AMD internal examples (published under MIT)
+Files: gpu-wiki/reference-kernels/amd/rdna4/gluon/
+
+================================================================================
+License Compatibility Summary
+================================================================================
+
+All third-party code included in this repository is licensed under one of:
+  - Apache-2.0 (compatible with project license)
+  - MIT (compatible with Apache-2.0)
+  - BSD-3-Clause (compatible with Apache-2.0)
+
+These licenses are all permissive and compatible with the Apache License 2.0
+used by this project. Original copyright headers are preserved in each file.
