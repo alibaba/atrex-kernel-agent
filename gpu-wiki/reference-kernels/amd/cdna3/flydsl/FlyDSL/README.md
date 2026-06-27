@@ -9,25 +9,27 @@ Distinct from `reference-kernels/amd/cdna/flydsl/FlyDSL/`: those are **CDNA-gene
 | [flash_attn_func_nomask_mi308x.py](flash_attn_func_nomask_mi308x.py) | MI308X (gfx942) | bf16 flash attention forward **no-mask** path, head_dim=64 native. V6: `ds_bpermute_lgkm_sum` manual ATT scheduling, 60.19 TFLOPS; BF16 objective met. Historical CK row is FP16, not the BF16 target | [cdna3-flash-attention-bf16-nomask-isa-scheduling.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-nomask-isa-scheduling.md) |
 | [flash_attn_func_mask_mi308x.py](flash_attn_func_mask_mi308x.py) | MI308X (gfx942) | bf16 flash attention forward with **bit-packed binary mask + LSE** (non-causal), head_dim=64 native. V10: **71.8 TFLOPS**, SHARE_KV_LDS + pk_fma + occupancy=4 + BHSD native layout. Supersedes V7 (50.6T, backed up as `.v7.bak`) | [V8-V10](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-lse-optimization.md), [V0-V7](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md) |
 | [chunk_gdn_flydsl_operator.py](chunk_gdn_flydsl_operator.py) | MI308X (gfx942) | Chunk-GDN standalone FlyDSL megakernel wrapper: input is precomputed `a/g_cumsum`, runs only the fused `recompute_w_u + fwd_h + fwd_o`; includes BDV64 hot path and BDV32 small-H path | [cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md) |
+| [moe_fp8_ptpc_mi308x/](moe_fp8_ptpc_mi308x/) | MI308X (gfx942) | FP8 PTPC Fused MoE two-stage GEMM checkpoint: E=512, topk=10, model_dim=4096, inter_dim=256, tokens<=512. Pause state: 1/14 rows pass the 5% gate; retained for continuation and negative-evidence reuse | [cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md) |
+| [moe_fp8_ptpc_mi308x_atrex_v2/](moe_fp8_ptpc_mi308x_atrex_v2/) | MI308X (gfx942) | atrex-open integrated FP8 PTPC Fused MoE v2 full-pipeline archive: same task16 shape and tokens as task66, with AITER routing trace parity and same-machine atrex-open performance parity | [cdna3-fused-moe-fp8-ptpc-atrex-v2.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md) |
 | [attn_bwd_dkdv_mi308x.py](attn_bwd_dkdv_mi308x.py) | MI308X | Attention backward dK+dV (bf16, arbitrary mask). V15: dO B-operand from LDS (6.52ms). lds_qt→lds_dot merge + strided dO reads. | [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md) |
 | [attn_bwd_dq_mi308x.py](attn_bwd_dq_mi308x.py) | MI308X | Attention backward dQ (bf16, arbitrary mask). V14: lds_kt eliminated via strided scalar reads (2.93ms, occupancy 7). | [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md) |
 | [flash_attn_bwd_flydsl_mi308x.py](flash_attn_bwd_flydsl_mi308x.py) | MI308X | Attention backward **API wrapper** (bf16, arbitrary mask). Bit-packed u32 mask + OOB guards + precomputed loop bounds. 11.7ms end-to-end, 3.0× vs PyTorch, 2.3× vs aiter CK-tile. | [cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md) |## Chunk-GDN Standalone Test
 
 ```bash
-cd /root/gpu-wiki/reference-kernels/amd/cdna3/flydsl/FlyDSL
+cd reference-kernels/amd/cdna3/flydsl/FlyDSL
 
 # Only run shape, chunk_offsets, and validation tests
-CHUNK_GDN_RUN_GPU_TESTS=0 /opt/conda310/bin/python3.10 test_chunk_gdn_flydsl_operator.py
+CHUNK_GDN_RUN_GPU_TESTS=0 ${PYTHON:-python3} test_chunk_gdn_flydsl_operator.py
 
 # Run GPU correctness tests in MI308/FlyDSL environment:
 # dense hot path, BDV32 small-H, tail path, varlen all compared with PyTorch reference
-CHUNK_GDN_RUN_GPU_TESTS=1 /opt/conda310/bin/python3.10 test_chunk_gdn_flydsl_operator.py
+CHUNK_GDN_RUN_GPU_TESTS=1 ${PYTHON:-python3} test_chunk_gdn_flydsl_operator.py
 ```
 
 ## Chunk-GDN 397B-TP2 rocprofv3 Baseline
 
 Performance comparison uses the ported Triton back-half baseline:
-`/root/gpu-wiki/reference-kernels/amd/cdna/triton/chunk_gdn/`, not
+`reference-kernels/amd/cdna/triton/chunk_gdn/`, not
 the PyTorch reference. The 397B-TP2 hot path shape is
 `(B,Hg,H,K,V)=(1,8,32,128,128)`, and the comparison boundary is after precomputing `a/g_cumsum`,
 specifically `recompute_w_u + fwd_h + fwd_o`.

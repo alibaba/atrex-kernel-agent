@@ -132,7 +132,9 @@ uniform_val = make_warp_uniform(value)  # Compiler hint: value uniform within wa
 ballot = vote_ballot_sync(pred, mask=0xFFFFFFFF)  # → Int32, per-thread predicate bits
 any_true = vote_any_sync(pred)                     # → Boolean
 all_true = vote_all_sync(pred)                     # → Boolean
-uniform = vote_uni_sync(pred)                      # → Boolean, all threads same?### Warp Reduction
+uniform = vote_uni_sync(pred)                      # → Boolean, all threads same?
+
+### Warp Reduction
 
 ```python
 from cutlass.cute.arch import warp_redux_sync

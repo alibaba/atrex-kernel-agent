@@ -133,7 +133,9 @@ Principle: bank of `smem[i][col]` = `(i * 33 + col) % 32`, so the same column in
 
 > For scenarios like GEMM kernels that require efficient vectorized access, the disadvantages of padding are significant.
 
----## 4. Solution 2: XOR Swizzle (Key Focus)
+---
+
+## 4. Solution 2: XOR Swizzle (Key Focus)
 
 ### 4.1 Core Idea
 

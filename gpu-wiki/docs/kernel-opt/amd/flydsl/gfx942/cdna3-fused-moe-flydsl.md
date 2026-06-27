@@ -1,5 +1,7 @@
 # Fused MoE Optimization (FlyDSL on MI308X)
 
+Applicability: backend: flydsl; hardware: amd; topic: optimization
+
 ## Bottleneck Analysis
 
 In the Kimi-K2.5 model, `fused_moe` accounts for **87.8%** (concurrency=2) to **89.7%** (concurrency=40) of GPU time.
@@ -37,12 +39,16 @@ export FLYDSL_W4A16_HYBRID=w2_bf16
 
 Most critical shape (tokens=16384, E=384, topk=8):
 
+The Triton numbers below are comparison baselines only; this page's target
+implementation path is FlyDSL on AMD hardware.
+
 | dtype | Torch | Triton | CK | FlyDSL |
 |-------|-------|--------|-----|--------|
 | BF16 | 119.82ms | 12.09ms | GPU fault | **8.68ms** |
 | W4A16 | 131.33ms | 31.43ms | Not Supported | **9.77ms** |
 
-FlyDSL vs Triton: BF16 **1.39x**, W4A16 **3.22x** speedup.
+FlyDSL versus the Triton comparison baseline: BF16 **1.39x**, W4A16
+**3.22x** speedup.
 
 ## End-to-End Performance
 

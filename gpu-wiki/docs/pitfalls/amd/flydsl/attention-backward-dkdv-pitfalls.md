@@ -1,8 +1,10 @@
 # Pitfalls: FlyDSL Attention Backward dQ + dK+dV on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 Traps encountered while optimizing the FlyDSL attention backward (dK+dV)
 kernel on MI308X. Companion report:
-.
+[cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md).
 
 Forward kernel pitfalls (shared traps like K_PAD, rocdl.exp2) are in
 [flash-attn-pitfalls.md](flash-attn-pitfalls.md).

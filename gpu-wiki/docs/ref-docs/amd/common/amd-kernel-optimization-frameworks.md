@@ -23,7 +23,7 @@ FlyDSL (Flexible Layout Python DSL) is built on the MLIR compilation stack, usin
 ### Compilation Pipeline
 
 ```
-Python kernel → FLIR (Layout Algebra) → MLIR → Canonicalization/CSE 
+Python kernel → FLIR (Layout Algebra) → MLIR → Canonicalization/CSE
 → GPU-to-ROCDL Lowering → gfx942/gfx950 Binary
 ```
 
@@ -38,9 +38,9 @@ Python kernel → FLIR (Layout Algebra) → MLIR → Canonicalization/CSE
 
 ```bash
 export AITER_ENFORCE_DSL=1
-export DSL2_ROOT=/opt/FlyDSL
+export DSL2_ROOT="${FLYDSL_ROOT:?set FLYDSL_ROOT}"
 export AITER_USE_FLYDSL_MOE=1
-export MLIR_PATH=/opt/mlir_install
+export MLIR_PATH="${MLIR_ROOT:?set MLIR_ROOT}"
 ```
 
 ### Typical Performance

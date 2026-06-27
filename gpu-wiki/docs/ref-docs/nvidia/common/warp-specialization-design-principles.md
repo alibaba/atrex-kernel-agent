@@ -419,11 +419,11 @@ for (k) {
     // Phase 1: global → register → shared memory
     gmem_load(reg, gmem[k+1]);      // prefetch next round
     __syncthreads();
-    
+
     // Phase 2: shared memory → register → MMA
     smem_load(frag, smem[k]);
     mma_sync(accum, frag_a, frag_b);
-    
+
     // Phase 3: register → shared memory
     smem_store(smem, reg);
     __syncthreads();

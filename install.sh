@@ -1,27 +1,21 @@
 #!/usr/bin/env bash
-# Copyright 2026 Alibaba Group
+# One-shot installer for the gpu-kernel-optimizer skill + hooks + agents.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# One-shot installer for the gpu-kernel-optimizer skill + hooks.
-#
-# The installer targets Codex and Claude Code by default:
-#   - Codex: $CODEX_HOME or ~/.codex
-#   - Claude Code: $CLAUDE_HOME or ~/.claude
+# Default install base: ~/aka_kernel_opt (customizable via AKA_KERNEL_OPT_HOME)
+# Files are installed under <base>/.codex and/or <base>/.claude:
+#   - Codex:  ~/aka_kernel_opt/.codex/skills/gpu-kernel-optimizer
+#             ~/aka_kernel_opt/.codex/hooks/
+#             ~/aka_kernel_opt/.codex/agents/
+#   - Claude: ~/aka_kernel_opt/.claude/skills/gpu-kernel-optimizer
+#             ~/aka_kernel_opt/.claude/hooks/
+#             ~/aka_kernel_opt/.claude/agents/
+#   - Shared: ~/aka_kernel_opt/gpu-wiki/
+#             ~/aka_kernel_opt/reference-projects/
 #
 # Usage:
-#   ./install.sh                  # install/update all detected targets
-#   ./install.sh --hooks-only     # only install/update hooks for detected targets
+#   ./install.sh                       # install/update all detected targets
+#   ./install.sh --prefix /my/path     # specify custom install directory
+#   ./install.sh --hooks-only          # only install/update hooks for detected targets
 #   ./install.sh --without-github      # install/update, but skip GitHub reference repos from gpu-wiki
 #   ./install.sh --max-iterations N    # allow Stop hooks after memory/vN.json exceeds N iterations
 #   ./install.sh --uninstall           # remove hooks installed by this script from detected targets
@@ -31,32 +25,35 @@
 set -euo pipefail
 
 SKILL_NAME="gpu-kernel-optimizer"
-CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-CODEX_SKILL_DIR="$CODEX_HOME/skills/$SKILL_NAME"
-CODEX_HOOKS_DIR="$CODEX_HOME/hooks"
-CODEX_HOOKS_FILE="$CODEX_HOME/hooks.json"
-CODEX_CONFIG_FILE="$CODEX_HOME/config.toml"
-CODEX_HOOK_SCRIPT="$CODEX_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
-CODEX_HOOK_TAG="gpu-kernel-optimizer-codex-hook-v1"
-
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-CLAUDE_SKILL_DIR="$CLAUDE_HOME/skills/$SKILL_NAME"
-CLAUDE_HOOKS_DIR="$CLAUDE_HOME/hooks"
-CLAUDE_HOOKS_FILE="$CLAUDE_HOME/settings.json"
-CLAUDE_HOOK_SCRIPT="$CLAUDE_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
-CLAUDE_HOOK_TAG="gpu-kernel-optimizer-claude-hook-v1"
-GPU_WIKI_DIR="/tmp/gpu-wiki"
-REFERENCE_PROJECTS_DIR="/tmp/reference-projects"
-ROCPROF_TRACE_DECODER_REPO="https://github.com/ROCm/rocprof-trace-decoder.git"
-
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GPU_WIKI_SOURCE_DIR="$SCRIPT_DIR/gpu-wiki"
+AGENTS_SOURCE_DIR="$SCRIPT_DIR/agents"
+
+ROCPROF_TRACE_DECODER_REPO="https://github.com/ROCm/rocprof-trace-decoder.git"
 
 MODE="install"
 WITHOUT_GITHUB="0"
 MAX_ITERATIONS="${GPU_KERNEL_MAX_ITERATIONS:-0}"
+CLI_PREFIX=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --prefix)
+      if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+        echo "ERROR: --prefix requires a directory path."
+        exit 2
+      fi
+      CLI_PREFIX="$2"
+      shift 2
+      ;;
+    --prefix=*)
+      CLI_PREFIX="${1#*=}"
+      if [[ -z "$CLI_PREFIX" ]]; then
+        echo "ERROR: --prefix requires a directory path."
+        exit 2
+      fi
+      shift
+      ;;
     --hooks-only)     MODE="hooks-only"; shift ;;
     --without-github) WITHOUT_GITHUB="1"; shift ;;
     --uninstall)      MODE="uninstall"; shift ;;
@@ -80,6 +77,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve install base: --prefix > AKA_KERNEL_OPT_HOME > ~/aka_kernel_opt
+if [[ -n "$CLI_PREFIX" ]]; then
+  INSTALL_BASE="$CLI_PREFIX"
+else
+  INSTALL_BASE="${AKA_KERNEL_OPT_HOME:-$HOME/aka_kernel_opt}"
+fi
+
+# Per-target paths
+CODEX_TARGET_DIR="$INSTALL_BASE/.codex"
+CODEX_SKILL_DIR="$CODEX_TARGET_DIR/skills/$SKILL_NAME"
+CODEX_HOOKS_DIR="$CODEX_TARGET_DIR/hooks"
+CODEX_AGENTS_DIR="$CODEX_TARGET_DIR/agents"
+CODEX_HOOKS_FILE="$CODEX_TARGET_DIR/hooks.json"
+CODEX_CONFIG_FILE="$CODEX_TARGET_DIR/config.toml"
+CODEX_HOOK_SCRIPT="$CODEX_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
+CODEX_HOOK_TAG="gpu-kernel-optimizer-codex-hook-v1"
+
+CLAUDE_TARGET_DIR="$INSTALL_BASE/.claude"
+CLAUDE_SKILL_DIR="$CLAUDE_TARGET_DIR/skills/$SKILL_NAME"
+CLAUDE_HOOKS_DIR="$CLAUDE_TARGET_DIR/hooks"
+CLAUDE_AGENTS_DIR="$CLAUDE_TARGET_DIR/agents"
+CLAUDE_HOOKS_FILE="$CLAUDE_TARGET_DIR/settings.json"
+CLAUDE_HOOK_SCRIPT="$CLAUDE_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
+CLAUDE_HOOK_TAG="gpu-kernel-optimizer-claude-hook-v1"
+
+GPU_WIKI_DIR="$INSTALL_BASE/gpu-wiki"
+REFERENCE_PROJECTS_DIR="$INSTALL_BASE/reference-projects"
+
 if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "ERROR: GPU_KERNEL_MAX_ITERATIONS must be a non-negative integer."
   exit 2
@@ -96,114 +121,135 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Prepare default knowledge repositories under /tmp
+# 1. Prepare default knowledge repositories under $INSTALL_BASE
+# ---------------------------------------------------------------------------
+link_gpu_wiki() {
+  if [ "$GPU_WIKI_SOURCE_DIR" = "$GPU_WIKI_DIR" ]; then
+    echo "[repo] gpu-wiki source is already $GPU_WIKI_DIR (skip)"
+    return
+  fi
+
+  local real_source
+  real_source="$(cd "$GPU_WIKI_SOURCE_DIR" && pwd)"
+
+  if [ -L "$GPU_WIKI_DIR" ]; then
+    local current_target
+    current_target="$(readlink "$GPU_WIKI_DIR")"
+    if [ "$current_target" = "$real_source" ]; then
+      echo "[repo] gpu-wiki symlink up-to-date"
+      return
+    fi
+    rm -f "$GPU_WIKI_DIR"
+  elif [ -e "$GPU_WIKI_DIR" ]; then
+    # 旧的拷贝目录存在，替换为软链接
+    rm -rf "$GPU_WIKI_DIR"
+  fi
+
+  ln -s "$real_source" "$GPU_WIKI_DIR"
+  echo "[repo] Symlinked gpu-wiki: $GPU_WIKI_DIR -> $real_source"
+}
+
+prepare_knowledge_repos() {
+  link_gpu_wiki
+  mkdir -p "$REFERENCE_PROJECTS_DIR"
+
+  # 初始化 submodules（如果在源码目录中）
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local submodule_dir="$script_dir/reference-projects"
+
+  if [ -f "$script_dir/.gitmodules" ]; then
+    echo "[repo] Initializing reference-projects submodules..."
+    (cd "$script_dir" && git submodule update --init --depth 1 -- reference-projects/) || {
+      echo "[repo] Warning: Failed to initialize reference-projects submodules (network unavailable?), will symlink existing dirs"
+    }
+    echo "[repo] Initializing gpu-wiki/3rdparty submodules..."
+    (cd "$script_dir" && git submodule update --init --depth 1 -- gpu-wiki/3rdparty/) || {
+      echo "[repo] Warning: Failed to initialize gpu-wiki/3rdparty submodules (network unavailable?), skipping"
+    }
+  fi
+
+  # 将 submodule 目录软链接到工作目录
+  if [ -d "$submodule_dir" ]; then
+    for repo_dir in "$submodule_dir"/*/; do
+      [ -d "$repo_dir" ] || continue
+      local repo_name
+      repo_name="$(basename "$repo_dir")"
+
+      # 跳过 README.md 等非目录项
+      [ -d "$repo_dir/.git" ] || [ -f "$repo_dir/.git" ] || continue
+
+      # 如果设置了 --without-github，检查该 submodule 的 URL 是否是 GitHub
+      if [ "$WITHOUT_GITHUB" = "1" ]; then
+        local repo_url
+        repo_url="$(git config --file "$script_dir/.gitmodules" "submodule.reference-projects/$repo_name.url" 2>/dev/null || true)"
+        if [[ "$repo_url" == *"github.com"* ]]; then
+          echo "[repo] Skipping GitHub repo (--without-github): $repo_name"
+          continue
+        fi
+      fi
+
+      # 创建软链接到目标工作目录
+      local link_target="$REFERENCE_PROJECTS_DIR/$repo_name"
+      local real_repo_dir
+      real_repo_dir="$(cd "$repo_dir" && pwd)"
+
+      if [ -L "$link_target" ]; then
+        # 已是软链接，检查是否指向正确目标
+        local current_target
+        current_target="$(readlink "$link_target")"
+        if [ "$current_target" = "$real_repo_dir" ]; then
+          echo "[repo] Symlink up-to-date: $repo_name"
+        else
+          rm -f "$link_target"
+          ln -s "$real_repo_dir" "$link_target"
+          echo "[repo] Updated symlink: $repo_name -> $real_repo_dir"
+        fi
+      elif [ -e "$link_target" ]; then
+        # 旧的拷贝目录存在，替换为软链接
+        rm -rf "$link_target"
+        ln -s "$real_repo_dir" "$link_target"
+        echo "[repo] Replaced copy with symlink: $repo_name -> $real_repo_dir"
+      else
+        ln -s "$real_repo_dir" "$link_target"
+        echo "[repo] Symlinked: $repo_name -> $real_repo_dir"
+      fi
+    done
+  else
+    echo "[repo] No reference-projects submodule directory found at $submodule_dir"
+    echo "[repo] Please run 'git submodule update --init --depth 1' first"
+  fi
+
+  echo "[repo] gpu-wiki: $GPU_WIKI_DIR"
+  echo "[repo] reference_project: $REFERENCE_PROJECTS_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: clone or update a git repo
 # ---------------------------------------------------------------------------
 update_or_clone_repo() {
   local repo_url="$1"
   local target_dir="$2"
-  local branch="${3:-}"
 
-  if [ -d "$target_dir/.git" ]; then
-    echo "[repo] Updating $target_dir"
-    if [ -n "$branch" ]; then
-      git -C "$target_dir" fetch origin "$branch" | cat
-      git -C "$target_dir" checkout "$branch" | cat
-      git -C "$target_dir" pull --ff-only origin "$branch" | cat
-    else
-      git -C "$target_dir" pull --ff-only | cat
-    fi
-    return
-  fi
-
-  if [ -e "$target_dir" ]; then
-    echo "[repo] ERROR: $target_dir exists but is not a git repository."
-    echo "       Move it away or make it a git checkout, then retry."
-    exit 1
-  fi
-
-  echo "[repo] Cloning $repo_url -> $target_dir"
-  if [ -n "$branch" ]; then
-    git clone --branch "$branch" --single-branch "$repo_url" "$target_dir" | cat
+  if [ -d "$target_dir/.git" ] || [ -f "$target_dir/.git" ]; then
+    echo "[repo] Updating $target_dir ..."
+    (cd "$target_dir" && git pull --ff-only 2>/dev/null) || true
   else
-    git clone --depth 1 "$repo_url" "$target_dir" | cat
+    echo "[repo] Cloning $repo_url -> $target_dir ..."
+    git clone --depth 1 "$repo_url" "$target_dir" || {
+      echo "[repo] Warning: Failed to clone $repo_url (network unavailable?), skipping."
+      return 0
+    }
   fi
 }
 
-repo_name_from_url() {
-  local repo_url="$1"
-  local repo_name
-  repo_name="${repo_url##*/}"
-  repo_name="${repo_name%.git}"
-  printf '%s\n' "$repo_name"
-}
-
-extract_reference_repo_urls() {
-  local readme_path="$GPU_WIKI_DIR/README.md"
-  [ -f "$readme_path" ] || return 0
-
-  grep -Eo '(git@[^ )`]+|https?://[^ )`]+\.git)' "$readme_path" \
-    | sed 's/[,.;，。；]*$//' \
-    | sort -u
-}
-
-is_github_repo_url() {
-  local repo_url="$1"
-  [[ "$repo_url" == git@github.com:* || "$repo_url" == https://github.com/* || "$repo_url" == http://github.com/* ]]
-}
-
-copy_local_gpu_wiki_to_tmp() {
-  local source_gpu_wiki_dir="$SCRIPT_DIR/gpu-wiki"
-
-  if [ ! -d "$source_gpu_wiki_dir" ]; then
-    echo "[repo] ERROR: local gpu-wiki directory not found: $source_gpu_wiki_dir"
-    exit 1
-  fi
-
-  if [ "$source_gpu_wiki_dir" = "$GPU_WIKI_DIR" ]; then
-    echo "[repo] Local gpu-wiki is already $GPU_WIKI_DIR (skip copy)"
-    return
-  fi
-
-  echo "[repo] Copying local gpu-wiki $source_gpu_wiki_dir -> $GPU_WIKI_DIR"
-  rm -rf "$GPU_WIKI_DIR"
-  mkdir -p "$GPU_WIKI_DIR"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a \
-      --exclude='.git/' \
-      "$source_gpu_wiki_dir"/ "$GPU_WIKI_DIR"/
-  else
-    cp -R "$source_gpu_wiki_dir"/. "$GPU_WIKI_DIR"/
-    rm -rf "$GPU_WIKI_DIR/.git"
-  fi
-}
-
-prepare_knowledge_repos() {
-  copy_local_gpu_wiki_to_tmp
-  mkdir -p "$REFERENCE_PROJECTS_DIR"
-
-  local repo_urls
-  repo_urls="$(extract_reference_repo_urls || true)"
-  if [ -z "$repo_urls" ]; then
-    echo "[repo] No reference project git URLs found in $GPU_WIKI_DIR/README.md"
-    echo "[repo] reference_project path remains $REFERENCE_PROJECTS_DIR"
-    return
-  fi
-
-  while IFS= read -r repo_url; do
-    [ -n "$repo_url" ] || continue
-
-    if is_github_repo_url "$repo_url" && [ "$WITHOUT_GITHUB" = "1" ]; then
-      echo "[repo] Skipping GitHub reference repo because --without-github is set: $repo_url"
-      continue
-    fi
-
-    local repo_name
-    repo_name="$(repo_name_from_url "$repo_url")"
-    update_or_clone_repo "$repo_url" "$REFERENCE_PROJECTS_DIR/$repo_name"
-  done <<< "$repo_urls"
-
-  echo "[repo] gpu-wiki: $GPU_WIKI_DIR"
-  echo "[repo] reference_project: $REFERENCE_PROJECTS_DIR"
+# ---------------------------------------------------------------------------
+# Clone rocprof-trace-decoder into the source tools/ directory (once)
+# ---------------------------------------------------------------------------
+clone_decoder_to_tools() {
+  local tools_dir="$SCRIPT_DIR/tools"
+  mkdir -p "$tools_dir"
+  update_or_clone_repo "$ROCPROF_TRACE_DECODER_REPO" "$tools_dir/rocprof-trace-decoder"
 }
 
 # ---------------------------------------------------------------------------
@@ -212,19 +258,21 @@ prepare_knowledge_repos() {
 detect_targets() {
   DETECTED_TARGETS=()
 
-  if [ -d "$CODEX_HOME" ]; then
+  # Detect Codex: check system ~/.codex OR existing install at $INSTALL_BASE/.codex
+  if [ -d "$HOME/.codex" ] || [ -d "$CODEX_TARGET_DIR" ]; then
     DETECTED_TARGETS+=("codex")
   fi
 
-  if [ -d "$CLAUDE_HOME" ]; then
+  # Detect Claude: check system ~/.claude OR existing install at $INSTALL_BASE/.claude
+  if [ -d "$HOME/.claude" ] || [ -d "$CLAUDE_TARGET_DIR" ]; then
     DETECTED_TARGETS+=("claude")
   fi
 
   if [ "${#DETECTED_TARGETS[@]}" -eq 0 ]; then
     echo "ERROR: Codex or Claude Code does not appear to be installed."
-    echo "  Checked Codex path:      $CODEX_HOME"
-    echo "  Checked Claude Code path: $CLAUDE_HOME"
-    echo "Install Codex/Claude Code first, or set CODEX_HOME/CLAUDE_HOME to an existing install path."
+    echo "  Checked Codex path:      $HOME/.codex"
+    echo "  Checked Claude Code path: $HOME/.claude"
+    echo "Install Codex/Claude Code first, or manually create $INSTALL_BASE/.codex or $INSTALL_BASE/.claude."
     exit 1
   fi
 
@@ -239,6 +287,7 @@ configure_codex_target() {
   CONFIG_FILE="$CODEX_CONFIG_FILE"
   HOOK_SCRIPT="$CODEX_HOOK_SCRIPT"
   HOOK_TAG="$CODEX_HOOK_TAG"
+  AGENTS_DIR="$CODEX_AGENTS_DIR"
 }
 
 configure_claude_target() {
@@ -249,6 +298,7 @@ configure_claude_target() {
   CONFIG_FILE=""
   HOOK_SCRIPT="$CLAUDE_HOOK_SCRIPT"
   HOOK_TAG="$CLAUDE_HOOK_TAG"
+  AGENTS_DIR="$CLAUDE_AGENTS_DIR"
 }
 
 # ---------------------------------------------------------------------------
@@ -275,6 +325,33 @@ copy_skill() {
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Copy agents into the active target agents directory
+# ---------------------------------------------------------------------------
+copy_agents() {
+  if [ ! -d "$AGENTS_SOURCE_DIR" ]; then
+    echo "[$TARGET_NAME][agents] No agents/ directory found in source (skip)"
+    return
+  fi
+
+  if [ "$AGENTS_SOURCE_DIR" = "$AGENTS_DIR" ]; then
+    echo "[$TARGET_NAME][agents] Already at $AGENTS_DIR (skip copy)"
+    return
+  fi
+
+  echo "[$TARGET_NAME][agents] Copying $AGENTS_SOURCE_DIR -> $AGENTS_DIR"
+  mkdir -p "$AGENTS_DIR"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude='.git/' \
+      "$AGENTS_SOURCE_DIR"/ "$AGENTS_DIR"/
+  else
+    rm -rf "$AGENTS_DIR"
+    mkdir -p "$AGENTS_DIR"
+    cp -R "$AGENTS_SOURCE_DIR"/. "$AGENTS_DIR"/
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # 4. Ensure Codex hooks are enabled in config.toml
 # ---------------------------------------------------------------------------
 enable_hooks_feature() {
@@ -282,19 +359,19 @@ enable_hooks_feature() {
 
   if [ ! -f "$CONFIG_FILE" ]; then
     printf '[features]\nhooks = true\n' > "$CONFIG_FILE"
-    echo "[$TARGET_NAME][config] Created $CONFIG_FILE with hooks enabled"
+    echo "[codex][config] Created $CONFIG_FILE with hooks enabled"
     return
   fi
 
   if grep -Eq '^[[:space:]]*codex_hooks[[:space:]]*=' "$CONFIG_FILE"; then
     perl -0pi -e 's/^[[:space:]]*codex_hooks[[:space:]]*=.*$/hooks = true/m' "$CONFIG_FILE"
-    echo "[$TARGET_NAME][config] Migrated deprecated codex_hooks to hooks in $CONFIG_FILE"
+    echo "[codex][config] Migrated deprecated codex_hooks to hooks in $CONFIG_FILE"
     return
   fi
 
   if grep -Eq '^[[:space:]]*hooks[[:space:]]*=' "$CONFIG_FILE"; then
     perl -0pi -e 's/^[[:space:]]*hooks[[:space:]]*=.*$/hooks = true/m' "$CONFIG_FILE"
-    echo "[$TARGET_NAME][config] Ensured hooks = true in $CONFIG_FILE"
+    echo "[codex][config] Ensured hooks = true in $CONFIG_FILE"
     return
   fi
 
@@ -303,7 +380,7 @@ enable_hooks_feature() {
     tmp=$(mktemp)
     awk 'BEGIN{inserted=0} /^\[features\]$/ {print; print "hooks = true"; inserted=1; next} {print} END{if(!inserted){print ""; print "[features]"; print "hooks = true"}}' "$CONFIG_FILE" > "$tmp"
     mv "$tmp" "$CONFIG_FILE"
-    echo "[$TARGET_NAME][config] Added hooks = true to [features] in $CONFIG_FILE"
+    echo "[codex][config] Added hooks = true to [features] in $CONFIG_FILE"
     return
   fi
 
@@ -542,6 +619,19 @@ def command_may_modify_memory(command_text: str) -> bool:
     return any(sub in stripped for sub in ("create", "update", "mask", "unmask"))
 
 
+def command_is_memory_manager_update(command_text: str) -> bool:
+    """Detect 'memory_manager update' specifically (not init/create)."""
+    stripped = command_text.strip()
+    if "memory_manager" not in stripped:
+        return False
+    if "update" not in stripped:
+        return False
+    # Exclude init and create invocations
+    if " init" in stripped or " create" in stripped:
+        return False
+    return True
+
+
 def resolve_path(path: Path, payload: dict) -> Path:
     if path.is_absolute():
         return path
@@ -622,7 +712,7 @@ def handle_pre_tool_use(payload: dict, target: str) -> int:
                     "Before writing memory/v<N>.json via memory_manager.py, read reference/v_iteration.schema.json to ensure the JSON conforms to the required schema.",
                     target,
                 )
-        # schema marker exists, allow through; fall through to normal checks
+        # schema checks passed; fall through to normal checks
 
     if file_path is None:
         if not (is_shell_tool(payload) and command_may_modify_kernel(command_text)):
@@ -707,6 +797,16 @@ def handle_post_tool_use(payload: dict, target: str) -> int:
             return 0
 
     if file_path is None:
+        # Detect memory_manager update via shell command
+        if is_shell_tool(payload) and command_is_memory_manager_update(command_text):
+            for ws in iter_workspaces(payload):
+                if should_trigger_memory_write_prompt(ws):
+                    version = f"v{latest_memory_version(ws)}"
+                    prompt = memory_write_continuation_prompt(ws, version)
+                    print(json.dumps({"decision": "block", "reason": prompt}, ensure_ascii=False))
+                    print(prompt, file=sys.stderr)
+                    return 2
+            return 0
         if not (is_shell_tool(payload) and command_may_modify_kernel(command_text)):
             return 0
         file_path = Path("kernel.py")
@@ -744,6 +844,21 @@ def handle_post_tool_use(payload: dict, target: str) -> int:
 
         return 0
 
+    # Memory write detection — remind to continue Stage 1 for next iteration
+    memory_dir = workspace / "memory"
+    is_memory_write = (
+        (resolved_path.is_relative_to(memory_dir) if hasattr(resolved_path, 'is_relative_to') else str(resolved_path).startswith(str(memory_dir)))
+        and resolved_path.suffix == ".json"
+        and resolved_path.stem.startswith("v")
+        and resolved_path.stem[1:].isdigit()
+    )
+    if is_memory_write and should_trigger_memory_write_prompt(workspace):
+        version = resolved_path.stem
+        prompt = memory_write_continuation_prompt(workspace, version)
+        print(json.dumps({"decision": "block", "reason": prompt}, ensure_ascii=False))
+        print(prompt, file=sys.stderr)
+        return 2
+
     if resolved_path.name != "kernel.py":
         return 0
 
@@ -753,9 +868,13 @@ def handle_post_tool_use(payload: dict, target: str) -> int:
         "Immediately run the relevant correctness test for this kernel change. "
         "If the test failed, update the current memory/v<N>.json with the failure, error message, and next fix; "
         "do not enter performance validation or commit the failed kernel change, and continue fixing it. "
-        "If the test passed, immediately enter gpu-kernel-profile-optimizer Stage 4: "
-        "run performance validation, calculate performance gain against the previous version, "
+        "If the test passed, immediately enter gpu-kernel-profile-optimizer Stage 4 validation: "
+        "measure kernel performance (latency, TFLOPS, bandwidth) using triton do_bench or the workspace timing harness, "
+        "then calculate peak utilization with tools/compute_utilization.py. "
+        "Compare metrics against the previous version, "
         "verify correctness and ISA target progress, and update memory/v<N>.json with the results. "
+        "Note: full hardware profiling (profile_kernel.sh for AMD, profile_nvidia.sh for NVIDIA) is performed "
+        "in Stage 1 of the NEXT iteration to identify new bottlenecks — it is not required for Stage 4 validation. "
         "Only after Stage 4 has updated memory/v<N>.json may you proceed to the next stage, "
         "including finalizing the memory JSON and performing the git operation required by the profile optimizer workflow."
     )
@@ -875,6 +994,35 @@ def goal_check_already_processed_current_artifacts(workspace: Path, newest_mtime
         return False
 
 
+def get_goal_check_level(workspace: Path) -> int:
+    """Read the current progressive prompt level (0-based) from the level marker."""
+    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
+    try:
+        content = level_file.read_text().strip()
+        return int(content) if content.isdigit() else 0
+    except (OSError, ValueError):
+        return 0
+
+
+def set_goal_check_level(workspace: Path, level: int) -> None:
+    """Persist the current progressive prompt level."""
+    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
+    try:
+        level_file.write_text(str(level))
+    except OSError:
+        pass
+
+
+def reset_goal_check_level(workspace: Path) -> None:
+    """Reset level back to 0 when a new artifact cycle begins."""
+    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
+    try:
+        if level_file.exists():
+            level_file.unlink()
+    except OSError:
+        pass
+
+
 def latest_memory_version(workspace: Path) -> int:
     memory_dir = workspace / "memory"
     latest_version = 0
@@ -892,37 +1040,51 @@ def latest_memory_version(workspace: Path) -> int:
     return latest_version
 
 
+def should_trigger_memory_write_prompt(workspace: Path) -> bool:
+    """Check exclusion conditions for memory write continuation prompt."""
+    # If kernel.py doesn't exist, workspace is still initializing
+    kernel_py = workspace / "kernel.py"
+    if not kernel_py.exists():
+        return False
+    # If only v0.json exists (baseline stage), don't trigger
+    memory_dir = workspace / "memory"
+    if not memory_dir.exists():
+        return False
+    version_files = [f for f in memory_dir.glob("v*.json") if f.stem[1:].isdigit()]
+    if len(version_files) <= 1:
+        return False
+    return True
+
+
+def memory_write_continuation_prompt(workspace: Path, version: str) -> str:
+    """Generate continuation prompt after memory/v<N>.json is updated."""
+    return (
+        "gpu-kernel-optimizer Stage 5 memory update detected: "
+        f"memory/{version}.json in workspace {workspace} has been updated. "
+        "Check Stop Conditions in README.md: if the optimization target is met, "
+        "proceed to finalize (git commit if not already done, then stop). "
+        "If the target is NOT met, continue to the next iteration \u2014 "
+        "enter Stage 1: run full hardware profiling using profile_kernel.sh (AMD) or profile_nvidia.sh (NVIDIA) "
+        "on the current kernel.py to identify the next bottleneck. "
+        "Do NOT skip profiling or rely on previous profile data \u2014 "
+        "the kernel has changed and fresh profile evidence is required for the next optimization plan."
+    )
+
+
 def iteration_limit_reached(workspace: Path, max_iterations: int) -> bool:
     if max_iterations <= 0:
         return False
     return latest_memory_version(workspace) > max_iterations
 
 
-def candidate_output_paths(payload: dict, workspace: Path) -> list[Path]:
-    paths: list[Path] = []
-    cwd = payload.get("cwd")
-    if isinstance(cwd, str) and cwd.strip():
-        paths.append(Path(cwd).expanduser() / "generated_kernel.py")
-    paths.append(workspace / "generated_kernel.py")
-
-    unique_paths: list[Path] = []
-    seen: set[str] = set()
-    for path in paths:
-        try:
-            resolved = path.resolve()
-        except OSError:
-            resolved = path
-        key = str(resolved)
-        if key not in seen:
-            seen.add(key)
-            unique_paths.append(resolved)
-    return unique_paths
+def output_path_for_workspace(workspace: Path) -> Path:
+    return workspace.parent / "generated_kernel.py"
 
 
 def first_existing_output_path(payload: dict, workspace: Path) -> Path | None:
-    for path in candidate_output_paths(payload, workspace):
-        if path.exists() and path.is_file():
-            return path
+    path = output_path_for_workspace(workspace)
+    if path.exists() and path.is_file():
+        return path
     return None
 
 
@@ -959,15 +1121,20 @@ def generated_kernel_violations(path: Path) -> list[str]:
         violations.append("missing Model.forward")
     if "reference.Model" in source or "from reference import Model" in source or "import reference" in source:
         violations.append("reference Model fallback")
-    if "flydsl" not in source.lower():
-        violations.append("missing visible FlyDSL implementation path")
+    _src_lower = source.lower()
+    _has_kernel_framework = any(kw in _src_lower for kw in (
+        "flydsl", "triton", "gluon", "cutedsl",
+        "cpp_inline", "cuda_source", "__global__",
+    ))
+    if not _has_kernel_framework:
+        violations.append("missing visible kernel implementation path (expected one of: triton, gluon, flydsl, cutedsl, or C++ inline)")
 
     return violations
 
 
 def output_contract_prompt(workspace: Path, output_path: Path | None, violations: list[str]) -> str:
     if output_path is None:
-        output_status = "No generated_kernel.py was found in the current working directory or optimization workspace."
+        output_status = f"No generated_kernel.py was found in the project root ({workspace.parent})."
     elif violations:
         output_status = f"generated_kernel.py exists at {output_path}, but violates the final output contract: {', '.join(violations)}."
     else:
@@ -978,43 +1145,14 @@ def output_contract_prompt(workspace: Path, output_path: Path | None, violations
         f"workspace {workspace} is about to end the current optimization session. "
         f"{output_status} "
         f"Do not modify the root SKILL.md. Read the child skill `{OUTPUT_CONTRACT_SKILL}` from the installed gpu-kernel-optimizer skill. "
-        "Then convert the validated optimized implementation into `generated_kernel.py` in the current working directory. "
+        f"Then convert the validated optimized implementation into `generated_kernel.py` in the project root directory ({workspace.parent}), NOT inside the {workspace.name}/ subdirectory. "
         "The final file is the only candidate evaluated by the hidden evaluator and must be a self-contained Python module with valid Python source only. "
         "It must define `class Model(nn.Module)`, preserve the reference Model init and forward signatures, return the same externally observable output structure, shapes, device, dtype, and numerical behavior, "
-        "and launch the main compute path through FlyDSL kernels or compiled FlyDSL programs from `Model.forward`. "
+        "and launch the main compute path through GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) from `Model.forward`. "
         "Use PyTorch only for setup or glue logic such as allocation, reshape/view, indexing, metadata preparation, and launch orchestration. "
         "Do not include Markdown, explanatory prose, tests, benchmarks, debug prints, command-line entry points, `__main__`, `_make_inputs`, `shapes.json` reads, `torch.compile`, `torch.jit`, custom C++ extensions, external files, or a reference Model fallback. "
         "After writing `generated_kernel.py`, run syntax/import checks outside the file and stop only when the final candidate is clean."
     )
-
-
-def get_goal_check_level(workspace: Path) -> int:
-    """Read the current progressive prompt level (0-based) from the level marker."""
-    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
-    try:
-        content = level_file.read_text().strip()
-        return int(content) if content.isdigit() else 0
-    except (OSError, ValueError):
-        return 0
-
-
-def set_goal_check_level(workspace: Path, level: int) -> None:
-    """Persist the current progressive prompt level."""
-    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
-    try:
-        level_file.write_text(str(level))
-    except OSError:
-        pass
-
-
-def reset_goal_check_level(workspace: Path) -> None:
-    """Reset level back to 0 when a new artifact cycle begins."""
-    level_file = workspace / GOAL_CHECK_LEVEL_MARKER
-    try:
-        if level_file.exists():
-            level_file.unlink()
-    except OSError:
-        pass
 
 
 def goal_check_prompt_level_1(workspace: Path) -> str:
@@ -1129,6 +1267,10 @@ def handle_stop(payload: dict, target: str, max_iterations: int) -> int:
             continue
 
         iteration_limit_hit = iteration_limit_reached(workspace, max_iterations)
+
+        if iteration_limit_hit:
+            continue
+
         output_path = first_existing_output_path(payload, workspace)
         violations = generated_kernel_violations(output_path) if output_path is not None else []
         if output_path is None or violations:
@@ -1136,14 +1278,10 @@ def handle_stop(payload: dict, target: str, max_iterations: int) -> int:
                 (workspace / OUTPUT_CONTRACT_MARKER).touch()
             except OSError:
                 pass
-
             continuation_prompt = output_contract_prompt(workspace, output_path, violations)
             print(json.dumps({"decision": "block", "reason": continuation_prompt}, ensure_ascii=False))
             print(continuation_prompt, file=sys.stderr)
             return 2
-
-        if iteration_limit_hit:
-            continue
 
         changed_files = kernel_files_newer_than_memory(workspace)
         if changed_files:
@@ -1315,20 +1453,12 @@ strip_hooks() {
 }
 
 # ---------------------------------------------------------------------------
-# Clone rocprof-trace-decoder into the source tools/ directory (once)
-# ---------------------------------------------------------------------------
-clone_decoder_to_tools() {
-  local tools_dir="$SCRIPT_DIR/tools"
-  mkdir -p "$tools_dir"
-  update_or_clone_repo "$ROCPROF_TRACE_DECODER_REPO" "$tools_dir/rocprof-trace-decoder"
-}
-
-# ---------------------------------------------------------------------------
 # Per-target orchestration
 # ---------------------------------------------------------------------------
 install_codex() {
   configure_codex_target
   [ "$MODE" = "hooks-only" ] || copy_skill
+  [ "$MODE" = "hooks-only" ] || copy_agents
   enable_hooks_feature
   ensure_codex_agents_config
   install_hook_script
@@ -1338,6 +1468,7 @@ install_codex() {
 install_claude() {
   configure_claude_target
   [ "$MODE" = "hooks-only" ] || copy_skill
+  [ "$MODE" = "hooks-only" ] || copy_agents
   install_hook_script
   merge_hooks
 }
@@ -1355,6 +1486,9 @@ uninstall_claude() {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+echo "[install] Base directory: $INSTALL_BASE"
+mkdir -p "$INSTALL_BASE"
+
 detect_targets
 
 case "$MODE" in
@@ -1380,17 +1514,21 @@ esac
 
 echo ""
 echo "Done."
+[ "$MODE" = "install" ] && echo "  gpu-wiki:       $GPU_WIKI_DIR"
+[ "$MODE" = "install" ] && echo "  ref-projects:   $REFERENCE_PROJECTS_DIR"
 for target in "${DETECTED_TARGETS[@]}"; do
   case "$target" in
     codex)
-      [ "$MODE" = "install" ] && echo "  Codex skill:       $CODEX_SKILL_DIR"
-      [ "$MODE" != "uninstall" ] && echo "  Codex hooks:       $CODEX_HOOKS_FILE"
-      [ "$MODE" != "uninstall" ] && echo "  Codex hook bin:    $CODEX_HOOK_SCRIPT"
+      [ "$MODE" = "install" ] && echo "  Codex skill:    $CODEX_SKILL_DIR"
+      [ "$MODE" = "install" ] && echo "  Codex agents:   $CODEX_AGENTS_DIR"
+      [ "$MODE" != "uninstall" ] && echo "  Codex hooks:    $CODEX_HOOKS_FILE"
+      [ "$MODE" != "uninstall" ] && echo "  Codex hook bin: $CODEX_HOOK_SCRIPT"
       ;;
     claude)
-      [ "$MODE" = "install" ] && echo "  Claude Code skill: $CLAUDE_SKILL_DIR"
-      [ "$MODE" != "uninstall" ] && echo "  Claude Code hooks: $CLAUDE_HOOKS_FILE"
-      [ "$MODE" != "uninstall" ] && echo "  Claude hook bin:   $CLAUDE_HOOK_SCRIPT"
+      [ "$MODE" = "install" ] && echo "  Claude skill:   $CLAUDE_SKILL_DIR"
+      [ "$MODE" = "install" ] && echo "  Claude agents:  $CLAUDE_AGENTS_DIR"
+      [ "$MODE" != "uninstall" ] && echo "  Claude hooks:   $CLAUDE_HOOKS_FILE"
+      [ "$MODE" != "uninstall" ] && echo "  Claude hook bin:$CLAUDE_HOOK_SCRIPT"
       ;;
   esac
 done

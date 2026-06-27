@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] CuTe Layout Algebra Reference
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/cute_layout_algebra_guide.md` | Organized version: [FlyDSL Layout Algebra Reference](flydsl-layout-algebra.md)
 
 > FlyDSL implements the CuTe layout algebra for AMD GPUs. This guide covers the mathematical foundations of the layout algebra and how FlyDSL exposes them through its Python API.

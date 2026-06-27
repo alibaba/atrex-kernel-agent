@@ -6,7 +6,7 @@ Conversion rules and patterns for Triton → Gluon, specific to NVIDIA Hopper sm
 
 | File | Description |
 |------|------|
-|  | Hopper sm_90 specific Triton → Gluon conversion |
+| [Triton → Gluon Conversion Guide (NVIDIA Hopper)](conversion-guide.md) | Hopper sm_90 specific Triton → Gluon conversion |
 | [API Mapping Table (NVIDIA Hopper)](api_mapping.md) | Hopper Triton → Gluon API mapping (including async_copy) |
 | [Pipeline Conversion Pattern (NVIDIA Hopper)](pipeline.md) | CP_ASYNC DMA pipeline: async global → shared |
 | [Matrix Multiply Pattern (NVIDIA Hopper wgmma)](matrix_multiply.md) | tl.dot → wgmma warpgroup-level MMA |

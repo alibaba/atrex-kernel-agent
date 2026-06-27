@@ -54,17 +54,17 @@ def remap_pid_zigzag(pid, NUM_PID_M, NUM_PID_BH, GROUP_SIZE_M: tl.constexpr = 8,
     # Map 1D pid to (start_m, batch, head)
     pid_m = pid % NUM_PID_M
     pid_bh = pid // NUM_PID_M
-    
+
     # Apply zigzag to start_m
     se_id_m = pid_m % NUM_SE
     zigzag_se_id_m = se_id_m if se_id_m % 2 == 0 else NUM_SE - 1 - se_id_m
     remapped_pid_m = (pid_m // NUM_SE) * NUM_SE + zigzag_se_id_m
-    
+
     # Apply zigzag to batch-head
     se_id_bh = pid_bh % NUM_SE
     zigzag_se_id_bh = se_id_bh if se_id_bh % 2 == 0 else NUM_SE - 1 - se_id_bh
     remapped_pid_bh = (pid_bh // NUM_SE) * NUM_SE + zigzag_se_id_bh
-    
+
     # Recombine
     remapped_pid = remapped_pid_m + remapped_pid_bh * NUM_PID_M
     return remapped_pid

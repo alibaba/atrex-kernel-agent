@@ -110,7 +110,9 @@ Each additional GMEM read effectively halves the effective bandwidth:
 
 ### 3.1 Principle
 
-GPU GMEM access is performed in units of 128 bytes (= 1 cache line). When 32 threads in a warp simultaneously access contiguous memory, the requests can be coalesced into the minimum number of cache line requests:### 3.2 Vectorized Load/Store
+GPU GMEM access is performed in units of 128 bytes (= 1 cache line). When 32 threads in a warp simultaneously access contiguous memory, the requests can be coalesced into the minimum number of cache line requests:
+
+### 3.2 Vectorized Load/Store
 
 Each thread loads multiple consecutive elements at once, increasing the access granularity per thread:
 
@@ -463,7 +465,9 @@ for each x_i:
 rstd = rsqrt(sum_sq / N + eps)
 ```
 
-No online trick is needed, but cluster reduction remains important: to avoid spilling due to data that cannot all fit in registers.### 6.3 When Online Is Beneficial
+No online trick is needed, but cluster reduction remains important: to avoid spilling due to data that cannot all fit in registers.
+
+### 6.3 When Online Is Beneficial
 
 | Scenario | Online | Two-pass | Recommendation |
 |------|--------|----------|------|
@@ -568,7 +572,9 @@ The following data is from H100 80GB HBM3 (peak 3.35 TB/s), batch size 8K-32K.
 3. **Online first**: Use online algorithms to avoid multiple GMEM reads
 4. **Cluster is the savior for 65K+**: At N >= 65K, cluster reduction delivers ~50% performance improvement
 5. **Monitor LDL**: LDL instructions in NCU indicate register spilling — reduce per-SM data volume
-6. **90% SOL is a realistic target**: Well-optimized memory-bound kernels can consistently achieve ~3 TB/s on H100## References
+6. **90% SOL is a realistic target**: Well-optimized memory-bound kernels can consistently achieve ~3 TB/s on H100
+
+## References
 
 - [QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light](https://github.com/Dao-AILab/quack/blob/main/media/2025-07-10-membound-sol.md) -- Core reference
 - [Thread Block Cluster](../../../kernel-opt/nvidia/common/thread-block-cluster.md) -- Cluster and DSMEM details

@@ -1,5 +1,7 @@
 # FlyDSL Layout Algebra Reference
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 FlyDSL implements CuTe layout algebra (derived from NVIDIA CUTLASS, BSD-3-Clause), providing complete layout algebra operations on AMD GPUs via the Fly MLIR dialect.
 
 > **All `fx.*` layout operations generate MLIR IR and must be called within a `@flyc.kernel` or `@flyc.jit` function body.**
@@ -119,7 +121,9 @@ Compose two layouts: `result(x) = A(B(x))`
 
 Computes the "remainder" modes not covered by the tiler.
 
-**Purpose**: An internal building block of `logical_divide`; computes the complementary iteration space during tiling.### 5.3 Coalesce — `fx.coalesce(layout)`
+**Purpose**: An internal building block of `logical_divide`; computes the complementary iteration space during tiling.
+
+### 5.3 Coalesce — `fx.coalesce(layout)`
 
 Simplify layout: flatten nested patterns and merge adjacent compatible patterns.
 

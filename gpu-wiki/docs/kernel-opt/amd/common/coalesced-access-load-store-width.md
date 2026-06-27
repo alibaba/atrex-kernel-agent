@@ -102,5 +102,5 @@ example: row-major tensor (stride=1 columndimension)
 
 ## Related Documentation
 
-- **Hardware Specifications**:
+- **Hardware Specifications**: [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md)
 - **Profiling**: [Profiling Tools Overview](profiling-tools-overview.md) — Using rocprof to obtain performance counters

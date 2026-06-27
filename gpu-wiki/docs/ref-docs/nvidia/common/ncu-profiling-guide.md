@@ -504,5 +504,5 @@ Also supports Response File: `ncu @args.txt ./app`
 
 - **Prerequisites**: [GPU Instruction-Level Optimization](../../generic/gpu-instruction-optimization.md) — Roofline analysis principles
 - **Hopper Specialization**: [Hopper ncu Profiling Details](../gluon/sm90/profiling_guide.md) — ncu usage for Gluon kernels
-- **AMD Counterpart**: [CDNA3 rocprofv3 Profile](../../amd/gluon/gfx942/profiling_guide.md) |  — AMD profiling
+- **AMD Counterpart**: [CDNA3 rocprofv3 Profile](../../amd/gluon/gfx942/profiling_guide.md) | [CDNA4 rocprofv3 Profile](../../amd/gluon/gfx950/profiling_guide.md) — AMD profiling
 - **Hardware Specifications**: `hardware_specs.md` per architecture — Peak TFLOPS required for SOL% calculation

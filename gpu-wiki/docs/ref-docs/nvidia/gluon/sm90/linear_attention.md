@@ -6,7 +6,7 @@ pitfalls: [6, 7, 8, 9, 10]
 
 # Chunk Linear Attention / Recurrent State Update Optimization Guide
 
-> **Composite pattern**. The internal wgmma is a matmul sub-pattern. See `patterns/matmul.md` for general matmul optimization.
+> **Composite pattern**. The internal wgmma is a matmul sub-pattern. See `matmul.md` for general matmul optimization.
 > The content below only describes **pattern-specific content** and **applicability adjustments** Instruct sub-pattern optimization.
 > See `common_optimizations.md` for the general ISA optimization checklist.
 
@@ -80,7 +80,7 @@ pitfalls: [6, 7, 8, 9, 10]
 
 2. per-iteration elapsed time:
  per_iter_min ≈ #wgmma × µs + fence/wait
-   
+
 3. :
    theoretical_time = NT × per_iter_min
 

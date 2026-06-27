@@ -1,7 +1,7 @@
 # API Mapping Reference (NVIDIA Hopper)
 
-**Last Updated**: 2026-03-18  
-**Target Architecture**: NVIDIA Hopper (sm_90, H20/H100/H200)  
+**Last Updated**: 2026-03-18
+**Target Architecture**: NVIDIA Hopper (sm_90, H20/H100/H200)
 **Verification Status Legend**: ✅ Verified | ⚠️ Pending Verification | ❌ Falsified
 
 > **⚠️ TTGIR Field Names ≠ Gluon Parameter Names**: `versionMajor/versionMinor`→`version=[major,minor]`, `warpsPerCTA`→`warps_per_cta`, etc. See `layouts.md` for the full mapping.
@@ -129,7 +129,7 @@ acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))
 | `tl.cast(x, dtype)` | `gl.cast(x, dtype)` | ✅ | Same |
 | `x.to(dtype)` | `x.to(dtype)` | ✅ | Same |
 
-See the parent Skill's `references/porting_rules.md` for a complete list of math operations.
+See `../../amd/common/porting_rules.md` for a complete list of math operations.
 
 ---
 

@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] Python API Reference
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/api/dsl.rst` + `docs/api/compiler.rst` + `docs/api/kernels.rst` | Compiled Version: [FlyDSL Programming Guide](flydsl-programming-guide.md)
 
 > Complete Python API reference for the FlyDSL package, synthesized from the Sphinx API docs.

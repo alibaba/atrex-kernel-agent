@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention (bf16, MHA + GQA) Optimization on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 This document records the iterative profile-driven optimization of a FlyDSL
 flash-attention forward kernel on AMD MI308X (CDNA3, gfx942), targeting the
 prefill regime and benchmarked head-to-head against `aiter.ops.mha.mha_batch_prefill_func`.

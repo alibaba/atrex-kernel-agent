@@ -167,7 +167,9 @@ struct Sm90VisitorImplBase {
 };
 ```
 
-Provides hand-written template specializations for 1-4 Ops (to avoid aggregate initialization limitations).### 2.3 Consumer Store Callbacks Lifecycle
+Provides hand-written template specializations for 1-4 Ops (to avoid aggregate initialization limitations).
+
+### 2.3 Consumer Store Callbacks Lifecycle
 
 Each node generates a callbacks object via `get_consumer_store_callbacks`, with the full lifecycle:
 
@@ -483,6 +485,6 @@ Evaluation order (depth-first postorder traversal):
 ## Related Documents
 
 - [CUTLASS GEMM Optimization](cutlass-gemm-optimization.md) -- mainloop design and tile strategies
--  -- Blackwell TMEM epilogue
+- [SM100 CuTeDSL](sm100/blackwell-cutedsl-sm100.md) -- Blackwell TMEM epilogue
 - [Pipeline Patterns](cutedsl-pipeline-patterns.md) -- epilogue pipeline stages
 - [Quantization & Block-Scaled GEMM](cutlass-quantization-block-scaled.md) -- block-scaled input MMA

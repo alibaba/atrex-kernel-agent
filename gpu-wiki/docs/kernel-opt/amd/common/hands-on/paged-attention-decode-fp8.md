@@ -56,5 +56,5 @@ def paged_attention_decode_fp8(
 ## Related Documents
 
 - **MFMA Instruction Selection**: [MFMA Instruction Selection and Usage](mfma-instruction-selection.md) — mfma_scale for FP8 GEMM
-- **CDNA4 FP8 Hands-On**:
+- **CDNA4 FP8 Hands-On**: [CDNA4 FP8 GEMM Optimization Hands-On](../../../../ref-docs/amd/common/gfx950/cdna4-fp8-gemm-optimization.md)
 - **Generic Triton Patterns**: [Triton Optimization Pattern Hands-On](../../../generic/hands-on/README.md) — Flash Attention, online softmaxonn, online softmax

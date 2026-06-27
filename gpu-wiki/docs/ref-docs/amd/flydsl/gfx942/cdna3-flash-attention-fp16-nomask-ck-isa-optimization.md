@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention Forward (fp16, no-mask) on MI308X
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 ## Target hardware
 
 - **Chip**: AMD MI308X (CDNA3, gfx942)
@@ -8,7 +10,7 @@
 - **Input dtype**: fp16
 - **Feature mode**: no mask, non-causal
 - **Reference CK command**:
-  `<composable_kernel-build>/bin/tile_example_fmha_fwd -b=1024 -h=8 -v=0 -d=64 -s=316`
+  `$COMPOSABLE_KERNEL_ROOT/build/bin/tile_example_fmha_fwd -b=1024 -h=8 -v=0 -d=64 -s=316`
 
 ## Algorithm baseline
 
@@ -172,9 +174,9 @@ diagnostics.
 ## Sustained recipe
 
 1. Measure CK locally for the exact dtype and shape:
-   `<composable_kernel-build>/bin/tile_example_fmha_fwd -b=1024 -h=8 -v=0 -d=64 -s=316`.
+   `$COMPOSABLE_KERNEL_ROOT/build/bin/tile_example_fmha_fwd -b=1024 -h=8 -v=0 -d=64 -s=316`.
 2. Validate FlyDSL with:
-   `FLASH_ATTN_DTYPE=f16 /opt/conda310/envs/vllm/bin/python verify_nomask.py`.
+   `FLASH_ATTN_DTYPE=f16 ${PYTHON:-python3} verify_nomask.py`.
 3. Profile with rocprofv3 kernel trace, 10 warmup + 50 measured dispatches.
 4. Capture ATT and count `ds_read_b128`, `ds_read2_b32`, `s_waitcnt`, and `s_nop`
    before claiming CK-like progress.

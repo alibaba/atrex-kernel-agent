@@ -41,4 +41,4 @@ def kernel(..., IS_CDNA4: tl.constexpr):
 
 - **Tuning Guide**: AMD GPU Kernel Tuning Guide — CDNA3 vs CDNA4 Hardware Specification Comparison
 - **Optimization Frameworks**: [AMD GPU Kernel Optimization Framework Overview](../../../../ref-docs/amd/common/amd-kernel-optimization-frameworks.md) — FlyDSL/CK/TileLang Comparison
-- **Cross-Architecture Difference Quick Reference**:
+- **Cross-Architecture Difference Quick Reference**: [Hardware Specification Comparison](../../../../hardware-specs/hardware-comparison-cdna3-cdna4.md)

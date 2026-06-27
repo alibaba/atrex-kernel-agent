@@ -124,7 +124,7 @@ The remaining ~11% gap comes from Triton compiler's `in_thread_transpose` optimi
 
 ## Related Documentation
 
-- **Cross-Architecture Reference**:  (hardware DMA) | [Hopper Pipeline](../../nvidia/hopper/pipeline.md) (CP_ASYNC)
+- **Cross-Architecture Reference**: [CDNA4 Pipeline](../cdna4/pipeline.md) (hardware DMA) | [Hopper Pipeline](../../nvidia/hopper/pipeline.md) (CP_ASYNC)
 - **🔴 Architecture Differences**: This article covers pure software pipelining (buffer_load→register→smem). CDNA4 and Hopper use hardware DMA to bypass registers; code is not portable between them.
 - **Downstream Optimization**: [CDNA3 Warp Pipeline Stage](../../../ref-docs/amd/gluon/gfx942/warp_pipeline_stage.md) — optimizes the pipeline code produced by this article
 - **Layout Dependencies**: [CDNA3 Layouts](layouts.md)

@@ -117,5 +117,5 @@ per_warp_acc_vgprs = total_acc_elements / num_warps × element_vgprs
 
 - **Occupancy**: [Occupancy Optimization](occupancy-optimization.md) — the relationship between VGPRs and occupancy
 - **Instruction Width**: [Coalesced Access and Instruction Width](coalesced-access-load-store-width.md) — increasing size_per_thread can exacerbate VGPR pressure
-- **Hardware Specs**:  — total VGPR counts per architecture
+- **Hardware Specs**: [Hardware Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — total VGPR counts per architecture
 - **Small Matrix Optimization**: [Small Matrix / Low CU Utilization Optimization](small-matrix-cu-utilization.md) — reducing tile size to eliminate spills

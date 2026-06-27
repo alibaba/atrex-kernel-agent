@@ -97,5 +97,5 @@ The following optimizations have proven ineffective or harmful on small matrices
 ## Related Documents
 
 - **Prerequisites**: [Roofline Analysis Methodology](roofline-analysis-methodology.md) — Tile AI, CU utilization pre-check
-- **Hardware Specifications**:  — CU count, peak compute
+- **Hardware Specifications**: [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — CU count, peak compute
 - **Occupancy**: [Occupancy Optimization](occupancy-optimization.md) — VGPR and occupancy relationship

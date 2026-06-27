@@ -44,4 +44,4 @@ b_transposed = ds_load_tr16_b128(lds_b_ptr)
 
 - **MFMA Instruction Reference**: [AMD MFMA Matrix Core Programming Guide](../../../../ref-docs/amd/common/amd-mfma-matrix-cores.md) — instruction naming rules, register layout
 - **Optimization Frameworks**: [AMD GPU Kernel Optimization Framework Overview](../../../../ref-docs/amd/common/amd-kernel-optimization-frameworks.md) — FlyDSL/CK/TileLang comparison
-- **Cross-Architecture Differences Quick Reference**:
+- **Cross-Architecture Differences Quick Reference**: [Hardware Specification Comparison](../../../../hardware-specs/hardware-comparison-cdna3-cdna4.md)

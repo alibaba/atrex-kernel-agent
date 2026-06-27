@@ -127,18 +127,18 @@ Within each 4x4 swizzle block:
 def swizzle_tile_index(linear_idx, num_tiles_major, log_swizzle_size):
     """Map linear tile index to (minor, major) coordinates"""
     swizzle_size = 1 << log_swizzle_size
-    
+
     # Extract offset within swizzle block
     offset = linear_idx & (swizzle_size - 1)         # Low log_swizzle_size bits
     extra = linear_idx >> log_swizzle_size            # High bits
-    
+
     # Extract major and minor block indices from high bits
     minor_div_swizzle = extra // num_tiles_major
     major = extra % num_tiles_major
-    
+
     # Reconstruct minor coordinate: block index * swizzle_size + offset
     minor = minor_div_swizzle * swizzle_size + offset
-    
+
     return minor, major
 ```
 
@@ -183,13 +183,13 @@ For example:
   tile_K = 128 elements
   element_size = 2 bytes (FP16)
   L2 per SM partition ≈ 256 KB (H100 has 50 MB L2, ~72 partitions)
-  
+
   swizzle_size <= 256 KB / (128 * 2) = 1024  ← Theoretical upper bound
-  
+
 Actually limited by concurrently active CTA count and other L2 users:
   Actual effective L2 ≈ 64 KB per CTA
   swizzle_size <= 64 KB / (128 * 2) = 256   ← Still large
-  
+
 So the bottleneck is usually not L2 capacity, but tile grid size.
 ```
 
@@ -201,7 +201,7 @@ Swizzle size cannot exceed the number of tiles along the minor dimension, otherw
 def get_log_swizzle_size(tiles_m, tiles_n, max_swizzle_size):
     """Select swizzle size based on tile grid dimensions"""
     min_dim = min(tiles_m, tiles_n)
-    
+
     if max_swizzle_size >= 8 and min_dim >= 6:
         return 3    # swizzle_size = 8
     elif max_swizzle_size >= 4 and min_dim >= 3:
@@ -240,7 +240,7 @@ In a standard GEMM launch, the kernel launches M_tiles * N_tiles CTAs, and the G
 ```
 Persistent Kernel:
 gridDim = (num_SMs, 1, 1)   # e.g., 114 CTAs (H100 has 114 SMs)
-  
+
   Each CTA:
       tile_idx = atomicAdd(&global_counter, 1)   # Atomic increment to get next tile
       (m, n) = swizzle(tile_idx)                 # Apply swizzle mapping
@@ -277,12 +277,12 @@ gridDim = (num_SMs, 1, 1)   # e.g., 114 CTAs (H100 has 114 SMs)
 ```python
 """Get next tile to process"""
     # Atomic increment global counter
-    
+
     # Check if exceeding total tile count
         return None  # No more work
-    
+
     # Handle batch dimension
-    
+
     # Apply swizzle mapping to (m, n)
 ```
 
@@ -413,7 +413,7 @@ If L2 hit rate is low:
   2. Check if swizzle size fits current problem scale
   3. Use NCU to compare L2 hit rate for raster_order = AlongM vs AlongN
   4. Check if other kernels run concurrently, competing for L2
-  
+
 If swizzle brings no improvement:
   1. Problem may already fit L2 (check A+B total size vs L2 capacity)
   2. Kernel may be compute-bound rather than memory-bound

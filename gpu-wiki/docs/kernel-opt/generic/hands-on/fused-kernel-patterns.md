@@ -11,20 +11,20 @@ Fuse softmax + log + nll_loss into a single kernel to avoid writing intermediate
 def cross_entropy_kernel(logits_ptr, labels_ptr, loss_ptr, ...):
     # 1. Load a row of logits
     logits = tl.load(logits_ptr + offsets, mask=mask, other=-float('inf'))
-    
+
     # 2. Online max (numerical stability)
     max_val = tl.max(logits, axis=0)
     logits = logits - max_val
-    
+
     # 3. Compute log(sum(exp(x)))
     exp_logits = tl.exp(logits)
     sum_exp = tl.sum(exp_logits, axis=0)
     log_sum_exp = tl.log(sum_exp)
-    
+
     # 4. Get the logit corresponding to label
     label = tl.load(labels_ptr + pid)
     target_logit = tl.load(logits_ptr + pid * vocab_size + label)
-    
+
     # 5. loss = log_sum_exp - (target_logit - max_val)
     loss = log_sum_exp - (target_logit - max_val)
     tl.store(loss_ptr + pid, loss)

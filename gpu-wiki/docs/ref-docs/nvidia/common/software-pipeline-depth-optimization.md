@@ -54,7 +54,7 @@ A pipeline requires two types of synchronization:
 ```
 Producer perspective:        Consumer perspective:
   acquire(buf[i])  ←——————  release(buf[i])    "buf[i] available?"
-  load(buf[i])                                  
+  load(buf[i])
   commit(buf[i])   ——————→  wait(buf[i])       "buf[i] data ready?"
                             compute(buf[i])
                             release(buf[i])

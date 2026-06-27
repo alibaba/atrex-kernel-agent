@@ -76,7 +76,7 @@ mma: gl.constexpr = gl.NVMMADistributedLayout(
 
 **Key Differences**:
 - AMD `version` is a scalar (e.g., `version=3`), while Hopper `version` is a list `[major, minor]`
-- wgmma operands are read directly from shared memoryundo, no `DotOperandLayout` is needed
+- wgmma operands are read directly from shared memory, so no `DotOperandLayout` is needed
 
 ---
 
@@ -84,7 +84,8 @@ mma: gl.constexpr = gl.NVMMADistributedLayout(
 The **shared memory operand layout** used for wgmma instructions. wgmma requires both operands to be in shared memory and must use this layout.
 
 TTGIR:
-```# Non-transposed (LHS operand: w[BT, 64])
+```
+# Non-transposed (LHS operand: w[BT, 64])
 shared_w: gl.constexpr = gl.NVMMASharedLayout(
     swizzle_byte_width=128, element_bitwidth=16, transposed=False)
 
@@ -95,7 +96,9 @@ shared_k: gl.constexpr = gl.NVMMASharedLayout(
 # Small swizzle (small matrix RHS: v_new[BT, BV] where BV=16)
 shared_v: gl.constexpr = gl.NVMMASharedLayout(
     swizzle_byte_width=32, element_bitwidth=16, transposed=False)
-``````Gluon:
+```
+
+Gluon:
 ```python
 # Non-transposed (LHS operand: w[BT, 64])
 shared_w: gl.constexpr = gl.NVMMASharedLayout(
@@ -121,7 +124,7 @@ shared_v: gl.constexpr = gl.NVMMASharedLayout(
 ---
 
 ### SwizzledSharedLayout (General)
-Used for shared memory in non-wgmma scenarios. For example, used duct`gl.load` to smem and then for temporary storage via `allocate_shared_memory(value=...)`.
+Used for shared memory in non-wgmma scenarios. For example, use `gl.load` to smem and then temporary storage via `allocate_shared_memory(value=...)`.
 
 TTGIR:
 ```
@@ -158,6 +161,7 @@ col_2d = gl.expand_dims(col_idx, axis=0)   # [1, BLOCK_N]
 `target_layout` should match the layout of the load/store target.
 
 ---
+```python
 # AMD (requires DotOperandLayout):
 dot_op0 = gl.DotOperandLayout(operand_index=0, parent=mma, k_width=4)
 a_dot = a_smem.load(dot_op0)

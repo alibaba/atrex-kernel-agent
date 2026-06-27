@@ -193,7 +193,7 @@ Per-Tensor          Per-Channel          Per-Group           Per-Element
                     (along K axis)       (32-128 elements shared)
     1 scale         M or N scales       M*N / group_size     M*N scales
                                          scales
-    
+
  Precision:  Lowest          Lower                 Higher                 Highest
  Overhead:   Minimum         O(M+N)               O(M*N/G)              O(M*N)
  Speed:      Fastest         Fast                  Slower                 Slowest
@@ -426,14 +426,14 @@ def should_use_promotion(K, dtype_bits, accum_bits, arch):
     """Rough estimate of whether promotion is needed"""
     if accum_bits == 32:
         return False  # FP32 accumulator is sufficiently precise
-    
+
     # Worst-case scenario for FP16 accumulator
     max_product = (2 ** dtype_bits) ** 2  # Upper bound of FP8 product
     max_accum = K * max_product
-    
+
     if max_accum > 30000:  # FP16 max ≈ 65504, leave safety margin
         return True
-    
+
     return False
 ```
 

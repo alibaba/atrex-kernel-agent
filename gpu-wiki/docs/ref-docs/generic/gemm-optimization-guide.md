@@ -194,7 +194,9 @@ Thread Block Tile (128 x 128)
 **Occupancy Trade-offs**:
 - Block size 128, 128 results per thread -> requires 180+ registers/thread -> Active Warps only 8 -> Occupancy 25%
 - Block size 256, 64 results per thread -> requires 128 registers/thread -> Active Warps can reach 16 -> Occupancy 50%
-- **Higher Occupancy does not necessarily mean higher performance**, but it provides a larger warp switching pool to hide latency## 5. Vectorized Access and Bank Conflict Elimination
+- **Higher Occupancy does not necessarily mean higher performance**, but it provides a larger warp switching pool to hide latency
+
+## 5. Vectorized Access and Bank Conflict Elimination
 
 ### 5.1 Vectorized Memory Access
 
@@ -263,20 +265,20 @@ int write_stage = 1;
 for (int k = BK; k < K; k += BK) {
     // Async load next tile to intermediate registers
     load_gmem_to_reg(A, B, ldg_a_reg, ldg_b_reg);
-    
+
     // Compute current tile (load from SMEM to registers + FMA)
     for (int j = 0; j < BK - 1; ++j) {
         load_smem_to_reg(As[load_stage], j+1, frag_a[(j+1)%2]);
         load_smem_to_reg(Bs[load_stage], j+1, frag_b[(j+1)%2]);
         mma(frag_a[j%2], frag_b[j%2], c);
     }
-    
+
     // Write intermediate registers to SMEM (intentionally staggered with compute to hide latency via ILP)
     store_reg_to_smem(ldg_a_reg, As[write_stage]);
     store_reg_to_smem(ldg_b_reg, Bs[write_stage]);
     __syncthreads();
     write_stage ^= 1;
-    
+
     mma(frag_a[1], frag_b[1], c);  // Compute last tile
 }
 ```
@@ -426,7 +428,9 @@ for k-loop:
     swap buffers
 ```
 
-**Result**: The latency of each loop iteration includes only the load latencyanson, not compute latency.### 9.3 Practical Suggestions
+**Result**: The latency of each loop iteration includes only the load latencyanson, not compute latency.
+
+### 9.3 Practical Suggestions
 
 - GEMV with batch size = 1: The computational workload is too small Wool to effectively overlap; prioritize high concurrency to hide latency.
 - Batched GEMV with a large batch size: The computational workload is significant; dual-pipelining is the primary optimization technique.

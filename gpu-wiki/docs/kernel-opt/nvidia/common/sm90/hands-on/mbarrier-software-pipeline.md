@@ -41,10 +41,10 @@ for k in range(0, K, BLOCK_K):
     tl.async_copy_global_to_shared(next_a_ptr, smem_a_next)
     tl.async_copy_global_to_shared(next_b_ptr, smem_b_next)
     tl.commit_group()
-    
+
     # Compute current tile
     acc = tl.dot(smem_a, smem_b, acc)
-    
+
     # Wait for next tile
     tl.wait_group(0)
     smem_a, smem_a_next = smem_a_next, smem_a

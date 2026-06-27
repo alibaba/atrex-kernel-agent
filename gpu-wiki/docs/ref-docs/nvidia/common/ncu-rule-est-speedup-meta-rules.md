@@ -34,7 +34,7 @@ Examples of fixes that tend to deliver close to NCU's est.:
 - Smem padding to break intra-warp bank conflicts (free; no inst count change)
 - Vectorization (16-byte loads when alignment permits)
 - `assumed_align=16` to unlock cp.async cp_size=128b (single-line fix; ~50% wins
-  on streaming workloads — see )
+  on streaming workloads — see [`../cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md`](../cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md))
 - Fixing a wrong cache-mode hint (`LoadCacheMode.GLOBAL` for streaming reads)
 
 ## When the estimate IS misleading
@@ -103,9 +103,9 @@ no new primitives) survives. V9 architecturally improved Eligible Warps/Sched
 was flat at the time it landed.
 
 Full case study:
-- Pitfalls: [`sm120-moe-data-prep-pitfalls (see pitfalls/nvidia/cutedsl/README.md)`](../../../pitfalls/nvidia/cutedsl/README.md)
-- Optimization journey:
-- Final code:
+- Pitfalls: [`../../pitfalls/nvidia/cutedsl/sm120-moe-data-prep-pitfalls.md`](../../../pitfalls/nvidia/cutedsl/sm120-moe-data-prep-pitfalls.md)
+- Optimization journey: [`../cutedsl/sm120/sm120-moe-data-prep-optimization.md`](../cutedsl/sm120/sm120-moe-data-prep-optimization.md)
+- Final code: [`reference-kernels/nvidia/blackwell-geforce/cutedsl/moe_data_prep/`](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/moe_data_prep/)
 
 (Add other case studies here as they accumulate from future sessions.)
 
@@ -150,6 +150,7 @@ time but no wall-time gain and had to be reverted.
 ## Related docs
 
 - NCU profiling fundamentals: [`ncu-profiling-guide.md`](ncu-profiling-guide.md)
+- Measurement trust (Duration≠latency, noise floor, graph-capture pitfalls): [`ncu-measurement-discipline.md`](ncu-measurement-discipline.md)
 - Bank conflict mitigation (cheap-fix family): [`smem-swizzling-bank-conflicts.md`](smem-swizzling-bank-conflicts.md)
 - Hierarchical reduction patterns: [`hierarchical-reduction-memory-bound.md`](hierarchical-reduction-memory-bound.md)
 - Warp specialization design (when it helps vs hurts): [`warp-specialization-design-principles.md`](warp-specialization-design-principles.md)

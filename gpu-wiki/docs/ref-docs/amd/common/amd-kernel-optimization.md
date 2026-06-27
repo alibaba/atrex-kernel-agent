@@ -274,4 +274,4 @@ Achieving peak bandwidth requires using multiple IODs simultaneously.
 - [AITER Optimization Techniques](aiter-optimization-techniques.md) — AITER inference operator library optimization techniques
 - [Profiling Tools Overview](../../../kernel-opt/amd/common/profiling-tools-overview.md) — Performance analysis tools such as rocprofv3
 - Triton Kernel Tuning Parameters — Triton tuning guide on AMD GPUs
--  — MI300X vs MI355X architecture comparison
+- [Hardware Comparison CDNA3/CDNA4](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — MI300X vs MI355X architecture comparison

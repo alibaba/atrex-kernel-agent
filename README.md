@@ -1,4 +1,4 @@
-# Atrex Kernel Agent (AKA)
+# Atrex Kernel Agent
 
 AKA is an end-to-end Agent project for GPU kernel implementation, analysis, profiling, and iterative optimization. It helps an Agent turn PyTorch logic or an existing kernel into a high-performance GPU kernel through a structured, profile-driven workflow.
 
@@ -8,7 +8,7 @@ AKA is an end-to-end Agent project for GPU kernel implementation, analysis, prof
 
 ## What It Does
 
-- Creates an isolated optimization workspace under `/tmp/kernel_opt_<name>/`.
+- Creates an isolated optimization workspace under `kernel_opt_<name>/`.
 - Looks up target hardware specs from the local `gpu-wiki` knowledge base.
 - Runs Roofline analysis and sets auditable performance targets.
 - Implements a correct baseline kernel before entering optimization.
@@ -24,36 +24,51 @@ Installation requires:
 - `bash`
 - `git`
 - `jq`
-- Codex or Claude Code installed
+- A compatible coding runtime installed
 
 Running optimization tasks also requires platform-specific profiling tools:
 
-- NVIDIA: `ncu`
+- NVIDIA: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
 ## Installation
 
+### 1. Internal Development Environment Setup (Required for internal users)
+
 ```bash
-./install.sh
+bash setup-dev-env.sh
 ```
+
+Configures git `insteadOf` URL redirect rules so that dependencies can be fetched correctly from the internal network. **External users can skip this step.**
+
+### 2. Pull reference-projects Submodule
+
+```bash
+git submodule update --init
+```
+
+Downloads all reference projects managed under `reference-projects/`.
+
+### 3. Run the Installer
+
+```bash
+bash install.sh --prefix [install-path]
+```
+
+The install path is optional; defaults to `~/aka_kernel_opt`.
 
 Common options:
 
 ```bash
-./install.sh --hooks-only          # Install or update hooks only
-./install.sh --without-github      # Skip GitHub reference repositories listed by gpu-wiki
-./install.sh --max-iterations N    # Configure hook stop behavior after memory/vN.json exceeds N
-./install.sh --uninstall           # Remove hooks installed by this script
+bash install.sh ~/my_path          # Install to a custom directory
+bash install.sh --hooks-only        # Install or update hooks only
+bash install.sh --max-iterations N  # Configure hook stop behavior after memory/vN.json exceeds N
+bash install.sh --uninstall         # Remove hooks installed by this script
 ```
 
-The installer detects:
+The installer detects supported runtime home directories and prepares local hooks when available.
 
-- Codex: `$CODEX_HOME` or `~/.codex`
-- Claude Code: `$CLAUDE_HOME` or `~/.claude`
-
-It also prepares the default local knowledge base at `/tmp/gpu-wiki/` and optional reference projects at `/tmp/reference-projects/`.
-
-After installation, restart Codex / Claude Code or open a new session so the hooks and Skills are loaded.
+After installation, restart the coding runtime or open a new session so the hooks are loaded.
 
 ## Quick Start
 
@@ -75,11 +90,11 @@ The Agent will initialize a workspace, source hardware specs from `gpu-wiki`, wr
 
 ```text
 .
-├── SKILL.md                         # Top-level gpu-kernel-optimizer Skill router
+├── SKILL.md                         # Top-level gpu-kernel-optimizer router manifest
 ├── install.sh                       # Installer / uninstaller
 ├── docs/                            # Detailed project design docs
 ├── reference/                       # Workspace, plan, memory, and profiling templates
-├── skills/                          # Baseline, optimizer, restart, and output-contract Skills
+├── skills/                          # Baseline, optimizer, restart, and output-contract modules
 ├── tools/                           # Profiling, utilization, memory, and measurement tools
 └── gpu-wiki/                        # Local GPU knowledge base
 ```

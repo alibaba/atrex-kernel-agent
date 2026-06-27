@@ -265,6 +265,6 @@ ncu --import profile.ncu-rep --metrics launch__registers_per_thread
 
 ## Related Documents
 
-- **Cross-architecture comparison**:  — 10 CDNA4-specific pitfalls
+- **Cross-architecture comparison**: [CDNA4 Pitfalls](../../../amd/gluon/gfx950/pitfalls.md) — 10 CDNA4-specific pitfalls
 - **🔴 #1 Conflicts with AMD**: This document considers manual code refactoring to be almost always a negative optimization, but manual optimizations in [CDNA3 ISA Optimization](../../../amd/gluon/gfx942/common_optimizations.md) yield +1-4% gains
 - **Referenced by**: [matmul](matmul.md) references #1-5 | [linear_attention](linear_attention.md) references #6-10

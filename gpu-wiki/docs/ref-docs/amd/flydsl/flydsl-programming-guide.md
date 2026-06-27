@@ -1,5 +1,7 @@
 # FlyDSL Programming Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 FlyDSL (**F**lexible **l**ayout p**y**thon **DSL**) is a Python DSL based on MLIR for writing high-performance AMD GPU kernels, implementing CuTe layout algebra. It compiles to ROCDL/HSACO binaries via the Fly dialect.
 
 > **Source Project**: [FlyDSL](https://github.com/ROCm/FlyDSL), licensed under Apache 2.0
@@ -389,7 +391,9 @@ def launch(A: fx.Tensor, B: fx.Tensor, ...):
 - `Config(num_warps=, waves_per_eu=, maxnreg=, **kwargs)` — Single tuning configuration
 - `@autotune(configs=[...], key=[...])` — Auto-benchmark all configurations
 - Results cached to `~/.flydsl/autotune/`
-- `do_bench(fn, warmup=5, rep=25)` — Standalone GPU benchmark## 9. Compilation Cache
+- `do_bench(fn, warmup=5, rep=25)` — Standalone GPU benchmark
+
+## 9. Compilation Cache
 
 ### Automatic Caching
 

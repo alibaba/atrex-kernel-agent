@@ -152,7 +152,9 @@ x_shifted = x - max_val
 exp_x = tl.exp(x_shifted)
 sum_exp = tl.sum(exp_x, axis=0)
 softmax_out = exp_x / sum_exp
-```## Activation Implementation Reference
+```
+
+## Activation Implementation Reference
 
 ### ReLU
 ```python

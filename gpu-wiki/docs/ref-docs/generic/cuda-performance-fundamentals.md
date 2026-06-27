@@ -111,7 +111,7 @@ for (int tile = 0; tile < numTiles; tile++) {
     M_tile[ir][ic] = M[...];
     N_tile[ir][ic] = N[...];
     __syncthreads();   // Ensure all threads have loaded before computing
-    
+
     for (int k = 0; k < TILE_SIZE; k++)
         res += M_tile[ir][k] * N_tile[k][ic];
     __syncthreads();   // Ensure all threads have finished computing before loading next tile
@@ -349,7 +349,9 @@ with nvtx.annotate("backward_pass", color="red"):
 
 ---
 
-## 7. Key Numbers Every CUDA Developer Must Know### 7.1 Memory Hierarchy Latency
+## 7. Key Numbers Every CUDA Developer Must Know
+
+### 7.1 Memory Hierarchy Latency
 
 | Storage Type | Latency (GPU cycles) | Physical Location | Notes |
 |-------------|---------------------|------------------|-------|

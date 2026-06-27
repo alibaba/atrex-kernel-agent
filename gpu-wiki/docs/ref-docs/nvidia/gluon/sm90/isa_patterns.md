@@ -117,7 +117,9 @@ In the same clock cycle, when multiple threads in the same warp access the same 
 
 - **wgmma is asynchronous**: Launched without blocking the warp, must be used with `WGMMA_FENCE` + `WGMMA_COMMIT_GROUP` + `WGMMA_WAIT` in coordination
 - **Operands reside in shared memory**: wgmma reads A and B matrices directly from smem (via `NVMMASharedLayout`), with the accumulator in registers
-- **Fundamental difference from AMD MFMA**: AMD MFMA operands are in registers (loaded from smem via `DotOperandLayout` before execution)### wgmma Related Synchronization Instructions
+- **Fundamental difference from AMD MFMA**: AMD MFMA operands are in registers (loaded from smem via `DotOperandLayout` before execution)
+
+### wgmma Related Synchronization Instructions
 
 | SASS Instruction | Corresponding Gluon API | Description |
 |----------|----------------|------|
