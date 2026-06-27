@@ -1,5 +1,7 @@
 # Pitfalls: FlyDSL Chunk-GDN on MI355X (gfx950)
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 Pitfalls encountered during optimizing the Chunk-GDN 5-kernel pipeline. Accompanying optimization documentation:
 `ref-docs/amd/flydsl/gfx950/cdna4-chunk-gdn.md`
 
@@ -353,7 +355,7 @@ grid = (NT_val, H // 4, 1)
 
 ## Related docs
 
--
+- [FlyDSL Chunk-GDN Optimization](../../../ref-docs/amd/flydsl/gfx950/cdna4-chunk-gdn.md)
 - [FlyDSL Flash Attention Pitfalls](flash-attn-pitfalls.md)
 - [Software Pipelining](../../../kernel-opt/amd/common/hands-on/software-pipelining.md)
 - [LDS Bank Conflict Optimization](../../../kernel-opt/amd/common/lds-bank-conflict-optimization.md)

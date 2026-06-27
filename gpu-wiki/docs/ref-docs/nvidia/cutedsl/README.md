@@ -27,3 +27,5 @@ Reference articles on the CuTeDSL programming model, CUTLASS 3.x architecture, a
 | Directory | Description |
 |-----------|-------------|
 | [sm90/](sm90/) | Hopper (SM90) CuTeDSL-specific articles |
+| [sm100/](sm100/) | Blackwell (SM100) CuTeDSL-specific articles |
+| [sm120/](sm120/) | Blackwell GeForce / RTX PRO 5000 (SM120) optimization reports (GDN decode fp32-state journey; GDN chunk fwd V113 0.531-0.533ms = 1.51× FLA; NVFP4 persistent GEMM; FA epilogue + NVFP4 quant; PipelineTmaAsync notes) |

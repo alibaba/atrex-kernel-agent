@@ -123,7 +123,7 @@ A matrix (16x16, row-major):
 
 B matrix (8x16, col-major):
   2 registers/thread
-  
+
 D/C matrix (16x8):
   4 registers/thread, each register 2 f32
 ```

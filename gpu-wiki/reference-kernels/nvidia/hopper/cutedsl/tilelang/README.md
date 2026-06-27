@@ -13,7 +13,7 @@ For a complete summary of inline PTX patterns, see:
 |------|-------------|----------------------------|
 | `__init__.py` | Exports + cutlass.cute re-exports | — |
 | `utils.py` | bitcast, make_tensor helpers, `pack_half2` | `mov.b32 {r,r}` |
-| `cpasync.py` | cp.async / TMA load/store/reduce / mbarrier | `mbarrier.try_wait.parity.shared::cta.b64` spin |
+| `cpasync.py` | cp.async / TMA load·store·reduce / mbarrier | `mbarrier.try_wait.parity.shared::cta.b64` spin |
 | `ldsm.py` | `ldmatrix` / `stmatrix` x1/x2/x4 + transpose variants | NVVM dialect (no PTX written) |
 | `ptx_mma.py` | `mma.sync.aligned` factory for all dtypes (FP16/BF16/INT8/INT4/TF32/FP64/FP8) + sparse variants | `mma.sync.aligned.{shape}.{layout}.{dtype}` |
 | `atomic.py` | AtomicAdd/Max/Min/Load/Store + AtomicAddx2/x4 | `atom.add.noftz.f16/v2.f16/v2.bf16`, `atom.global.add.v4.f32`, `atom.cas.b32` spin-based float max/min, `fence.sc.gpu` |
@@ -39,4 +39,4 @@ For a complete summary of inline PTX patterns, see:
 
 ## Relationship with the SM120 NVFP4 Demo
 
- uses the same `llvm.inline_asm` approach Xin for `mma.sync.aligned.kind::mxf4nvf4...`, with template strings, constraint rules, `StructType` output decomposition, and `u32` packed FP4 register — all consistent. You can use `ptx_mma.py` as a template Spring new block-scaled MMA factory.
+[`reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py`](../../../blackwell-geforce/cutedsl/) uses the same `llvm.inline_asm` approach Xin for `mma.sync.aligned.kind::mxf4nvf4...`, with template strings, constraint rules, `StructType` output decomposition, and `u32` packed FP4 register — all consistent. You can use `ptx_mma.py` as a template Spring new block-scaled MMA factory.

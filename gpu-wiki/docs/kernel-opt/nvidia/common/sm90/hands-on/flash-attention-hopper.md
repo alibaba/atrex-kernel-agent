@@ -17,14 +17,14 @@ for kv_block in range(num_kv_blocks):
     # TMA loads K (automatic padding/OOB handling)
     cute.copy(tma_k, k_gmem[kv_block], k_smem)
     cute.copy(tma_v, v_gmem[kv_block], v_smem)
-    
+
     # WGMMA: S = Q @ K^T (SS mode, both Q/K read from shared memory)
     s = cute.gemm(qk_mma, q_smem, k_smem)
-    
+
     # Online softmax in registers
     m_new = cute.max(s, axis=1)
     p = cute.exp2((s - m_new) * log2e)
-    
+
     # WGMMA: O += P @ V
     acc = cute.gemm(pv_mma, p_smem, v_smem, acc)
 ```

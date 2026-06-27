@@ -12,15 +12,15 @@ def flash_attention(Q: T.Tensor(q_shape, dtype), K: T.Tensor(kv_shape, dtype),
         # Memory allocation
         Q_shared = T.alloc_shared([block_M, dim], dtype)       # LDS
         acc_o = T.alloc_fragment([block_M, dim], accum_dtype)  # Registers
-        
+
         # Data movement
         T.copy(Q[bz, offset:offset+block_M, by, :], Q_shared,
                coalesced_width=qk_coalesced_width)
-        
+
         # Computation
         T.gemm(Q_shared, K_shared, acc_s, transpose_B=True,
                k_pack=k_pack, policy=GemmWarpPolicy.FullRow)
-        
+
         # Reduction
         T.reduce_max(acc_s, m_i, dim=1, clear=False)
         T.reduce_sum(acc_s, row_sum, dim=1)

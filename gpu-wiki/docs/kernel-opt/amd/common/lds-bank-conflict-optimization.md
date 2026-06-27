@@ -36,6 +36,6 @@ Better than padding: zero extra LDS consumption while eliminating both read and 
 ## Related Documents
 
 - **Index**: AMD GPU Kernel Tuning Guide — Complete tuning topic index
-- **Hardware Specs**:  — LDS bank count differences between CDNA3 vs CDNA4
+- **Hardware Specs**: [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — LDS bank count differences between CDNA3 vs CDNA4
 - **General Memory Hierarchy**: [GPU Memory Hierarchy & Optimization](../../../ref-docs/generic/gpu-memory-hierarchy.md) — General shared memory / LDS optimization strategies
 - **Hands-on**: [LDS Bank Conflict Swizzle Hands-on](hands-on/lds-bank-conflict-swizzle.md) — XOR swizzle code examples

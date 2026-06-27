@@ -24,7 +24,8 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 ├── install.sh                            # Installer / uninstaller for Skills, hooks, gpu-wiki, and references
 ├── atrex-workflow.png                    # Workflow diagram
 ├── docs/
-│   └── atrex-kernel-agent-design.md      # This design document
+│   ├── design.md                         # This design document
+│   └── gpu-wiki-design.md                # gpu-wiki knowledge-base design
 ├── gpu-wiki/                             # Local GPU knowledge base and reference index
 │   ├── README.md
 │   ├── docs/                             # Hardware specs, kernel optimization docs, pitfalls, ref docs
@@ -51,7 +52,12 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
     ├── measure_kernel_time.py            # Kernel latency helper
     ├── memory_manager.py                 # Structured memory JSON manager
     ├── profile_kernel.sh                 # AMD rocprofv3 / ATT / PMC / ASM wrapper
-    └── input_att.yaml                    # ATT profiling configuration
+    ├── profile_nvidia.sh                 # NVIDIA ncu wrapper (metrics + symptom classification)
+    ├── classify_ncu.py                   # NCU metrics -> symptom diagnosis
+    ├── extract_nvidia_asm.py             # NVIDIA SASS extraction / analysis
+    ├── ncu_helpers/                      # Bundled ncu-report parsing helpers
+    ├── input_att.yaml                    # ATT profiling configuration
+    └── rocprof-trace-decoder-amd-mainline/ # AMD ATT decoder plugin
 ```
 
 ## Core Components
@@ -198,7 +204,7 @@ Each optimization iteration follows the profile optimizer Skill.
 Important rules:
 
 - Official profile evidence is required before code changes.
-- NVIDIA evidence comes from `ncu`.
+- NVIDIA evidence comes from `ncu`, wrapped by `tools/profile_nvidia.sh` (metrics parsing + symptom classification).
 - AMD evidence comes from `tools/profile_kernel.sh`, collecting ATT, PMC, and ASM artifacts.
 - After extracting bottleneck evidence, each iteration must query `gpu-wiki` first, then reference projects, then public web sources when needed, before writing the optimization plan.
 - Each iteration changes exactly one optimization category so attribution is clear.
@@ -268,7 +274,7 @@ The `masked` field allows the workflow to discard stale optimization memory with
 
 The workflow trusts official profile evidence only:
 
-- NVIDIA: `ncu`
+- NVIDIA: `ncu`, wrapped by `tools/profile_nvidia.sh` (metrics parsing + symptom classification)
 - AMD: `tools/profile_kernel.sh`, which wraps `rocprofv3`, ATT, PMC, and ASM extraction
 
 `reference/profile_guide.md` consolidates profiling commands, metric interpretation, evidence extraction, SASS/ASM analysis, and troubleshooting.
@@ -302,8 +308,10 @@ The `tools/` directory provides:
 - `bench_bandwidth.py`: run bandwidth benchmarks.
 - `measure_bandwidth_ceiling.py`: measure same-size bandwidth ceilings.
 - `measure_kernel_time.py`: helper for kernel latency measurement.
-- `extract_asm.py`: extract assembly for analysis.
+- `extract_asm.py`: extract AMD assembly for analysis.
 - `profile_kernel.sh`: AMD profiling wrapper for rocprofv3, ATT, PMC, and ASM.
+- `profile_nvidia.sh`: NVIDIA profiling wrapper for ncu; parses metrics and classifies symptoms via `classify_ncu.py` and the bundled `ncu_helpers/`.
+- `extract_nvidia_asm.py`: extract and analyze NVIDIA SASS (from `.ncu-rep`, cubin, Triton, or CuteDSL).
 - `memory_manager.py`: manage structured iteration records.
 
 ## Critical Constraints
@@ -311,7 +319,7 @@ The `tools/` directory provides:
 - Hardware specifications must not be guessed. They must come from `gpu-wiki` and include source references.
 - Archived specs without `gpu-wiki` sources are invalid.
 - Missing specs must be recorded as `UNKNOWN (gpu-wiki not found)` and escalated to the user.
-- Optimization decisions require official profile evidence: `ncu` for NVIDIA or `tools/profile_kernel.sh` / `rocprofv3` for AMD.
+- Optimization decisions require official profile evidence: `ncu` / `tools/profile_nvidia.sh` for NVIDIA or `tools/profile_kernel.sh` / `rocprofv3` for AMD.
 - `do_bench`, `torch.cuda.Event`, and handwritten timers are timing helpers only; they cannot replace official profiler evidence for bottleneck decisions.
 - Each optimization iteration must change only one optimization category.
 - Kernel changes that fail correctness tests must not proceed to performance validation or commit.

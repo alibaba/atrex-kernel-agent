@@ -109,7 +109,9 @@ val_blocked = gl.convert_layout(val_mma, blocked_layout)
 
 # store
 gl.store(base_ptr + gl.cast(offsets, gl.int32), val_blocked, mask=mask)
-```**Note**: The data of `gl.store` must be in a layout suitable for global memory writes (typically `BlockedLayout`). If the accumulator is in `NVMMADistributedLayout` (MMA layout), it needs to be converted via `gl.convert_layout` first.
+```
+
+**Note**: The data of `gl.store` must be in a layout suitable for global memory writes (typically `BlockedLayout`). If the accumulator is in `NVMMADistributedLayout` (MMA layout), it needs to be converted via `gl.convert_layout` first.
 
 ---
 

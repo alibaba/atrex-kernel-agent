@@ -18,10 +18,10 @@
 def mla_decode_kernel(q, kv_cache, rope_cache, out, ...):
     # Load latent KV
     c_kv = tl.load(kv_cache_ptr)
-    
+
     # Decompress: k_nope = W_uk @ c_kv (computed online, avoids storing full K)
     k = concat(rope_key, matmul(W_uk, c_kv))
-    
+
     # Standard attention
     s = matmul(q, k.T) * scale
     p = softmax(s)

@@ -1,0 +1,70 @@
+[submodule "reference-projects/cutlass"]
+	path = reference-projects/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
+	shallow = false
+[submodule "reference-projects/cutex"]
+	path = reference-projects/cutex
+	url = https://github.com/deciding/cutex.git
+	shallow = false
+[submodule "reference-projects/cuLA"]
+	path = reference-projects/cuLA
+	url = https://github.com/inclusionAI/cuLA.git
+	shallow = false
+[submodule "reference-projects/flash-attention"]
+	path = reference-projects/flash-attention
+	url = https://github.com/Dao-AILab/flash-attention.git
+	shallow = false
+[submodule "reference-projects/flashinfer"]
+	path = reference-projects/flashinfer
+	url = https://github.com/flashinfer-ai/flashinfer.git
+	shallow = false
+[submodule "reference-projects/FlyDSL"]
+	path = reference-projects/FlyDSL
+	url = https://github.com/ROCm/FlyDSL.git
+	shallow = false
+[submodule "reference-projects/triton"]
+	path = reference-projects/triton
+	url = https://github.com/triton-lang/triton.git
+	shallow = false
+[submodule "reference-projects/DeepGEMM"]
+	path = reference-projects/DeepGEMM
+	url = https://github.com/deepseek-ai/DeepGEMM.git
+	shallow = false
+[submodule "reference-projects/LeetCUDA"]
+	path = reference-projects/LeetCUDA
+	url = https://github.com/xlite-dev/LeetCUDA.git
+	shallow = false
+[submodule "reference-projects/FlashMLA"]
+	path = reference-projects/FlashMLA
+	url = https://github.com/deepseek-ai/FlashMLA.git
+	shallow = false
+[submodule "reference-projects/composable_kernel"]
+	path = reference-projects/composable_kernel
+	url = https://github.com/ROCm/composable_kernel.git
+	shallow = false
+[submodule "reference-projects/cute-gemm"]
+	path = reference-projects/cute-gemm
+	url = https://github.com/reed-lau/cute-gemm.git
+	shallow = false
+[submodule "reference-projects/hpc-ops"]
+	path = reference-projects/hpc-ops
+	url = https://github.com/Tencent/hpc-ops.git
+	shallow = false
+[submodule "reference-projects/aiter"]
+	path = reference-projects/aiter
+	url = https://github.com/ROCm/aiter.git
+	shallow = false
+[submodule "reference-projects/quack"]
+	path = reference-projects/quack
+	url = https://github.com/Dao-AILab/quack.git
+	shallow = false
+[submodule "reference-projects/tilelang"]
+	path = reference-projects/tilelang
+	url = https://github.com/tile-ai/tilelang.git
+	shallow = false
+[submodule "gpu-wiki/3rdparty/KernelWiki"]
+	path = gpu-wiki/3rdparty/KernelWiki
+	url = https://github.com/mit-han-lab/KernelWiki.git
+[submodule "gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys"]
+	path = gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys
+	url = https://github.com/mlc-ai/modern-gpu-programming-for-mlsys.git

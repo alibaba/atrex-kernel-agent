@@ -4,8 +4,8 @@ Traps encountered while iterating 18 versions of `fused_recurrent_gated_delta_ru
 (GDN decode, fp32 state, bf16 q/k/v, T=1) on RTX PRO 5000 Blackwell.
 Companion to:
 
-- Optimization journey:
-- Final kernel:
+- Optimization journey: [`../../ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md`](../../../ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md)
+- Final kernel: [`reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_decode/sm120_gdn_fwd_T1_v13.py`](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_decode/sm120_gdn_fwd_T1_v13.py)
 
 ---
 
@@ -23,7 +23,7 @@ Companion to:
   Memory routes are Hopper-style (TMA + cp.async); compute is Ampere-style
   (warp shuffle + warp MMA `mma.sync.aligned.kind::mxf4nvf4...m16n8k64`).
 **Lesson**: **Hopper TMA + Ampere warp ALU**. This is also documented in
-the sister project
+the sister project [`sm120-nvfp4-inline-ptx-gemm.md`](../../../ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-inline-ptx-gemm.md)
 — same chip, same constraint.
 
 ---
@@ -60,7 +60,9 @@ This single line is what unlocked the 1.58× speedup from V8 → V13.
 **Why**: cp.async with `LoadCacheMode.GLOBAL` only supports the 128-bit (16-byte)
 form. There is no 8-byte cp.async.cg variant.
 **Lesson**: Either fix the alignment (Pitfall 2) or change the layout so each
-thread's V slice is exactly 4 fp32 / 8 bf16 contiguous. Don't try smaller vec.## 4. `cute.arch.load(cop=..., level1_eviction_priority=...)` rejected by MLIR verifier
+thread's V slice is exactly 4 fp32 / 8 bf16 contiguous. Don't try smaller vec.
+
+## 4. `cute.arch.load(cop=..., level1_eviction_priority=...)` rejected by MLIR verifier
 
 **Trap**: Compose cache hint and L1 eviction priority for maximum control:
 ```python
@@ -210,7 +212,9 @@ malformed PTX in this build.
 back into per-element compute, easier paths:
 1. Issue per-element loads (slow — V11 was 2.6× slower)
 2. Use cp.async + SMEM staging (V13's chosen path)
-3. Wait for a stable `lang.vector.dynamic_position` API in newer CuTeDSL## 11. Increasing BV per CTA can *decrease* ncu Max BW %
+3. Wait for a stable `lang.vector.dynamic_position` API in newer CuTeDSL
+
+## 11. Increasing BV per CTA can *decrease* ncu Max BW %
 
 **Trap**: After V13 hits 87.7% Max BW, double BV (8 → 16) to amortize
 fixed per-CTA overhead and (you assume) push closer to peak.

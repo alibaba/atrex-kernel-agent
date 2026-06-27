@@ -63,7 +63,7 @@ Source: `common_optimizations.md` Appendix A, "Element-wise" and "Reduction" row
 
 ## Stopping Conditions
 
-Use the general stopping conditions from SKILL.md §1.8. Stop when bandwidth utilization ≥ 90%.
+Use the general stopping conditions from optimization-guide.md §1.8. Stop when bandwidth utilization ≥ 90%.
 
 ---
 

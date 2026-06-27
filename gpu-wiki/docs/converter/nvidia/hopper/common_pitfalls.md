@@ -1,6 +1,6 @@
 # Common Errors and Solutions (NVIDIA Hopper)
 
-**Last Updated**: 2026-03-18  
+**Last Updated**: 2026-03-18
 **Target Architecture**: NVIDIA Hopper (sm_90)
 
 ---
@@ -206,7 +206,9 @@ acc = warpgroup_mma(a_smem, b_smem, acc, is_async=True)
 ```
 TypeError: load() got an unexpected keyword argument 'eviction_policy'
 ```
-**Solution**: Directly remove the `eviction_policy` parameter:## Error 9: Incorrect threads_per_warp Product
+**Solution**: Directly remove the `eviction_policy` parameter:
+
+## Error 9: Incorrect threads_per_warp Product
 
 **Symptoms**:
 ```
@@ -266,4 +268,4 @@ print(f"Max difference: {max_diff}")
 
 ## Quick Checklist
 
-See the full verification checklist in `references/verification_guide.md` in the parent Skill.
+See the full verification checklist in `../../amd/common/verification_guide.md`.

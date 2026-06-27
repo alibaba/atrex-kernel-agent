@@ -1,6 +1,6 @@
 # API Reference Table
 
-**Last updated**: 2026-03-03  
+**Last updated**: 2026-03-03
 **Verification Status Legend**: ✅ Verified | ⚠️ Pending Verification | ❌ Falsified
 
 > **⚠️ TTGIR field names ≠ Gluon parameter names**: `isTransposed`→`transposed`, `sizePerThread`→`size_per_thread`, `warpsPerCTA`→`warps_per_cta`, etc. See `layouts.md` for the complete mapping.
@@ -101,7 +101,9 @@ When encountering a new API, add it to this table in the following format:
 | Triton | Gluon | Verification Status | Notes |
 |--------|-------|---------|------|
 | `tl.xxx` | `gl.yyy` | ⚠️ Pending Verification | Source: Official documentation |
-```**Verification status update process**:
+```
+
+**Verification status update process**:
 1. Check official documentation to confirm the mapping relationship
 2. Write minimal test code Terminology validation
 3. Functional test passed

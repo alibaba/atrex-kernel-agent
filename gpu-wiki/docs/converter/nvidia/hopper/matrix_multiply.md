@@ -135,7 +135,9 @@ for i_t in range(NT):
         async_copy.async_copy_global_to_shared(smem_w.index((i_t+1) % 2), ...)
         async_copy.async_copy_global_to_shared(smem_k.index((i_t+1) % 2), ...)
         async_copy.commit_group()
-```## Key Points
+```
+
+## Key Points
 
 1. **wgmma operands must be in shared memory with NVMMASharedLayout**
 2. **DotOperandLayout is not needed** (the biggest difference from AMD)
@@ -145,7 +147,7 @@ for i_t in range(NT):
 
 ## Related Documents
 
-- **Cross-architecture reference**: [CDNA3 Matrix Multiplication](../../amd/cdna3/matrix_multiply.md) (mfma) |  (mfma)
+- **Cross-architecture reference**: [CDNA3 Matrix Multiplication](../../amd/cdna3/matrix_multiply.md) (mfma) | [CDNA4 Matrix Multiplication](../../amd/cdna4/matrix_multiply.md) (mfma)
 - **⚠️ Key difference**: This article uses wgmma (operands read directly from shared memory), while AMD uses mfma (operands read from registers)
 - **ISA reference**: [PTX MMA Instruction Evolution](../../../ref-docs/nvidia/common/nvidia-ptx-mma-instructions.md)
 - **Optimization downstream**: [Hopper GEMM Optimization](../../../ref-docs/nvidia/gluon/sm90/matmul.md)

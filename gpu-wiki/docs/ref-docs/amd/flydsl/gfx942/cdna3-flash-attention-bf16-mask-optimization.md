@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention bf16 with Free Mask on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 ## Target hardware
 
 - **Chip**: AMD MI308X (CDNA3, gfx942)
@@ -14,7 +16,7 @@
 Standard Flash Attention forward pass with **arbitrary (non-causal) attention mask**:
 - Input: Q, K, V ∈ (B, H, S, D) bf16; Mask ∈ (B, 1, S, S) f32 (broadcast over heads)
 - Online softmax with per-row running max and sum
-- Two-stage GEMM: S = Q*K^T, then O = softmax(S + Mask) * V
+- Two-stage GEMM: S = Q·K^T, then O = softmax(S + Mask) · V
 
 Starting point: the MI308X causal+GQA variant (`flash_attn_func_mi308x.py`) which
 achieves ~110 TFLOPS on large causal shapes. See companion doc:
@@ -28,7 +30,7 @@ achieves ~110 TFLOPS on large causal shapes. See companion doc:
 | Mask | (1024, 1, 316, 316) | f32 | Broadcast over heads, contiguous |
 | O | (1024, 8, 316, 64) | bf16 | Output |
 | scale | 0.125 (= 1/√64) | — | |
-| Theoretical FLOPs | 0.2094 TFLOP | — | 4*B*H*S^2*D |
+| Theoretical FLOPs | 0.2094 TFLOP | — | 4·B·H·S²·D |
 
 ## Kernel resource footprint (V7 final)
 
@@ -268,12 +270,12 @@ whereas the rigid sched_dsrd/sched_mfma hints prevented this interleaving.
   The V transpose ds_swizzle technique (v14) is shared between both variants.
 - **Continued in V8-V10**: [cdna3-flash-attention-bf16-mask-lse-optimization.md](cdna3-flash-attention-bf16-mask-lse-optimization.md)
   — SHARE_KV_LDS + pk_fma + waves_per_eu=4 + LSE output. 50.6 → 71.8 TFLOPS (+42%).
-- **Pitfalls**:
+- **Pitfalls**: [flash-attn-pitfalls.md](../../../../pitfalls/amd/flydsl/flash-attn-pitfalls.md)
   — Traps 15-17 are mask-specific (f32 mask); traps 29-32 are bit-packed mask pitfalls;
   traps 46-51 are mask+LSE (V8-V10) pitfalls. Traps 1-14 apply to both causal and mask variants.
-- **Reference kernel (mask+LSE, V10)**:
-- **Reference kernel (mask, V7 backup)**:
-- **Reference kernel (causal+GQA)**:
-- **Generic CDNA baseline**:
+- **Reference kernel (mask+LSE, V10)**: [flash_attn_func_mask_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_func_mask_mi308x.py)
+- **Reference kernel (mask, V7 backup)**: `flash_attn_func_mask_mi308x.py.v7.bak`
+- **Reference kernel (causal+GQA)**: [flash_attn_func_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_func_mi308x.py)
+- **Generic CDNA baseline**: [flash_attn_func.py](../../../../../reference-kernels/amd/cdna/flydsl/FlyDSL/flash_attn_func.py)
 - **Backward kernel (dK+dV) optimization**: [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md)
   — Same hardware, backward pass. 46.94 TFLOPS / 3.77× vs PyTorch SDPA bwd.

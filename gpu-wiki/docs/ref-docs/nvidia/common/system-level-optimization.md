@@ -433,7 +433,9 @@ GPU system-level optimization covers multiple dimensions from hardware utilizati
 - **Inference optimization**: Continuous batching, PagedAttention, speculative decoding, quantizationbre
 - **Memory optimization**: Gradient checkpointing, memory pool, activation offloading
 
-Optimization should follow a "measurement → identification → optimization → verification" iterative process, with each change quantitatively verifying its effect.## 3. CUDA Graph: Eliminating Kernel Launch Overhead
+Optimization should follow a "measurement → identification → optimization → verification" iterative process, with each change quantitatively verifying its effect.
+
+## 3. CUDA Graph: Eliminating Kernel Launch Overhead
 
 ### 3.1 Principle
 

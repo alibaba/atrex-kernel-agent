@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] Kernel Authoring Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) | Collated version: [FlyDSL Programming Guide](flydsl-programming-guide.md)
 
 > Writing GPU kernels with FlyDSL: JIT-compiled functions, GPU kernels, expression API, launch configuration, shared memory, and synchronization.

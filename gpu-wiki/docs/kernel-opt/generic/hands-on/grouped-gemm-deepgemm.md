@@ -14,7 +14,7 @@ def grouped_gemm_kernel(
     ...
 ):
     pid = tl.program_id(0)
-    
+
     # Find which group the current pid belongs to
     group_id = 0
     accumulated = 0
@@ -26,7 +26,7 @@ def grouped_gemm_kernel(
             local_pid = pid - accumulated
             break
         accumulated += tiles_in_group
-    
+
     # Use local_pid to compute tile position, execute standard GEMM
     ...
 ```

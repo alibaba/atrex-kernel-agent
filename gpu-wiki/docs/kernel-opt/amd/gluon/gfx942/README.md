@@ -8,6 +8,7 @@ Kernel optimization knowledge for Gluon DSL on MI300X (gfx942).
 
 | File | Description |
 |------|------|
+| [Optimization Guide](optimization-guide.md) | CDNA3 Gluon kernel optimization guide |
 | [Optimization Strategy](optimization_strategy.md) | Small matrix GEMM optimization priority table |
 | [Small Matrix GEMM Topic](pattern_overview.md) | Specialized matmul scenarios and pitfalls |
 | [SE-level Zigzag](se_level_zigzag.md) | Causal Attention load balancing |

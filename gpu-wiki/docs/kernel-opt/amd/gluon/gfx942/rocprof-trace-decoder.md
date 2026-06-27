@@ -22,7 +22,7 @@ By default, rocprofv3 searches ``LD_LIBRARY_PATH`` and the rocprofiler-sdk insta
 rocprofv3 --att --att-library-path /path/to/lib -- ./a.out
 ```
 
-For information on how to generate thread trace data, see the documentation on [using rocprofv3 to collect thread trace](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/amd-mainline/how-to/using-thread-trace.html)
+For information on how to generate thread trace data, see the documentation on [using rocprofv3 to collect thread trace](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/develop/how-to/using-thread-trace.html)
 
 ### Rocprofiler-sdk API
 
@@ -34,16 +34,14 @@ rocprofiler_thread_trace_decoder_handle_t decoder{};
 auto status = rocprofiler_thread_trace_decoder_create(&decoder, "/opt/rocm/lib");
 ```
 
-For more API information, see the [ROCm docs](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/amd-mainline/api-reference/thread_trace.html), [SDK Samples](https://github.com/ROCm/rocm-systems/blob/develop/projects/rocprofiler-sdk/samples/thread_trace/agent.cpp) and [SDK API](https://github.com/ROCm/rocprofiler-sdk/tree/amd-mainline/source/include/rocprofiler-sdk/experimental/thread-trace)
+For more API information, see the [ROCm docs](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/thread_trace.html), [SDK Samples](https://github.com/ROCm/rocm-systems/blob/develop/projects/rocprofiler-sdk/samples/thread_trace/agent.cpp) and [SDK API](https://github.com/ROCm/rocprofiler-sdk/tree/amd-mainline/source/include/rocprofiler-sdk/experimental/thread-trace)
 
 ### Supported devices
 
 - AMD Radeon: 6000, 7000, 9000 series
 - AMD Instinct: MI200 and MI300 series
 
-## Installation
-
-Install from the upstream repository: https://github.com/ROCm/rocprof-trace-decoder.git
+## End User License Agreement
 
 - Headers are provided under the MIT license.
-- Pre-built binaries are available from [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases).
+- The .so and .dylib binaries use a custom LICENSE

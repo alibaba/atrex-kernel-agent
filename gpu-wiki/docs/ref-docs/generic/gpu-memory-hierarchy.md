@@ -121,7 +121,9 @@ The latency of local memory can be partially mitigated through L1/L2 caches.
 
 PCIe bandwidth (~16 GB/s) is far lower than device memory bandwidth (hundreds of GB/s to several TB/s).
 - Keep intermediate results on the GPU to avoid back-and-forth transfers
-- Even if certain computations are faster on the CPU, the overhead of frequent transfers may be greater### Using Pinned Memory
+- Even if certain computations are faster on the CPU, the overhead of frequent transfers may be greater
+
+### Using Pinned Memory
 
 Page-locked (pinned) memory offers higher transfer speeds than regular pageable memory and supports asynchronous transfers. However, it should not be over-allocated — it occupies non-pageable system memory.
 
@@ -155,4 +157,4 @@ Compare the effective bandwidth against the hardware's theoretical peak bandwidt
 - **Content overlap**: [GPU Application-Level Optimization Strategies](gpu-application-optimization.md) — The host-device transfer section is more comprehensive
 - **NVIDIA-specific**: [NVIDIA Architecture-Specific Optimization Techniques](../../kernel-opt/nvidia/common/nvidia-arch-specific-optimization.md) — L2 persistence, TMA, and other NVIDIA-specific memory technologies
 - **AMD-specific**: [LDS Bank Conflict Optimization](../../kernel-opt/amd/common/lds-bank-conflict-optimization.md) — LDS bank conflicts, XOR swizzle
-- **🔴 Conflict Note**: This document claims shared memory has 32 banks (generic), but AMD CDNA4 actually has **64 banks**. See
+- **🔴 Conflict Note**: This document claims shared memory has 32 banks (generic), but AMD CDNA4 actually has **64 banks**. See [Hardware Specification Comparison](../../hardware-specs/hardware-comparison-cdna3-cdna4.md)

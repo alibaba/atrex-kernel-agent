@@ -110,7 +110,9 @@ Common values for `k_width`: bf16/f16 → 4, f32 → 2, f8 → 8. Obtain from th
 
 ### Dynamic Layout Computation (⚠️ Important)
 
-When a kernel uses dynamic `num_warps` (via `@triton.heuristics`) or dynamic tile sizes (via `@triton.autotune`), you cannot use a fixed Layout extracted from a single TTGIR dump. Layouts must be computed dynamically inside the kernel using constexpr parameters.#### 1D Layout Dynamic Calculation
+When a kernel uses dynamic `num_warps` (via `@triton.heuristics`) or dynamic tile sizes (via `@triton.autotune`), you cannot use a fixed Layout extracted from a single TTGIR dump. Layouts must be computed dynamically inside the kernel using constexpr parameters.
+
+#### 1D Layout Dynamic Calculation
 
 ```python
 @gluon.jit

@@ -8,5 +8,5 @@ A collection of NVIDIA GPU reference kernels organized by architecture generatio
 |------|------|
 | [ampere/](ampere/) | Ampere architecture kernels (CuTeDSL, Gluon, Triton) |
 | [hopper/](hopper/) | Hopper (SM90) architecture kernels (CuTeDSL, Gluon) |
-|  | Blackwell (SM100) architecture kernels (CuTeDSL, Gluon, Triton) |
-|  | Blackwell GeForce (SM120/SM103) architecture kernels (CuTeDSL, Triton) |
+| [blackwell/](blackwell/) | Blackwell (SM100) architecture kernels (CuTeDSL, Gluon, Triton) |
+| [blackwell-geforce/](blackwell-geforce/) | Blackwell GeForce (SM120/SM103) architecture kernels (CuTeDSL, Triton) |

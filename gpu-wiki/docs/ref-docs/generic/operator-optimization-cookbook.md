@@ -249,8 +249,10 @@ Core idea: Use shared memory as a staging area to achieve "coalesced read + coal
 
 **XOR Swizzle**: Use the address transform of `(row, col) -> (row, col ^ row)` to scramble storage locations. Does not waste space, maintains alignment, and is the standard approach used by high-performance libraries like CUTLASS.
 
-```cuda// Swizzle when writing
-// Reverse swizzle when reading```
+```cuda
+// Swizzle when writing
+// Reverse swizzle when reading
+```
 
 Mathematical proof of XOR swizzle's effectiveness: For a fixed constant C, the mapping f(x) = x XOR C is a bijection (one-to-one mapping), so 32 distinct row numbers map to 32 distinct banks, with no conflicts.
 
@@ -285,7 +287,9 @@ __global__ void sigmoid_vec4(float* x, float* y, int N) {
         FLOAT4(y[idx]) = reg_y;
     }
 }
-```### 5.2 Kernel Fusion (Example: RoPE)
+```
+
+### 5.2 Kernel Fusion (Example: RoPE)
 
 RoPE (Rotary Position Embedding) is a standard operator in large models. A naive PyTorch implementation requires multiple reads and writes to global memory (roughly 11× data volume), whereas a hand-written fused kernel only needs 1 read and 1 write (2× data volume), reducing ineffective memory access by 80%+.
 
@@ -387,7 +391,9 @@ Reference: for memory-bound operators, a bandwidth utilization of 80-95% is cons
 - **Occupancy**: Improve by adjusting block size, reducing register usage, and controlling shared memory usage
 - **2D Block**: A simple change (1D -> 2D) can significantly boost occupancy
 - **Thread Coarsening**: Appropriately reduce the number of blocks Arg, have each thread process more data, which can alleviate warp stalls and improve instruction reordering
-- **ILP (Instruction-Level Parallelism)**: Let one thread process multiple independent data items (e.g., multiple rows), allowing the compiler to pipeline### 7.4 Reduce Unnecessary Overhead
+- **ILP (Instruction-Level Parallelism)**: Let one thread process multiple independent data items (e.g., multiple rows), allowing the compiler to pipeline
+
+### 7.4 Reduce Unnecessary Overhead
 
 - Avoid redundant data copies between kernels (e.g., unnecessary copies in `torch.sort`)
 - Be mindful of the negative impact of debugging code such as `CUDA_KERNEL_ASSERT` on registers and occupancy

@@ -73,4 +73,4 @@ c = mfma_scaled(a_fp8, b_fp8, c_acc, scale_a, scale_b)
 
 - **MFMA Instruction Reference**: [AMD MFMA Matrix Core Programming Guide](../../../../ref-docs/amd/common/amd-mfma-matrix-cores.md) — instruction naming conventions, register layout
 - **Tuning Guide**: AMD GPU Kernel Tuning Guide — CDNA3 vs CDNA4 hardware specification comparison
-- **CDNA4 FP8 Hands-on**:
+- **CDNA4 FP8 Hands-on**: [CDNA4 FP8 GEMM Optimization Hands-on](../../../../ref-docs/amd/common/gfx950/cdna4-fp8-gemm-optimization.md)

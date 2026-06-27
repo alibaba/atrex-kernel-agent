@@ -88,5 +88,5 @@ tdm.async_copy_2d(smem, desc, offset_x, offset_y)
 
 - **Tuning Guide**: AMD GPU Kernel Tuning Guide — CDNA3 vs CDNA4 Hardware Specification Comparison
 - **General Execution Model**: [GPU Execution Model and Thread Optimization](../../../../ref-docs/generic/gpu-execution-model.md)
-- **CDNA4 FP8 in Practice**:
+- **CDNA4 FP8 in Practice**: [CDNA4 FP8 GEMM Optimization in Practice](../../../../ref-docs/amd/common/gfx950/cdna4-fp8-gemm-optimization.md)
 - **General Triton Patterns**: [Triton Optimization Patterns in Practice](../../../generic/hands-on/README.md)

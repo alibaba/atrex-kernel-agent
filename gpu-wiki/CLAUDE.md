@@ -1,11 +1,3 @@
-# GPU Wiki - Agent Entry Point
+# GPU Wiki Compatibility Index
 
-This knowledge base contains GPU kernel optimization documentation for AI Agents.
-
-**Start here**: Read [README.md](README.md) for the complete directory structure, document index, and usage instructions.
-
-**Quick navigation**:
-- Hardware specs: `docs/hardware-specs/`
-- Kernel optimization: `docs/kernel-opt/`
-- Reference kernels: `reference-kernels/`
-- Pitfalls: `docs/pitfalls/`
+Read `README.md` first. This wiki is product-neutral: use available read/search tools, prefer vendor official documentation and `reference-projects/` for API and ISA ground truth, and run `python3 gpu-wiki/scripts/check-self-contained.py --root gpu-wiki` after path or index changes.

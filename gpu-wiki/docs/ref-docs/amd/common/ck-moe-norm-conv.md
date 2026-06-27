@@ -85,7 +85,9 @@ Weight pre-reordering (`b_nr_kr_waveflatten`): reorders the B matrix from `[E, N
 
 ## TopK Softmax
 
-`include/ck_tile/ops/topk_softmax/` implements TopK + Softmax for the MoE routing layer:### Interface
+`include/ck_tile/ops/topk_softmax/` implements TopK + Softmax for the MoE routing layer:
+
+### Interface
 
 ```cpp
 struct TopkSoftmaxHostArgs {

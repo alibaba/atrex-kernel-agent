@@ -20,7 +20,7 @@ elif warp_group_id == 1:
         pipeline_load.consumer_wait(stage)
         acc = cute.gemm(mma, smem_a[stage], smem_b[stage], acc)
         pipeline_load.consumer_release(stage)
-        
+
         # Notify epilogue after computation is complete
         pipeline_store.producer_commit(acc)
 

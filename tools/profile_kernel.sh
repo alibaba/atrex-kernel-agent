@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2026 Alibaba Group
+# Copyright 2026 Alibaba Group.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 #
 # Instruction-level profiling tool for Gluon kernels
 #
@@ -27,6 +28,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Auto-detect rocprof-trace-decoder library location.
 # Priority: 1) ROCPROF_TRACE_DECODER_DIR env var  2) local clone under tools/  3) /opt/rocm/lib
 # Install from: https://github.com/ROCm/rocprof-trace-decoder.git
@@ -46,7 +48,7 @@ else
 fi
 
 KERNEL_FILE=""
-OUTPUT_DIR="./profile_output"
+OUTPUT_DIR="./profiles/v0"
 KERNEL_REGEX=""
 RUN_ATT=true
 RUN_PMC=true
@@ -138,9 +140,7 @@ fi
 
 if [[ ! -f "$DECODER_DIR/librocprof-trace-decoder.so" ]]; then
     echo "Error: ATT decoder library not found at $DECODER_DIR"
-    echo "Expected: librocprof-trace-decoder.so"
-    echo "Install from: https://github.com/ROCm/rocprof-trace-decoder.git"
-    echo "Or set ROCPROF_TRACE_DECODER_DIR to the directory containing librocprof-trace-decoder.so"
+    echo "Expected: $DECODER_DIR/librocprof-trace-decoder.so"
     exit 1
 fi
 

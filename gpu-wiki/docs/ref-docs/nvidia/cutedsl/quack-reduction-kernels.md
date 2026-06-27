@@ -399,8 +399,10 @@ ReductionBase
 TopK (independent, ReductionBase)
  |-- bitonic_topk # register bitonic sort + warp shuffle
  |-- optimal_sort # sorting network
-```## Reference
+```
+
+## Reference
 
 - [QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light](https://github.com/Dao-AILab/quack/blob/main/media/2025-07-10-membound-sol.md)
-- [CuTe-DSL Documentation](https://docs.nvidia.com/cutlass/media/docs/pythonDSL/cute_dsl_general/dsl_introduction.html)
+- [CuTe-DSL Documentation](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/dsl_introduction.html)
 - [Hierarchical Reduction General Principles](../common/hierarchical-reduction-memory-bound.md)

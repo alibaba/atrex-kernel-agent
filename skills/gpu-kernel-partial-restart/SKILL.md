@@ -13,10 +13,10 @@ Restart optimization from a partially fresh context. The main agent masks approx
 
 ## Required Inputs
 
-- The `/tmp/kernel_opt_<name>` workspace created by `gpu-kernel-optimizer`.
-- Existing `/tmp/kernel_opt_<name>/memory/` directory with `v*.json` files.
-- Existing `/tmp/kernel_opt_<name>/README.md`.
-- Existing `/tmp/kernel_opt_<name>/kernel.py` (latest version).
+- The `kernel_opt_<name>` workspace created by `gpu-kernel-optimizer`.
+- Existing `kernel_opt_<name>/memory/` directory with `v*.json` files.
+- Existing `kernel_opt_<name>/README.md`.
+- Existing `kernel_opt_<name>/kernel.py` (latest version).
 
 ## Workflow
 
@@ -33,8 +33,8 @@ The main agent performs the following steps before launching the subagent.
    - List and read all iteration files using the memory manager:
 
      ```bash
-     python tools/memory_manager.py list --workspace /tmp/kernel_opt_<name>
-     python tools/memory_manager.py read --workspace /tmp/kernel_opt_<name> --unmasked-only
+     python tools/memory_manager.py list --workspace kernel_opt_<name>
+     python tools/memory_manager.py read --workspace kernel_opt_<name> --unmasked-only
      ```
 
    - Identify recorded optimization experience, including attempted directions, failures, conclusions, constraints, lessons, and rejected ideas stored in each iteration's JSON.
@@ -44,7 +44,7 @@ The main agent performs the following steps before launching the subagent.
    - Randomly choose approximately half of these files and mask them:
 
      ```bash
-     python tools/memory_manager.py mask --workspace /tmp/kernel_opt_<name> --version v2 v4 v5
+     python tools/memory_manager.py mask --workspace kernel_opt_<name> --version v2 v4 v5
      ```
 
    - Preserve the latest successful iteration (the current best version) as unmasked.
@@ -73,7 +73,7 @@ Subagent requirements:
   7. Search for optimization paths without assuming masked conclusions are still valid.
 - **Forbidden**:
   - Do not revert `kernel.py` to baseline or any earlier version.
-  - Do not create a new workspace; continue in `/tmp/kernel_opt_<name>`.
+  - Do not create a new workspace; continue in `kernel_opt_<name>`.
   - Do not read masked `memory/v*.json` files as active data.
   - Do not modify `README.md` target thresholds or hardware specs.
   - Do not re-run Stage 1 baseline implementation.
@@ -86,7 +86,7 @@ Subagent requirements:
 - **No target drift**: preserve Stop Conditions and hardware-spec sources from `README.md`.
 - **No file deletion**: do not delete `memory/v*.json` files; only set `masked: true` to discard memory. Mask only about half of optimization experience; keep essential state required to continue safely.
 - **No masked field on v0**: do not mask `memory/v0.json` (the baseline) unless the user explicitly requests it.
-- **Optimizer workspace only**: continue all work in `/tmp/kernel_opt_<name>`, the workspace created by `gpu-kernel-optimizer`.
+- **Optimizer workspace only**: continue all work in `kernel_opt_<name>`, the workspace created by `gpu-kernel-optimizer`.
 - **kernel.py is the starting point**: the subagent must optimize from the current `kernel.py`, not from baseline.
 
 ## Completion Criteria

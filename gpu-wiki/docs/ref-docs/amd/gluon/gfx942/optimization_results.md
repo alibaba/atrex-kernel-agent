@@ -40,7 +40,7 @@ pitfalls: [24-31, 38-40]
 
 ## Key Conclusions
 
-1. **Attention optimization is fundamentally different from GEMM**: 
+1. **Attention optimization is fundamentally different from GEMM**:
    - GEMM optimization focuses on compute-memory overlap (warp_pipeline_stage, double buffering)
    - Attention optimization focuses on reducing non-MFMA compute overhead (softmax, masking, branch elimination)
 
@@ -76,9 +76,9 @@ pitfalls: [24-31, 38-40]
 | 39 | start_m × batch-head Zigzag — effective for all S | Incorporate the batch-head dimension into the permutation, total blocks far exceeds SEs. +65% improvement at S=2048 | Appendix G |
 | 40 | Non-Causal must maintain bh-first ordering | Non-causal uses bh-first to maintain L2 cache locality. start_m-first ordering causes a 3-4% performance regression | Appendix G |## Stopping Conditions
 
-Use the general stopping conditions from SKILL.md §1.8:
+Use the general stopping conditions from optimization-guide.md §1.8:
 
-1. **Precision Verification**: 
+1. **Precision Verification**:
    - Compare with PyTorch's `F.scaled_dot_product_attention`, error < 1e-3 (fp16/bf16)
    - Verify correctness of causal mask
    - Verify correctness of GQA/MQA (if applicable)

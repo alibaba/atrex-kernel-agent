@@ -162,6 +162,6 @@ else:
 ## Related Documents
 
 - **Same ISA, Larger Config**: [MI300X Hardware Specs](hardware_specs_mi300x.md) — Full 8-XCD MI300X specifications
-- **Architecture Comparison**:
-- **Cross-Architecture**:  | [Hopper Specs](hardware_specs_hopper.md)
+- **Architecture Comparison**: [CDNA3 vs CDNA4 Hardware Comparison](hardware-comparison-cdna3-cdna4.md)
+- **Cross-Architecture**: [CDNA4 MI355X Specs](hardware_specs_mi355x.md) | [Hopper Specs](hardware_specs_hopper.md)
 - **Downstream Consumers**: [ISA Optimization Checklist](../ref-docs/amd/gluon/gfx942/common_optimizations.md) — Roofline calculations require the peak TFLOPS from this document

@@ -79,7 +79,7 @@ Current AI kernel optimization methods fall into three categories:
 - Execution filtering: Excludes random operators, constant outputs, and overly simple/difficult tasks
 - Final dataset: CUDA-Agent-Ops-6K (6,000 training tasks)
 
-**2. Skill-Integrated Agent Loop**
+**2. Workflow-Integrated Agent Loop**
 - Follows the ReAct paradigm: iterative cycles of reasoning → action → observation
 - Standard workflow: Performance analysis → CUDA implementation → compilation verification → iterative optimization
 - Discrete reward design: r ∈ {-1, 1, 2, 3} (error / correct but not faster / faster than eager / also faster than compile)
@@ -126,7 +126,7 @@ Current AI kernel optimization methods fall into three categories:
 
 ### 3.1 What Are Skills
 
-Skills is a mechanism proposed by Claude Code that is becoming a standard configuration in kernel development repositories. It is not simply a "prompt," but rather a **development interface within the repository** that defines the interaction protocol between the Agent and the code repository:
+Repository workflow modules, popularized by Claude Code, are becoming a standard configuration in kernel development repositories. They are not simply prompts; they are **development interfaces within the repository** that define the interaction protocol between the agent and the code repository:
 - **Task Routing**: Determine which implementation path a given requirement should follow
 - **Process Decomposition**: Break complex tasks into sequentially executable stages
 - **Tool Exposure**: Turn internal repository abstractions, scripts, and commands into capabilities callable by the Agent
@@ -145,22 +145,22 @@ Skills is a mechanism proposed by Claude Code that is becoming a standard config
 - Exposes internal repository APIs (`TensorMatcher`, `LaunchKernel`, `AlignedVector`)
 
 **MNN (Alibaba) — Multi-stage State Machine Style**
-- Each Skill is broken into multiple steps as stepN-xxx.md, each with clear pass criteria
+- Each workflow module is broken into multiple steps as stepN-xxx.md, each with clear pass criteria
 - Example for adding a new operator: Schema → Shape inference → Geometry computation/CPU implementation → Testing → Multi-backend extension
 - Strong constraints: access to `schema/private/` and `source/internal/` is prohibited
 
 **FlashInfer — Lifecycle Closure Style**
 - 3 Skills covering the full development loop: write kernel → test benchmark → debug crashes
 - Tightly integrated with the TVM-FFI mechanism
-- Debugging Skill treats "recording inputs before a crash" as a core methodology
+- Debugging workflow treats "recording inputs before a crash" as a core methodology
 
 ### 3.3 Key Principles for Skills Design
 
 Common patterns distilled from multiple projects:
-1. **A good Skill must include a verification step**: going beyond "how to implement" to include "how to verify"
-2. **Knowledge should be front-loaded, not back-filled**: structure the maintainers' tacit knowledge (selection strategies, pitfalls) into the Skill upfront
+1. **A good workflow module must include a verification step**: going beyond "how to implement" to include "how to verify"
+2. **Knowledge should be front-loaded, not back-filled**: structure the maintainers' tacit knowledge (selection strategies, pitfalls) into the workflow upfront
 3. **Constraints are as important as tools**: defining what the Agent must not do is equally critical as defining what it can call
-4. **Granularity varies by project**: different projects require different levels of Skill granularity
+4. **Granularity varies by project**: different projects require different levels of workflow-module granularity
 
 ---
 

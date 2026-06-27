@@ -5,9 +5,9 @@ two pitfalls cost ~2 days of debugging; the third is a hard cute-DSL limit you s
 just route around.
 
 Companion to:
--  (full perf journey)
--  (final kernel)
--  (single-atom MMA inline-PTX baseline)
+- [sm120-nvfp4-persistent-gemm-pro5000-optimization.md](../../../ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-persistent-gemm-pro5000-optimization.md) (full perf journey)
+- [sm120_nvfp4_persistent_gemm_pro5000.py](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_persistent_gemm_pro5000.py) (final kernel)
+- [sm120_nvfp4_inline_ptx_gemm.py](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py) (single-atom MMA inline-PTX baseline)
 
 ---
 
@@ -56,8 +56,10 @@ slices `sfa_phys = sfa_logical * 4`). When you instead read the SF as a single
 **Lesson**: Use a tight pack `(M_blocks_outer, SF_TILES_K, atoms_per_block, atom_dim, 4)`
 with read index `sSFA_u32[stage, kb, atom, sfa_logical, 0]` (NO `* 4`). 8× smem
 reduction, frees BLOCK_K=128 + STAGES=4 to fit in 100 KB. See
-`pack_sf_per_block` in .
-This single change accounts for **+37%** end-to-end perf (v38 → v43).## 3. cute-DSL 4.4.2 `cp.async.bulk` / `cp.async` + `PipelineTmaAsync` mbar = broken
+`pack_sf_per_block` in [sm120_nvfp4_pack_helpers.py](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_pack_helpers.py).
+This single change accounts for **+37%** end-to-end perf (v38 → v43).
+
+## 3. cute-DSL 4.4.2 `cp.async.bulk` / `cp.async` + `PipelineTmaAsync` mbar = broken
 
 **Trap**: CUTLASS C++ puts SF onto the SAME stage barrier as TMA(A,B). You try to do the
 same in cute-DSL via three reasonable paths:

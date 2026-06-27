@@ -24,3 +24,4 @@ AMD hardware general optimization reference articles, covering MFMA, CK architec
 
 | Directory | Description |
 |-----------|-------------|
+| [gfx950/](gfx950/) | MI355X (CDNA4) reference articles |

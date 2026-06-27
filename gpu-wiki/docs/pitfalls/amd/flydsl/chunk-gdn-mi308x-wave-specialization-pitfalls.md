@@ -1,5 +1,7 @@
 # Pitfalls: FlyDSL Chunk-GDN Wave-Specialized Megakernel on MI308X
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 Companion optimization report:
 [`cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md`](../../../ref-docs/amd/flydsl/gfx942/cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md)
 
@@ -52,7 +54,9 @@ or `do_bench` to assess gains.
 **Result**: The performance boundary is unfair, easily miscounting input construction, front half, synchronization, or benchmark overhead into
 kernel gains.
 
-**Why**: The fair boundary for this megakernel is the back half after `a/g_cumsum` has been precomputed. The baseline must be a tuned Triton back-half with the same boundary: `recompute_w_u_fwd + fwd_h + fwd_o`. Performance conclusions can only be read from
+**Why**: The fair boundary for this megakernel is the back half after
+`a/g_cumsum` has been precomputed. Triton is only the same-boundary comparison
+baseline here: `recompute_w_u_fwd + fwd_h + fwd_o`. Performance conclusions can only be read from
 the kernel dispatch duration of `rocprofv3 --kernel-trace`.
 
 **Lesson**: PyTorch is only used for correctness. The performance table must clearly list which dispatches from the rocprofv3 kernel trace are summed.
@@ -87,7 +91,9 @@ deteriorated, making large-T rocprofv3 slower.
 dependencies, and the one-CTA-per-CU constraint. Static resources are only a necessary condition, not an acceptance criterion.
 
 **Lesson**: An accepted version must simultaneously satisfy correctness, rocprofv3 sweep, ISA resource usage, and counter
-consistency. When static resources decrease but rocprofv3 becomes slower, rocprofv3 and counters take precedence.## 6. O-through-LDS Storer Looks More Like FlashQLA but Is Slower
+consistency. When static resources decrease but rocprofv3 becomes slower, rocprofv3 and counters take precedence.
+
+## 6. O-through-LDS Storer Looks More Like FlashQLA but Is Slower
 
 **Trap**: In order to get closer to Hopper FlashQLA, the O output is also passed through the LDS storer, letting the producer/storer wave handle the write-out.
 
@@ -104,7 +110,7 @@ consistency. When static resources decrease but rocprofv3 becomes slower, rocpro
 | Idea | MI308X Verdict |
 |---|---|
 | Replicate Hopper TMA/mbarrier pipeline | Don't; only migrate data flow and role concepts |
-| Use PyTorch as performance baseline | Don't; only use same-boundary tuned Triton/Gluon + rocprofv3 |
+| Use PyTorch as performance baseline | Don't; only use same-boundary tuned Triton/Gluon comparison data + rocprofv3 |
 | BDV64 covers all shapes | Don't; use BDV64 for hot H=32, BDV32 for small H |
 | Static LDS/VGPR reduction is acceptable | Don't; must check rocprofv3 + ISA + counters |
 | O-through-LDS looks more like FlashQLA | Not suitable for MI308X; direct GMEM store is better |

@@ -263,7 +263,7 @@ If you get it wrong:
 | [`warp.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/warp.py) | `activemask.b32` single instruction |
 | [`grid_sync.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/grid_sync.py) | Multi-line PTX + `.reg`/`.pred` soft sync protocol |## 12. Relationship with SM120 NVFP4 Inline PTX
 
- uses the same `llvm.inline_asm` approach described in this article to issue `mma.sync.aligned.kind::mxf4nvf4...` operations. The template strings, constraint rules, `StructType` output decomposition, and `u32` packing of FP4 registers are all identical, with the only differences being:
+[`docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-inline-ptx-gemm.md`](sm120/sm120-nvfp4-inline-ptx-gemm.md) uses the same `llvm.inline_asm` approach described in this article to issue `mma.sync.aligned.kind::mxf4nvf4...` operations. The template strings, constraint rules, `StructType` output decomposition, and `u32` packing of FP4 registers are all identical, with the only differences being:
 
 - The SM120 nvfp4 mma has no NVVM op and requires hand-written PTX (the method described in this article).
 - SM120 uses warp MMA instead of SM100 tcgen05/TMEM.

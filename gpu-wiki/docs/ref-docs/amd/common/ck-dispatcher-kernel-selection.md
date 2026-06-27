@@ -332,7 +332,9 @@ The following are experimental conclusions from `LEARNINGS.md`:
 1. **Log-transform is essential**: Raw TFLOPS regression only achieves 84% efficiency on tiny-M (M=1) scenarios; `log1p(TFLOPS)` improves this to 96%
 2. **Tiny-M shapes are the hardest**: When M=1, most kernel configurations perform extremely poorly (tile_m=128 wastes 127/128 of the space), and model noise exceeds the performance differences between kernels
 3. **IHEM (Hard Example Mining) is not applicable**: For the scale mismatch problem, resampling actually degrades overall efficiency (94.31% -> 92.90%)
-4. **Padding feature is critical**: `missing_required_padding` is one of the most important features, as it directly predicts whether a kernel will fail## File Structure
+4. **Padding feature is critical**: `missing_required_padding` is one of the most important features, as it directly predicts whether a kernel will fail
+
+## File Structure
 
 ```
 dispatcher/

@@ -1,5 +1,7 @@
 # Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 API-level integration pitfalls encountered while connecting the optimized dQ + dK/dV
 backward kernels to an end-to-end benchmark with arbitrary (non-causal) additive masks.
 
@@ -9,7 +11,7 @@ Forward mask pitfalls (bit-packed encoding, VT_STRIDE) are in
 [flash-attn-pitfalls.md](flash-attn-pitfalls.md).
 
 Companion optimization report:
-.
+[cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md).
 
 Reference API code:
 [flash_attn_bwd_flydsl.py](../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_bwd_flydsl_mi308x.py).

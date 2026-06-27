@@ -15,20 +15,20 @@ acc = tl.zeros([BLOCK_M, BLOCK_N_V], dtype=tl.float32)      # running output
 for j in range(0, num_kv_blocks):
     # Load K block, compute QK^T
     qk = tl.dot(q, tl.trans(k))
-    
+
     # Update running max
     m_ij = tl.max(qk, axis=1)
     m_new = tl.maximum(m_i, m_ij)
-    
+
     # Scale old accumulator
     alpha = tl.math.exp2((m_i - m_new) * log2e)  # exp2 is faster than exp
     acc *= alpha[:, None]
     l_i *= alpha
-    
+
     # Compute softmax for current block
     p = tl.math.exp2((qk - m_new[:, None]) * log2e)
     l_i += tl.sum(p, axis=1)
-    
+
     # Accumulate PV
     acc += tl.dot(p.to(v.dtype), v)
     m_i = m_new

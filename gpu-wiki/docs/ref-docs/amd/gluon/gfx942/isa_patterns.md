@@ -122,7 +122,9 @@ Bank conflicts are checked independently within each group.
 
 - 16×16 variants: ~8 cycles latency, 1/cycle throughput (per SIMD)
 - 32×32 variants: ~16 cycles latency, 1/2-cycle throughput (per SIMD)
-- Uses AGPR as accumulator registers### MFMA Stall Diagnosis
+- Uses AGPR as accumulator registers
+
+### MFMA Stall Diagnosis
 
 If the Idle column for `v_mfma_*` instructions is high → waiting for operands to be ready → better prefetch / pipeline needed
 

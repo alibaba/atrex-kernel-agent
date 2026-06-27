@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention Backward bf16 — Arbitrary Mask Integration on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 ## Target hardware
 
 - Chip: AMD MI308X (CDNA3, gfx942)
@@ -28,7 +30,7 @@ real-world inputs with arbitrary masks.
 | Mask | (1024, 1, 316, 316) | f32 | Per-batch, broadcast over heads |
 | dO (grad_output) | (1024, 8, 316, 64) | bf16 | Same layout as Q |
 | scale | 0.125 (= 1/√64) | — | |
-| Theoretical FLOPs (bwd) | 0.5235 TFLOP | — | 5*2*B*H*S^2*D |
+| Theoretical FLOPs (bwd) | 0.5235 TFLOP | — | 5·2·B·H·S²·D |
 | S_padded | 320 (= ceil(316/32)×32) | — | For mask tiling |
 
 ## API architecture
@@ -148,8 +150,8 @@ Test shape: B=1024, H=8, S=316, D=64, arbitrary sparse mask (~43% valid Q-rows).
 
 - Kernel-level optimization journey: [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md)
 - Forward mask optimization: [cdna3-flash-attention-bf16-mask-optimization.md](cdna3-flash-attention-bf16-mask-optimization.md)
-- Integration pitfalls:
-- Kernel-level pitfalls:
-- Reference API code:
-- Reference kernel dQ:
-- Reference kernel dK/dV:
+- Integration pitfalls: [flash-attn-bwd-mask-integration-pitfalls.md](../../../../pitfalls/amd/flydsl/flash-attn-bwd-mask-integration-pitfalls.md)
+- Kernel-level pitfalls: [attention-backward-dkdv-pitfalls.md](../../../../pitfalls/amd/flydsl/attention-backward-dkdv-pitfalls.md)
+- Reference API code: [flash_attn_bwd_flydsl_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_bwd_flydsl_mi308x.py)
+- Reference kernel dQ: [attn_bwd_dq_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/attn_bwd_dq_mi308x.py)
+- Reference kernel dK/dV: [attn_bwd_dkdv_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/attn_bwd_dkdv_mi308x.py)

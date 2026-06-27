@@ -28,7 +28,7 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
 5. **Missing wiki values**: If a spec cannot be found, write `<metric>: UNKNOWN (gpu-wiki not found)`, record the gap in `memory/v<N>.json` under `pitfalls_and_fixes`, report it to the user, and ask whether a placeholder is acceptable. Do not fill gaps with wording such as "approximately", "should be", "usually", or "similar product".
 6. **Auditable archive**: Any reviewer must be able to verify every spec from the local `<gpu-wiki>/` path in the archive. Non-verifiable archives are invalid.
 7. **Profiling-driven optimization only**:
-   - NVIDIA: `ncu`
+   - NVIDIA: `ncu` (wrapped by `./tools/profile_nvidia.sh`)
    - AMD: `./tools/profile_kernel.sh`
    - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `ncu` or `profile_kernel.sh` for identifying bottlenecks.
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
@@ -64,7 +64,7 @@ Trigger this skill when the request asks to:
 
 ## Startup: Create Workspace and Parse User Input
 
-Create an isolated optimization workspace under `/tmp` using the initialization script:
+Create an isolated optimization workspace in the **current working directory**。
 
 ```bash
 bash reference/workspace_init.sh <name> <kernel_demo_path>
@@ -81,8 +81,8 @@ Flow: **parse user input -> Step 0 (hardware specs + Roofline analysis) -> write
 | `platform` | **Required**. Target hardware platform, such as H20, H100, MI308X, or MI355X. | Ask the user if missing. |
 | `arch` | Hardware architecture, derived from platform when possible. | H20/H100/H200 -> Hopper; MI300X/MI308X -> CDNA3; MI355X -> CDNA4. |
 | `framework` | **Required**. Programming language/framework, such as CuteDSL or FlyDSL. | Ask the user if missing. |
-| `gpu_wiki_path` | Local gpu-wiki path. Do not ask the user to confirm it. | `/tmp/gpu-wiki/` |
-| `reference_project` | Local reference-project path. | `/tmp/reference-projects/` |
+| `gpu_wiki_path` | Local gpu-wiki path. Do not ask the user to confirm it. | `~/aka_kernel_opt/gpu-wiki/` |
+| `reference_project` | Local reference-project path. | `~/aka_kernel_opt/reference-projects/` |
 | `kernel_demo` | **Required**. Initial kernel implementation file to optimize. | Ask the user if missing. |
 | `additional_notes` | Extra constraints, known bottlenecks, preferred directions, and edge cases. | `none` |
 
@@ -122,7 +122,7 @@ Before entering any sub-skill, write the initial session constraints into the wo
 Fill `README.md` using `./reference/README.md`. Unknown fields must be `TBD`.
 
 ```bash
-python tools/memory_manager.py init --workspace /tmp/kernel_opt_<name>
+python tools/memory_manager.py init --workspace kernel_opt_<name>
 ```
 
 Use `tools/memory_manager.py` for all memory JSON operations (create, read, update, mask/unmask, summary). See `python tools/memory_manager.py --help` for full usage.
@@ -198,6 +198,9 @@ All sub-skills share top-level `tools/`:
 - `tools/measure_kernel_time.py`
 - `tools/extract_asm.py`
 - `tools/profile_kernel.sh`
+- `tools/profile_nvidia.sh`
+- `tools/classify_ncu.py`
+- `tools/extract_nvidia_asm.py`
 - `tools/memory_manager.py`
 
 ## Shared References

@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention Forward (bf16, mask+LSE) on MI308X — V8-V10
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 Continuation of the [V0-V7 mask optimization journey](cdna3-flash-attention-bf16-mask-optimization.md)
 (50.6 TFLOPS → **71.8 TFLOPS**, +42%).
 
@@ -118,6 +120,6 @@ Based on rocprofv3 ISA analysis of the V10 compiled kernel:
 
 - [V0-V7 mask optimization journey](cdna3-flash-attention-bf16-mask-optimization.md)
 - [Causal+GQA optimization journey](cdna3-flash-attention-bf16-gqa-optimization.md)
--  (traps 46-51: mask+LSE V8-V10)
--  (V10 final)
--
+- [Pitfalls](../../../../pitfalls/amd/flydsl/flash-attn-pitfalls.md) (traps 46-51: mask+LSE V8-V10)
+- [Reference kernel](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_func_mask_mi308x.py) (V10 final)
+- V7 backup: `flash_attn_func_mask_mi308x.py.v7.bak`

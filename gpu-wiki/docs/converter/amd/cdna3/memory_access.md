@@ -37,9 +37,9 @@ offsets_i32 = gl.cast(offsets, gl.int32)
 
 # Step 7: buffer_load
 val = gl.amd.cdna3.buffer_load(
-    ptr=base, 
-    offsets=offsets_i32, 
-    mask=mask, 
+    ptr=base,
+    offsets=offsets_i32,
+    mask=mask,
     other=0.0
 )
 ```

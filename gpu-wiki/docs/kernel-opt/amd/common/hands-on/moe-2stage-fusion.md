@@ -64,4 +64,4 @@ else:
 - **MFMA Instruction Selection**: [MFMA Instruction Selection and Usage](mfma-instruction-selection.md)
 - **Optimization Frameworks**: [AMD GPU Kernel Optimization Framework Overview](../../../../ref-docs/amd/common/amd-kernel-optimization-frameworks.md) — FlyDSL/CK/TileLang comparison
 - **General Instruction Optimization**: [GPU Instruction-Level Optimization](../../../../ref-docs/generic/gpu-instruction-optimization.md)
-- **CDNA4 FP8 Hands-on**:
+- **CDNA4 FP8 Hands-on**: [CDNA4 FP8 GEMM Optimization Hands-on](../../../../ref-docs/amd/common/gfx950/cdna4-fp8-gemm-optimization.md)

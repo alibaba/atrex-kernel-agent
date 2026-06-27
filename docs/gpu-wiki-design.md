@@ -8,7 +8,7 @@ Core usage:
 
 1. The Agent enters through `README.md`, `CLAUDE.md`, and directory-level `README.md` files.
 2. The Agent selects the target knowledge area by architecture, DSL/framework, and task type.
-3. The Agent reads concise pattern cards in `docs/kernel-opt/` first, then follows links to full reports in `docs/ref-docs/`, runnable examples in `reference-kernels/`, or upstream projects under `/tmp/reference-projects/` when deeper evidence is needed.
+3. The Agent reads concise pattern cards in `docs/kernel-opt/` first, then follows links to full reports in `docs/ref-docs/`, upstream source clones in reference-projects/ (in /tmp/), or runnable examples in `reference-kernels/` when deeper evidence is needed.
 
 The repository is intentionally optimized for Agent retrieval: files are split by topic, directory names encode architecture/framework context, and relationship documents call out conflicts between architectures.
 
@@ -81,7 +81,6 @@ The repository separates quick decision support from long-form evidence:
 - `docs/ref-docs/`: complete reference articles, deep optimization reports, profiling workflows, framework notes, and detailed implementation journeys. These files are read when the Agent needs justification, exact constraints, or richer examples.
 - `docs/pitfalls/`: negative knowledge. These files explain what failed, why it failed, and when not to use a technique.
 - `reference-kernels/`: concrete runnable or near-runnable kernel implementations.
-- `/tmp/reference-projects/`: optional upstream source checkouts for API, ISA, and latest implementation details.
 
 This layered design keeps common lookups fast while preserving enough source-level evidence for difficult optimization and migration tasks.
 
@@ -218,7 +217,7 @@ Current high-level structure:
 | `amd/cdna/` | FlyDSL, Triton | CDNA general examples, including FlyDSL and aiter Triton kernels |
 | `amd/cdna3/` | FlyDSL | CDNA3/gfx942-specific MI308X attention and mask/no-mask tuning kernels |
 | `amd/rdna4/` | FlyDSL, Gluon | RDNA4/gfx1250 WMMA and attention examples |
-| `generic/` | Triton, Gluon | Generic Triton tutorials, triton-kernels, FlashAttention, FlashInfer |
+| `generic/` | Triton, Gluon | Generic Triton tutorials, triton-kernels, FlashAttention, FlashInfer, LeetCUDA |
 
 Typical lookup by kernel type:
 
@@ -231,26 +230,19 @@ Typical lookup by kernel type:
 | Quantization | `amd/cdna/triton/aiter/quant/`, NVIDIA CuTeDSL quantization reports and examples |
 | SSM / Mamba | `nvidia/hopper/cutedsl/flashinfer/` |
 
-### 5.2 Upstream API and ISA References
+### 5.2 `reference-projects/` — Upstream Project References
 
-API signatures, decorators, type annotations, and ISA semantics should be checked from the relevant upstream projects or public vendor documentation. When local documentation is insufficient, clone the corresponding upstream repository into `/tmp/reference-projects/` and treat it as a read-only source reference.
-
-Difference from `reference-kernels/`:
-
-- Upstream projects answer “what exactly does this API or instruction mean?”
-- `reference-kernels/` answers “how is this API or instruction used in a real kernel?”
-
-Agents should prefer upstream source references for API correctness and `reference-kernels/` for implementation patterns.
+`reference-projects/` is reserved for optional local snapshots or source summaries of upstream projects. For API/ISA ground truth, clone the relevant upstream project to `/tmp/reference-projects/` or consult vendor official documentation.
 
 ## 6. Source Provenance
 
 The knowledge base combines three source categories:
 
 1. **Official documentation**: CUDA Programming Guide, PTX ISA, CUTLASS/CuTeDSL docs, Nsight Compute, ROCm documentation, AMD ISA references, profiling guides.
-2. **Open-source repositories**: CUTLASS, cutex, cuLA, flash-attention, FlashInfer, FlyDSL, Triton, DeepGEMM, FlashMLA, composable_kernel, cute-gemm, hpc-ops, aiter, QuACK, TileLang.
+2. **Open-source repositories**: CUTLASS, cutex, cuLA, flash-attention, FlashInfer, FlyDSL, Triton, DeepGEMM, LeetCUDA, FlashMLA, composable_kernel, cute-gemm, hpc-ops, aiter, QuACK, TileLang.
 3. **Local optimization experience**: architecture-specific Gluon/FlyDSL/CuTeDSL optimization reports, pitfalls, profiling conclusions, and distilled pattern cards.
 
-The repository keeps distilled knowledge in `docs/`, executable or illustrative code in `reference-kernels/`, and API/ISA ground truth in upstream projects or vendor documentation.
+The repository keeps distilled knowledge in `docs/`, executable or illustrative code in `reference-kernels/`, and references to upstream projects in reference-projects/.
 
 ## 7. Agent Reading Workflow
 
@@ -261,7 +253,7 @@ For a new task, the recommended workflow is:
 3. **Read the closest directory README**: start from `README.md`, then `docs/README.md`, then the relevant module README.
 4. **Read quick knowledge first**: use `docs/kernel-opt/` for concise optimization direction.
 5. **Read full evidence when needed**: use `docs/ref-docs/` and `docs/pitfalls/` to understand constraints, failures, and tradeoffs.
-6. **Check ground truth for implementation**: use upstream projects or vendor documentation for API/ISA behavior and `reference-kernels/` for concrete kernel patterns.
+6. **Check ground truth for implementation**: clone upstream projects to /tmp/reference-projects/ for API/ISA behavior, use reference-kernels/ for concrete kernel patterns, and prefer vendor official documentation for ISA/architecture references.
 7. **Consult `docs/RELATIONS.md` for cross-architecture work**: especially before transferring an optimization from AMD to NVIDIA or from one GPU generation to another.
 
 ## 8. Coverage Summary
@@ -309,6 +301,6 @@ To keep the knowledge base useful for Agents:
 1. **Preserve narrow topic boundaries**: do not merge unrelated techniques into a monolithic file.
 2. **Keep directory README files current**: Agents depend on README files for navigation.
 3. **Record conflicts explicitly**: if a technique behaves differently across architectures, update `docs/RELATIONS.md` or a relevant pitfall file.
-4. **Separate facts from examples**: API and ISA truth belongs in upstream projects or vendor documentation; runnable usage patterns belong in `reference-kernels/`; distilled guidance belongs in `docs/`.
+4. **Separate facts from examples**: API and ISA truth belongs in vendor documentation or upstream source repositories; runnable usage patterns belong in `reference-kernels/`; distilled guidance belongs in `docs/`.
 5. **Prefer evidence-backed optimization notes**: include profiling data, hardware constraints, or source references when possible.
 6. **Update counts and structure after large imports**: this design document should reflect the current repository structure, not historical organization.

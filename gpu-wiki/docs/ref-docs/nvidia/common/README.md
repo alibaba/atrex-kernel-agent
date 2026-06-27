@@ -11,6 +11,7 @@ General optimization reference articles for NVIDIA hardware, covering PTX, NCU p
 | [ncu-profiling-guide.md](ncu-profiling-guide.md) | Nsight Compute Profiling Guide |
 | [ncu-profile-driven-optimization-workflow.md](ncu-profile-driven-optimization-workflow.md) | NCU Profile-Driven Optimization Workflow: collecting reports, exporting counter/source/PM sampling/PTX-SASS evidence, comparing baselines, and converging to a verifiable kernel edit |
 | [ncu-rule-est-speedup-meta-rules.md](ncu-rule-est-speedup-meta-rules.md) | Cross-architecture meta-rules: NCU single rule % est. is an architecture upper bound, not a wall-time gain. When it is trustworthy, when it is misleading, and the three-strike convergence signal. Cheap-fix bias > heavyweight. |
+| [ncu-measurement-discipline.md](ncu-measurement-discipline.md) | Measurement-trust layer: NCU `Duration` ≠ harness latency (use NCU for ratios only); noise discipline (smoke-test variance, same-process A/B, variance floor) before believing a sub-1× delta; profiling and silent kernel-skip under CUDA graph capture; per-call overhead floor. |
 | [nvidia-ptx-mma-instructions.md](nvidia-ptx-mma-instructions.md) | PTX MMA Instruction Evolution |
 | [nvidia-ptx-sync-and-async.md](nvidia-ptx-sync-and-async.md) | PTX Synchronization and Asynchronous Primitives |
 | [ptx-instruction-set.md](ptx-instruction-set.md) | PTX Instruction Set Reference |
@@ -30,4 +31,4 @@ General optimization reference articles for NVIDIA hardware, covering PTX, NCU p
 | Directory | Description |
 |-----------|-------------|
 | [sm90/](sm90/) | Hopper (SM90) specific articles |
-|  | Blackwell GeForce / RTX PRO (SM120) hardware specifications and architecture whitepaper |
+| [sm120/](sm120/) | Blackwell GeForce / RTX PRO (SM120) hardware specifications and architecture whitepaper |

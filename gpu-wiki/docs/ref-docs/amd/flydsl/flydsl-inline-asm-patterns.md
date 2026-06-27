@@ -1,5 +1,7 @@
 # FlyDSL inline_asm Writing Guide (AMD GFX942 / gfx1250)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 Source: `FlyDSL/kernels/` (FlyDSL built-in kernel library).
 Corresponding reference kernels:
 - CDNA: `reference-kernels/amd/cdna/flydsl/FlyDSL/`
@@ -157,7 +159,9 @@ Reference: ``gemm_fp8fp4_gfx1250.py:373``, ``moe_gemm_2stage_mxscale_gfx1250.py:
 
 **Pattern**: Use Python f-strings to expand multiple PTX lines at compile time, then join them into a single assembly block with ``\n``.join. This avoids multiple ``inline_asm`` calls (each inserts an op).
 
-**Applicable scenario**: When the kernel body is very large (gfx1250 fused MoE GEMM 30+KB instructions), I-cache misses are inevitable on first launch. Prefetching 10 instruction pages of 4KB each can eliminate the first-launch latency.### 3.5 RDNA4 barrier — `s_barrier_signal/wait`
+**Applicable scenario**: When the kernel body is very large (gfx1250 fused MoE GEMM 30+KB instructions), I-cache misses are inevitable on first launch. Prefetching 10 instruction pages of 4KB each can eliminate the first-launch latency.
+
+### 3.5 RDNA4 barrier — `s_barrier_signal/wait`
 
 ```python
 def _barrier():
@@ -275,7 +279,7 @@ Only fall back to inline_asm when you need `global_*_dword` (generic load/store 
 | Prefer dialect op | ``flydsl._mlir.dialects.rocdl`` + ``flydsl.expr.buffer_ops`` | ``cutlass._mlir.dialects.nvvm`` |
 | Primary use cases | cache invalidation, HW reg settings, barrier, prefetch, load/store with cache modifiers | mma.sync, ldmatrix, atomic (including vectorized), IEEE rounding, quantization lop3, CAS spin, grid sync, mbarrier try_wait |
 
-See the companion doc: .
+See the companion doc: [CuTeDSL Inline PTX Patterns Overview](../../nvidia/cutedsl/cutedsl-inline-ptx-patterns.md).
 
 ---
 

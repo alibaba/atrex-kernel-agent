@@ -7,7 +7,7 @@
 ```python
 # GDN (Gated Delta Network) decode: need to manage multiple states
 # 1. gate state
-# 2. delta state  
+# 2. delta state
 # 3. output state
 
 # Each decode step requires:

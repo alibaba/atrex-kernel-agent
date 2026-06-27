@@ -121,7 +121,7 @@ for i in range(1, loop_n):
     smem_w.index(i % depth).store(next_w)  # In-place overwrite, no new memory allocation
 ```
 
-See: `references/patterns/pipeline.md`
+See `pipeline.md`.
 
 ---
 
@@ -170,12 +170,14 @@ RuntimeError: Shared memory load failed
 **Cause**: DotOperandLayout is not used
 
 **Solution**:
-```python# ❌ Wrong
+```python
+# ❌ Wrong
 a_dot = a_smem.load()  # Missing layout
 
 # ✅ Correct
 dot_op0 = gl.DotOperandLayout(operand_index=0, parent=mma, k_width=4)
-a_dot = a_smem.load(dot_op0)```
+a_dot = a_smem.load(dot_op0)
+```
 
 ---
 
@@ -184,7 +186,9 @@ a_dot = a_smem.load(dot_op0)```
 **Symptom**:
 ```
 TypeError: missing required argument 'X'
-```**Cause**: Function definition does not match call parameters
+```
+
+**Cause**: Function definition does not match call parameters
 
 **Solution**:
 - Check all function definitions
@@ -193,10 +197,10 @@ TypeError: missing required argument 'X'
 
 ---
 
-## Error 9: Edit tool triggers a large number of LSP false positives
+## Error 9: Static Analysis Reports Many LSP False Positives
 
 **Symptoms**:
-Every time the Edit tool is used to modify Gluon code, 20+ LSP errors similar to the following are output:
+After modifying Gluon code, static analysis may report 20+ LSP errors similar to the following:
 ```
 Type "AMDMFMALayout" is not assignable to declared type "constexpr"
 Type "BlockedLayout" is not assignable to declared type "constexpr"
@@ -207,13 +211,15 @@ Type "BlockedLayout" is not assignable to declared type "constexpr"
 
 **Solution**:
 1. **Ignore all LSP errors involving `constexpr`** — they will always exist and cannot be fixed
-2. **Reduce the number of Edit calls** — use the Write tool to write/rewrite the entire file at once
-3. **Do not delete comments line by line** — if batch cleanup of comments is needed, use Write to rewrite the entire file
+2. **Keep related source changes together** — when changing layout-heavy code, rewrite the affected block coherently rather than making many tiny edits
+3. **Do not delete comments line by line** — if batch cleanup of comments is needed, rewrite the affected section as a whole
 
-```python# These patterns trigger LSP false positives, but are completely correct in Gluon:
+```python
+# These patterns trigger LSP false positives, but are completely correct in Gluon:
 mma: gl.constexpr = gl.amd.AMDMFMALayout(...)      # LSP reports error, but correct
 blocked: gl.constexpr = gl.BlockedLayout(...)       # LSP reports error, but correct
-dot_op0: gl.constexpr = gl.DotOperandLayout(...)    # LSP reports error, but correct```
+dot_op0: gl.constexpr = gl.DotOperandLayout(...)    # LSP reports error, but correct
+```
 
 **How to distinguish true and false errors**: Only trust the results of `check_syntax.py` and `validate.py`, do not trust LSP diagnostics.
 
@@ -290,9 +296,11 @@ acc = gl.amd.cdna3.mfma(dot, other, acc)
 
 **Verification method**: Before conversion, you must check the value of the `num_stages` parameter in the Triton wrapper. If > 1, you **must** implement pipelining and cannot skip it.
 
-For more details, see: `references/patterns/pipeline.md`
+For more details, see `pipeline.md`.
 
----## Error 11: Reporting Completion Without Running Benchmark Verification
+---
+
+## Error 11: Reporting Completion Without Running Benchmark Verification
 
 **Symptom**: After passing functional verification (`validate.py`), the report directly states "conversion complete", but `benchmark.py` has not been run.
 
@@ -337,7 +345,9 @@ def kernel(X, BLOCK_SIZE: gl.constexpr, NUM_WARPS: gl.constexpr):
         order=[0])
 
 # Launcher must pass both num_warps and NUM_WARPS
-kernel  # ← Pass additionally
+kernel[(grid,)](x_ptr, BLOCK_SIZE=block_size,
+               num_warps=num_warps, num_stages=1,
+               NUM_WARPS=num_warps)  # ← Pass additionally
 
 # Working with @triton.heuristics: If num_warps is dynamically computed by heuristics,
 # add an additional heuristic to set NUM_WARPS:
@@ -465,7 +475,9 @@ python tools/extract_ttgir.py kernel_fwd_driver.py -o /tmp/fwd.ttgir
 python tools/extract_ttgir.py kernel_bwd_driver.py -o /tmp/bwd.ttgir
 ```
 
-**If kernels share the same BLOCK_SIZE and num_warps**, their BlockedLayout is typically also the same, and a single Layout can be reused. However, if kernels have different tile dimensions or warp counts, **they must be extracted separately**.## Error 17: `eviction_policy` parameter is not supported in Gluon
+**If kernels share the same BLOCK_SIZE and num_warps**, their BlockedLayout is typically also the same, and a single Layout can be reused. However, if kernels have different tile dimensions or warp counts, **they must be extracted separately**.
+
+## Error 17: `eviction_policy` parameter is not supported in Gluon
 
 **Symptom**:
 ```
@@ -489,4 +501,4 @@ val = gl.load(ptr + offs, mask=mask, other=0.0)
 
 ## Quick Checklist
 
-See the full verification checklist in `references/verification_guide.md`.
+See the full verification checklist in `../common/verification_guide.md`.

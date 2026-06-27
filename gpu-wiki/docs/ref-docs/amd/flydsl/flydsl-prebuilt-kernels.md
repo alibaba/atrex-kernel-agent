@@ -1,5 +1,7 @@
 # FlyDSL Pre-built Kernel Library Reference
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 FlyDSL provides a set of production-grade pre-built GPU kernels covering common operators such as Normalization, Softmax, GEMM, and MoE, implemented using the `@flyc.kernel`/`@flyc.jit` API.
 
 ---
@@ -88,7 +90,9 @@ executor = build_softmax_module(M=32768, N=8192, dtype_str="bf16")
 3. **Global Max**: Block-wide shuffle reduction
 4. **Local Exp + Sum**: `exp2(x * log2(e))` approximation + partial sum accumulation
 5. **Global Sum**: Block-wide sum reduction
-6. **Normalize + Store**: Divide by sum, type conversion, vectorized store## 4. GEMM Kernel
+6. **Normalize + Store**: Divide by sum, type conversion, vectorized store
+
+## 4. GEMM Kernel
 
 ### 4.1 Preshuffle GEMM
 
@@ -282,7 +286,7 @@ requires？
 
 | Comparison | BF16 | W4A16 |
 |------------|------|-------|
-| vs Triton | 1.39× | 3.22× |
+| vs Triton comparison baseline | 1.39× | 3.22× |
 | vs PyTorch | 13.8× | 13.4× |
 
 ### End-to-End (RTP-LLM, Kimi-K2.5 MoE)

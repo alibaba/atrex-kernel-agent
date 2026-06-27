@@ -10,13 +10,13 @@ def chunk_state_kernel(B, C, dt, states, ...):
     """Mamba2 SSD: Update SSM state per chunk"""
     # Perform matrix operations within each chunk
     # Pass state between chunks (similar to RNN)
-    
+
     # 1. Compute decay matrix within chunk
     decay = tl.exp(-dt * A)  # A is a diagonal matrix
-    
+
     # 2. Accumulate state
     state = prev_state * decay + tl.dot(B_chunk.T, X_chunk)
-    
+
     # 3. Compute output
     Y_chunk = tl.dot(C_chunk, state)
 ```

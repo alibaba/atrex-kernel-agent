@@ -8,7 +8,7 @@ applicable_scenarios:
 
 # Stopping Conditions
 
-Use the general stopping conditions from SKILL.md §1.8, with the full checklist from §3.0-3.6 of `common_optimizations.md`.
+Use the general stopping conditions from optimization-guide.md §1.8, with the full checklist from §3.0-3.6 of `common_optimizations.md`.
 
 # Final Best Configuration Template for 256×256×64 GEMM
 
@@ -39,7 +39,7 @@ SUBK: tl.constexpr = 16
 # Main loop
 for k in range(0, K, BLOCK_K):
     # Use WPS (Warp Pipeline Stage) to implement 4-subslice pipeline
-    # Ref: triton-to-gluon-converter.skill/cdna3-triton-to-gluon-converter.skill/references/patterns/pipeline.md
+    # Ref: converter/amd/cdna3/pipeline.md
     pass
 ```
 

@@ -1,5 +1,7 @@
 # FlyDSL Attention Backward dQ + dK+dV (bf16, Causal Mask) on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 ## Target hardware
 
 - Chip: AMD MI308X (CDNA3, gfx942)
@@ -188,10 +190,10 @@ Current best (V14+V15, S=316): dQ 2.93ms + dK+dV 6.52ms = 9.45ms. **37.7% faster
 
 ## Related docs
 
-- Forward kernel optimization:
-- Forward kernel pitfalls:
-- Backward kernel pitfalls:
-- Reference kernel (dK+dV):
-- Reference kernel (dQ):
+- Forward kernel optimization: [cdna3-flash-attention-bf16-mask-optimization.md](cdna3-flash-attention-bf16-mask-optimization.md)
+- Forward kernel pitfalls: [flash-attn-pitfalls.md](../../../../pitfalls/amd/flydsl/flash-attn-pitfalls.md)
+- Backward kernel pitfalls: [attention-backward-dkdv-pitfalls.md](../../../../pitfalls/amd/flydsl/attention-backward-dkdv-pitfalls.md)
+- Reference kernel (dK+dV): [attn_bwd_dkdv_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/attn_bwd_dkdv_mi308x.py)
+- Reference kernel (dQ): [attn_bwd_dq_mi308x.py](../../../../../reference-kernels/amd/cdna3/flydsl/FlyDSL/attn_bwd_dq_mi308x.py)
 - API integration + arbitrary mask + end-to-end perf: [cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md](cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md)
-- API integration pitfalls:
+- API integration pitfalls: [flash-attn-bwd-mask-integration-pitfalls.md](../../../../pitfalls/amd/flydsl/flash-attn-bwd-mask-integration-pitfalls.md)

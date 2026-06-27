@@ -568,7 +568,9 @@ class MLP(nn.Module):
 
 For gated activation, the fc1 output is `2 * hidden_features` (interleaved), with automatic Muon reshape handling.
 
-## Part 4: Supporting Infrastructure### 12. Fast Math
+## Part 4: Supporting Infrastructure
+
+### 12. Fast Math
 
 `FastDivmod` wraps CUTLASS's `FastDivmodDivisor` to convert integer division into multiplication + shift, avoiding expensive integer division on the GPU:
 
@@ -632,4 +634,4 @@ if group_id % 2 == 1:  # serpentine order
 - `VarlenMTileScheduler`: Supports variable-length M dimensions (e.g., batched attention), using `cu_seqlens_m` + warp-level prefix sum Tracy for efficient tile allocation
 - `TriangularTileScheduler`: Used for triangular matrix operations (e.g., dKdV of causal attention), processing only lower-triangular tiles
 
-See  for Blackwell-specific CuTeDSL programming details.
+See [SM100 CuTeDSL](sm100/blackwell-cutedsl-sm100.md) for Blackwell-specific CuTeDSL programming details.

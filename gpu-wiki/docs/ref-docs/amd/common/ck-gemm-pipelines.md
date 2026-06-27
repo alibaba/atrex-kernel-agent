@@ -512,4 +512,4 @@ __GPU_WIZI_TRANSLATION_PLACEHOLDER_000001__
 - [AMD MFMA Matrix Core Programming Guide](amd-mfma-matrix-cores.md) — MFMA naming conventions and register layouts
 - [LDS Bank Conflict Optimization](../../../kernel-opt/amd/common/lds-bank-conflict-optimization.md) — General bank conflict knowledge
 - [Occupancy Optimization](../../../kernel-opt/amd/common/occupancy-optimization.md) — Relationship between VGPR/AGPR and occupancy
--  — CDNA3 vs CDNA4 architecture parameters
+- [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — CDNA3 vs CDNA4 architecture parameters

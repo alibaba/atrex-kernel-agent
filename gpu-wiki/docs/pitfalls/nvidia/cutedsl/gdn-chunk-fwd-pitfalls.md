@@ -6,8 +6,8 @@ finally 1.51x faster than same-process FLA on the directional
 `output_final_state=True` contract at `B=1,T=6144,H=16,HV=32,K=128,V=128`.
 
 Related:
-- Optimization report:
-- Reference kernel:
+- Optimization report: [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`](../../../ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md)
+- Reference kernel: [`reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/sm120_gdn_chunk_fwd_3k.py`](../../../../reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/sm120_gdn_chunk_fwd_3k.py)
 - GDN decode pitfalls (complementary): [`gdn-decode-pitfalls.md`](gdn-decode-pitfalls.md)
 
 ---
@@ -241,7 +241,8 @@ if is_producer:   # all 32 threads of warp 0 enter together
     prod_state.advance()
 ```
 
-Source: upstream CUTLASS CuTeDSL source, `cutlass/cute/algorithm.py:415-416` and `cutlass/pipeline/helpers.py:321-324`.
+Source: `CUTLASS $CUTLASS_DIR/python/CuTeDSL/cutlass/cute/algorithm.py:415-416`,
+`CUTLASS $CUTLASS_DIR/python/CuTeDSL/cutlass/pipeline/helpers.py:321-324`.
 
 
 ## 10. D-1 "all-warps-produce-and-consume" is broken with PipelineTmaAsync
@@ -280,7 +281,8 @@ consumer_group = CooperativeGroup(Agent.Thread, CONSUMER_WARPS)   # e.g., NUM_WA
 Only threads in producer warps enter the producer code path. Only threads in consumer
 warps call `consumer_wait` / `consumer_release`.
 
-Source: upstream CUTLASS CuTeDSL source, `cutlass/pipeline/helpers.py:172,258-260` and `cutlass/pipeline/sm90.py:519-538`.
+Source: `CUTLASS $CUTLASS_DIR/python/CuTeDSL/cutlass/pipeline/helpers.py:172,258-260`,
+`CUTLASS $CUTLASS_DIR/python/CuTeDSL/cutlass/pipeline/sm90.py:519-538`.
 
 
 ## 11. `producer_commit` is a NOOP for TMA — don't debug its internals
@@ -312,7 +314,7 @@ exists only for API symmetry with non-TMA producers.
 4. `consumer_wait(state)` — spins on full barrier until TMA bytes == expected bytes
 5. `consumer_release(state)` — signals empty barrier
 
-Source: upstream CUTLASS CuTeDSL source, `cutlass/pipeline/sm90.py:541-545`.
+Source: `CUTLASS $CUTLASS_DIR/python/CuTeDSL/cutlass/pipeline/sm90.py:541-545`.
 
 
 ## 12. TMA + warp-spec on small tiles with serial dependency = performance regression

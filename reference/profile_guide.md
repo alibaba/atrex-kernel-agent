@@ -1,6 +1,6 @@
 # Profile Tool Usage Guide
 
-> Source: gpu-wiki (`/tmp/gpu-wiki/docs/ref-docs/`)
+> Source: gpu-wiki (`~/aka_kernel_opt/gpu-wiki/docs/ref-docs/`)
 > - AMD: `amd/common/rocprofv3-profiling-guide.md`, `amd/gluon/gfx942/profiling_guide.md`
 > - NVIDIA: `nvidia/common/ncu-profiling-guide.md`, `nvidia/gluon/sm90/profiling_guide.md`
 
@@ -55,10 +55,9 @@ Output structure:
 
 #### Prerequisites
 
-ATT decoding requires the `rocprof-trace-decoder` library ([GitHub](https://github.com/ROCm/rocprof-trace-decoder)). The `profile_kernel.sh` script **auto-detects** the decoder at:
+ATT decoding requires the `rocprof-trace-decoder` library. The `profile_kernel.sh` script **auto-detects** the decoder at:
 ```
-1) $ROCPROF_TRACE_DECODER_DIR (if set)
-2) /opt/rocm/lib
+tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64
 ```
 The script automatically sets `--att-library-path` and `LD_LIBRARY_PATH` — no manual configuration required.
 
@@ -467,7 +466,7 @@ Examples:
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `rocprofv3: command not found` | ROCm not in PATH | `export PATH=/opt/rocm/bin:$PATH` |
-| ATT decoder fails | Missing library | Install `rocprof-trace-decoder` from [GitHub](https://github.com/ROCm/rocprof-trace-decoder) or set `ROCPROF_TRACE_DECODER_DIR` |
+| ATT decoder fails | Missing library at auto-detected path | Verify `tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so` exists |
 | Stats CSV empty | Wrong dispatch | Use `--iteration-range "[1]"` to skip warmup |
 | PMC batch fails with Warning | Counter mutual exclusion or GPU busy | Retry; partial results from other batches are still usable |
 | No `.amdgcn` files produced | Kernel uses JIT cache, no recompilation | Check `asm/compile.log`; clear Triton cache or set `TRITON_CACHE_DIR` manually |

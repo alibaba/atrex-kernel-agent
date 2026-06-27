@@ -1,5 +1,7 @@
 # Pitfalls: FlyDSL Flash Attention on MI308X (gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 This document collects the non-obvious traps encountered while optimizing
 the FlyDSL flash-attention forward kernel on MI308X. Companion: the
 optimization journey doc at
@@ -208,15 +210,20 @@ q_tile, varying batch lengths) in the slow position.
 
 ---
 
-## 9. Aiter installation traps on a Normandy-style ROCm 6.4.3 worker
+## 9. Aiter source and ROCm 6.4.3 compatibility notes
 
-These show up if you try to JIT-build aiter as the comparison baseline.
+These notes come from historical attempts to use AITER as a comparison
+baseline in a restricted ROCm 6.4.3 environment. Prefer local snapshots or
+consumer-provided reference material when available; no task-time network access
+is required by this wiki page.
 
-### 9a. `github.com` is blocked but `codeload.github.com` is reachable
+### 9a. Upstream source provenance
 
-`git clone` fails. But `curl -sL https://codeload.github.com/ROCm/aiter/tar.gz/refs/heads/main`
-works. Use tarball download for both `aiter` and the `composable_kernel`
-submodule.
+Reference source: AITER upstream was observed via the ROCm/aiter GitHub
+repository, with `codeload.github.com` used as historical provenance for the
+source snapshot when direct repository access was unavailable. Treat both
+`aiter` and its `composable_kernel` submodule as local reference material once
+snapshotted.
 
 ### 9b. ROCm 6.4 renamed `hipDeviceAttributePciChipId` → `hipDeviceAttributePciDeviceId`
 
@@ -507,7 +514,7 @@ and MFMA tile to match actual head_dim. For D=64: `D_CHUNKS=2`,
 ## 16. Scalar mask loads dominate runtime for free-mask attention
 
 **Trap**: Adding free-mask support to Flash Attention seems straightforward:
-inside the KV loop, after computing S = Q*K^T, load `mask[q_row, kv_col]`
+inside the KV loop, after computing S = Q·K^T, load `mask[q_row, kv_col]`
 for each MFMA output element and add it to the score. With MFMA 32×32
 layout, each thread holds 16 lo + 16 hi score values → 32 scalar f32
 loads per thread per subtile. "32 loads is fine, it's just a few extra
@@ -560,7 +567,7 @@ dimensions, explicitly extract `mask_stride_b = mask.stride(0)` and
 physical storage layout matches the logical view. Add an assertion:
 `assert mask.shape[1] == 1, "mask must broadcast over heads"`.
 
-See also:
+See also: [cdna3-flash-attention-bf16-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md)
 for the full optimization journey.
 
 ---
@@ -688,7 +695,7 @@ kernels (attention = GEMM + softmax + GEMM), use targeted `sched_mfma` /
 `sched_dsrd` / `sched_group_barrier` instead. Don't stack multiple
 scheduling hint systems.
 
-See also:
+See also: [cdna3-flash-attention-bf16-gqa-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-gqa-optimization.md)
 v15 section for the full list of dead-end attempts.
 
 ---
@@ -824,7 +831,7 @@ in online softmax with bit-packed masks. The -inf→NaN path exists whenever any
 has zero attend positions across all KV tiles, which is common with sparse masks
 (56.4% in our test case).
 
-See also:  V7.
+See also: [cdna3-flash-attention-bf16-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md) V7.
 
 ---
 
@@ -851,7 +858,7 @@ that the masked score retains its QK-dependent component. The replacement approa
 (`select(attend, score, penalty)`) discards this component and changes the max value
 by an amount that gets amplified exponentially through exp2.
 
-See also:  V7.
+See also: [cdna3-flash-attention-bf16-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md) V7.
 
 ---
 
@@ -879,14 +886,14 @@ prefer `sched_barrier(0)` (unconstrained) over `sched_dsrd/sched_mfma` (semi-con
 The key insight is that MFMA has 64-cycle pipeline latency where other work can execute
 for free — hints that prevent this interleaving leave performance on the table.
 
-**With [trap #27 (sched_group_barrier regresses)](#27-sched_group_barrier-mfmadsrd-interleave-regresses-07) conflict note**:
+**With [trap #27 (sched_group_barrier regresses)](#27-schedgroupbarrier-mfmadsrd-interleave-regresses-07) conflict note**:
 Trap #27 shows that `sched_group_barrier` (HARD constraint) is worse than
 `sched_dsrd/sched_mfma` (SOFT hints). This trap shows that even soft hints can be
 harmful when there is additional VALU work that should fill MFMA bubbles. The ordering
 from most to least constrained: `sched_group_barrier` > `sched_dsrd/sched_mfma` >
 `sched_barrier(0)`. Pick the least-constrained option that doesn't regress.
 
-See also:  V7.
+See also: [cdna3-flash-attention-bf16-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md) V7.
 
 ---
 
@@ -911,7 +918,7 @@ tile size. The per-tile fixed costs (mask, softmax, synchronization) must be amo
 over enough MFMA work. Only consider BLOCK_M=64 if VGPR pressure from a larger tile
 causes spills or occupancy collapse — and verify with profiling.
 
-See also:  V7.
+See also: [cdna3-flash-attention-bf16-mask-optimization.md](../../../ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md) V7.
 
 ---
 
