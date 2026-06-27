@@ -14,7 +14,7 @@ The full feature set is called **Thread Trace**, and the toolchain consists of t
 | Component | Function | Source |
 |------|------|------|
 | **rocprofv3** | Captures instruction-level trace data | Bundled with ROCm installation (`/opt/rocm/bin/rocprofv3`) |
-| **rocprof-trace-decoder** | Decodes raw .att binaries into an analyzable format | [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases), installed outside this repository |
+| **rocprof-trace-decoder** | Decodes raw .att binaries into an analyzable format | [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases), downloaded in this guide to `tools/rocprof-trace-decoder-amd-mainline/` |
 | **rocprof-compute-viewer** | Visualizes trace data (GUI, optional) | [ROCm docs](https://rocm.docs.amd.com/projects/rocprof-compute-viewer/en/amd-mainline/how-to/using_compute_viewer.html) |
 
 **This guide focuses on CLI-based instruction-level analysis** and does not rely on GUI visualization tools.
@@ -28,10 +28,10 @@ The full feature set is called **Thread Trace**, and the toolchain consists of t
 The following commands have been verified in the current environment and can be used directly:
 
 ```bash
-# Complete command — Use input_att.yaml configuration file + external trace decoder library
+# Complete command — Use input_att.yaml configuration file + local trace decoder library
 env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
     rocprofv3 --att \
-    --att-library-path <rocprof-trace-decoder-lib-dir> \
+    --att-library-path ./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64 \
     -i tools/input_att.yaml \
     -- python <kernel.py>
 ```
@@ -43,7 +43,7 @@ env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
 
 ### 1.2 Configuration File input_att.yaml
 
-The `tools/input_att.yaml` configuration for this skill (verified working):
+The `tools/input_att.yaml` configuration for this guide (verified working):
 
 ```yaml
 jobs:
@@ -129,7 +129,7 @@ After finding the dispatch_id, analyze the corresponding `stats_ui_output_agent_
 
 ```csv
 "CodeObj","Vaddr","Instruction","Hitcount","Latency","Stall","Idle","Source"
-11,6400,"s_load_dwordx2 s[2:3], s[0:1], 0x0",16,64,0,0,"/root/workspace/chunk_gdn_gluon.py:47"
+11,6400,"s_load_dwordx2 s[2:3], s[0:1], 0x0",16,64,0,0,"chunk_gdn_gluon.py:47"
 ```
 
 | Column | Meaning | Importance |
@@ -249,7 +249,9 @@ for ts, typ, stall, lat, idx in insts:
 print(f"Wave duration: {duration:,} cycles")
 for unit, cycles in idle.items():
     print(f"  {unit} idle: {cycles:>10,} cycles ({cycles*100//duration}%)")
-# Print timeline (sample every 10 windows)```### 3.4 Interpretation of Measured Results (chunk_gated_delta_rule kernel, 2026-03-09)
+# Print timeline (sample every 10 windows)```
+
+### 3.4 Interpretation of Measured Results (chunk_gated_delta_rule kernel, 2026-03-09)
 
 ```
 Functional Unit Idle Time:
@@ -345,7 +347,9 @@ buffer_load_dwordx4 (line 285)   hit=2352  stall=309156  ← Memory access stall
 **Optimization Insights:**
 - `buffer_load_dwordx2` (line 290) → Step 3.1: Should be optimized to dwordx4
 - Multiple `buffer_load` with high Stall → Step 3.5: Need to improve compute-memory overlap
-- `s_barrier` with high Stall → May need to reconsider the synchronization strategy### How to Distinguish Scratch from Global Memory Access
+- `s_barrier` with high Stall → May need to reconsider the synchronization strategy
+
+### How to Distinguish Scratch from Global Memory Access
 
 In assembly, scratch operations can be identified as follows:
 - Use `scratch_load_*` / `scratch_store_*` instructions (gfx9 syntax)
@@ -423,7 +427,7 @@ TRACE_DIR="tt_test"
 | **ROCm** | 7.0+ | `rocprofv3 --version` |
 | **AQL Profile** | Bundled with ROCm 7.0+, or build from source | `ls /opt/rocm/lib/libhsa-amd-aqlprofile64.so` |
 | **ROCprofiler-SDK** | Bundled with ROCm 7.0+ | `which rocprofv3` |
-| **ROCprof Trace Decoder** | Download from [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases) | Install outside this repository and pass the library directory to `rocprofv3 --att-library-path` |
+| **ROCprof Trace Decoder** | Download from [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases) | This guide assumes the decoder is available at `tools/rocprof-trace-decoder-amd-mainline/` |
 
 ### 7.2 Common Issues and Solutions
 
@@ -437,8 +441,8 @@ TRACE_DIR="tt_test"
 **Cause**: Need to link the dynamic library .so instead of the static library .a.
 **Solution**:
 ```bash
-# Symlink .so to cmake search path
-ln -s /opt/conda310/lib/libpython3.10.so /usr/local/python3.10/lib/libpython3.10.so
+# Symlink .so from the active Python environment to the CMake search path
+ln -s "$CONDA_PREFIX/lib/libpython3.10.so" "${PYTHON_PREFIX:-/usr/local/python3.10}/lib/libpython3.10.so"
 ```
 
 #### Q: Captured stats_*.csv is empty (only header)
@@ -514,6 +518,6 @@ bazelisk run \
 ## Related Documents
 
 - **General rocprofv3 Usage**: [AMD rocprofv3 Profiling Guide](../../common/rocprofv3-profiling-guide.md) — general features such as tracing, counter collection, output formats
-- **CDNA4 Instruction-Level Analysis**:
+- **CDNA4 Instruction-Level Analysis**: [CDNA4 rocprofv3 Profile](../gfx950/profiling_guide.md)
 - **NVIDIA Counterpart**: [NCU Profiling Guide](../../../nvidia/common/ncu-profiling-guide.md) — complete NVIDIA Nsight Compute usage
 - **Prerequisite Knowledge**: [GPU Instruction-Level Optimization](../../../generic/gpu-instruction-optimization.md) — Roofline analysis principles

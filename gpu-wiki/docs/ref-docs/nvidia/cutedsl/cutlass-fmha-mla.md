@@ -252,7 +252,8 @@ int max_length;              // Maximum length for chunked computation
 int* cumulative_seqlen_ptr;  // Cumulative sequence length array [0, len0, len0+len1, ...]
 int total_length = -1;
 
-operator int() const { return max_length; }  // Implicitly convert to int for ceil_div etc```
+operator int() const { return max_length; }  // Implicitly convert to int for ceil_div etc
+```
 
 At runtime, the actual length is obtained based on the batch index:
 
@@ -429,5 +430,5 @@ Warp assignment: 0x12'3333'3333'4444
 ### Related Documentation
 
 - [CUTLASS GEMM Optimization](cutlass-gemm-optimization.md)
--
+- [SM100 CuTeDSL Programming](sm100/blackwell-cutedsl-sm100.md)
 - CUTLASS Programming Model

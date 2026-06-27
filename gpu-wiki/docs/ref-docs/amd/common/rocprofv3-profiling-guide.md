@@ -121,7 +121,9 @@ rocprofv3 --input config.yaml -- ./app
 ```
 
 - **JSON/YAML**: Supports all configuration options (tracing + profiling)
-- **Plain text**: Only supports HW counter specification### Additional Counter Definitions
+- **Plain text**: Only supports HW counter specification
+
+### Additional Counter Definitions
 
 ```bash
 rocprofv3 --extra-counters extra_counters.yaml -- ./app
@@ -394,5 +396,5 @@ rocprofv3 --list-avail
 
 - **NVIDIA counterpart**: [NCU Profiling Guide](../../nvidia/common/ncu-profiling-guide.md) — Full usage of NVIDIA Nsight Compute
 - **CDNA3 Instruction-level Analysis**: [rocprofv3 ATT Detailed Guide](../gluon/gfx942/profiling_guide.md) — ATT Thread Trace usage
-- **CDNA4 Instruction-level Analysis**:
+- **CDNA4 Instruction-level Analysis**: [CDNA4 rocprofv3 Profile](../gluon/gfx950/profiling_guide.md)
 - **Prerequisites**: [GPU Instruction-level Optimization](../../generic/gpu-instruction-optimization.md) — Roofline analysis principles

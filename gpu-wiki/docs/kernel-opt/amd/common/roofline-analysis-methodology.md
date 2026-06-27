@@ -51,7 +51,7 @@ Ridge Point = peak (FLOPS) / peakbandwidth (Bytes/s) (unit: FLOPs/Byte)
 | MI300X | FP64 | 81.7 | 5.3 | **15.4** |
 | MI308X | FP16/BF16 | ~232 | ~5.3* | **~43.8** |
 | MI355X | FP16/BF16 | — | — | **~629** |
-> The Ridge Point of MI355X is much higher than that of MI300X; the same tile configuration is more likely to be memory-bound on MI355X. See  for details.
+> The Ridge Point of MI355X is much higher than that of MI300X; the same tile configuration is more likely to be memory-bound on MI355X. See [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) for details.
 
 ### Determining the Bottleneck
 
@@ -155,7 +155,7 @@ Bandwidth Utilization (%) = Actual Bandwidth (TB/s) / Bandwidth Upper Bound (TB/
 
 | Data Volume Level | Bandwidth Upper Bound | How to Obtain |
 |-----------|---------|---------|
-| **Large data volume** (sufficient to saturate HBM) | Hardware theoretical peak bandwidth | Check  |
+| **Large data volume** (sufficient to saturate HBM) | Hardware theoretical peak bandwidth | Check [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) |
 | **Small data volume** (insufficient to saturate HBM) | **Measured bandwidth upper bound for the same data volume** | Measure using a memcpy kernel |
 
 > **Experience**: When data volume is < ~100MB, the measured bandwidth is usually far below the theoretical peak (possibly only 50-80%). Using the theoretical peak as the denominator at this point will make bandwidth utilization appear very low, but the kernel may actually be approaching the bandwidth limit for that data volume.
@@ -199,13 +199,15 @@ theoretical_TFLOPS = 33.6M × 64 / 0.328 μs = 6.55 TFLOPS
 
 → Theoretical performance upper bound 6.55 TFLOPS (2.8% of peak 232 TFLOPS)
 → Indicates the operator cannot efficiently utilize hardware under this configuration; optimization space is limited
-``` > **Key Insight**: When the theoretical performance ceiling is far below the hardware peak, the problem lies not in ISA-level optimization but at the **operator configuration level** (tile size, matrix dimensions, data reuse). In this case, prioritize algorithmic optimizations (e.g., kernel fusion, reordering computation) rather than instruction-level optimizations.
+```
+
+> **Key Insight**: When the theoretical performance ceiling is far below the hardware peak, the problem lies not in ISA-level optimization but at the **operator configuration level** (tile size, matrix dimensions, data reuse). In this case, prioritize algorithmic optimizations (e.g., kernel fusion, reordering computation) rather than instruction-level optimizations.
 
 ---
 
 ## Related Documents
 
-- **Hardware Specifications**:  — Ridge Point, peak performance, bandwidth for each architecture
+- **Hardware Specifications**: [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — Ridge Point, peak performance, bandwidth for each architecture
 - **Occupancy**: [Occupancy Optimization](occupancy-optimization.md) — Relationship between VGPR and occupancy
 - **Small Matrix Optimization**: [Small Matrix/Low CU Utilization Optimization](small-matrix-cu-utilization.md) — Targeted strategies when CU utilization < 10%
 - **General Theory**: [GPU Execution Model](../../../ref-docs/generic/gpu-execution-model.md), [GPU Memory Hierarchy](../../../ref-docs/generic/gpu-memory-hierarchy.md)

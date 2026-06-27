@@ -51,13 +51,15 @@ python tools/measure_bandwidth_ceiling.py --size-bytes <kernel_data_bytes>
 NVIDIA:
 
 ```bash
-ncu --set full --launch-skip <N> --launch-count 1 -o ./profile python kernel.py
+bash tools/profile_nvidia.sh kernel.py --output-dir ./profile --launch-skip <N>
 ```
+
+`profile_nvidia.sh` wraps `ncu`: it collects the `.ncu-rep`, parses key metrics, and classifies symptoms. Read `./profile/summary.txt` for the diagnosis and `./profile/analysis/metrics_key_run.txt` for detailed metrics. To localise a symptom to a **source line / SASS address**, profile with `--source`: the script then emits an independent (VeloQ-ported) evidence bundle indexed by `analysis/source_evidence_manifest.json` (`source_metrics_*`, `warp_stalls_*`, `disasm_run`). `summary.txt`'s `LOCALIZE` line names which file to open per fired symptom. These are evidence only — the controlled-vocabulary diagnosis still comes from `summary.txt`.
 
 AMD:
 
 ```bash
-bash tools/profile_kernel.sh python kernel.py
+bash tools/profile_kernel.sh kernel.py --output-dir ./profile
 python tools/extract_asm.py kernel.py --output kernel.s
 ```
 

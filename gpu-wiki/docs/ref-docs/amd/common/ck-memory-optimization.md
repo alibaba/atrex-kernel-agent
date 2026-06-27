@@ -144,7 +144,7 @@ struct LdsIndexSwapping {
     using XorTransform    = XorTransform<BaseLengths[1], XORFactor>;
     using UnmergeTransform = UnmergeTransform<...>;
     using MergeTransform   = MergeTransform<...>;
-    
+
     __device__ auto operator()(index_t m, index_t k) const {
         auto k_xor = k ^ (m % factor);   // Step 1: XOR
  // Step 2-3: Unmerge + Merge LDS offset
@@ -262,7 +262,9 @@ backward: ←←←←←
 
 ### 6.4 Integration in LoadStoreTraits
 
-The Space-Filling Curve is automatically selected by `LoadStoreTraits` and embedded into the TileWindow's load/store path; users typically do not need to use it directly.## 7. TileWindow — Distributed Access Window
+The Space-Filling Curve is automatically selected by `LoadStoreTraits` and embedded into the TileWindow's load/store path; users typically do not need to use it directly.
+
+## 7. TileWindow — Distributed Access Window
 
 ### 7.1 Concept
 

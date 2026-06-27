@@ -70,8 +70,8 @@ Patches 5+ would have continued at the same cadence with no certainty of landing
 
 ## evidence
 
-- `/tmp/kernel_opt_attn_fp4_fusion/probe_v3_env.py` — initial probe showing `flash_attn` not on cluster
-- `/tmp/kernel_opt_attn_fp4_fusion/flash_attn/cute/` (commit `4fa44ed`) — vendored attempt + 3 shims, halted at P4
+- `kernel_opt_attn_fp4_fusion/probe_v3_env.py` — initial probe showing `flash_attn` not on cluster
+- `kernel_opt_attn_fp4_fusion/flash_attn/cute/` (commit `4fa44ed`) — vendored attempt + 3 shims, halted at P4
 - `wiki_drafts/v3-fa-fusion-deferred-plan.md` — the cute-DSL FA + fp4 fusion plan that this trap blocks
 
 ## related

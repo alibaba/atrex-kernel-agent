@@ -17,7 +17,7 @@ Use this skill when the user provides PyTorch logic or a kernel demo and asks to
 
 This stage first understands the PyTorch semantics, then learns the framework APIs (CuteDSL or FlyDSL) through `<gpu-wiki>/README.md`, implements `kernel.py` and `test_kernel.py`, validates correctness, records performance, writes `baseline_report.md`, and writes `memory/v0.json`.
 
-The default knowledge base is `/tmp/gpu-wiki/`, referenced below as `<gpu-wiki>/`.
+The default knowledge base is `~/aka_kernel_opt/gpu-wiki/`, referenced below as `<gpu-wiki>/`.
 
 ## Phase 1: Understand PyTorch Semantics
 
@@ -36,7 +36,7 @@ The default knowledge base is `/tmp/gpu-wiki/`, referenced below as `<gpu-wiki>/
 ## Phase 2: Learn Framework APIs from gpu-wiki
 
 1. **Mandatory prerequisite**: read `<gpu-wiki>/README.md` and follow its indexed learning path.
-2. Prioritize API docs, hardware constraints, pitfalls, and external reference-project examples directly related to the target platform, framework, and compute pattern.
+2. Prioritize API docs, reference kernels, hardware constraints, and pitfalls directly related to the target platform, framework, and compute pattern.
 3. Prefer implementations with the same framework and compute pattern.
 4. Enter relevant documents through each directory-level `README.md`; do not blindly grep the full wiki first.
 5. Record learned wiki paths, API constraints, hardware constraints, and pitfalls in `plans/v0_plan.md` for implementation and reporting.
@@ -77,7 +77,7 @@ for case in test_cases:
     finally:
         signal.alarm(0)
 ```
-6. If API, compilation, accuracy, performance, or hardware issues appear, return to `<gpu-wiki>/` through README indexes, read the relevant docs/pitfalls, and use reference projects only when needed.
+6. If API, compilation, accuracy, performance, or hardware issues appear, return to `<gpu-wiki>/` through README indexes, read the relevant docs/reference kernels/pitfalls, and then fix the implementation.
 7. Record the baseline configuration, including tile size, thread organization, grid/block design, and major data-movement patterns.
 
 ## Phase 4: Performance, Correctness, and Quality Gate
@@ -118,10 +118,10 @@ python tools/compute_utilization.py   --gpu <gpu> --dtype <dtype>   --flops-expr
 
    ```bash
    # Create the iteration file
-   python tools/memory_manager.py create --workspace /tmp/kernel_opt_<name> --version v0
+   python tools/memory_manager.py create --workspace kernel_opt_<name> --version v0
 
    # Fill in performance and metadata
-   python tools/memory_manager.py update --workspace /tmp/kernel_opt_<name> --version v0 \
+   python tools/memory_manager.py update --workspace kernel_opt_<name> --version v0 \
        --set 'performance.latency_us=<value>' \
        --set 'performance.tflops=<value>' \
        --set 'performance.bandwidth_gbps=<value>' \

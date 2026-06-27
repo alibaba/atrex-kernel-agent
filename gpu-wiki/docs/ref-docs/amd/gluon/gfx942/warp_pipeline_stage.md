@@ -237,4 +237,4 @@ grep -c 's_waitcnt' kernel.amdgcn
 - **Prerequisites**: [CDNA3 ISA Instruction Patterns](isa_patterns.md)
 - **GEMM Chain Upstream**: [Optimization Strategy](../../../../kernel-opt/amd/gluon/gfx942/optimization_strategy.md) → This document → [Stopping Conditions](../../../../kernel-opt/amd/gluon/gfx942/final_config_template.md)
 - **Converter Reference**: [CDNA3 Pipeline Conversion](../../../../converter/amd/cdna3/pipeline.md) — Pipeline code produced by conversion is optimized by this document
-- **🔴 Conflict Notice**: The WPS +27% conclusion in this document only applies to pure GEMM.  found that WPS is a **negative optimization** for attention (which has cross-iteration dependencies from online softmax)
+- **🔴 Conflict Notice**: The WPS +27% conclusion in this document only applies to pure GEMM. [CDNA4 pitfalls #7](../gfx950/pitfalls.md) found that WPS is a **negative optimization** for attention (which has cross-iteration dependencies from online softmax)

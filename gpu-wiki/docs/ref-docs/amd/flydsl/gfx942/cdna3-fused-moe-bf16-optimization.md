@@ -1,5 +1,7 @@
 # FlyDSL Fused MoE BF16 Step-by-Step Optimization (MI308X gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 This document records the complete process of implementing and progressively optimizing a Fused MoE kernel from scratch on the AMD MI308X (CDNA3, gfx942, 80 CUs) using FlyDSL. The model configuration is Mixtral-7B: hidden=4096, intermediate=14336, experts=8, top_k=2, BF16.
 
 Final performance: **All token counts (1~4096) achieve better E2E performance than aiter (CK ASM)**, reaching 185 TFLOPS (89.9% peak) at tc=4096.
@@ -196,31 +198,16 @@ def moe_stage1_kernel(arg_out, arg_x, arg_w1_ps, arg_expert_ids, arg_sorted_toke
 
 **Motivation**: `moe_sort_tokens` returns `num_m_tiles` which requires `.item()` to move the GPU scalar to CPU (~30-50us HIP sync). At small tc, sort itself is also slow (multiple kernel launches).
 
-**Approach 1: Fused Triton Sort Kernel**
+**Migration/comparison note: fused sort**
 
-Use a single Triton kernel to replace the multi-step operations of argsort + scatter + tile:
+A historical Triton fused-sort experiment showed that replacing argsort +
+scatter + tile with one GPU-side pass removes most of the small-token fixed
+overhead. For this FlyDSL target, keep that as migration context only: do not
+switch the backend to Triton. Carry the lesson into a FlyDSL-compatible design
+where the sort path produces GPU-resident metadata and the FlyDSL S1/S2 kernels
+consume it without a CPU synchronization.
 
-```python
-@triton.jit
-def _moe_fused_sort_kernel(
-    expert_ids_ptr, token_idx_ptr, weights_ptr,
-    out_token_ids_ptr, out_weights_ptr,
-    out_tile_expert_ids_ptr, out_num_m_tiles_ptr,
-    N, NUM_EXPERTS, TILE_M, MAX_TPE, BLOCK_SIZE,
-):
- # kernel complete: count per expert -> pad to tile_m -> scatter -> tile expert_ids
-    for e in tl.static_range(NUM_EXPERTS):
-        e_mask = (expert == e) & mask
-        count = tl.sum(e_mask.to(tl.int32))
-        padded = ((count + TILE_M - 1) // TILE_M) * TILE_M
-        # scatter tokens, weights, expert_ids in one pass
- tl.store(out_num_m_tiles_ptr, tl.sum(running_tiles)) # write GPU tensor
-```**Triton Considerations**:
-- `tl.arange(0, N)` requires N to be a power of 2, so it must be rounded up
-- `tl.zeros([1])` is a block type; before `tl.store`, you need to `tl.sum()` to extract scalars
-- `tl.cumsum` is used to compute the local position of a token within each expert
-
-**Option 2: GPU-side num_m_tiles + Kernel Early-Exit Guard**
+**FlyDSL path: GPU-side num_m_tiles + Kernel Early-Exit Guard**
 
 The sort kernel writes `num_m_tiles` to a GPU tensor, and the S1/S2 kernels read it at entry via `buffer_load` and apply a guard:
 
@@ -276,7 +263,7 @@ MI308X, Mixtral-7B BF16, E2E (including sort + GEMM + accumulation):
 | tile_n 64→128 | V10 | **+38%** | Moderate | Compute density |
 | Fused atomic epilogue | V17 | **+19%** | Large | Eliminate host ops |
 | In-kernel X indirection | V18 | +3% | +15% | Eliminate pre-gather |
-| Fused Triton sort | V27 | ~0% | **+50%** | Eliminate sort overhead |
+| GPU-side fused sort migration lesson | V27 | ~0% | **+50%** | Eliminate sort overhead without making Triton the FlyDSL implementation backend |
 | Zero-sync early-exit | V27 | ~0% | +5% | Eliminate HIP sync |
 
 ### 2. Compute Density Is Critical for Large tc
@@ -289,7 +276,7 @@ For compute-bound configurations (tc≥512), **MFMA instruction density** determ
 ### 3. Fixed Overhead Is the Bottleneck for Small tc
 
 For memory-bound configurations (tc≤128), **fixed overhead** dominates E2E time:
-- Sort (argsort vs fused Triton kernel: ~200us difference)
+- Sort (host argsort versus the historical fused-sort comparison: ~200us difference)
 - CPU↔GPU sync (.item() calls: ~30-50us)
 - Tensor allocation (eliminated by pre-allocation)
 - Pre-gather (eliminated by in-kernel indirection)
@@ -300,12 +287,16 @@ For memory-bound configurations (tc≤128), **fixed overhead** dominates E2E tim
 - **`buffer_ops.buffer_load` reads GPU scalar**: avoids `.item()` synchronization
 - **`rocdl.raw_ptr_buffer_atomic_fadd`**: S2 epilogue fused accumulation
 - **`fx.block_idx.y` returns i32**: no need for `arith.index_cast`, directly participates in `arith.cmpi`
-- **Scheduling hints**: `sched_dsrd/mfma/vmem/dswr` controls instruction interleaving order### 5. Triton Sort Kernel Tips
+- **Scheduling hints**: `sched_dsrd/mfma/vmem/dswr` controls instruction interleaving order
 
-- `tl.arange(0, N)` requires N to be a power of 2
-- `tl.zeros([1])` is a block type, and scalar extraction with `tl.sum()` is required before `tl.store`
-- Use `tl.cumsum` with a mask продукт to compute per-expert token positions
-- A single kernel handles count + pad + scatter + tile_expert_ids, replacing multi-step host-side operations
+### 5. Fused Sort Migration Lesson
+
+- Treat the Triton fused-sort result as migration evidence, not as a FlyDSL
+  implementation recipe.
+- Keep `num_m_tiles` GPU-resident so FlyDSL kernels can read it with
+  `buffer_ops.buffer_load` and avoid `.item()` synchronization.
+- Preserve the one-pass count + pad + scatter + tile-expert structure when
+  adapting the sort path to the consuming FlyDSL harness.
 
 ---
 

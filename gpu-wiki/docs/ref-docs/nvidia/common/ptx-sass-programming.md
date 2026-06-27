@@ -295,7 +295,7 @@ asm volatile(
     "{%0,  %1,  %2,  %3,  %4,  %5,  %6,  %7,  "
     " %8,  %9,  %10, %11, %12, %13, %14, %15, "
  " ...(128register)}, "
-    "%33, %34, "          // A and B matrix descriptors
+    "%33, %34, "          // A、B matrix descriptors
     "1, 1, 1, 0, 0;"     // scale_d, scale_a, scale_b, ...
     : "+f"(d0), "+f"(d1), ..., "+f"(d127)
     : "l"(desc_a), "l"(desc_b));

@@ -6,4 +6,4 @@ Hardware-tuned kernel reference implementations of FlyDSL on the AMD CDNA3/gfx94
 
 | Directory | Description |
 |------|------|
-| [FlyDSL/](FlyDSL/) | MI308X/gfx942 FlyDSL kernel source code (Flash Attention, Attention backward, Chunk-GDN megakernel, etc.) |
+| [FlyDSL/](FlyDSL/) | MI308X/gfx942 FlyDSL kernel source code (Flash Attention, Attention backward, Chunk-GDN megakernel, FP8 PTPC Fused MoE checkpoint, etc.) |

@@ -202,7 +202,7 @@ otherwise:
 
 ## Related Documents
 
-- **Cross-Architecture Comparison**: [CDNA3 Hardware Specs](hardware_specs_mi300x.md) |
+- **Cross-Architecture Comparison**: [CDNA3 Hardware Specs](hardware_specs_mi300x.md) | [CDNA4 Hardware Specs](hardware_specs_mi355x.md)
 - **General Spec Tables**: [NVIDIA Compute Capability Reference Table](../kernel-opt/nvidia/common/nvidia-compute-capabilities.md)
 - **Downstream Consumption**: [Hopper ISA Optimization Checklist](../ref-docs/nvidia/gluon/sm90/common_optimizations.md)
 - **⚠️ Difference to Note**: H20 ridge point ~37 vs H100 ~295, the same kernel may be compute-bound on H20 but memory-bound on H100

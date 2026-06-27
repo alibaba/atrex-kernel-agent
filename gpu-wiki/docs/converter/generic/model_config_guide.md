@@ -1,138 +1,66 @@
-# OpenCode Unified Model Configuration Guide
+# Model Capability Selection Reference
 
-When you have only one model provider (such as an internal proxy for Anthropic) and need all agents and sub-agents to use the same model, follow this guide to configure.
+This page summarizes how to match model capability to GPU-kernel conversion and optimization work. It is knowledge for planning review depth, implementation risk, and validation effort; it is not tied to any particular tool configuration.
 
-## Problem
+## Capability Tiers
 
-OpenCode's oh-my-opencode plugin includes multiple built-in agents (oracle, explore, librarian, etc.) and multiple task categories (deep, quick, ultrabrain, etc.), each with **its own independent default model configuration**. If not explicitly overridden, they will attempt to call models that your provider does not support, causing sub-agent startup failures.
+| Tier | Suitable Work | Risk Profile |
+|---|---|---|
+| Fast review | Small doc edits, spelling fixes, simple link checks, one-line code comments | Low risk when the change is local and mechanically verifiable |
+| Standard implementation | Straightforward PyTorch to Triton ports, API mapping lookups, simple elementwise kernels, routine benchmark interpretation | Moderate risk; needs syntax, accuracy, and performance validation |
+| Deep reasoning | Complex fusion, reductions with numerical stability concerns, layout-heavy Gluon code, multi-stage pipelines, attention kernels | High risk; needs explicit invariants, profile evidence, and comparison against a tuned baseline |
+| Specialist review | Hardware-specific ISA/resource diagnosis, roofline analysis, bank-conflict analysis, cross-backend migration | High risk; requires domain-specific evidence such as profiler counters, assembly/resource snapshots, and shape sweeps |
 
-## Involved Configuration Files
+## Complexity Signals
 
-```
-~/.config/opencode/
-├── opencode.json          # ① Provider and model definitions
-└── oh-my-opencode.json    # ② Agent/Category model mapping (critical!)
-```
+Use a deeper reasoning tier when any of these signals appear:
 
-## Configuration Steps
+- The implementation changes memory layout, shared-memory layout, or thread/block mapping.
+- The kernel contains reductions, online softmax, recurrent state, or causal masking.
+- Correctness depends on numerical stability tricks such as max-subtraction, compensated accumulation, or precision-specific casts.
+- Performance depends on hardware-specific instructions such as MFMA, WGMMA, async copy, TMA, or warp/wave specialization.
+- The benchmark target is close to a hardware ceiling, so small regressions matter.
+- Multiple shapes have different bottlenecks, especially low-grid small-matrix cases.
 
-### Step 1: `opencode.json` — Define Provider
+Fast review is usually enough when the change is limited to prose, links, tables, or a small local code cleanup with no semantic effect.
 
-Register your API endpoint and available models in `provider`:
+## Review Perspectives
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "my-provider": {                          // ← Provider name, custom
-      "npm": "@ai-sdk/anthropic",             // ← SDK type
-      "name": "my-provider",
-      "options": {
-        "baseURL": "https://your-api-proxy/v1",
-        "apiKey": "your-api-key"
-      },
-      "models": {
-        "claude-opus-4-6": {                  // ← Model ID
-          "name": "claude-opus-4-6",          // ← Actual upstream model name
-          "limit": {
-            "context": 400000,
-            "output": 65536
-          }
-        }
-      }
-    }
-  },
-  "plugin": ["oh-my-opencode@latest"]
-}
-```
+Different reviews should emphasize different evidence:
 
-This step defines **the only available model** `my-provider/claude-opus-4-6`.
+| Perspective | Primary Questions | Useful Evidence |
+|---|---|---|
+| API mapping | Does each source operation map to the correct backend primitive? | Local API tables, backend reference docs, syntax checks |
+| Correctness | Does the optimized implementation preserve semantics over representative shapes and dtypes? | Accuracy tests, max-diff summaries, edge-case shape coverage |
+| Performance | Does the result improve the right metric for the bottleneck? | Latency, TFLOPS, bandwidth utilization, roofline position |
+| Hardware resources | Are occupancy, LDS/shared memory, registers, scratch, and barriers acceptable? | Profiler counters, compiler metadata, ISA snapshots |
+| Maintainability | Is the implementation explainable and safe to adapt? | Clear layout comments, minimal special cases, named assumptions |
 
-### Step 2: `oh-my-opencode.json` — Unify All Agents and Categories
+## Validation Depth
 
-This is the **core** step. You must explicitly point each agent and category to your model, using the format `"providerName/modelID"`:
+Validation depth should scale with risk:
 
-```jsonc
-{
-  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/dev/assets/oh-my-opencode.schema.json",
+| Change Type | Minimum Validation |
+|---|---|
+| Documentation-only changes | Link/path scan and formatting check |
+| Simple source transformation | Syntax check, accuracy validation, one representative benchmark |
+| Layout or tiling change | Accuracy validation across edge shapes, benchmark across representative shapes, resource check |
+| Pipeline or memory hierarchy change | Accuracy validation, benchmark sweep, profiler counters, resource/ISA inspection |
+| New fused kernel | Baseline comparison, multi-shape correctness, profiler evidence, rejection log for attempted alternatives |
 
-  // ── All built-in Agents ──
-  "agents": {
-    "hephaestus":       { "model": "my-provider/claude-opus-4-6" },
-    "oracle":           { "model": "my-provider/claude-opus-4-6" },
-    "librarian":        { "model": "my-provider/claude-opus-4-6" },
-    "explore":          { "model": "my-provider/claude-opus-4-6" },
-    "multimodal-looker":{ "model": "my-provider/claude-opus-4-6" },
-    "prometheus":       { "model": "my-provider/claude-opus-4-6" },
-    "metis":            { "model": "my-provider/claude-opus-4-6" },
-    "momus":            { "model": "my-provider/claude-opus-4-6" },
-    "atlas":            { "model": "my-provider/claude-opus-4-6" }
-  },
+## Evidence Quality
 
-  // ── All Task Categories (determines the model used by sub-agent when task() is called) ──
-  "categories": {
-    "visual-engineering": { "model": "my-provider/claude-opus-4-6" },
-    "ultrabrain":         { "model": "my-provider/claude-opus-4-6" },
-    "deep":               { "model": "my-provider/claude-opus-4-6" },
-    "artistry":           { "model": "my-provider/claude-opus-4-6" },
-    "quick":              { "model": "my-provider/claude-opus-4-6" },
-    "unspecified-low":    { "model": "my-provider/claude-opus-4-6" },
-    "unspecified-high":   { "model": "my-provider/claude-opus-4-6" },
-    "writing":            { "model": "my-provider/claude-opus-4-6" }
-  }
-}
-```
+Prefer evidence that can be reproduced from local references and local benchmark harnesses:
 
-### Complete List of Items to Override
+- State the baseline and fusion boundary clearly.
+- Use the same shape, dtype, and backend when comparing variants.
+- Separate correctness references from performance baselines when they are different implementations.
+- Record rejected variants with the measured reason for rejection.
+- Preserve enough metadata for later readers to understand hardware scope, backend scope, and applicable shape ranges.
 
-**Agents** (invoked via `subagent_type=`):
+## Practical Selection Rules
 
-| Agent Name | Purpose |
-|------------|---------|
-| `hephaestus` | GPT model-specific build agent |
-| `oracle` | Read-only high-quality reasoning advisor |
-| `librarian` | External documentation/OSS search |
-| `explore` | Codebase structure exploration |
-| `multimodal-looker` | Image/PDF analysis |
-| `prometheus` | Work plan generation |
-| `metis` | Pre-planning analysis |
-| `momus` | Plan review |
-| `atlas` | Knowledge base management |**Categories** (determines the model used by Sisyphus-Junior, called via `category=`):
-
-| Category | Purpose |
-|----------|------|
-| `visual-engineering` | Frontend/UI/UX |
-| `ultrabrain` | High-difficulty logic tasks |
-| `deep` | Deep autonomous problem solving |
-| `artistry` | Creative problem solving |
-| `quick` | Simple single-file modifications |
-| `unspecified-low` | Low-effort miscellaneous |
-| `unspecified-high` | High-effort miscellaneous |
-| `writing` | Documentation writing |
-
-**Missing any item → that agent/category will fall back to the built-in default model → if your provider does not support that model, it will error out.**
-
-## Verifying Configuration
-
-After configuration, verify that all sub-agents can start normally using the following method:
-
-```
-# Test various agents in OpenCode session
-> Please use explore agent to search current directory structure      # Test explore
-> Please use librarian to check PyTorch documentation       # Test librarian
-> Help me fix a typo using quick category        # Test quick category
-> Help me analyze this code using deep category        # Test deep category
-```
-
-If any reports a model unavailable error, check whether the corresponding agent/category has the correct `model` value configured in `oh-my-opencode.json`.
-
-## Common Errors
-
-**Error 1**: `Model not found` or `model is not available`
-→ The agent/category is missing a model override and is attempting to use the default model.
-
-**Error 2**: `Invalid API key` or `Unauthorized`
-→ The provider's baseURL or apiKey is incorrectly configured.
-
-**Error 3**: Main agent works normally but sub-agent fails
-→ `opencode.json` has the model configured but `oh-my-opencode.json` is missing the corresponding agent/category mapping.
+1. Use the lightest capability tier that can still explain and verify the change.
+2. Increase review depth when the implementation touches layout, synchronization, memory hierarchy, or numerical stability.
+3. Treat profiler and benchmark evidence as mandatory for performance claims.
+4. Treat model output as a hypothesis until local validation confirms correctness and performance.

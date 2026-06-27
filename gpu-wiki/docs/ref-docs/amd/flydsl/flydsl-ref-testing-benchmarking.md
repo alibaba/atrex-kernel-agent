@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] Testing & Benchmarking Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/testing_benchmarking_guide.md` | Compiled Version: [FlyDSL Programming Guide §14](flydsl-programming-guide.md)
 
 > Test infrastructure, running tests, benchmark harness, writing new tests, and performance measurement.
@@ -164,7 +166,7 @@ op             shape                              dtype       TB/s    TFLOPS
 gemm           16x40960x5120                      fp8         1.234     56.789
 ```
 
-**Logs:** Written to `${BENCH_LOG_DIR:-/tmp/flydsl_bench}/`
+**Logs:** Written to `BENCH_LOG_DIR` when set; otherwise the default directory is `/tmp/flydsl_bench/`.
 
 ---
 

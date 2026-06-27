@@ -1,6 +1,6 @@
 # Fused Attention (Prefill / Paged Attention) Optimization Guide
 
-> **Composite pattern**. For sub-pattern optimization, see `patterns/matmul.md` and `patterns/softmax_reduce.md`.
+> **Composite pattern**. For sub-pattern optimization, see `docs/ref-docs/nvidia/gluon/sm90/matmul.md` and `softmax_reduce.md`.
 > The following only describes content **specific to this pattern** and **interaction constraints** between sub-patterns.
 > For the general ISA optimization checklist, see `common_optimizations.md`.
 
@@ -66,7 +66,7 @@ Source: `common_optimizations.md` Appendix A "Attention" row.
 
 ## Stop Conditions
 
-Use the general stop conditions from SKILL.md §1.8.
+Use the general stop conditions from optimization-guide.md §1.8.
 
 ---
 

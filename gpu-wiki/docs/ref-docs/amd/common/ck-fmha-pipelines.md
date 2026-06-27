@@ -7,14 +7,14 @@ This article is based on CK source code analysis, extracting key designs and opt
 ## Table of Contents
 
 - [Overall Architecture](#overall-architecture)
-- [Forward Pipeline Variants](#forward-pipeline-variants-pipeline-enumeration)
-  - [qr_ks_vs: Standard Forward](#qr_ks_vs-standard-forward)
-  - [qr_ks_vs_async: Asynchronous Copy Variant](#qr_ks_vs_async-async-copy-variant)
+- [Forward Pipeline Variants](#forward-pipeline-variants)
+  - [qr_ks_vs: Standard Forward](#qrksvs-standard-forward)
+  - [qr_ks_vs_async: Asynchronous Copy Variant](#qrksvsasync-async-copy-variant)
   - [splitkv: Long Sequence Sharding](#splitkv-long-sequence-splitting)
   - [pagedkv: Paged KV Cache](#pagedkv-cache-processing)
   - [appendkv: KV Append Write](#appendkv-kv-append-write)
   - [v3: Highly Optimized Variant](#v3-highly-optimized-variant)
-  - [batch_prefill: Batch Prefill](#batch_prefill-batch-prefill)
+  - [batch_prefill: Batch Prefill](#batchprefill-batch-prefill)
 - [Backward Pipeline](#backward-pipeline)
 - [Two-Stage GEMM Structure](#two-stage-gemm-structure)
 - [Online Softmax Algorithm](#online-softmax-algorithm)
@@ -80,7 +80,9 @@ O[seqlen_q, hdim_v]    = P @ V[seqlen_k, hdim_v]
 
 ---
 
-## Forward Pipeline Variants### Pipeline Enumeration
+## Forward Pipeline Variants
+
+### Pipeline Enumeration
 
 ```cpp
 enum class BlockFmhaPipelineEnum {
@@ -156,7 +158,9 @@ last:      MFMA(k_{n-1})
 - Outputs `O_acc` and `LSE_acc` to a temporary buffer (rather than the final O)
 - Supports `kHasUnevenSplits`: boundary handling when the split length is not evenly divisible
 - Obtains the K range each split is responsible for via the mask's `GetTileRangeAlongX(..., num_splits, i_split)`
-- Supports `kMergeNumHeadGroupsSeqLenQ` for GQA scenario optimization### pagedkv: Paged KV Cache
+- Supports `kMergeNumHeadGroupsSeqLenQ` for GQA scenario optimization
+
+### pagedkv: Paged KV Cache
 
 `BlockFmhaFwdPagedKVPipelineQRKSVS` handles non-contiguously stored KV cache (PagedAttention mode).
 

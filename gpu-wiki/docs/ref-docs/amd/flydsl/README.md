@@ -1,5 +1,7 @@
 # AMD FlyDSL (MLIR) Reference Articles
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 FlyDSL programming framework reference articles, covering programming guides, Layout algebra, API references, and pre-built Kernels.
 
 ---
@@ -22,4 +24,5 @@ FlyDSL programming framework reference articles, covering programming guides, La
 
 | Directory | Description |
 |------|------|
-| [gfx942/](gfx942/) | MI300X FlyDSL-specific articles |
+| [gfx942/](gfx942/) | MI300X/MI308X FlyDSL-specific articles, including FP8 PTPC Fused MoE atrex-open v2 and task66 checkpoint archives |
+| [gfx950/](gfx950/) | MI355X FlyDSL complete optimization reports |

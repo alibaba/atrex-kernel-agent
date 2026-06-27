@@ -1,2 +1,19 @@
-# External reference repositories (cloned, not distributed)
-reference-projects/
+# Local tooling and OS metadata
+.DS_Store
+.codegraph/
+.codex/
+docs/superpowers/plans/
+openspec/
+stage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# rocprof-trace-decoder is cloned by install.sh at runtime
+tools/rocprof-trace-decoder/
+
+# Git submodules are tracked via .gitmodules
+# reference-projects/ content is managed as submodules

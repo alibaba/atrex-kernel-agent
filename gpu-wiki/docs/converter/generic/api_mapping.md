@@ -84,7 +84,9 @@
 softplus_x = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
 tanh_sp = 2.0 * tl.sigmoid(2.0 * softplus_x) - 1.0
 mish_x = x * tanh_sp
-```## Reduction Operations
+```
+
+## Reduction Operations
 
 | PyTorch | Triton | Verification Status | Notes |
 |---------|--------|---------|------|

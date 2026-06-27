@@ -327,12 +327,12 @@ opcode.modifier1.modifier2.type  dest, src1, src2;
     .reg .u32 %r<10>;
     .reg .f32 %f<10>;
     .reg .pred %p;
-    
+
     ld.param.u64 %rd0, [param_ptr];
     ld.param.u32 %r0, [param_N];
-    
+
     // kernel body
-    
+
     ret;
 }
 ```

@@ -72,7 +72,7 @@ ku::utcmma_ss(smem_P, smem_V, acc_O);
 Blackwell supports executing "dual GEMM" (2 parallel matrix multiplications) in a single UMMA instruction, further increasing throughput:
 
 ```cpp
-// SM100_MMA_F16BF16_WS_TS_NOELECT: 
+// SM100_MMA_F16BF16_WS_TS_NOELECT:
 // WS = Warp Specialized, TS = Tensor-Shared
 // UMMA 2 batch QK GEMM
 ```

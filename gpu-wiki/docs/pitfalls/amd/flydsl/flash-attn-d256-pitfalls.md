@@ -1,5 +1,7 @@
 # Flash Attention head_dim=256 Pitfalls (CDNA4 / gfx950)
 
+Applicability: backend: flydsl; hardware: amd; topic: pitfalls
+
 Pitfalls encountered during flash attention optimization for head_dim=256 on MI355X. Supplements the generic `flash-attn-pitfalls.md`.
 
 ---

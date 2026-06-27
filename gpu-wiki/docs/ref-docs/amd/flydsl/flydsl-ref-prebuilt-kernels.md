@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] Pre-built Kernel Library Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/prebuilt_kernels_guide.md` | Organized version: [FlyDSL Pre-built Kernel Library](flydsl-prebuilt-kernels.md)
 
 > Available FlyDSL kernels: Normalization, Softmax, GEMM — configuration, data types, pipelines, and shared utilities.

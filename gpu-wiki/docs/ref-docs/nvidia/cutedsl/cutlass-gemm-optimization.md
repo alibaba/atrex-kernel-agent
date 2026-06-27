@@ -245,7 +245,9 @@ Handles the layout conversion from register layout to global memory layout:
 
 ---
 
-## Hopper Warp Specialization### Producer-Consumer Model
+## Hopper Warp Specialization
+
+### Producer-Consumer Model
 
 Thread blocks are divided into **producer** and **consumer** warp groups:
 

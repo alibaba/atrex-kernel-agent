@@ -2,7 +2,31 @@
 
 | File | Kernel | Hardware | Trap count |
 |------|--------|----------|-----------|
-| sm120-fused-rmsnorm-gated-pitfalls | vLLM `_deltanet_post` fused RMSNormGated + SiLU(z) gating | sm_120 (RTX PRO 5000 Blackwell-GeForce) | 5 |
+| [sm120-fused-rmsnorm-gated-pitfalls.md](sm120-fused-rmsnorm-gated-pitfalls.md) | vLLM `_deltanet_post` fused RMSNormGated + SiLU(z) gating | sm_120 (RTX PRO 5000 Blackwell-GeForce) | 5 |
+| [sm100-sparse-decode-split-k-pitfalls.md](sm100-sparse-decode-split-k-pitfalls.md) | DSA sparse attention (`H=16` MLA) + FP8 top-k indexer — SM-starved split-K decode | sm_100 (B200 Blackwell datacenter) | 12 |
+
+## Cross-Pitfall Summary (sm_100 Triton, SM-starved split-K decode)
+
+- **Split-K / flash-decoding is the structural win on SM-starved grids** — 1 CTA
+  per token leaves ~147/148 SMs idle; manufacture parallelism before any tile or
+  cache tuning. Re-open `NUM_SPLITS` after every structural rewrite.
+- **`exp2(-inf - -inf) = NaN`** poisons online softmax over a possibly-empty tile
+  — guard the running max when you split a full reduction into partials.
+- **A scalar `if` in the hot loop kills `num_stages` prefetch** (+25%); keep the
+  body unconditional and use a precomputed dynamic loop bound.
+- **`tl.static_range` only helps when `N×tile_bytes ≲ 8 KB`**; `num_stages` is a
+  no-op on loop-free single-dot kernels.
+- **Cross-CTA atomic barrier works** (`ld.volatile` spin + `debug_barrier`,
+  monotonic counter) only when all CTAs fit on the SMs; **Triton 3.6 clusters and
+  atomic sync are mutually exclusive** (`PlanCTA` assertion).
+- **`cache_modifier` and `eviction_policy` are orthogonal, regime-dependent
+  levers** — per-load not global; `.cg`+`evict_last` is illegal on stores.
+- **`.item()` is a structural barrier (and CUPTI sees it)**; branch on
+  `tensor.shape` (free) instead.
+- **`tl.sort` blows up past BLOCK_N≈2048** — use radix-select; **verify any
+  intrinsic's compiled throughput** (`tl.histogram` was ~30× off the cost model)
+  before designing around it.
+- **`input_precision="ieee"` is inert for bf16×bf16 dot** on sm_100.
 
 ## Cross-Pitfall Summary (sm_120 Triton)
 

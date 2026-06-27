@@ -1,5 +1,7 @@
 # [FlyDSL Original Documentation] Architecture & Compilation Pipeline Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/architecture_guide.md` | Compiled version: [FlyDSL Programming Guide](flydsl-programming-guide.md)
 
 > FlyDSL project structure, compilation stages, key abstractions, and configuration.

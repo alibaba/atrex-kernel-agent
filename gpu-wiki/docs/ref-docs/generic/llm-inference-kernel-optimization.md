@@ -61,7 +61,7 @@ Python → TTIR → TTGIR → LLIR → PTX → SASS
 
 The TTGIR stage is where Triton's core value lies, automatically handling shared memory placement, TMA optimization, warp-level reduction, etc. The performance gap between FlashAttention's Triton implementation and hand-written CUDA mainly stems from optimization strategy differences at the TTGIR stage.
 
-**IR Debugging Tools**: TeraLang provides an IR Viewer ([deciding.github.io/txl](https://deciding.github.io/txl)), supporting bidirectional line-level mapping between Python source code and TTIR/TTGIR/PTX. Use `@txl.jit(diff_mode='ttgir', diff_select=0)` to inspect optimization differences pass by pass.
+**IR Debugging Tools**: TeraLang provides an IR Viewer (`deciding.github.io/txl`), supporting bidirectional line-level mapping between Python source code and TTIR/TTGIR/PTX. Use `@txl.jit(diff_mode='ttgir', diff_select=0)` to inspect optimization differences pass by pass.
 
 ---
 
@@ -85,7 +85,9 @@ For the decode stage (`seqlen_q=1`), each query has only one token in a memory-b
 
 ### GQA/MHA Support
 
-The Paged Attention kernel supports GQA (Grouped Query Attention) through the ratio relationship between `num_kv_heads` and `num_heads`: multiple query heads share the same group of KV heads, with the kernel internally indexing KV via `head_idx // num_groups`.## KV Cache Compression: TurboQuant
+The Paged Attention kernel supports GQA (Grouped Query Attention) through the ratio relationship between `num_kv_heads` and `num_heads`: multiple query heads share the same group of KV heads, with the kernel internally indexing KV via `head_idx // num_groups`.
+
+## KV Cache Compression: TurboQuant
 
 TurboQuant adopts different compression strategies for K and V:
 
@@ -186,7 +188,9 @@ Qwen3.5's GDN layer prefill adopts a chunk-wise algorithm:
 - **Bitmask Causal Mask**: Use bitmask instead of float mask to save shared memory and bandwidth
 - **TMA async_scatter**: Use TMA scatter mode Facts to asynchronously write discontinuous outputs in varlen scenarios, improving performance by approximately 12% over manual scatter
 - **Cumsum vectorization**: Vectorize prefix sum operations in GDN to reduce serial dependencies
-- Leverage Blackwell's TMEM and tcgen05_mma instructions## DeepSeek Model Inference Optimization Practices
+- Leverage Blackwell's TMEM and tcgen05_mma instructions
+
+## DeepSeek Model Inference Optimization Practices
 
 ### DeepSeek-R1 Optimization on Blackwell (NVIDIA Official)
 
@@ -273,19 +277,21 @@ This visualization method helps identify CPU-GPU interaction bottlenecks.
 
 This content is compiled from the following Zhihu articles:
 
-- "GPU Compute Doubled FlashAttention-4"(zhuanlan.zhihu.com/p/2016244587212059939)
-- "Paged KV Cache Execution Flow"(zhuanlan.zhihu.com/p/2022751653233739039)
-- "TurboQuant K+V Dual Compression"(zhuanlan.zhihu.com/p/2021821004310127750)
-- "Optimizing DeepSeek R1 Throughput on NVIDIA Blackwell GPUs"(zhuanlan.zhihu.com/p/1937300334126040902)
-- "cuLA CUDA Linear Attention"(zhuanlan.zhihu.com/p/2023109718873220097)
-- "A Beginner's Perspective on cuLA Development Notes"(zhuanlan.zhihu.com/p/2023828507680056143)
-- "Qwen3.5 GDN Prefill Kernel Optimization"(zhuanlan.zhihu.com/p/2007935329550766500)
-- "[Triton Low-Level Modification Series] From Vector Add to FlashAttention-Level Optimization in Practice"(zhuanlan.zhihu.com/p/2015703290181083527)
-- "CUDA Launch Kernel from an Intelligent Computing Low-Level Software Perspective"(zhuanlan.zhihu.com/p/2017706822077786108)
-- "Large Model Inference Benchmark List Update: GPU Performance Tuning Essentials"(zhuanlan.zhihu.com/p/1891510263217356976)
-- "DeepSeek R1 Generates GPU Kernels Without Programming"(zhuanlan.zhihu.com/p/23456689226)- "NVIDIA Optimizes DeepSeek-R1 on B200"(zhuanlan.zhihu.com/p/30981405406)
-- "Performance Analysis in the AI Era: A Preliminary Exploration of GPU Profiling"(zhuanlan.zhihu.com/p/31148258173)
-- "Basic Methods for CUDA Kernel Optimization"(zhuanlan.zhihu.com/p/693645814)## Related Documentation
+- 《GPU Compute Doubled FlashAttention-4》(zhuanlan.zhihu.com/p/2016244587212059939)
+- 《Paged KV Cache Execution Flow》(zhuanlan.zhihu.com/p/2022751653233739039)
+- 《TurboQuant K+V Dual Compression》(zhuanlan.zhihu.com/p/2021821004310127750)
+- 《Optimizing DeepSeek R1 Throughput on NVIDIA Blackwell GPUs》(zhuanlan.zhihu.com/p/1937300334126040902)
+- 《cuLA CUDA Linear Attention》(zhuanlan.zhihu.com/p/2023109718873220097)
+- 《A Beginner's Perspective on cuLA Development Notes》(zhuanlan.zhihu.com/p/2023828507680056143)
+- 《Qwen3.5 GDN Prefill Kernel Optimization》(zhuanlan.zhihu.com/p/2007935329550766500)
+- 《[Triton Low-Level Modification Series] From Vector Add to FlashAttention-Level Optimization in Practice》(zhuanlan.zhihu.com/p/2015703290181083527)
+- 《CUDA Launch Kernel from an Intelligent Computing Low-Level Software Perspective》(zhuanlan.zhihu.com/p/2017706822077786108)
+- 《Large Model Inference Benchmark List Update: GPU Performance Tuning Essentials》(zhuanlan.zhihu.com/p/1891510263217356976)
+- 《DeepSeek R1 Generates GPU Kernels Without Programming》(zhuanlan.zhihu.com/p/23456689226)- 《NVIDIA Optimizes DeepSeek-R1 on B200》(zhuanlan.zhihu.com/p/30981405406)
+- 《Performance Analysis in the AI Era: A Preliminary Exploration of GPU Profiling》(zhuanlan.zhihu.com/p/31148258173)
+- 《Basic Methods for CUDA Kernel Optimization》(zhuanlan.zhihu.com/p/693645814)
+
+## Related Documentation
 
 - **Flash Attention Implementation**: [Online Softmax and Flash Attention](../../kernel-opt/generic/hands-on/online-softmax-flash-attention.md) -- Triton-based online softmax and causal mask optimization code
 - **Split-KV Merge**: [Cascade / State Merge](../../kernel-opt/generic/hands-on/cascade-state-merge.md) -- Split-KV attention result merging patterns

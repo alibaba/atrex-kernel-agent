@@ -1,23 +1,25 @@
 # Real-time Learning Guide
 
-This document supplements the learning methods in SKILL.md with detailed step-by-step procedures.
+This document supplements the learning methods in conversion-guide.md with detailed step-by-step procedures.
 
 ---
 
 ## Process 1: Querying Unknown APIs
 
-```1. Confirm the problem: "What does tl.xxx correspond to in Gluon?"
-2. Check references/porting_rules.md (complete API reference, including Gluon-specific APIs)
+```
+1. Confirm the problem: "What does tl.xxx correspond to in Gluon?"
+2. Check `porting_rules.md` (complete API reference, including Gluon-specific APIs)
 3. Check Gluon official source code:
    - https://github.com/triton-lang/triton/tree/main/python/triton/experimental/gluon
 4. Experimental verification: Write minimal test code and compile to see if it passes
-5. Record to api_mapping.md and mark verification status```
+5. Record the finding in the relevant architecture-specific API mapping notes and mark verification status
+```
 
 ## Process 2: Resolving Compilation Errors
 
 ```
 1. Read error message → Locate problematic code line and used API
-2. Check references/common_pitfalls.md (common errors and solutions)
+2. Check the architecture-specific `common_pitfalls.md` page for the target backend (for example, `../cdna3/common_pitfalls.md` or `../cdna4/common_pitfalls.md`)
 3. Search GitHub Issues: https://github.com/triton-lang/triton/issues (keywords: gluon + error message)
 4. Apply fix → Recompile
 5. Record new errors/solutions to common_pitfalls.md
@@ -30,7 +32,7 @@ This document supplements the learning methods in SKILL.md with detailed step-by
 2. Design comparative test: Write Triton version and Gluon version
 3. Run test: Compare functional correctness and output consistency
 4. Draw conclusion: ✅ Hypothesis valid / ❌ Hypothesis invalid
-5. api_mapping.md, verification
+5. Update the relevant architecture-specific API mapping notes with the verification result
 ```
 
 ---
@@ -44,9 +46,9 @@ This document supplements the learning methods in SKILL.md with detailed step-by
 
 ### 2. Internal References
 
-- `references/porting_rules.md` — Complete API reference + conversion rules
-- `references/common_pitfalls.md` — Known errors and solutions
-- `examples/` — Verified conversion examples
+- `porting_rules.md` — Complete API reference + conversion rules
+- Architecture-specific `common_pitfalls.md` pages — Known errors and solutions
+- Architecture-specific conversion examples from the relevant backend guide or reference material
 
 ### 3. Community Resources (Supplementary Reference)
 

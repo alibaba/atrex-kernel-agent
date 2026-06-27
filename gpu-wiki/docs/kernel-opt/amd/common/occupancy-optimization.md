@@ -43,6 +43,6 @@ hipcc --save-temps kernel.cpp
 ## Related Documentation
 
 - **Index**: AMD GPU Kernel Tuning Guide — Complete tuning topic index
-- **Hardware Specifications**:  — Hardware parameters such as VGPR file size
+- **Hardware Specifications**: [Hardware Specification Comparison](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) — Hardware parameters such as VGPR file size
 - **General Execution Model**: [GPU Execution Model and Thread Optimization](../../../ref-docs/generic/gpu-execution-model.md) — SIMT execution model, general theory of occupancy optimization
 - **Triton Tuning**: Triton Kernel Tuning Parameters — Occupancy control at the Triton level such as `waves_per_eu`

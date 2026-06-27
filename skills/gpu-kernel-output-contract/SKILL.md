@@ -33,7 +33,7 @@ Use this skill when:
 
 ## Output Contract
 
-- Write the final implementation to `generated_kernel.py` in the current working directory.
+- Write the final implementation to `generated_kernel.py` in the project root directory (the parent of the `kernel_opt_*/` workspace), NOT inside the `kernel_opt_*/` subdirectory.
 - `generated_kernel.py` is what will be evaluated; nothing printed to chat is read as the candidate.
 - The file must contain exactly one self-contained Python module.
 - `generated_kernel.py` must be independently executable/importable and must not depend on any other local `.py` file.
@@ -45,12 +45,12 @@ Use this skill when:
 - Include all necessary imports.
 - Keep every required runtime helper, kernel, schedule, compiled program definition, and `Model` implementation inside `generated_kernel.py`.
 - Do not import from or depend on any other local Python file.
-- Define one or more FlyDSL kernel, schedule, or program definitions if needed.
+- Define one or more GPU kernel implementations using any supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA).
 - Define `class Model(nn.Module)`.
 - `Model.__init__` must accept the same initialization arguments as the reference `Model`.
 - `Model.forward` must accept the same inputs as the reference `Model.forward`.
 - `Model.forward` must return outputs with the same externally observable structure, shape, device, returned tensor dtype, and numerical behavior as the reference implementation.
-- The main compute path must be implemented using FlyDSL kernels or compiled FlyDSL programs launched from `Model.forward`.
+- The main compute path must be implemented using GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) launched from `Model.forward`.
 - You may use PyTorch only for setup or glue logic such as output allocation, reshape/view, indexing, metadata preparation, and launch orchestration.
 - Internal computation precision, accumulation dtype, approximations, and intermediate layouts may differ from the PyTorch reference.
 - You may use lower precision or mixed precision internally, including fp8, fp4, or int8 paths, if the returned outputs satisfy the evaluator's numerical tolerance for every evaluated shape.
@@ -100,7 +100,7 @@ The final `generated_kernel.py` must not contain:
 
 1. Identify the current validated optimized implementation and its reference `Model` signature.
 2. Copy only the runtime implementation needed by the candidate into `generated_kernel.py`.
-3. Keep FlyDSL kernels, schedules, compiled program definitions, helper functions, and `class Model(nn.Module)` in the same file.
+3. Keep GPU kernel definitions (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA), schedules, compiled program definitions, helper functions, and `class Model(nn.Module)` in the same file.
 4. Preserve `Model.__init__` and `Model.forward` signatures required by the evaluator.
 5. Remove any tests, benchmarks, prints, profiling code, report generation, command-line parsing, and `__main__` entry.
 6. Run a syntax check outside `generated_kernel.py` before stopping.
@@ -112,14 +112,14 @@ The final `generated_kernel.py` must not contain:
 
 Before stopping, verify:
 
-- `generated_kernel.py` exists in the current working directory.
+- `generated_kernel.py` exists in the project root directory (parent of `kernel_opt_*/`), not inside the workspace subdirectory.
 - It is valid Python source.
 - It imports everything it needs.
 - It is independently executable/importable and does not depend on any other local `.py` file.
 - It defines `class Model(nn.Module)`.
 - `Model.__init__` matches the reference initialization arguments.
 - `Model.forward` matches the evaluator input keys.
-- The main compute path launches FlyDSL kernels or compiled FlyDSL programs from `Model.forward`.
+- The main compute path launches GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) from `Model.forward`.
 - The returned structure, keys, shapes, device, dtype, and numerical behavior match the reference.
 - The file does not read `shapes.json` or redefine `_make_inputs`.
 - The file does not call, instantiate, or wrap the original reference `Model`.

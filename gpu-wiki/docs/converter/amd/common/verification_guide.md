@@ -66,7 +66,8 @@ python tools/benchmark.py generated.py reference.py \
 **Requirements**: Functional verification (Level 3) must pass first
 
 **Custom Parameters**:
-```bash# Widen performance range
+```bash
+# Widen performance range
 python tools/benchmark.py generated.py reference.py \
     --wrapper-name my_wrapper --setup-name my_setup \
     --low 0.85 --high 1.15
@@ -89,7 +90,8 @@ python tools/benchmark.py generated.py reference.py \
 python tools/extract_ttgir.py kernel.py
 
 # Save to file
-python tools/extract_ttgir.py kernel.py -o output.ttgir```
+python tools/extract_ttgir.py kernel.py -o output.ttgir
+```
 
 ---
 
@@ -108,7 +110,7 @@ python tools/extract_ttgir.py kernel.py -o output.ttgir```
    → Syntax error / Type error / Import error
 
 3. Fix syntax
-   → Refer to correct usage in SKILL.md
+   → Refer to correct usage in conversion-guide.md
 
 4. Re-verify
    → Run check_syntax.py again
@@ -149,8 +151,8 @@ idx = gl.arange(0, BLOCK_SIZE, layout=layout)
 3. Check memory layout
    → Is layout definition correct, fully faithful to TTGIR Layouts
 
-4. Update api_mapping.md
-   → Fix incorrect mapping relationships
+4. Update the relevant architecture-specific API mapping notes
+   → Fix incorrect mapping relationships for the target backend
 
 5. Regenerate code
    → Use updated knowledge
@@ -210,7 +212,9 @@ print(f"Maximum difference: {max_diff}")
 # Check difference locations
 diff_mask = (output_triton - output_gluon).abs() > 1e-3
 print(f"Difference location count: {diff_mask.sum().item()}")
-```### Scenario 4: Performance Validation Failure
+```
+
+### Scenario 4: Performance Validation Failure
 
 **Symptom**: `benchmark.py` reports performance ratio outside the 90%-110% range
 
@@ -319,7 +323,7 @@ print("✅ kernel definition successful")
 - [ ] Write minimal test code
 - [ ] Compilation passes
 - [ ] Functional test passes
-- [ ] Record in api_mapping.md
+- [ ] Record in the relevant architecture-specific API mapping notes
 
 ---
 
@@ -332,7 +336,7 @@ print("✅ kernel definition successful")
 **Resolution**:
 1. Re-check official documentation
 2. Compare behavioral differences between Triton and Gluon
-3. Update api_mapping.md
+3. Update the relevant architecture-specific API mapping notes
 
 ---
 
@@ -410,7 +414,9 @@ python tools/benchmark.py generated.py reference.py \
 python tools/benchmark.py generated.py reference.py \
     --wrapper-name my_wrapper --setup-name my_setup \
     --warmup 50 --rep 200
-```# Extract TTGIR
+```
+
+# Extract TTGIR
 python tools/extract_ttgir.py kernel.py
 
 # Basic usage

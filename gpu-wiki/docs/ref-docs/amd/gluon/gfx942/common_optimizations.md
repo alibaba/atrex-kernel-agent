@@ -1,9 +1,9 @@
 # ISA Optimization Detailed Checklist
 
-**Last Updated**: 2026-03-23 (v2.4: restructured to a general optimization checklist; the GEMM-specific §3.6 WPS has been moved to `patterns/matmul/warp_pipeline_stage.md`, and `optimization_checklist.md` has been removed)
+**Last Updated**: 2026-03-23 (v2.4: restructured to a general optimization checklist; the GEMM-specific §3.6 WPS is covered in `warp_pipeline_stage.md`, and `optimization_checklist.md` has been removed)
 
 > **Note**: This document contains general ISA optimization steps (§3.0-§3.5) applicable to all AMD CDNA3 kernels.
-> For GEMM-specific `warp_pipeline_stage` optimizations, see `patterns/matmul/warp_pipeline_stage.md`.
+> For GEMM-specific `warp_pipeline_stage` optimizations, see `warp_pipeline_stage.md`.
 > See Appendix A of this document for a quick-reference optimization decision table for various kernel types.
 
 ---
@@ -91,7 +91,8 @@ Non-coalesced access (uncoalesced / strided):
 
 **Key Rule**: The `order` of `BlockedLayout` determines which dimension is contiguous in memory, and **this dimension must match the actual storage layout of the tensor in HBM**.
 
-```python# Matrix A: shape [M, K], stride_am=K, stride_ak=1 → K dimension is contiguous in memory
+```python
+# Matrix A: shape [M, K], stride_am=K, stride_ak=1 → K dimension is contiguous in memory
 # → blocked_a's order should make K dimension (dim 1) contiguous
 blocked_a = gl.SwizzledSharedLayout(
     vec=8,                    # K dimension spt=8 → dwordx4 (bf16)
@@ -111,7 +112,10 @@ blocked_b = gl.SwizzledSharedLayout(
     threads_per_warp=[16, 4],  # N dimension tpw=4, adjacent threads contiguous in N dimension
     warps_per_cta=[4, 1],
     order=[1, 0]               # dim 1 (N) contiguous → matches memory layout
-)```**How to Determine Whether Memory Access is Coalesced**:
+)
+```
+
+**How to Determine Whether Memory Access is Coalesced**:
 
 | Condition | Coalesced? | Description |
 |------|---------|------|
@@ -122,7 +126,8 @@ blocked_b = gl.SwizzledSharedLayout(
 
 ### Diagnostic Methods
 
-```bash# 1. Extract assembly
+```bash
+# 1. Extract assembly
 # 2. Check load width
 grep -c 'buffer_load_dword ' kernel.asm         # dwordx1 (32-bit) → Not ideal
 grep -c 'buffer_load_dwordx2' kernel.asm        # dwordx2 (64-bit) → Acceptable
@@ -139,7 +144,8 @@ grep -c 'ds_write_b64' kernel.asm
 grep -c 'ds_write_b128' kernel.asm
 
 # 5. Check coalesced access (need to analyze with kernel source code)
-# Confirm blocked layout's order matches tensor's memory layout```
+# Confirm blocked layout's order matches tensor's memory layout
+```
 
 ### Relationship Between Instruction Width and Layout
 
@@ -150,7 +156,7 @@ Bytes per thread = size_per_thread[contiguous_dim] × element_size_bytes
 Instruction width = min(Bytes per thread, 16)  # Max dwordx4 = 16 bytes
 ```
 
-| Data Type | element_size | size_per_thread requiredothek to achieve dwordx4 ≥ |
+| Data Type | element_size | size_per_thread required to achieve dwordx4 |
 |---------|-------------|--------------------------------------|
 | fp32 (4B) | 4 | 4 |
 | bf16/fp16 (2B) | 2 | 8 |
@@ -212,11 +218,13 @@ If manual adjustments cause functional errors, re-extract the original layout us
 - **Do not** blindly increase size_per_thread — the layout semantics must remain correct, and the order must match the memory layout
 - After modifying the load layout, downstream layouts such as SliceLayout, DotOperandLayout, etc. may also need adjustment
 - In some scenarios, the tensor's contiguous dimension conflicts with the layout required for computation (e.g., K-contiguous vs N-contiguous for the B matrix), requiring a trade-off between coalesced memory access and LDS bank conflicts (see §3.2 and Appendix D Pitfall 21)
-- Verify accuracy before confirming the changes## 3.2 Check Swizzle for Bank Conflicts
+- Verify accuracy before confirming the changes
+
+## 3.2 Check Swizzle for Bank Conflicts
 
 ### Objective
 
-Eliminate LDS (Shared Memory) bank conflicts Erie reduces the stall cycles in `ds_read`/`ds_write`.
+Eliminate LDS (Shared Memory) bank conflicts to reduce stall cycles in `ds_read`/`ds_write`.
 
 ### CDNA3 LDS Bank Configuration
 
@@ -329,7 +337,9 @@ data = gl.amd.cdna3.buffer_load(...)                                  # mma layo
 row_idx = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, blocked))   # blocked slice
 data = gl.amd.cdna3.buffer_load(...)                                  # blocked layout data
 data_smem = gl.allocate_shared_memory(..., value=data)                # No conversion needed
-```#### Method C: Accept ds_bpermute (When Unavoidable)
+```
+
+#### Method C: Accept ds_bpermute (When Unavoidable)
 
 Certain layout conversions are algorithmically necessary (e.g., scattering back to different distributions after reduction). In these cases:
 - Ensure that `ds_bpermute` is not inside a high-frequency loop
@@ -481,13 +491,15 @@ awk -F',' 'NR>1 {total_lat+=$5; total_stall+=$6; total_idle+=$7}
     END {printf "Latency: %d, Stall: %d (%.1f%%), Idle: %d (%.1f%%)\n",
          total_lat, total_stall, total_stall/total_lat*100,
          total_idle, total_idle/total_lat*100}' stats_*.csv
-```### Fix Methods
+```
+
+### Fix Methods
 
 #### Method A: Implement Software Pipelining
 
 If the kernel has a main loop and has not yet implemented pipelining:
 
-See `triton-to-gluon-converter.skill/cdna3-triton-to-gluon-converter.skill/references/patterns/pipeline.md` for details.
+See `converter/amd/cdna3/pipeline.md` for details.
 
 Core pattern:
 ```python
@@ -549,14 +561,14 @@ More concurrent waves → the GPU switches to another wave for execution while o
 ## 3.6 warp_pipeline_stage Full-Stage Packing (GEMM-Specific Optimization)
 
 > ⚠️ **This optimization applies only to large-tile GEMM**, not to Flash Attention or small-matrix GEMM.
-> Detailed content has been moved to `patterns/matmul/warp_pipeline_stage.md`.
+> Detailed content is covered in `warp_pipeline_stage.md`.
 
 **Applicable Conditions**:
 - Large-tile GEMM (grid_blocks ≥ num_CUs, sufficient loop iterations)
 - Not applicable to Flash Attention (complex control flow between MFMAs)
 - Not applicable to small-matrix GEMM (too few loop iterations, overhead > benefit)
 
-**Key Points** (see `patterns/matmul/warp_pipeline_stage.md` for details):
+**Key Points** (see `warp_pipeline_stage.md` for details):
 1. All LDS operations and computations must be packed — ds_read uses `"prep"`, MFMA uses `"compute"`, ds_write uses `"prep"`
 2. buffer_load is placed between pipeline stages and not packed inside any stage
 3. buffer_load must not use the `other=0.0` parameter
@@ -573,7 +585,7 @@ Must perform after each optimization step:
 
 ```bash
 # 1. Accuracy verification
-python triton-to-gluon-converter.skill/tools/validate.py \
+python <validation-command> \
     optimized_kernel.py reference_kernel.py --var-name result_gold
 
 # 2. Performance verification
@@ -597,17 +609,19 @@ If performance does not improve or regresses → roll back, record the reason, c
 |---------|---------|---------|----------|
 | Compute Bound | 3.3 Eliminate scratch/spill | 3.5 compute-memory overlap | 3.2 bank conflicts |
 | Memory Bound | 3.0+3.1 coalesced access+wide load | 3.5 compute-memory overlap | 3.2 bank conflicts |
-| Insufficient CU Utilization | Tile size tuning | BLOCK_K tuning | Micro-optimizations |### By Kernel Type
+| Insufficient CU Utilization | Tile size tuning | BLOCK_K tuning | Micro-optimizations |
+
+### By Kernel Type
 
 | Kernel Type | Required | Optional | Not Applicable | Specific Docs |
 |------------|------|------|--------|----------|
-| Large-tile GEMM | 3.0, 3.1, 3.3, 3.5, 3.6 | 3.2, 3.4 | — | `patterns/matmul/` |
-| Small-matrix GEMM | 3.0, tile tuning | 3.1, 3.3 | 3.5, 3.6 | `patterns/small_gemm/` |
-| Flash Attention | 3.0, 3.1, 3.3 | 3.2 | 3.6 (N/A) | `patterns/fused_attention/` |
+| Large-tile GEMM | 3.0, 3.1, 3.3, 3.5, 3.6 | 3.2, 3.4 | — | `warp_pipeline_stage.md` |
+| Small-matrix GEMM | 3.0, tile tuning | 3.1, 3.3 | 3.5, 3.6 | Small GEMM topic notes |
+| Flash Attention | 3.0, 3.1, 3.3 | 3.2 | 3.6 (N/A) | Fused attention topic |
 
 ## Related Documents
 
 - **Prerequisites**: [CDNA3 Hardware Specifications](../../../../hardware-specs/hardware_specs_mi300x.md) — Required for Roofline analysis
-- **Cross-Architecture Reference**:  | [Hopper ISA Optimization Checklist](../../../nvidia/gluon/sm90/common_optimizations.md)
+- **Cross-Architecture Reference**: [CDNA4 ISA Optimization Checklist](../gfx950/common_optimizations.md) | [Hopper ISA Optimization Checklist](../../../nvidia/gluon/sm90/common_optimizations.md)
 - **ISA Reference**: [CDNA3 ISA Instruction Patterns](isa_patterns.md) — Detailed descriptions of instructions referenced in this document
 - **🔴 Conflict Note**: This document considers manual ISA optimization to be effective (+1-4%), but [Hopper pitfalls #1](../../../nvidia/gluon/sm90/pitfalls.md) found that manual refactoring on sm_90 is almost always a negative optimization

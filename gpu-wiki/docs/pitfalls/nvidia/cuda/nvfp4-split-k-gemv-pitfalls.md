@@ -5,9 +5,9 @@ Specific to the CUDA C++ NVFP4 decode GEMV Split-K route on `sm_120`.
 Related:
 
 - Optimization report:
-
+  [sm120-nvfp4-split-k-gemv-bf16-optimization.md](../../../ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md)
 - Code:
-
+  [reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/](../../../../reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/)
 
 ## 1. Treating Split-K as an all-shape replacement
 
@@ -75,7 +75,9 @@ make replay results incomparable.
 across graph capture and replay.
 
 **Lesson**: Cache workspace by `N` and device, and keep allocation outside the
-measured hot path.## 6. Wrapping C1 fallback inside a new custom op
+measured hot path.
+
+## 6. Wrapping C1 fallback inside a new custom op
 
 **Trap**: Put both C1 and C2 behind one `torch.library.custom_op`, with C1
 falling back to CUTLASS internally.

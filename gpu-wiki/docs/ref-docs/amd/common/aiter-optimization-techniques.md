@@ -529,5 +529,5 @@ def get_gemm_kernel(dtype, M, N, K):
 - [LDS Bank Conflict Optimization](../../../kernel-opt/amd/common/lds-bank-conflict-optimization.md) -- Bank architecture and XOR swizzle for conflict elimination
 - [Preshuffle B Layout](../../../kernel-opt/amd/common/hands-on/preshuffle-b-layout.md) -- Pre-arranged weight matrix to avoid runtime layout conversion
 - [MoE 2-Stage Fusion](../../../kernel-opt/amd/common/hands-on/moe-2stage-fusion.md) -- Expert GEMM + SiLU fusion, mixed precision
--  -- Architecture parameter comparison
+- [Hardware Specification Comparison CDNA3 vs CDNA4](../../../hardware-specs/hardware-comparison-cdna3-cdna4.md) -- Architecture parameter comparison
 - Triton Kernel Tuning Parameters -- Tile size, MFMA selection, num_warps

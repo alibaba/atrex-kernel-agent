@@ -30,5 +30,5 @@ HSA_ENABLE_DEBUG=1 ./my_program
 - **Index**: AMD GPU Kernel Tuning Guide — Complete tuning topic index
 - **rocprofv3 Details**: [AMD rocprofv3 Profiling Guide](../../../ref-docs/amd/common/rocprofv3-profiling-guide.md) — Detailed guide on general rocprofv3 usage
 - **CDNA3 Profiling**: [rocprofv3 Instruction-Level Profile Details](../../../ref-docs/amd/gluon/gfx942/profiling_guide.md) — ATT hotspot analysis
-- **CDNA4 Profiling**:  — Configuration and usage on CDNA4
+- **CDNA4 Profiling**: [ROCm Profiling Guide (CDNA4)](../../../ref-docs/amd/gluon/gfx950/profiling_guide.md) — Configuration and usage on CDNA4
 - **NVIDIA Comparison**: [NCU Profiling Guide](../../../ref-docs/nvidia/common/ncu-profiling-guide.md) — NVIDIA Nsight Compute profiling

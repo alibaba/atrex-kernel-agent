@@ -1,5 +1,7 @@
 # FlyDSL Flash Attention Forward (bf16, no-mask ISA scheduling) on MI308X
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 This note archives the no-mask FlashAttention forward tuning round on
 MI308X / gfx942. It is intentionally separate from the existing causal+GQA and
 bit-packed-mask FlashAttention records: this kernel is the no-mask D64 BF16

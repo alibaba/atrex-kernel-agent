@@ -143,7 +143,9 @@ nvtx.range_pop()
 3. **Small Kernel Overhead**: Numerous short kernels cause launch overhead to exceed computation time
 4. **Memory Bottleneck**: Frequent allocation/deallocation triggers CUDA malloc
 
-**Megatron-LM Profiling Experience**: Launch with the `--profile` flag; Nsight Systems can clearly display the bubble ratio of each stage in Pipeline Parallelism, helping to adjust the number of micro-batches and the pipeline schedule.### PyTorch Profiler + TensorBoard
+**Megatron-LM Profiling Experience**: Launch with the `--profile` flag; Nsight Systems can clearly display the bubble ratio of each stage in Pipeline Parallelism, helping to adjust the number of micro-batches and the pipeline schedule.
+
+### PyTorch Profiler + TensorBoard
 
 ```python
 with torch.profiler.profile(

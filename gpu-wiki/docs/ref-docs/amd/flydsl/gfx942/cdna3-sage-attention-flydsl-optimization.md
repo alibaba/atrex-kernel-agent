@@ -1,5 +1,7 @@
 # FlyDSL SageAttention Step-by-Step Optimization Practice (MI308X gfx942)
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 This document records the complete process of implementing and progressively optimizing the SageAttention (quantized Flash Attention) kernel from scratch on the AMD MI308X (CDNA3, gfx942, 80 CUs) using FlyDSL.
 
 Final performance: S=8192 achieves **191.9 TFLOPS**, S=32768 achieves **199.1 TFLOPS** (42.7% peak). Compared to the Gluon reference implementation (62-64 TFLOPS), it is **3x faster**.
@@ -294,7 +296,9 @@ Do not manually interleave VALU and MFMA. The AMD compiler optimizes best with t
 - `sched_barrier(0)` is **required** at GEMM boundaries (QK→softmax)
 - `sched_dsrd(N) + sched_mfma(N)` is effective within MFMA loops, but the optimal N requires experimentation
 - Inner loops do not need barriers—give the compiler freedom
-- Overusing scheduling hints actually restricts the compiler's optimization space### 6. Hardware Arbitration Mechanisms Are Usually Correct
+- Overusing scheduling hints actually restricts the compiler's optimization space
+
+### 6. Hardware Arbitration Mechanisms Are Usually Correct
 `s_setprio`, `disable_xdl_arb_stall`, and other hardware controls rarely have positive effects in high-occupancy scenarios. The default policy is nearly optimal.
 
 ### 7. 219 VALU Is the Algorithmic Lower Bound

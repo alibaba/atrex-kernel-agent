@@ -107,6 +107,6 @@ gl.amd.cdna3.buffer_store(c, c_ptr, c_offsets, mask=c_mask)
 
 ## Related Documentation
 
-- **Cross-Architecture Reference**:  | [Hopper Matrix Multiplication](../../nvidia/hopper/matrix_multiply.md) (wgmma)
+- **Cross-Architecture Reference**: [CDNA4 Matrix Multiplication](../cdna4/matrix_multiply.md) | [Hopper Matrix Multiplication](../../nvidia/hopper/matrix_multiply.md) (wgmma)
 - **ISA Reference**: [AMD MFMA Programming Guide](../../../ref-docs/amd/common/amd-mfma-matrix-cores.md)
 - **Downstream Optimization**: [CDNA3 GEMM Optimization](../../../kernel-opt/amd/gluon/gfx942/pattern_overview.md)

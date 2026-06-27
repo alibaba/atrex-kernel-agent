@@ -151,17 +151,17 @@ A typical warp-specialized kernel entry:
 ```cpp
 __global__ void gemm_kernel(...) {
     int warp_group_idx = threadIdx.x / 128;
-    
+
     if (warp_group_idx == 0) {
         // Producer: Release unneeded registers
         warpgroup_reg_dealloc<40>();   // Reduce to 40 registers
-        
+
         // ... TMA load code (only needs few registers)
     }
     else {
         // Consumer: Acquire more registers
         warpgroup_reg_alloc<232>();    // Increase to 232 registers
-        
+
         // ... WGMMA code (needs many accumulator registers)
     }
 }
@@ -446,12 +446,12 @@ For very long K dimensions, accumulation can be staged to shared memory:
 // Staged accumulation: Write accumulators to SMEM every K_CHUNK tiles
 for (int k_chunk = 0; k_chunk < K; k_chunk += K_CHUNK) {
     float accum[TILE_M * TILE_N / THREADS];  // Local accumulators in registers
-    
+
     // Normal accumulation within K_CHUNK
     for (int k = 0; k < K_CHUNK; k += TILE_K) {
         mma(accum, smem_A[k], smem_B[k]);
     }
-    
+
     // Accumulate to SMEM (release registers)
     atomicAdd(smem_partial, accum);
     __syncthreads();

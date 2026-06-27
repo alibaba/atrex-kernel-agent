@@ -53,7 +53,7 @@ Tile size selection should not focus solely on AI; the following multiple constr
 | Constraint | Impact | Evaluation Method |
 |---------|------|---------|
 | **Tile AI vs Ridge Point** | Determines bottleneck type. Larger tiles → higher AI → more likely Compute Bound | Calculate using the formula above |
-| **SM Utilization** | Larger tiles → fewer grid blocks → more idle SMs. Requires `grid_blocks ≥ num_SMs` | `grid_blocks = cdiv(M,BM) × cdiv(N,BN)`, see SKILL.md §1.4 for details |
+| **SM Utilization** | Larger tiles → fewer grid blocks → more idle SMs. Requires `grid_blocks ≥ num_SMs` | `grid_blocks = cdiv(M,BM) × cdiv(N,BN)`, see optimization-guide.md §1.4 for details |
 | **Register Pressure** | Larger tiles → more accumulator registers → potential spilling to local memory (disastrous performance degradation) | Check `local_memory_overhead` in ncu or `STL`/`LDL` instructions in SASS |
 | **Shared Memory Capacity** | Larger tiles → more smem usage → may exceed limits | Hopper: up to 228 KB/block (requires `cudaFuncSetAttribute` configuration), default 48 KB |
 | **Occupancy** | Register and smem usage affect the number of thread blocks that can simultaneously reside on each SM → affects latency hiding capability | `Achieved Occupancy` in ncu report |
@@ -105,7 +105,7 @@ Source: `common_optimizations.md` Appendix A "Large Tile GEMM" row.
 
 ## Stopping Conditions
 
-Use the general stopping conditions from SKILL.md §1.8. The applicable checklist covers all items in §3.0-3.6 of `common_optimizations.md`.
+Use the general stopping conditions from optimization-guide.md §1.8. The applicable checklist covers all items in §3.0-3.6 of `common_optimizations.md`.
 
 ---
 
@@ -124,7 +124,7 @@ See `pitfalls.md` for details. Summary below:
 ## Related Documents
 
 - **Prerequisites**: [Hopper Hardware Specs](../../../../hardware-specs/hardware_specs_hopper.md) + [Common Optimization Checklist](common_optimizations.md)
-- **Cross-Architecture Reference**:  | [CDNA3 GEMM Optimization](../../../../kernel-opt/amd/gluon/gfx942/pattern_overview.md) (5 files)
+- **Cross-Architecture Reference**: [CDNA4 GEMM Optimization](../../../amd/gluon/gfx950/matmul.md) | [CDNA3 GEMM Optimization](../../../../kernel-opt/amd/gluon/gfx942/pattern_overview.md) (5 files)
 - **wgmma Details**: [PTX MMA Instruction Evolution](../../common/nvidia-ptx-mma-instructions.md) — wgmma instruction specification
 - **CuTeDSL**: [CuTeDSL SM90-Specific Features](../../cutedsl/sm90/hopper-cutedsl-sm90.md) — WGMMA usage in CuTeDSL
 - **Converter Reference**: [Hopper Matrix Multiply Conversion](../../../../converter/nvidia/hopper/matrix_multiply.md)

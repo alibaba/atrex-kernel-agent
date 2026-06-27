@@ -2,7 +2,7 @@
 
 Dao-AILab QuACK ("Quirky Assortment of CuTe Kernels") high-performance GPU kernel library, written entirely in CuTeDSL (Python). This directory contains SM90+ common code (48 .py files + sort/ subdirectory). For SM100/SM120 specific code, see the corresponding architecture directories.
 
-> Source: QuACK upstream repository mirror (`quack/`)
+> Source: `$REFERENCE_KERNEL_ROOT/quack/quack/`
 
 ## Kernel Files
 

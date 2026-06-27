@@ -33,7 +33,7 @@ Key differences vs the generic / earlier MI308X variants:
   retained only for experimentation. They were not promoted because they either
   regressed performance or produced non-finite output.
 - **rocprofv3/ATT-driven comparison**: local CK no-mask reference
-  `<composable_kernel-build>/bin/tile_example_fmha_fwd
+  `$COMPOSABLE_KERNEL_ROOT/build/bin/tile_example_fmha_fwd
   -b=1024 -h=8 -v=0 -d=64 -s=316` measured 2.912971 ms / 71.889906 TFLOPS.
   This FlyDSL final measured 3.327254 ms / 62.938751 TFLOPS, i.e. 87.55% of CK
   and 92.16% of the CK95 target. Archive status: optimized but CK95 not met.

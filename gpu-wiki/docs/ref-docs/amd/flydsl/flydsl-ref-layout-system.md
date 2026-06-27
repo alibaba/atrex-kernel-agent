@@ -1,5 +1,7 @@
 # [FlyDSL Original Document] Layout Algebra Guide
 
+Applicability: backend: flydsl; hardware: amd; topic: reference
+
 > Source: [FlyDSL](https://github.com/ROCm/FlyDSL) `docs/layout_system_guide.md` | Compiled version: [FlyDSL Layout Algebra Reference](flydsl-layout-algebra.md)
 
 > Core types, construction, coordinate mapping, algebra operations, and layout utilities in FlyDSL.

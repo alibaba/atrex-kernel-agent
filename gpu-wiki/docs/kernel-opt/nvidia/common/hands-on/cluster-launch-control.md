@@ -15,7 +15,7 @@ from triton.experimental.gluon.nvidia.blackwell import clc
 def persistent_matmul_clc(a, b, c, ...):
     # CLC dynamically retrieves the next pending tile
     tile_id = clc.get_work_item()
-    
+
     while tile_id is not None:
         m_tile, n_tile = decode_tile_id(tile_id)
         # Execute GEMM

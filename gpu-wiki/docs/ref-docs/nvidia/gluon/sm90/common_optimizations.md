@@ -1,6 +1,6 @@
 # Hopper (sm_90) General ISA Optimization Checklist
 
-**Last Updated**: 2026-03-20 (v2.0: consolidated and deduplicated from optimization_checklist.md and SKILL.md §3.0-3.6)
+**Last Updated**: 2026-03-20 (v2.0: consolidated and deduplicated from `optimization_checklist.md` and `optimization-guide.md` §3.0-3.6)
 
 ---
 
@@ -18,11 +18,11 @@
 - All intermediate files (`_v2`, `_v3`, etc.) are **deleted in one batch** after final verification passes
 
 **After each optimization step, you must verify:**
-1. **Accuracy verification** — Use `triton-to-gluon-converter.skill/tools/validate.py`
-2. **Performance verification** — Use `tools/measure_kernel_time.py` or `triton-to-gluon-converter.skill/tools/benchmark.py`
+1. **Accuracy verification** — run the local accuracy check used by the consuming harness
+2. **Performance verification** — run `tools/measure_kernel_time.py` or the local benchmark used by the consuming harness
 
-**Verification offloading (mandatory):**
-After completing code changes for each optimization point, **you must spawn a background task to execute verification**. The main agent **ends the current response and waits for the verification conclusion before proceeding to the next optimization point**.
+**Serial verification:**
+After completing code changes for each optimization point, run verification and wait for the conclusion before proceeding to the next optimization point.
 
 **Why wait serially**: Optimization points have dependencies (3.2 is based on 3.1's result file). If 3.1 verification fails, all subsequent modifications based on it are invalid. You must wait for the verification conclusion to confirm before proceeding.
 
@@ -92,18 +92,20 @@ The GPU's memory controller will **coalesce** the memory access requests of mult
 ```
 coalesced (coalesced):
   thread 0 → addr 0x1000
- thread 1 -> addr 0x1010 ← accesscontiguous
+  thread 1 → addr 0x1010 ← contiguous access
   thread 2 → addr 0x1020
   ...
- -> coalesced sector , bandwidthutilizationhigh
+  → coalesced sectors, high bandwidth utilization
 
 coalesced (strided):
   thread 0 → addr 0x1000
- thread 1 -> addr 0x2000 ← accesscontiguous
+  thread 1 → addr 0x2000 ← strided access
   thread 2 → addr 0x3000
   ...
- -> independent, bandwidthutilizationlow
-```**Hopper Coalescing Rules**:
+  → independent sectors, low bandwidth utilization
+```
+
+**Hopper Coalescing Rules**:
 - Memory access requests from a warp (32 threads) can be coalesced into 1 transaction if the addresses fall within the same **128B sector**
 - Ideal case: 32 threads × 16B/thread (LDG.E.128) = 512B, covering 4 sectors, resulting in 4 transactions
 - Note: **warp size = 32** (not AMD's 64)
@@ -148,7 +150,7 @@ Instruction width = min(bytes per thread, 16)  # Max 128-bit = 16 bytes
 | Cause | Fix |
 |-------|-----|
 | `order` does not match memory layout → no coalescing | Adjust `order` so the innermost dimension = the dimension with stride=1 in the tensor |
-| `size_per_thread` is too small in the contiguous dimension → narrow load | Increase `size_per_thread` in the contiguous dimension (bf16 requires ≥ 8 Congrats to reach 128-bit) |
+| `size_per_thread` is too small in the contiguous dimension → narrow load | Increase `size_per_thread` in the contiguous dimension (bf16 requires ≥ 8 elements to reach 128-bit) |
 | The original layout in TTGIR is inherently narrow or non-coalescing | Re-select the layout, but must guarantee functional equivalence |
 
 ### ⚠️ Notes
@@ -213,7 +215,9 @@ gl.SwizzledSharedLayout(vec, perPhase, maxPhase, order=[1, 0])
 |-----------|---------|--------------------------|
 | `vec` | Contiguous vector width (unit: number of elements) | Larger → more elements accessed contiguously per access |
 | `perPhase` | Rows per phase | Controls the XOR swizzle period |
-| `maxPhase` | Maximum number of phases | Controls the XOR swizzle range |### Common Causes and Fixes
+| `maxPhase` | Maximum number of phases | Controls the XOR swizzle range |
+
+### Common Causes and Fixes
 
 | Cause | Fix |
 |------|---------|
@@ -296,10 +300,12 @@ Hopper's CP_ASYNC DMA can transfer data directly from global memory to shared me
 
 ### Diagnostics
 
-```bash# Check if async_copy (LDGSTS) is used
+```bash
+# Check if async_copy (LDGSTS) is used
 ncu --import profile_output.ncu-rep --page source --print-source sass | grep -c 'LDGSTS'
 
-# If = 0 and has LDG+STS → async_copy not used → must fix```
+# If = 0 and has LDG+STS → async_copy not used → must fix
+```
 
 ### Correct Implementation
 
@@ -348,14 +354,16 @@ for i in range(num_stages - 1, num_iters):
 for s in range(min(num_stages - 1, num_iters)):
     async_copy.wait_group(num_outstanding=num_stages - 2 - s)
     # ... compute ...
-```### ⚠️ Notes
+```
+
+### ⚠️ Notes
 
 - Larger `num_stages` → more smem usage → potential occupancy decrease
 - Hopper smem max is 228 KB, much larger than AMD's 64 KB, supporting more stages
 - In `wait_group(num_outstanding=N)`, N indicates a maximum of N groups of asynchronous operations are allowed to be incomplete
 - N=0 means wait for all to complete (safest but shallowest pipeline)
 
-See `hopper-triton-to-gluon-converter.skill/references/patterns/pipeline.md`
+See `converter/nvidia/hopper/pipeline.md`
 
 ---
 
@@ -467,17 +475,19 @@ tl.assume(stride_bn > 0)
 |---------|-------------------|---------|----------------|
 | **Compute Bound** | 3.3 Eliminate scratch/spill | 3.5 wgmma correctness | 3.2 Bank conflicts |
 | **Memory Bound** | 3.0+3.1 Coalesced access + wide load | 3.4 async_copy pipeline | 3.2 Bank conflicts |
-| **Latency-Bound** | Tile dimension tuning (see `patterns/linear_attention.md`) | 3.0 Coalesced access pre-check | ❌ Most ISA optimizations ineffective |
-| **Insufficient SM Utilization** | 3.6 Tile size tuning | 3.6.2 BLOCK_K tuning | 3.6.3 Micro-optimizations |### Selecting Optimizations by Kernel Type
+| **Latency-Bound** | Tile dimension tuning (see `linear_attention.md`) | 3.0 Coalesced access pre-check | ❌ Most ISA optimizations ineffective |
+| **Insufficient SM Utilization** | 3.6 Tile size tuning | 3.6.2 BLOCK_K tuning | 3.6.3 Micro-optimizations |
+
+### Selecting Optimizations by Kernel Type
 
 | Kernel Type | Required | Optional | Not Applicable | Topic Docs |
 |------------|------|------|--------|---------|
-| **Large Tile GEMM** | 3.0, 3.1, 3.3, 3.4, 3.5 | 3.2 | 3.6 (SM sufficient) | `patterns/matmul.md` |
-| **Small Matrix GEMM** | 3.0, 3.6 | 3.1, 3.3 | 3.4 (loop too short) | `patterns/matmul.md` |
-| **Attention** | 3.0, 3.1, 3.3, 3.4, 3.5 | 3.2 | — | `patterns/fused_attention.md` |
-| **Recurrent State Update** | Increase chunk_size, 3.0, 3.1 | 3.5 | 3.3, 3.4 (may degrade performance) | `patterns/linear_attention.md` |
-| **Element-wise** | 3.0, 3.1 | — | 3.3, 3.4, 3.5 (no wgmma) | `patterns/softmax_reduce.md` |
-| **Reduction** | 3.0, 3.1 | 3.2 | 3.4, 3.5 (no wgmma) | `patterns/softmax_reduce.md` |
+| **Large Tile GEMM** | 3.0, 3.1, 3.3, 3.4, 3.5 | 3.2 | 3.6 (SM sufficient) | `matmul.md` |
+| **Small Matrix GEMM** | 3.0, 3.6 | 3.1, 3.3 | 3.4 (loop too short) | `matmul.md` |
+| **Attention** | 3.0, 3.1, 3.3, 3.4, 3.5 | 3.2 | — | Fused attention topic |
+| **Recurrent State Update** | Increase chunk_size, 3.0, 3.1 | 3.5 | 3.3, 3.4 (may degrade performance) | `linear_attention.md` |
+| **Element-wise** | 3.0, 3.1 | — | 3.3, 3.4, 3.5 (no wgmma) | Softmax/reduce topic |
+| **Reduction** | 3.0, 3.1 | 3.2 | 3.4, 3.5 (no wgmma) | Softmax/reduce topic |
 
 ---
 
@@ -502,6 +512,6 @@ tl.assume(stride_bn > 0)
 ## Related Documents
 
 - **Prerequisites**: [Hopper Hardware Specifications](../../../../hardware-specs/hardware_specs_hopper.md)
-- **Cross-Architecture Reference**: [CDNA3 ISA Optimization Checklist](../../../amd/gluon/gfx942/common_optimizations.md) |
+- **Cross-Architecture Reference**: [CDNA3 ISA Optimization Checklist](../../../amd/gluon/gfx942/common_optimizations.md) | [CDNA4 ISA Optimization Checklist](../../../amd/gluon/gfx950/common_optimizations.md)
 - **ISA Reference**: [Hopper SASS Instruction Patterns](isa_patterns.md) — Detailed LDG/STG/WGMMA instruction descriptions
 - **Profiling**: [Hopper ncu Profiling Guide](profiling_guide.md)

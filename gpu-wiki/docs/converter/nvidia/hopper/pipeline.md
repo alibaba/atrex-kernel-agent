@@ -8,14 +8,14 @@ When ``num_stages > 1`` is set in Triton, the compiler automatically generates s
 
 ### Imports
 
-````python
+```python
 from triton.experimental.gluon.language.nvidia.hopper import (
     async_copy,          # contains async_copy_global_to_shared, commit_group, wait_group
     fence_async_shared,  # must call before wgmma
     warpgroup_mma,       # async matrix multiply
     warpgroup_mma_wait,  # wait for wgmma completion
 )
-````
+```
 
 ---
 
@@ -44,7 +44,7 @@ from triton.experimental.gluon.language.nvidia.hopper import (
 
 ### ✅ Correct Approach: async_copy + Double-Buffer Pipeline
 
-````python
+```python
 # ============================================================
 # 1. Pre-allocate persistent shared memory (double-buffered, depth=2)
 # ============================================================
@@ -116,7 +116,9 @@ for i_t in range(NT):
         async_copy.commit_group()
 
 # No explicit epilogue needed — last iteration handled in loop, no prefetch
-````### ❌ Wrong Approach: gl.load + smem.store
+```
+
+### ❌ Wrong Approach: gl.load + smem.store
 
 ```python
 # ❌ Wrong: two-step transfer (global → register → shared)
@@ -186,7 +188,7 @@ If the Triton source code uses `num_stages > 1`, you **must** implement pipelini
 
 ## Related Documentation
 
-- **Cross-Architecture Reference**: [CDNA3 Pipeline](../../amd/cdna3/pipeline.md) (pure software) |  (hardware DMA)
+- **Cross-Architecture Reference**: [CDNA3 Pipeline](../../amd/cdna3/pipeline.md) (pure software) | [CDNA4 Pipeline](../../amd/cdna4/pipeline.md) (hardware DMA)
 - **🔴 Architecture Difference**: This document uses CP_ASYNC DMA, with a different API than CDNA4 DMA (`async_copy_global_to_shared` vs `buffer_load_to_shared`)
 - **ISA Reference**: [PTX Sync and Async Operations](../../../ref-docs/nvidia/common/nvidia-ptx-sync-and-async.md) — Underlying PTX instructions for CP_ASYNC
 - **Layout Dependency**: [Hopper Layouts](layouts.md)

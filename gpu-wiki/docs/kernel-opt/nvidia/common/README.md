@@ -8,7 +8,7 @@ NVIDIA GPU general optimization knowledge: Compute Capability comparison, archit
 
 | File | Description |
 |------|------|
-|  | Blackwell / Hopper kernel optimization knowledge cards (51 cards): hardware mechanisms, typical kernels, language interfaces, migration rules, bottleneck patterns, and optimization techniques |
+| [blackwell/](blackwell/) | Blackwell / Hopper kernel optimization knowledge cards (51 cards): hardware mechanisms, typical kernels, language interfaces, migration rules, bottleneck patterns, and optimization techniques |
 | [hands-on/](hands-on/) | Blackwell (SM100) Kernel Optimization Hands-on: tcgen05/TMEM, three-role warp specialization, CLC, 2CTA, etc. |
 | [sm90/](sm90/) | Hopper (SM90) specific optimizations and hands-on |
 | [NVIDIA Compute Capability Comparison Table](nvidia-compute-capabilities.md) | CC 7.5-12.x threads/warps/blocks/registers comparison |

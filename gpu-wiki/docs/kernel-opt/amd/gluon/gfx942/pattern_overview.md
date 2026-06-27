@@ -6,7 +6,7 @@ Pitfalls: [32-37, 41-43]
 
 # Small Matrix GEMM Optimization Guide
 
-> This document is a specialized scenario of `matmul`. For general GEMM optimization, see `patterns/matmul/`. For a general ISA optimization checklist, see `common_optimizations.md`.
+> This document is a specialized scenario of `matmul`. For general GEMM optimization, see `docs/ref-docs/amd/gluon/gfx942/warp_pipeline_stage.md` and the general ISA checklist in `common_optimizations.md`.
 > For applicable pitfall experiences, see the optimization point files in this folder (pitfalls 32-37, 41-43).
 
 ---

@@ -139,8 +139,10 @@ Most MFMA kernels have AI > 247, placing them in the Compute Bound region. The o
 2. **Determine the data precision**: Which data type is used?
    - BF16 MFMA → FP16/BF16 Matrix = 1,307.4 TFLOPS (MI300X)
    - FP32 element-wise → FP32 Vector = 163.4 TFLOPS (MI300X)
-3. **Mixed computation**: If a kernel has both MFMA and element-wise operations, evaluate using the MFMA compute power (MFMA is usually the performance-determining factor)## Related Documents
+3. **Mixed computation**: If a kernel has both MFMA and element-wise operations, evaluate using the MFMA compute power (MFMA is usually the performance-determining factor)
 
-- **Cross-Architecture Comparison**:  | [Hopper Hardware Specs](hardware_specs_hopper.md)
+## Related Documents
+
+- **Cross-Architecture Comparison**: [CDNA4 Hardware Specs](hardware_specs_mi355x.md) | [Hopper Hardware Specs](hardware_specs_hopper.md)
 - **Downstream Consumers**: [ISA Optimization Checklist](../ref-docs/amd/gluon/gfx942/common_optimizations.md) — Roofline calculations require the peak TFLOPS from this document
 - **⚠️ Difference Note**: Ridge point ~247 (BF16), significantly different from CDNA4 (~629) and H20 (~37). The optimization direction for the same kernel may be entirely different

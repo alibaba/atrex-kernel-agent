@@ -5,14 +5,16 @@ arch: cdna3/gfx942
 gpu: MI308X
 operator: Chunk-GDN fused forward
 profiling: rocprofv3
-skill_use: warp-specialization megakernel porting playbook
+knowledge_use: warp-specialization megakernel porting playbook
 ---
+
+Applicability: backend: flydsl; hardware: amd; topic: reference
 
 # MI308 Chunk-GDN Wave-Specialized Megakernel Playbook
 
 Date: 2026-05-09
 
-This is the skill-facing version; the full per-version changelog is no longer retained. The focus is on distilling truly reusable experience from porting the FlashQLA Hopper warp-specialization megakernel to MI308/CDNA3/FlyDSL into:
+This reference distills reusable experience from porting the FlashQLA Hopper warp-specialization megakernel to MI308/CDNA3/FlyDSL. The full per-version changelog is no longer retained; the focus is on:
 
 - When to attempt megakernel fusion;
 - How to adapt Hopper design concepts into wave-specialization achievable on CDNA3;
@@ -25,11 +27,11 @@ it only runs the FlyDSL backend megakernel, and the caller must pass in precompu
 See the companion pitfalls page at
 [`chunk-gdn-mi308x-wave-specialization-pitfalls.md`](../../../../pitfalls/amd/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md).
 
-## Skill Application Card
+## Applicability Card
 
 ### When to Use
 
-When a linear attention / SSM / recurrent-state kernel satisfies the following conditions simultaneously, this experience can be applied as a warp-specialization megakernel porting skill:
+When a linear attention / SSM / recurrent-state kernel satisfies the following conditions simultaneously, this experience can be applied as a warp-specialization megakernel porting method:
 
 | Condition | How to Determine |
 |---|---|
@@ -46,12 +48,12 @@ Unsuitable situations:
 - LDS cannot accommodate the necessary cross-stage data;
 - Correctness depends on complex varlen/cache store, but there is no reliable reference.
 
-### Delegation Contract
+### Acceptance Criteria
 
-When delegating similar optimization to an agent, the prompt must explicitly require the following completion criteria:
+Use the following completion criteria for similar optimization work:
 
-1. **Performance conclusions only accept `rocprofv3`**: Do not use `do_bench`, manual timing, or `torch.cuda.Event` as conclusions.
-2. **Baseline must be on the same boundary**: Use the current tuned Triton/Gluon path for production performance comparisons; PyTorch is only for correctness.
+1. **Performance conclusions require `rocprofv3`**: Do not use `do_bench`, manual timing, or `torch.cuda.Event` as final conclusions.
+2. **Baseline must be on the same boundary**: Use the current tuned Triton/Gluon comparison baseline for production performance comparisons; PyTorch is only for correctness.
 3. **Must report resources**: LDS, VGPR/accum VGPR, scratch, barriers, and key waitcnt.
 4. **Must check shape/grid**: At minimum, cover the hot shape and small-H / low-grid shapes; do not optimize for only one model dimension.
 5. **Must provide a rejected table**: Each failed optimization must be explained with rocprof/ISA/PMC evidence, not just "no gain".
@@ -81,7 +83,9 @@ chunk_local_cumsum
 - The viable CDNA3 approach is: 512-thread workgroup, 8 wave64, compute/producer wave division, single-buffer LDS with lifetime alias, and ordinary `buffer_load/ds_write` and `s_barrier`.
 - The `(8,32,128,128)` hot path requires `BLOCK_DV=64`; otherwise, Q/K/A/g/beta staging and some GEMM work are duplicated.
 - `(2,8)` / `(8,16)` small-H shapes require a BDV32 fast path to increase V-axis grid parallelism; the hot path tile should not be unconditionally applied to all shapes.
-- The accepted version must simultaneously satisfy correctness, large-T rocprofv3 sweep, ISA resources, and consistent PMC/counter direction.## FlashQLA to MI308 Migration Model
+- The accepted version must simultaneously satisfy correctness, large-T rocprofv3 sweep, ISA resources, and consistent PMC/counter direction.
+
+## FlashQLA to MI308 Migration Model
 
 ### Hopper Solution Abstraction
 
@@ -141,7 +145,7 @@ The fair comparison boundary for the FlyDSL megakernel is `a/g_cumsum` already g
 recompute_w_u -> fwd_h -> fwd_o
 ```
 
-Therefore, the performance baseline must also start from the same boundary: Triton baseline = `recompute_w_u_fwd`
+Therefore, the performance baseline must also start from the same boundary: Triton comparison baseline = `recompute_w_u_fwd`
 + `chunk_gated_delta_rule_fwd_h` + `chunk_fwd_o`. Do not use the PyTorch reference as the performance baseline.
 
 ## Final Implementation Structure
@@ -154,7 +158,7 @@ Therefore, the performance baseline must also start from the same boundary: Trit
 | `fused_fwd_mi308x_v2.py` | Shape-aware front door, selects fast/tail/direct-store path |
 | `fused_fwd_mi308x_v2_fast.py` | BDV64 hot path, primary `(8,32,128,128)` |
 | `fused_fwd_mi308x_v2_bdv32_fast.py` | BDV32 small-H path, serves `(2,8)` / `(8,16)` |
-| `reference-kernels/amd/cdna/triton/chunk_gdn/` | Migrated Triton back-half baseline |
+| `reference-kernels/amd/cdna/triton/chunk_gdn/` | Migrated Triton back-half comparison baseline |
 
 ### Hot Path Resources
 
@@ -182,7 +186,9 @@ GEMM1 reads K directly from GMEM; `K^T` remains in LDS because GEMM3/GEMM6 are m
 | 4-7 | producer | Stages Q/K^T/A/g/beta, coordinates barrier window |
 
 The producer's responsibility is to create limited overlap, not to emulate Hopper TMA. Every producer must verify in the ISA whether
-`s_barrier` is still at the expected position; if the compiler moves or removes the barrier, correctness may be directly invalidated.## Performance Results
+`s_barrier` is still at the expected position; if the compiler moves or removes the barrier, correctness may be directly invalidated.
+
+## Performance Results
 
 ### Standalone 397B-TP2 back-half
 
@@ -208,9 +214,10 @@ Correctness spot-check, T=4096, same inputs:
 
 ### RTP Direct-Store Operator
 
-In the RTP integration path, the FlyDSL direct-store also writes cache-state into the megakernel, removing the external Triton
-`fwd_h + store_ssm_state_to_block_map`. On long sequence `(8,32,128,128)`, the RTP operator level is approximately
-`1.43-1.47x` relative to current Triton, and approximately `2.14-2.23x` relative to old `507e` Triton.
+In the RTP integration path, the FlyDSL direct-store also writes cache-state into the megakernel, removing the external
+same-boundary comparison step `fwd_h + store_ssm_state_to_block_map`. On long sequence `(8,32,128,128)`, the RTP operator
+level is approximately `1.43-1.47x` relative to current Triton comparison data, and approximately `2.14-2.23x` relative to
+old `507e` Triton comparison data.
 
 ### Shape Generalization
 
@@ -234,12 +241,12 @@ Shape generalization covers 10 runtime shapes for Qwen3.5/Qwen3.6. Key rules:
 | Post-V47 cleanup | Multiple stride/beta/layout cleanup attempts | Static resources seemed better but rocprof/PMC worsened, all rejected |
 | SG-V5 | Small-H BDV32 fast path | Fixed `(2,8)` / `(8,16)` by increasing grid parallelism |
 
-## Skill Tuning Workflow
+## Tuning Workflow
 
 ### 1. Establish a Fair Baseline
 
 1. Clarify the fusion boundary, e.g., whether `a/g_cumsum` is included.
-2. Baseline uses the current tuned Triton/Gluon path, not PyTorch.
+2. Baseline uses the current tuned Triton/Gluon comparison data, not PyTorch.
 3. Create kernel trace mapping for multiple dispatches of the split baseline, and explain the sum rules.
 4. Correctness can use PyTorch or tuned baseline, but performance must only use `rocprofv3`.
 
@@ -272,7 +279,7 @@ Do not pursue a full Hopper pipeline from the beginning. Recommended order:
 |---|---|---|
 | `(8,32,128,128)` | BDV64 | Reduces redundant staging and redundant P/Ag work |
 | `(8,16,128,128)` | BDV32 | BDV64 grid only has 32 CTAs, CU underfill |
-| `(2,8,128,128)` | BDV32 | BDV64 grid only has 16 CTAs, fixed cost too high |When optimizing similar kernels, the skill must first calculate grid blocks / CU. In low-grid scenarios, increasing parallel partitioning usually takes priority over ISA micro-tuning.
+| `(2,8,128,128)` | BDV32 | BDV64 grid only has 16 CTAs, fixed cost too high |When optimizing similar kernels, the reference workflow should first calculate grid blocks / CU. In low-grid scenarios, increasing parallel partitioning usually takes priority over ISA micro-tuning.
 
 ### 5. Accepting or Rejecting a Version
 
@@ -289,7 +296,7 @@ If static resource usage decreases but rocprofv3 performance degrades, prioritiz
 
 ## Rejected Patterns
 
-| Attempt | Why It Failed | Skill Rule |
+| Attempt | Why It Failed | Design Rule |
 |---|---|---|
 | Directly porting Hopper double-buffer | LDS exceeds 64KB or bank conflict explodes | Fit LDS first, then consider specialization |
 | Producer-side gate precompute | SFU decreases but LDS/VMEM pressure increases | Don't just count `v_exp_f32`; must examine global counters |
@@ -312,13 +319,13 @@ If static resource usage decreases but rocprofv3 performance degrades, prioritiz
 
 | Content | Path |
 |---|---|
-| gpu-wiki FlyDSL reference | `/root/gpu-wiki/reference-kernels/amd/cdna3/flydsl/FlyDSL/` |
-| gpu-wiki Triton baseline | `/root/gpu-wiki/reference-kernels/amd/cdna/triton/chunk_gdn/` |
-| MI308X pitfalls | `/root/gpu-wiki/docs/pitfalls/amd/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md` |
-| standalone profile driver | `/tmp/kernel_opt_chunk_gdn_gpu_wiki/rocprof_397b_tp2/profile_chunk_gdn_397b_tp2.py` |
-| standalone rocprof CSV | `/tmp/kernel_opt_chunk_gdn_gpu_wiki/rocprof_397b_tp2/out_*_p50/` |
-| RTP checkpoint | `/root/RTP-LLM/github-opensource/optimization_checkpoint.md` |
-| original workspace handoff | `/root/wenhua_code/flydsl/chunk_gdn_flydsl_workspace/megakernel/shape_generalization_next_handoff.md` |
+| gpu-wiki FlyDSL reference | `reference-kernels/amd/cdna3/flydsl/FlyDSL/` |
+| gpu-wiki Triton comparison baseline | `reference-kernels/amd/cdna/triton/chunk_gdn/` |
+| MI308X pitfalls | `docs/pitfalls/amd/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md` |
+| standalone profile driver | `kernel_opt_chunk_gdn_gpu_wiki/rocprof_397b_tp2/profile_chunk_gdn_397b_tp2.py` |
+| standalone rocprof CSV | `kernel_opt_chunk_gdn_gpu_wiki/rocprof_397b_tp2/out_*_p50/` |
+| RTP checkpoint | `RTP-LLM/github-opensource/optimization_checkpoint.md` |
+| original workspace handoff | `wenhua_code/flydsl/chunk_gdn_flydsl_workspace/megakernel/shape_generalization_next_handoff.md` |
 
 ## Open Issues
 
