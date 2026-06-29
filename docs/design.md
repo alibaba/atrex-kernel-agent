@@ -43,7 +43,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 │   ├── gpu-kernel-bottleneck-analysis/   # Roofline and bottleneck helper Skill
 │   ├── gpu-kernel-profile-optimizer/     # Stage 2 profile-driven optimization Skill
 │   ├── gpu-kernel-output-contract/       # Final generated_kernel.py packaging Skill
-│   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Skill
+│   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Agent
 └── tools/
     ├── bench_bandwidth.py                # Bandwidth benchmark helper
     ├── compute_utilization.py            # TFLOPS / bandwidth utilization calculator
@@ -111,9 +111,9 @@ Path: `skills/gpu-kernel-output-contract/SKILL.md`
 
 This Skill packages a validated implementation into `generated_kernel.py` when a hidden evaluator requires a clean final candidate. The final file must contain valid Python source only, define `class Model(nn.Module)`, preserve the reference contract, and exclude tests, benchmarks, debug prints, Markdown, external file reads, and `__main__` blocks.
 
-### Partial Restart Skill
+### Partial Restart Agent
 
-Path: `skills/gpu-kernel-partial-restart/SKILL.md`
+Path: `agents/gpu-kernel-partial-restart.md`
 
 This Skill is used when no new actionable direction is available but Stop Conditions are not met. It masks about half of the previous optimization memories, preserves the latest successful iteration and baseline, and launches a fresh subagent from the current `kernel.py` and unmasked memory.
 

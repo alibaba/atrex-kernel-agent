@@ -33,7 +33,7 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
    - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `ncu` or `profile_kernel.sh` for identifying bottlenecks.
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
 9. Optimization runs in a temporary workspace and every accepted iteration is committed with git.
-10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` sub-skill or by the user manually.
+10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` agent or by the user manually.
 
 ### Scope Without Exceptions
 
