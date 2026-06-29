@@ -256,6 +256,29 @@ With 512 total columns per SM:
 
 For double-buffered 128x256 tiles, the full 512 columns are consumed. If additional scratch TMEM is needed (e.g., for softmax in attention kernels), reduce the tile size or use a single accumulator buffer.
 
+### When can you pipeline-overlap? (columns / bytes / head-dim threshold)
+
+Pipeline overlap of MMA with the epilogue (or of consecutive MMAs) relies on having a **second accumulator buffer** so one can be filled while the other is drained. That requires both buffers to coexist in the 512-column TMEM:
+
+> **Double-buffer fits ⇔ 2 × (accumulator columns) ≤ 512 ⇔ accumulator ≤ 256 columns.**
+
+Column ↔ byte conversion (per SM): each TMEM column spans 128 lanes × 4 B = **512 B/column**, so 512 columns = 256 KB.
+
+| Per-accumulator footprint | Columns | Bytes | Can double-buffer (overlap)? |
+|---|---|---|---|
+| ≤ 128 cols | ≤ 128 | ≤ 64 KB | Yes — up to 4 buffers, room for scratch |
+| ≤ 256 cols | ≤ 256 | ≤ 128 KB | Yes — exactly 2 buffers, no scratch left |
+| > 256 cols | > 256 | > 128 KB | **No** — only one fits; overlap must come from 2-SM (split the accumulator across the pair) or a smaller tile |
+
+For a GEMM tile M×N the accumulator occupies **N columns** (M maps to the 128 lanes), so overlap is feasible when **N ≤ 256**.
+
+For attention, the accumulators are sized by **head-dim and KV-tile**: the O accumulator is **head-dim columns** and the S accumulator is **kv-tile columns**. Practical consequences:
+
+- **head-dim ≤ 128:** O (≤128 cols) leaves ample room to double-buffer O and still hold S + softmax scratch.
+- **head-dim = 256:** a single O accumulator already uses 256 cols (= half of TMEM). With an S accumulator alongside it (e.g. 128 cols → S+O = 384 ≤ 512 fits **single-buffered**), there is **no room to also double-buffer O on one SM** — so large head-dim trades away overlap headroom. Options: keep single-stage (`q_stage=1`) on 1 SM, or go 2-SM to split O across the pair's TMEM (then weigh the cluster sync tax — see [2sm-cooperative.md](2sm-cooperative.md)).
+
+Rule of thumb: **overlap is "free" on TMEM up to ~256 accumulator columns (~128 KB); beyond that you must either shrink the tile or use 2-SM.**
+
 ## Microbenchmark Data
 
 From published Blackwell microbenchmarks:
