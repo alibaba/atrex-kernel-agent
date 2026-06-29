@@ -11,7 +11,7 @@
 #             ~/aka_kernel_opt/reference-projects/
 #
 # Skill directory whitelist (only these are copied):
-#   reference/  skills/  tools/  SKILL.md
+#   reference/  skills/  tools/  agents/  SKILL.md
 #
 # Usage:
 #   ./install.sh                       # install/update all detected targets
@@ -301,7 +301,7 @@ configure_claude_target() {
 # 3. Copy skill files into the active target skill directory
 # ---------------------------------------------------------------------------
 # Whitelist of paths to copy into the skill directory
-SKILL_WHITELIST=(reference skills tools SKILL.md)
+SKILL_WHITELIST=(reference skills tools agents SKILL.md)
 
 copy_skill() {
   if [ "$SCRIPT_DIR" = "$TARGET_SKILL_DIR" ]; then
