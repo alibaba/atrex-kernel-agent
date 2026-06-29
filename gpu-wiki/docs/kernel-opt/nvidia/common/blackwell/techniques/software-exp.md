@@ -196,8 +196,18 @@ For applications requiring higher accuracy, a degree-6 polynomial (6 FMAs) achie
 - **Any kernel limited by transcendental function throughput**: If profiling shows SFU utilization near 100% while FMA utilization is low, software emulation can rebalance the workload.
 - **Not recommended on Hopper**: The SFU-to-MMA throughput ratio is better balanced on SM90. The overhead of 4 FMAs vs 1 SFU instruction is not justified unless the SFU is proven to be the bottleneck.
 
+## B200 vs B300 (Blackwell Ultra) — the key practical difference
+
+Software exp2 is a **B200-targeted mitigation, not a universal Blackwell win**. The bottleneck it addresses is arch-specific:
+
+- **B200 (sm_100):** tensor-core throughput roughly doubled vs Hopper while the SFU/`ex2` path did not, so for softmax-heavy attention the SFU is the bottleneck — software exp2 (exp on FMA units) is a clear win.
+- **B300 / Blackwell Ultra (sm_103):** NVIDIA advertises **~2× attention-layer acceleration** vs B200 — the special-function / softmax path is strengthened, so hardware `MUFU.EX2` is much closer to keeping up with the tensor cores. On B300 the SFU exp bottleneck that motivates software exp2 is largely relieved: hardware `ex2.approx` is often adequate, and the extra FMA work of the software path can be **net-negative**. In practice, on B300 it is frequently faster to *disable* the software-exp emulation and use hardware `MUFU.EX2`.
+
+**Rule of thumb:** treat software exp2 as conditional on "is the SFU the proven softmax bottleneck on *this* arch?" — usually yes on B200, often no on B300. Profile `MUFU`/SFU utilization vs FMA utilization on the target part before enabling it, and keep it behind a flag so it can be turned off per architecture.
+
 ## Caveats
 
 - The 4-FMA chain has a latency of ~16 cycles (4 dependent FMAs at ~4 cycles each), vs ~20 cycles for SFU `ex2.approx`. Latency is comparable; the win comes from throughput (128 FMA units vs 16 SFU units).
+- **Arch-conditional (see above):** on B300/sm_103 the hardware exp path is faster relative to the tensor cores than on B200, so the software path is often unnecessary or slower. Do not enable it unconditionally for "Blackwell".
 - Polynomial coefficients are for 2^x on [-0.5, 0.5]. For e^x, multiply the input by log2(e) first.
 - The `ldexpf` or exponent bit-manipulation step for 2^n must handle overflow/underflow (very large/small x). In attention, `x <= 0` always holds, so only underflow toward zero is possible.
