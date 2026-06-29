@@ -6,12 +6,8 @@ Entry point for NVIDIA reference articles, architecture materials, and per-kerne
 
 | Directory | Description |
 |-----------|-------------|
-| [common/](common/) | NVIDIA general optimization and hardware materials; includes [NCU Profile-Driven Optimization Workflow](common/ncu-profile-driven-optimization-workflow.md) and [SM120 Hardware Specifications](../../hardware-specs/hardware_specs_sm120.md) |
-| [cuda/](cuda/) | CUDA C++ / inline PTX reference articles and SM120 CUDA optimization notes |
-| [cutedsl/](cutedsl/) | CuTeDSL / CUTLASS / QuACK reference articles and SM90/SM100/SM120 optimization reports |
-| [gluon/sm90/](gluon/sm90/) | Hopper (SM90) Gluon reference articles |
-| [triton/](triton/) | Triton reference articles and SM120 Triton optimization notes |
-
-## SM120 Hardware Specifications Quick Entry
-
-- [Blackwell GeForce / RTX PRO Hardware Compute Specifications Table](../../hardware-specs/hardware_specs_sm120.md)
+| [common/](common/) | NVIDIA general optimization and hardware materials (cross-DSL) |
+| [cuda/](cuda/) | CUDA C++ / inline PTX reference articles and optimization reports |
+| [cutedsl/](cutedsl/) | CuTeDSL / CUTLASS / QuACK reference articles and optimization reports |
+| [gluon/](gluon/) | Gluon reference articles for NVIDIA architectures |
+| [triton/](triton/) | Triton reference articles and optimization notes |

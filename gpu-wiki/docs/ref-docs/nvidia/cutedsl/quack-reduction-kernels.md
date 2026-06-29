@@ -4,7 +4,7 @@ QuACK (Quirky Assortment of CuTe Kernels) is a high-performance memory-bound ker
 
 > For general hierarchical reduction principles (DSL-agnostic), see [Hierarchical Reduction](../common/hierarchical-reduction-memory-bound.md)
 
-Source: [github.com/Dao-AILab/quack](https://github.com/Dao-AILab/quack) (Wentao Guo, Ted Zadouri, Tri Dao)
+Source: github.com/Dao-AILab/quack (Wentao Guo, Ted Zadouri, Tri Dao)
 
 ---
 
@@ -403,6 +403,6 @@ TopK (independent, ReductionBase)
 
 ## Reference
 
-- [QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light](https://github.com/Dao-AILab/quack/blob/main/media/2025-07-10-membound-sol.md)
-- [CuTe-DSL Documentation](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_general/dsl_introduction.html)
+- QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light (github.com/Dao-AILab/quack)
+- CuTe-DSL Documentation (docs.nvidia.com/cutlass -- pythonDSL/cute_dsl_general)
 - [Hierarchical Reduction General Principles](../common/hierarchical-reduction-memory-bound.md)
