@@ -11,7 +11,9 @@
 #             ~/aka_kernel_opt/reference-projects/
 #
 # Skill directory whitelist (only these are copied):
-#   reference/  skills/  tools/  agents/  SKILL.md
+#   reference/  skills/  tools/  SKILL.md
+#
+# agents/ is copied separately to $TARGET_DIR/agents/ (not inside the skill dir).
 #
 # Usage:
 #   ./install.sh                       # install/update all detected targets
@@ -301,7 +303,7 @@ configure_claude_target() {
 # 3. Copy skill files into the active target skill directory
 # ---------------------------------------------------------------------------
 # Whitelist of paths to copy into the skill directory
-SKILL_WHITELIST=(reference skills tools agents SKILL.md)
+SKILL_WHITELIST=(reference skills tools SKILL.md)
 
 copy_skill() {
   if [ "$SCRIPT_DIR" = "$TARGET_SKILL_DIR" ]; then
@@ -326,6 +328,33 @@ copy_skill() {
         cp "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/$item"
       fi
     done
+  fi
+}
+
+copy_agents() {
+  local agents_src="$SCRIPT_DIR/agents"
+  local agents_dst
+
+  if [ "$TARGET_NAME" = "codex" ]; then
+    agents_dst="$CODEX_TARGET_DIR/agents"
+  elif [ "$TARGET_NAME" = "claude" ]; then
+    agents_dst="$CLAUDE_TARGET_DIR/agents"
+  else
+    echo "[$TARGET_NAME][agents] Unknown target, skipping agents copy"
+    return
+  fi
+
+  if [ ! -d "$agents_src" ]; then
+    echo "[$TARGET_NAME][agents] No agents/ directory in source, skipping"
+    return
+  fi
+
+  echo "[$TARGET_NAME][agents] Copying $agents_src -> $agents_dst"
+  mkdir -p "$agents_dst"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$agents_src/" "$agents_dst/"
+  else
+    cp -R "$agents_src"/. "$agents_dst/"
   fi
 }
 
@@ -1436,7 +1465,10 @@ strip_hooks() {
 # ---------------------------------------------------------------------------
 install_codex() {
   configure_codex_target
-  [ "$MODE" = "hooks-only" ] || copy_skill
+  if [ "$MODE" != "hooks-only" ]; then
+    copy_skill
+    copy_agents
+  fi
   enable_hooks_feature
   ensure_codex_agents_config
   install_hook_script
@@ -1445,7 +1477,10 @@ install_codex() {
 
 install_claude() {
   configure_claude_target
-  [ "$MODE" = "hooks-only" ] || copy_skill
+  if [ "$MODE" != "hooks-only" ]; then
+    copy_skill
+    copy_agents
+  fi
   install_hook_script
   merge_hooks
 }
