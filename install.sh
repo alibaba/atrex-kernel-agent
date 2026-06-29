@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# One-shot installer for the gpu-kernel-optimizer skill + hooks + agents.
+# One-shot installer for the gpu-kernel-optimizer skill + hooks.
 #
 # Default install base: ~/aka_kernel_opt (customizable via AKA_KERNEL_OPT_HOME)
 # Files are installed under <base>/.codex and/or <base>/.claude:
-#   - Codex:  ~/aka_kernel_opt/.codex/skills/gpu-kernel-optimizer
+#   - Codex:  ~/aka_kernel_opt/.codex/skills/gpu-kernel-optimizer/
 #             ~/aka_kernel_opt/.codex/hooks/
-#             ~/aka_kernel_opt/.codex/agents/
-#   - Claude: ~/aka_kernel_opt/.claude/skills/gpu-kernel-optimizer
+#   - Claude: ~/aka_kernel_opt/.claude/skills/gpu-kernel-optimizer/
 #             ~/aka_kernel_opt/.claude/hooks/
-#             ~/aka_kernel_opt/.claude/agents/
 #   - Shared: ~/aka_kernel_opt/gpu-wiki/
 #             ~/aka_kernel_opt/reference-projects/
+#
+# Skill directory whitelist (only these are copied):
+#   reference/  skills/  tools/  SKILL.md
 #
 # Usage:
 #   ./install.sh                       # install/update all detected targets
@@ -28,7 +29,6 @@ SKILL_NAME="gpu-kernel-optimizer"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GPU_WIKI_SOURCE_DIR="$SCRIPT_DIR/gpu-wiki"
-AGENTS_SOURCE_DIR="$SCRIPT_DIR/agents"
 
 ROCPROF_TRACE_DECODER_REPO="https://github.com/ROCm/rocprof-trace-decoder.git"
 
@@ -88,7 +88,6 @@ fi
 CODEX_TARGET_DIR="$INSTALL_BASE/.codex"
 CODEX_SKILL_DIR="$CODEX_TARGET_DIR/skills/$SKILL_NAME"
 CODEX_HOOKS_DIR="$CODEX_TARGET_DIR/hooks"
-CODEX_AGENTS_DIR="$CODEX_TARGET_DIR/agents"
 CODEX_HOOKS_FILE="$CODEX_TARGET_DIR/hooks.json"
 CODEX_CONFIG_FILE="$CODEX_TARGET_DIR/config.toml"
 CODEX_HOOK_SCRIPT="$CODEX_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
@@ -97,7 +96,6 @@ CODEX_HOOK_TAG="gpu-kernel-optimizer-codex-hook-v1"
 CLAUDE_TARGET_DIR="$INSTALL_BASE/.claude"
 CLAUDE_SKILL_DIR="$CLAUDE_TARGET_DIR/skills/$SKILL_NAME"
 CLAUDE_HOOKS_DIR="$CLAUDE_TARGET_DIR/hooks"
-CLAUDE_AGENTS_DIR="$CLAUDE_TARGET_DIR/agents"
 CLAUDE_HOOKS_FILE="$CLAUDE_TARGET_DIR/settings.json"
 CLAUDE_HOOK_SCRIPT="$CLAUDE_HOOKS_DIR/gpu_kernel_optimizer_hook.py"
 CLAUDE_HOOK_TAG="gpu-kernel-optimizer-claude-hook-v1"
@@ -287,7 +285,6 @@ configure_codex_target() {
   CONFIG_FILE="$CODEX_CONFIG_FILE"
   HOOK_SCRIPT="$CODEX_HOOK_SCRIPT"
   HOOK_TAG="$CODEX_HOOK_TAG"
-  AGENTS_DIR="$CODEX_AGENTS_DIR"
 }
 
 configure_claude_target() {
@@ -298,58 +295,40 @@ configure_claude_target() {
   CONFIG_FILE=""
   HOOK_SCRIPT="$CLAUDE_HOOK_SCRIPT"
   HOOK_TAG="$CLAUDE_HOOK_TAG"
-  AGENTS_DIR="$CLAUDE_AGENTS_DIR"
 }
 
 # ---------------------------------------------------------------------------
 # 3. Copy skill files into the active target skill directory
 # ---------------------------------------------------------------------------
+# Whitelist of paths to copy into the skill directory
+SKILL_WHITELIST=(reference skills tools SKILL.md)
+
 copy_skill() {
   if [ "$SCRIPT_DIR" = "$TARGET_SKILL_DIR" ]; then
     echo "[$TARGET_NAME][skill] Already at $TARGET_SKILL_DIR (skip copy)"
     return
   fi
 
-  echo "[$TARGET_NAME][skill] Copying $SCRIPT_DIR -> $TARGET_SKILL_DIR"
+  echo "[$TARGET_NAME][skill] Copying whitelisted paths $SCRIPT_DIR -> $TARGET_SKILL_DIR"
   mkdir -p "$TARGET_SKILL_DIR"
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete \
-      --exclude='.git/' \
-      --exclude='install.sh.bak.*' \
-      "$SCRIPT_DIR"/ "$TARGET_SKILL_DIR"/
+    for item in "${SKILL_WHITELIST[@]}"; do
+      if [ -e "$SCRIPT_DIR/$item" ]; then
+        rsync -a --delete "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/"
+      fi
+    done
   else
-    rm -rf "$TARGET_SKILL_DIR"
-    mkdir -p "$TARGET_SKILL_DIR"
-    cp -R "$SCRIPT_DIR"/. "$TARGET_SKILL_DIR"/
+    for item in "${SKILL_WHITELIST[@]}"; do
+      if [ -d "$SCRIPT_DIR/$item" ]; then
+        mkdir -p "$TARGET_SKILL_DIR/$item"
+        cp -R "$SCRIPT_DIR/$item"/. "$TARGET_SKILL_DIR/$item"/
+      elif [ -f "$SCRIPT_DIR/$item" ]; then
+        cp "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/$item"
+      fi
+    done
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 3b. Copy agents into the active target agents directory
-# ---------------------------------------------------------------------------
-copy_agents() {
-  if [ ! -d "$AGENTS_SOURCE_DIR" ]; then
-    echo "[$TARGET_NAME][agents] No agents/ directory found in source (skip)"
-    return
-  fi
-
-  if [ "$AGENTS_SOURCE_DIR" = "$AGENTS_DIR" ]; then
-    echo "[$TARGET_NAME][agents] Already at $AGENTS_DIR (skip copy)"
-    return
-  fi
-
-  echo "[$TARGET_NAME][agents] Copying $AGENTS_SOURCE_DIR -> $AGENTS_DIR"
-  mkdir -p "$AGENTS_DIR"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete \
-      --exclude='.git/' \
-      "$AGENTS_SOURCE_DIR"/ "$AGENTS_DIR"/
-  else
-    rm -rf "$AGENTS_DIR"
-    mkdir -p "$AGENTS_DIR"
-    cp -R "$AGENTS_SOURCE_DIR"/. "$AGENTS_DIR"/
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # 4. Ensure Codex hooks are enabled in config.toml
@@ -1458,7 +1437,6 @@ strip_hooks() {
 install_codex() {
   configure_codex_target
   [ "$MODE" = "hooks-only" ] || copy_skill
-  [ "$MODE" = "hooks-only" ] || copy_agents
   enable_hooks_feature
   ensure_codex_agents_config
   install_hook_script
@@ -1468,7 +1446,6 @@ install_codex() {
 install_claude() {
   configure_claude_target
   [ "$MODE" = "hooks-only" ] || copy_skill
-  [ "$MODE" = "hooks-only" ] || copy_agents
   install_hook_script
   merge_hooks
 }
@@ -1520,13 +1497,11 @@ for target in "${DETECTED_TARGETS[@]}"; do
   case "$target" in
     codex)
       [ "$MODE" = "install" ] && echo "  Codex skill:    $CODEX_SKILL_DIR"
-      [ "$MODE" = "install" ] && echo "  Codex agents:   $CODEX_AGENTS_DIR"
       [ "$MODE" != "uninstall" ] && echo "  Codex hooks:    $CODEX_HOOKS_FILE"
       [ "$MODE" != "uninstall" ] && echo "  Codex hook bin: $CODEX_HOOK_SCRIPT"
       ;;
     claude)
       [ "$MODE" = "install" ] && echo "  Claude skill:   $CLAUDE_SKILL_DIR"
-      [ "$MODE" = "install" ] && echo "  Claude agents:  $CLAUDE_AGENTS_DIR"
       [ "$MODE" != "uninstall" ] && echo "  Claude hooks:   $CLAUDE_HOOKS_FILE"
       [ "$MODE" != "uninstall" ] && echo "  Claude hook bin:$CLAUDE_HOOK_SCRIPT"
       ;;
