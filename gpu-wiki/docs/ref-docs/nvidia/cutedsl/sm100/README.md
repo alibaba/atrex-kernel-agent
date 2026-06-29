@@ -19,3 +19,4 @@ Reference articles on CuTeDSL-specific features on the Blackwell architecture (i
 | [colfax-blackwell-gemm-part3-85-percent-sota.md](colfax-blackwell-gemm-part3-85-percent-sota.md) | Blackwell Matrix Multiplication Part 3: Achieving 85% SOTA |
 | [colfax-blackwell-gemm-part4-beyond-sota.md](colfax-blackwell-gemm-part4-beyond-sota.md) | Blackwell Matrix Multiplication Part 4: Beyond SOTA |
 | [mxfp8-b200-high-performance-memory-bound-kernel.md](mxfp8-b200-high-performance-memory-bound-kernel.md) | High-Performance Memory-Bound Kernels on B200: An MXFP8 Quantization Case Study |
+| [cutedsl-sm100-helper-api.md](cutedsl-sm100-helper-api.md) | Usage guide for the SM100 CuTeDSL surface: capability→helper map, how to use each feature well (MMA / TMEM / CTA-pair / TMA / block scaling / pipelines), autotuning, debugging knobs, pitfalls |
