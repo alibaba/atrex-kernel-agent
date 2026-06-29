@@ -13,6 +13,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 NAME="${1:-}"
 KERNEL_DEMO="${2:-}"
 
@@ -68,12 +70,16 @@ profiles/*/att/*.pftrace
 profiles/*/att/*.otf2
 EOF
 
+# Step 5: Deploy CLAUDE.md (agent behavior constraints)
+cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
+
 echo ""
 echo "Workspace initialized at: $WORKSPACE"
 echo ""
 echo "Directory structure:"
 echo "  $WORKSPACE/"
 echo "  ├── kernel.py          (copied from kernel_demo)"
+echo "  ├── CLAUDE.md          (agent behavior constraints)"
 echo "  ├── .gitignore"
 echo "  ├── memory/            (iteration JSON files)"
 echo "  ├── plans/             (optimization plans)"
