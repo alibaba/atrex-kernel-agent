@@ -576,7 +576,7 @@ The following data is from H100 80GB HBM3 (peak 3.35 TB/s), batch size 8K-32K.
 
 ## References
 
-- [QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light](https://github.com/Dao-AILab/quack/blob/main/media/2025-07-10-membound-sol.md) -- Core reference
+- QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light (github.com/Dao-AILab/quack) -- Core reference
 - [Thread Block Cluster](../../../kernel-opt/nvidia/common/thread-block-cluster.md) -- Cluster and DSMEM details
 - [PTX Synchronization and Asynchronous Operations](nvidia-ptx-sync-and-async.md) -- mbarrier, cp.async instructions
 - [NCU Profiling Guide](ncu-profiling-guide.md) -- Performance analysis tool
