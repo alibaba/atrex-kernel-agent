@@ -293,50 +293,46 @@ Use Stage 1 profile evidence to extract the current bottleneck, search knowledge
 
 ### Execution: Subagent Required
 
-The main agent must launch a subagent for Stage 2. The main agent must not perform evidence search or write the plan directly.
+The main agent must launch a research subagent for Stage 2. The main agent must not perform evidence search or write the plan directly.
 
-The subagent reads current profile artifacts, workspace constraints, historical `plans/v*_plan.md`, gpu-wiki, optional reference projects, and public web sources. Once it finds one executable non-duplicate path that matches the current bottleneck, it must write the plan and return. It must not keep broadening the search unnecessarily.
+**Subagent skill**: `skills/gpu-kernel-research/SKILL.md`
 
-Subagent requirements:
+The research subagent owns all search strategy details (progressive three-layer expansion, novelty constraint, layer exhaustion detection). This stage only orchestrates: prepare inputs → launch subagent → receive outputs → hand off to Stage 3.
 
-- **Task type**: read-only research plus plan-writing task.
-- **Required inputs**: workspace path, version `V<N>`, `README.md`, `memory/` directory, all unmasked `memory/v*.json` files, historical plan paths, `profiles/v<N>/` artifacts, previous `memory/v<N-1>.json` if present, platform, framework, kernel type, and Stop Conditions.
-- **Must do**: read all prerequisite files; skip `memory/v*.json` files where `masked: true`; summarize attempted historical methods from unmasked memory files; extract bottlenecks from profile evidence; search gpu-wiki, then reference project, then public web by priority; stop after the first actionable non-duplicate path; write `plans/v<N>_plan.md`.
-- **Forbidden**: do not modify `kernel.py`; do not perform Stage 3; do not skip gpu-wiki; do not fabricate specs; do not repeat prior plans; do not read `masked: true` memory files as active data; do not output multiple parallel optimization actions; do not return only a verbal plan.
-- **Return**: `plans/v<N>_plan.md` path, evidence summary, search-source summary, the single optimization action, expected impact, risks, and rollback.
+### Input Parameters to Pass
 
-### Mandatory Reads per Iteration
+The main agent must provide these parameters when launching the research subagent:
 
-Starting from V1, read:
+| Parameter | Source |
+|-----------|--------|
+| `workspace_path` | Current `kernel_opt_<name>/` absolute path |
+| `version` | Current iteration `V<N>` |
+| `platform` | From workspace `README.md` (nvidia / amd) |
+| `framework` | From workspace `README.md` (triton / cutedsl / flydsl / gluon) |
+| `kernel_type` | From workspace `README.md` |
+| `profiles_dir` | `profiles/v<N>/` path (Stage 1 output) |
+| `memory_dir` | `memory/` directory path |
+| `historical_plans` | All `plans/v*_plan.md` paths |
+| `stop_conditions` | From workspace `README.md` |
+| `gpu_wiki_path` | gpu-wiki root path |
 
-1. `kernel_opt_<name>/README.md`
-2. `<gpu-wiki>/README.md`
-3. All unmasked `kernel_opt_<name>/memory/v*.json` files (skip files where `masked: true`)
-4. Current `profiles/v<N>/` artifacts
-5. Previous `kernel_opt_<name>/memory/v<N-1>.json` (if unmasked)
-6. Historical `plans/v*_plan.md`
+### Output Received
 
-### Knowledge Base Search
+The research subagent returns:
 
-Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the
-**Symptom-Driven Retrieval (NVIDIA vs AMD)** guidance in `<gpu-wiki>/README.md` —
-NVIDIA and AMD use different vocabularies and sub-trees, and that vendor-split
-mapping is maintained there, not in this skill. Then apply the Search Priority
-below.
+| Field | Usage |
+|-------|-------|
+| `plan_path` | Written `plans/v<N>_plan.md` — direct input for Stage 3 |
+| `evidence_summary` | Bottleneck evidence for iteration report |
+| `search_sources` | Sources searched (with new/used annotation) |
+| `optimization_action` | The single action to implement in Stage 3 |
+| `expected_impact` | Expected performance improvement |
+| `risks` | Risk assessment and rollback strategy |
 
-### Search Priority
+### Handoff to Stage 3
 
-Search in this strict order:
-
-1. **gpu-wiki first**: search the entire `<gpu-wiki>/` repository, not only `docs/`.
-2. **reference project fallback**: use only when gpu-wiki has no new path and `README.md` has `reference-project != none`.
-3. **public web fallback**: use only when neither gpu-wiki nor the reference project provides a new actionable path.
-
-Public web findings may provide optimization ideas only. Hardware spec values still require gpu-wiki or explicit user confirmation.
-
-### Plan Format
-
-Follow the format defined in `reference/plan.md`.
+After receiving the subagent output:
+- If `plan_path` is returned: proceed to Stage 3 using `plans/v<N>_plan.md` as the implementation spec
 
 ## Stage 3: Single-Category Optimization Implementation
 
