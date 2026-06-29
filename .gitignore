@@ -2,6 +2,8 @@
 .DS_Store
 .codegraph/
 .codex/
+.claude/
+.qoder/
 docs/superpowers/plans/
 openspec/
 stage/

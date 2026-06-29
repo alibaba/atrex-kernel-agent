@@ -41,7 +41,7 @@ Net negative.
 `match.sync.b32` on sm_120 client Blackwell is itself MIO-bound (no public
 perf table for this primitive on this arch — Volta/Turing/Ampere data exists
 but not sm_120). The primitive isn't free. PTX spec for `match.sync` is at
-NVIDIA PTX ISA 9.2 reference manual section 9.7.13.10 (official: https://docs.nvidia.com/cuda/parallel-thread-execution/index.html).
+NVIDIA PTX ISA 9.2 reference manual, section 9.7.13.10 (see official NVIDIA PTX ISA documentation).
 
 **Lesson**: Before applying warp-aggregation, **estimate the intra-warp
 duplicate rate from your problem size**. Rule of thumb on sm_120: needs
