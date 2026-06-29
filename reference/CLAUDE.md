@@ -10,7 +10,7 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 ### Stage 2 (Evidence-Driven Search and Planning)
 
 - The main agent MUST launch a research subagent for Stage 2.
-- The subagent MUST follow `skills/gpu-kernel-research/SKILL.md` exactly.
+- The subagent MUST follow `agents/gpu-kernel-research.md` exactly.
 - The main agent SHALL NOT perform evidence search or write the plan directly.
 - The main agent SHALL NOT call gpu-wiki search, read reference-projects, or web search for optimization knowledge — this is the subagent's job.
 
@@ -31,4 +31,4 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 ## Skill References
 
 - Full optimization workflow: `skills/gpu-kernel-profile-optimizer/SKILL.md`
-- Research subagent contract: `skills/gpu-kernel-research/SKILL.md`
+- Research subagent contract: `agents/gpu-kernel-research.md`

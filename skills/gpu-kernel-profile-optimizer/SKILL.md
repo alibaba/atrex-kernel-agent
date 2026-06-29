@@ -295,7 +295,7 @@ Use Stage 1 profile evidence to extract the current bottleneck, search knowledge
 
 The main agent must launch a research subagent for Stage 2. The main agent must not perform evidence search or write the plan directly.
 
-**Subagent skill**: `skills/gpu-kernel-research/SKILL.md`
+**Subagent**: `agents/gpu-kernel-research.md`
 
 The research subagent owns all search strategy details (progressive three-layer expansion, novelty constraint, layer exhaustion detection). This stage only orchestrates: prepare inputs → launch subagent → receive outputs → hand off to Stage 3.
 
