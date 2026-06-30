@@ -165,29 +165,49 @@ After receiving the subagent output:
 
 ## Stage 3: Optimization Implementation
 
-Goal: implement the optimization actions from `plans/v<N>_plan.md` and keep evidence attribution clear for each change.
+**Subagent**: `optimize`
 
-Rules:
+### Goal
 
-- Each change must be traceable to specific profile evidence. Multiple optimization actions are allowed in one iteration as long as each action has clear attribution to a bottleneck symptom.
-- If the change targets a symptom that produced a `LOCALIZE` line in `summary.txt`, do not edit `kernel.py` until you have localized it via a `--source` re-profile (see *Localization rule (mandatory)* in Stage 1); change only the specific line(s) the evidence identifies, not the whole kernel.
-- If framework API or operator interface details are needed, search `<gpu-wiki>/reference-kernels/` or clone upstream source to `reference-projects/` first.
-- Changes must land in workspace `kernel.py`; auxiliary files may be adjusted only when necessary and must be explained in the report.
-- Do not mix unrelated refactors, formatting, or cleanup.
-- After editing, immediately run correctness validation through `test_kernel.py` or the validation entry in `kernel.py`.
-- Before starting an iteration, create the memory file if it does not exist:
+Implement the optimization actions from `plans/v<N>_plan.md` with clear evidence attribution for each change, validate correctness, and update iteration memory.
 
-  ```bash
-  python tools/memory_manager.py create --workspace kernel_opt_<name> --version v<N>
-  ```
+The main agent must directly launch the `optimize` subagent for Stage 3. Do NOT write your own prompt or create an ad-hoc subagent — invoke `optimize` by name as a subagent. The main agent must not implement optimization changes directly.
 
-- Update `memory/v<N>.json` immediately after the edit result is known using the memory manager:
+Subagent launch instruction:
 
-  ```bash
-  python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
-      --set 'optimization.action_category=<category>' \
-      --set 'optimization.action_description=<description>'
-  ```
+```
+Launch subagent: optimize
+Task type: execution task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - version: V<N>
+  - platform: <nvidia / amd>
+  - kernel_file: kernel.py
+  - plan_path: plans/v<N>_plan.md
+  - profiles_dir: profiles/v<N>/
+  - summary_path: profiles/v<N>/summary.txt
+  - memory_dir: memory/
+  - gpu_wiki_path: <gpu-wiki root path>
+```
+
+The `optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (re-profiling with `--source` if needed), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
+
+### Output Received
+
+The optimize subagent returns:
+
+| Field | Usage |
+|-------|-------|
+| `kernel_file` | Path to modified `kernel.py` |
+| `validation_result` | PASS / FAIL from correctness test |
+| `memory_file` | Path to updated `memory/v<N>.json` |
+| `actions_applied` | List of optimization actions implemented with their evidence attribution |
+
+### Handoff to Stage 4
+
+After receiving the subagent output:
+- `validation_result` must be PASS. The `optimize` subagent is responsible for iteratively fixing correctness failures internally.
+- If PASS: proceed to Stage 4 for performance measurement and quality gate.
 
 ## Stage 4: Performance, Correctness, and Quality Gate
 
