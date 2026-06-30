@@ -43,7 +43,7 @@ The default knowledge base is `~/aka_kernel_opt/gpu-wiki/`, referenced below as 
 
 ## Phase 3: Implement Baseline Kernel and Correctness Tests
 
-1. Implement a correct baseline `kernel.py` based on PyTorch semantics and the learned framework APIs.Not only must the functionality be correct, but the framework implementation must also be correct, using either CuteDSL or FlyDSL.
+1. Implement a correct baseline `kernel.py` based on PyTorch semantics and the learned framework APIs.Not only must the functionality be correct, but the framework implementation must also be correct, using either CuteDSL or FlyDSL. **The core compute must be a kernel you write that is launched from `run`. Do NOT delegate the operator to a library: no `flashinfer`/`flash_attn`/`xformers`/`vllm`/`aiter`, no `torch.nn.functional.scaled_dot_product_attention` as the compute path, and no wrapping of the benchmark's target op. `torch` is for setup/reshape/indexing/launch glue only.** This is enforced by `tools/validate_solution.py`; a baseline that delegates will be rejected, so do not seed one (and do not instruct a subagent to "leverage `scaled_dot_product_attention`").
 2. Write `test_kernel.py` using PyTorch logic directly as the correctness reference.
 3. Cover representative inputs, including normal shapes, boundary shapes, and relevant dtype or stride cases.
 4. Example correctness check:
@@ -55,7 +55,7 @@ rel_err = (out.float() - ref).norm() / ref.norm()
 assert rel_err < 0.01
 ```
 
-5. The default BF16 threshold is `rel_err < 0.01`; lower precision formats may use task-specific relaxed thresholds.
+5. The default BF16 threshold is `rel_err < 0.01`; lower precision formats may use task-specific relaxed thresholds. **For SOL-ExecBench problems, this global `rel_err` check is NOT sufficient** — correctness must use SOL's exact per-element tolerance (`max_atol`/`max_rtol`/`required_matched_ratio`/`max_error_cap`/NaN-Inf/`allow_negative_inf`) via `sol_execbench.core.bench.correctness.compute_error_stats`. The adapter-generated `test_kernel.py` already does this; do not weaken it. A high-matched-ratio with large outlier error (e.g. 0.289 rel-err) must FAIL.
 6. Add per-case timeout guard in `test_kernel.py` to prevent hanging:
 
 ```python
@@ -165,3 +165,8 @@ Key rules:
 ## Appendix: Prohibited Actions
 
 - Do not use unspecified programming frameworks or import external projects.
+- **Library delegation**: do not import or call `flashinfer`, `flash_attn`, `xformers`, `vllm`, `aiter`, or use `torch.nn.functional.scaled_dot_product_attention` as the compute path. The operator must be a self-written kernel reachable from `run`.
+- **Language-tag camouflage**: do not add decorated kernels (`@cute.kernel`, `@triton.jit`) that are never called from `run`, and do not declare a framework you do not actually launch.
+- **Shape-keyed memoization**: do not cache results/intermediate GPU tensors in module-global state or `lru_cache` keyed on input shape metadata to move work out of the timed region.
+- **Timing gaming**: the kernel must write all output bytes; do not rely on the allocator's pre-zeroing by skipping output initialization.
+- **Fabricated targets**: do not invent performance targets (e.g. `peak * 0.9`); targets must derive from a measured reference latency. All of the above are enforced by `tools/validate_solution.py`.

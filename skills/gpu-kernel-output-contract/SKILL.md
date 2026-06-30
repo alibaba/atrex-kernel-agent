@@ -31,6 +31,8 @@ Use this skill when:
 - Among correct implementations, faster implementations are better.
 - Do not degrade a validated optimized implementation while packaging it into `generated_kernel.py`.
 
+> **SOL-ExecBench problems use a different packaging path.** If the workspace was created with `workspace_init.sh --sol-execbench` (it has `reference.py` from `definition.json`, a DPS `run`, and a `.sol_problem.json`), do NOT produce `generated_kernel.py`/`class Model`. Instead package with `python tools/sol_adapter.py package kernel_opt_<name>`, which validates the kernel with `tools/validate_solution.py`, refuses to emit on a hard FAIL, and writes a truthful `solution.json` (with `spec.languages` set to the framework actually launched from `run`). The anti-cheat rules below apply equally to that `kernel.py`.
+
 ## Output Contract
 
 - Write the final implementation to `generated_kernel.py` in the project root directory (the parent of the `kernel_opt_*/` workspace), NOT inside the `kernel_opt_*/` subdirectory.
@@ -50,8 +52,11 @@ Use this skill when:
 - `Model.__init__` must accept the same initialization arguments as the reference `Model`.
 - `Model.forward` must accept the same inputs as the reference `Model.forward`.
 - `Model.forward` must return outputs with the same externally observable structure, shape, device, returned tensor dtype, and numerical behavior as the reference implementation.
-- The main compute path must be implemented using GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) launched from `Model.forward`.
+- The main compute path must be implemented using GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) launched from `Model.forward`. The kernel must be **reachable from `Model.forward`** — a decorated kernel that is never launched does not satisfy this (and is flagged as language-tag camouflage).
 - You may use PyTorch only for setup or glue logic such as output allocation, reshape/view, indexing, metadata preparation, and launch orchestration.
+- **Do not delegate the operator to a library**: no `flashinfer`, `flash_attn`, `xformers`, `vllm`, `aiter`, and no `torch.nn.functional.scaled_dot_product_attention` (or other whole-operator torch op) as the compute path. Such a candidate is not an optimized kernel and is rejected by `tools/validate_solution.py`.
+- **No shape-keyed memoization**: do not cache outputs/intermediate GPU tensors in module-global state or `lru_cache` keyed on input shape metadata. Each call must do its real work in the measured region.
+- **Write all output bytes**: do not rely on allocator/pre-zeroed buffers by skipping output initialization.
 - Internal computation precision, accumulation dtype, approximations, and intermediate layouts may differ from the PyTorch reference.
 - You may use lower precision or mixed precision internally, including fp8, fp4, or int8 paths, if the returned outputs satisfy the evaluator's numerical tolerance for every evaluated shape.
 - Do not call, instantiate, or wrap the original reference `Model`.
@@ -91,6 +96,9 @@ The final `generated_kernel.py` must not contain:
 - Placeholder unfinished content.
 - An `if __name__ == "__main__"` block.
 - A fallback that uses the original reference `Model` as the primary execution path.
+- Computing the main result via a library/torch op instead of a self-written kernel: `flashinfer`/`flash_attn`/`xformers`/`vllm`/`aiter` imports or calls, or `torch.nn.functional.scaled_dot_product_attention` on the compute path.
+- Decorated kernels (`@triton.jit`/`@cute.kernel`/`@cute.jit`) that are never launched from `Model.forward` (dead-decorator / language-tag camouflage).
+- Process-global or `lru_cache` caches keyed on input shape metadata that gate per-call compute / H2D work.
 - Calls to `torch.compile` or `torch.jit`.
 - Custom C++ extension build or load logic.
 - Reads from external files such as `shapes.json`, `input.py`, profiling artifacts, reports, or temporary files.

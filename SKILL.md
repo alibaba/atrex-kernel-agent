@@ -34,6 +34,13 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
 9. Optimization runs in a temporary workspace and every accepted iteration is committed with git.
 10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` sub-skill or by the user manually.
+11. **Self-written kernel / anti-cheat (no exceptions under default policy `require_self_written_kernel`)**: The operator's core compute must be a kernel YOU write, launched from the entry function (`run`), using Triton (`@triton.jit`), CuteDSL (`@cute.jit`/`@cute.kernel`), cuTile, FlyDSL, or inline CUDA. The following are cheating and are rejected by `tools/validate_solution.py` (the single, non-bypassable gate, also invoked by the generated `test_kernel.py` and by `tools/sol_adapter.py package`):
+    - **Library delegation (C1)**: importing/calling `flashinfer`, `flash_attn`, `xformers`, `vllm`, or `aiter`; using `torch.nn.functional.scaled_dot_product_attention` as the compute path; or wrapping the benchmark's target library op. `torch` may be used ONLY for setup/allocation/reshape/indexing/launch glue (a lone `F.linear` projection inside an otherwise real fused kernel is a WARN that needs justification, not a free pass).
+    - **Language-tag camouflage (C2)**: declaring a framework in `solution.json` that is not actually launched from `run`, or pasting decorated kernels (`@cute.kernel`, `@triton.jit`) that are never reached "for language classification". `sol_adapter.py package` labels `spec.languages` from the framework actually detected on the data path — do not hand-edit it.
+    - **Input/shape-keyed memoization (C3)**: process-global caches or `lru_cache` keyed on input shape metadata that move per-call work (host sync, python loops, H2D copies) out of the timed region. SOL-ExecBench's allocator only varies `data_ptr`; defeating it with a shape key is a cheat.
+    - **Timing-methodology gaming (C4)**: skipping output initialization to exploit the allocator's pre-zeroing / cupti GPU-span measurement. Your kernel must write all output bytes.
+    - **Masked-error PASS (C5)**: correctness must use SOL's exact tolerance (`max_atol`/`max_rtol`/`required_matched_ratio`/`max_error_cap`/NaN-Inf/`allow_negative_inf`). Do not substitute a looser global `rel_err` check.
+    - **Fabricated target / Ref=0.000-as-success (C6)**: never invent a performance target (e.g. `peak * 0.9`, "990T"). Targets must derive from a measured reference latency (`T_b`). If no real reference latency is measured, the result is `UNSCORED` — you may not claim a speedup.
 
 ### Scope Without Exceptions
 
@@ -71,6 +78,14 @@ bash reference/workspace_init.sh <name> <kernel_demo_path>
 ```
 
 This script creates the workspace directory structure (`memory/`, `plans/`, `profiles/`), copies the kernel demo as `kernel.py`, initializes git, and creates `.gitignore`. See `reference/workspace_init.sh` for details.
+
+**SOL-ExecBench problems**: when the input is a SOL-ExecBench problem directory (containing `definition.json` + `workload.jsonl`), initialize with the adapter instead:
+
+```bash
+bash reference/workspace_init.sh --sol-execbench <problem_dir> [<name>]
+```
+
+This parses `definition.json`/`workload.jsonl` and generates `reference.py` (the exact reference semantics), a destination-passing-style `kernel.py` stub with the correct `run(*inputs, *outputs)` signature, a frozen `baseline.json`, an honest `aka_bench_config.json` (`benchmark_reference=true`), and a SOL-faithful `test_kernel.py`. `test_kernel.py` is the single promotion gate: it runs the static anti-cheat validator, the authoritative `sol-execbench` CLI (real tolerance + leaderboard timing), honest `T_b` measurement, and a best-effort dynamic anti-memo/output-coverage probe. Package the final kernel for submission with `python tools/sol_adapter.py package kernel_opt_<name>` (refuses to emit `solution.json` if the validator reports a hard FAIL).
 
 After global constraints are confirmed and before writing the workspace `README.md`, parse configuration from the user prompt. Do not read the current directory `README.md` for configuration. All configuration must come from explicit user input or defaults.
 
@@ -202,6 +217,8 @@ All sub-skills share top-level `tools/`:
 - `tools/classify_ncu.py`
 - `tools/extract_nvidia_asm.py`
 - `tools/memory_manager.py`
+- `tools/validate_solution.py` — static anti-cheat validator (single rule source for the library-delegation / camouflage / memoization bans; exit 0=clean, 1=WARN, 2=FAIL).
+- `tools/sol_adapter.py` — SOL-ExecBench `materialize`/`package` adapter (truthful `solution.json`, refuses cheats).
 
 ## Shared References
 
