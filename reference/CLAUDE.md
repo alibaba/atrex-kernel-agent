@@ -35,6 +35,11 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - DO NOT proceed to Stage 3 without receiving the subagent's plan output.
 - DO NOT proceed to Stage 5 without receiving the subagent's quality gate result.
 
+## Hardware Architecture Constraints
+
+- **blackwell-geforce is NOT blackwell**: `blackwell-geforce` (sm120) and `blackwell` (sm100) are completely different architectures. Do NOT conflate them or assume they share the same optimization strategies.
+- **sm103 ≈ sm100 ≠ sm120**: The sm103 hardware architecture is similar to sm100 (both belong to the Blackwell data-center family), but is completely different from sm120 (Blackwell GeForce / consumer). When searching for reference kernels or optimization knowledge for sm103, prefer sm100/blackwell sources — NEVER use sm120/blackwell-geforce sources as a substitute.
+
 ## Skill References
 
 - Full optimization workflow: `skills/gpu-kernel-profile-optimizer/SKILL.md`
