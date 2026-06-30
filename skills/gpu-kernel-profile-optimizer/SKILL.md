@@ -31,7 +31,7 @@ Constraints:
 
 - Do not skip stages.
 - Do not edit code without profile evidence.
-- Implement only one optimization category per iteration so the result can be attributed.
+- Each optimization action must have clear profile evidence attribution.
 - If the quality gate fails, revert to the previous commit, record the failure, and stop the current iteration.
 - If stop conditions are not met, do not exit unless the user explicitly stops the workflow.
 
@@ -154,7 +154,7 @@ The research subagent returns:
 | `plan_path` | Written `plans/v<N>_plan.md` — direct input for Stage 3 |
 | `evidence_summary` | Bottleneck evidence for iteration report |
 | `search_sources` | Sources searched (with new/used annotation) |
-| `optimization_action` | The single action to implement in Stage 3 |
+| `optimization_actions` | The action(s) to implement in Stage 3 |
 | `expected_impact` | Expected performance improvement |
 | `risks` | Risk assessment and rollback strategy |
 
@@ -163,13 +163,13 @@ The research subagent returns:
 After receiving the subagent output:
 - If `plan_path` is returned: proceed to Stage 3 using `plans/v<N>_plan.md` as the implementation spec
 
-## Stage 3: Single-Category Optimization Implementation
+## Stage 3: Optimization Implementation
 
-Goal: implement exactly one optimization category from `plans/v<N>_plan.md` and keep attribution clear.
+Goal: implement the optimization actions from `plans/v<N>_plan.md` and keep evidence attribution clear for each change.
 
 Rules:
 
-- Change only one category per iteration, such as vectorized load only, swizzle only, or double buffering only.
+- Each change must be traceable to specific profile evidence. Multiple optimization actions are allowed in one iteration as long as each action has clear attribution to a bottleneck symptom.
 - If the change targets a symptom that produced a `LOCALIZE` line in `summary.txt`, do not edit `kernel.py` until you have localized it via a `--source` re-profile (see *Localization rule (mandatory)* in Stage 1); change only the specific line(s) the evidence identifies, not the whole kernel.
 - If framework API or operator interface details are needed, search `<gpu-wiki>/reference-kernels/` or clone upstream source to `reference-projects/` first.
 - Changes must land in workspace `kernel.py`; auxiliary files may be adjusted only when necessary and must be explained in the report.
@@ -358,5 +358,5 @@ Different tools provide different layers of evidence and must not be mixed:
 - Do not commit performance conclusions without correctness validation.
 - Do not record only latency without TFLOPS, bandwidth, and peak-utilization ratios.
 - Do not provide unsourced optimization suggestions.
-- Do not mix multiple optimization actions in one iteration.
+- Do not implement optimization actions without corresponding profile evidence.
 - Do not continue planning after the quality gate fails.

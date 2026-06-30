@@ -7,6 +7,13 @@ For the full stage-by-stage workflow, read the skill files referenced below.
 
 When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 
+### Workflow Integrity Constraint (MANDATORY)
+
+- The agent MUST strictly follow every step defined in the workflow, in the exact order specified.
+- NO step may be skipped, abbreviated, or merged with another step under any circumstance.
+- Each stage's entry conditions, execution steps, and exit criteria MUST be fully satisfied before proceeding.
+- If a step appears unnecessary for the current context, the agent MUST still execute it and document why the result was trivial — skipping is NEVER permitted.
+
 ### Stage 2 (Evidence-Driven Search and Planning)
 
 - The main agent MUST launch a research subagent for Stage 2.

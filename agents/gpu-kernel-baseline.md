@@ -4,7 +4,6 @@ description: |
   GPU kernel baseline implementation expert. Learns the target framework from gpu-wiki, implements a correct
   baseline GPU kernel (V0), validates correctness, records performance, and produces all Stage 1 deliverables.
   Use when the user provides PyTorch logic and asks to build a baseline kernel for profile-driven optimization.
-tools: Read, Grep, Glob, Write, Bash
 ---
 
 # Role Definition
