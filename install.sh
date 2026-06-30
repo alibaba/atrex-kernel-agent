@@ -1203,7 +1203,7 @@ def goal_check_prompt_level_3(workspace: Path) -> str:
     return (
         "gpu-kernel-optimizer goal check (final escalation): the optimization target in "
         f"workspace {workspace} remains unmet after multiple attempts. "
-        "If no new optimization direction is available, read and follow the gpu-kernel-partial-restart agent: "
+        "If no new optimization direction is available, launch the gpu-kernel-partial-restart agent: "
         "randomly mask half of the optimization experience in memory/v*.json files, then restart optimization work. "
         "Then continue directly into the gpu-kernel-optimizer "
         "Stage 2 flow from the installed skill entry (`SKILL.md`): update the Stage 2 optimization plan, "

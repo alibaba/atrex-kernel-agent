@@ -135,19 +135,28 @@ Run the following phases in order. A phase must pass before the next phase start
 
 ### Stage 1: Baseline Implementation
 
-**Subagent**: [gpu-kernel-baseline](agents/gpu-kernel-baseline.md)
+**Subagent**: `gpu-kernel-baseline`
 
 Goal: understand the PyTorch logic, extract compute pattern, input/output shapes, dtype, dependencies, and accuracy requirements; learn the target framework API and hardware constraints from `<gpu-wiki>/README.md`; then implement correct `kernel.py` and `test_kernel.py`, validate correctness and baseline performance, and create the starting point for profile-driven optimization.
 
-The main agent must launch a subagent for Stage 1. The main agent must not implement the baseline directly. The subagent must read and follow `agents/gpu-kernel-baseline.md`, read the PyTorch logic, learn framework APIs via `<gpu-wiki>/README.md`, implement `kernel.py` and `test_kernel.py`, validate correctness and performance, write `baseline_report.md`, write `memory/v0.json`, and commit.
+The main agent must directly launch the `gpu-kernel-baseline` subagent for Stage 1. Do NOT write your own prompt or create an ad-hoc subagent — invoke `gpu-kernel-baseline` by name as a subagent. The main agent must not implement the baseline directly.
 
-Subagent requirements:
+Subagent launch instruction:
 
-- **Task type**: editing task.
-- **Required inputs**: workspace path, `README.md`, `memory/` directory, PyTorch logic or `kernel_demo`, platform, framework, dtype, shapes, and correctness threshold.
-- **Must do**: read `agents/gpu-kernel-baseline.md`; read workspace `README.md`; implement `kernel.py` and `test_kernel.py` base on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
+```
+Launch subagent: gpu-kernel-baseline
+Task type: editing task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - pytorch_logic: <user-provided PyTorch logic or kernel_demo path>
+  - platform: <target platform, e.g. H20, MI308X>
+  - gpu_wiki_path: <gpu-wiki root path>
+```
+
+The `gpu-kernel-baseline` subagent will autonomously: read workspace `README.md`; implement `kernel.py` and `test_kernel.py` based on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
+
 - **Forbidden**: do not skip `<gpu-wiki>/README.md`; do not fabricate hardware specs; do not modify Stage 2 plans or profiles; do not commit if correctness fails.
-- **Return**: paths for `kernel.py` which implemented by CuteDSL or FlyDSL, `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
+- **Expected return**: paths for `kernel.py` (implemented in CuteDSL or FlyDSL), `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
 
 Entry criteria:
 

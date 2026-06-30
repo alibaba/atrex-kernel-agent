@@ -5,7 +5,6 @@ description: |
   The main agent masks half of the optimization memory, then launches this agent which reads README.md
   and unmasked memory to extract experience, takes the latest kernel.py as the starting point, and
   continues optimization through the gpu-kernel-profile-optimizer workflow.
-tools: Read, Grep, Glob, Write, Bash, Agent, Task
 ---
 
 # Role Definition
