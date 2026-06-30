@@ -20,7 +20,6 @@
 #   ./install.sh --prefix /my/path     # specify custom install directory
 #   ./install.sh --hooks-only          # only install/update hooks for detected targets
 #   ./install.sh --without-github      # install/update, but skip GitHub reference repos from gpu-wiki
-#   ./install.sh --max-iterations N    # allow Stop hooks after memory/vN.json exceeds N iterations
 #   ./install.sh --uninstall           # remove hooks installed by this script from detected targets
 #
 # Idempotent. Safe to re-run.
@@ -36,7 +35,6 @@ ROCPROF_TRACE_DECODER_REPO="https://github.com/ROCm/rocprof-trace-decoder.git"
 
 MODE="install"
 WITHOUT_GITHUB="0"
-MAX_ITERATIONS="${GPU_KERNEL_MAX_ITERATIONS:-0}"
 CLI_PREFIX=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,22 +57,6 @@ while [[ $# -gt 0 ]]; do
     --hooks-only)     MODE="hooks-only"; shift ;;
     --without-github) WITHOUT_GITHUB="1"; shift ;;
     --uninstall)      MODE="uninstall"; shift ;;
-    --max-iterations)
-      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: --max-iterations requires a non-negative integer."
-        exit 2
-      fi
-      MAX_ITERATIONS="$2"
-      shift 2
-      ;;
-    --max-iterations=*)
-      MAX_ITERATIONS="${1#*=}"
-      if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: --max-iterations requires a non-negative integer."
-        exit 2
-      fi
-      shift
-      ;;
     *) echo "Unknown arg: $1"; exit 2 ;;
   esac
 done
@@ -104,11 +86,6 @@ CLAUDE_HOOK_TAG="gpu-kernel-optimizer-claude-hook-v1"
 
 GPU_WIKI_DIR="$INSTALL_BASE/gpu-wiki"
 REFERENCE_PROJECTS_DIR="$INSTALL_BASE/reference-projects"
-
-if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: GPU_KERNEL_MAX_ITERATIONS must be a non-negative integer."
-  exit 2
-fi
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required. Install it with your system package manager."
@@ -1079,12 +1056,6 @@ def memory_write_continuation_prompt(workspace: Path, version: str) -> str:
     )
 
 
-def iteration_limit_reached(workspace: Path, max_iterations: int) -> bool:
-    if max_iterations <= 0:
-        return False
-    return latest_memory_version(workspace) > max_iterations
-
-
 def output_path_for_workspace(workspace: Path) -> Path:
     return workspace.parent / "generated_kernel.py"
 
@@ -1224,13 +1195,11 @@ def goal_check_prompt_for_level(workspace: Path, level: int) -> str:
         return goal_check_prompt_level_3(workspace)
 
 
-def handle_goal_check(payload: dict, target: str, max_iterations: int) -> int:
+def handle_goal_check(payload: dict, target: str) -> int:
     stop_hook_active = payload.get("stop_hook_active", False)
 
     for workspace in iter_workspaces(payload):
         if not recently_active(workspace):
-            continue
-        if iteration_limit_reached(workspace, max_iterations):
             continue
 
         newest_mtime = newest_iteration_artifact_mtime(workspace)
@@ -1266,18 +1235,13 @@ def handle_goal_check(payload: dict, target: str, max_iterations: int) -> int:
 
     return 0
 
-def handle_stop(payload: dict, target: str, max_iterations: int) -> int:
+def handle_stop(payload: dict, target: str) -> int:
     for workspace in iter_workspaces(payload):
         if not recently_active(workspace):
             continue
 
         newest_mtime = newest_iteration_artifact_mtime(workspace)
         if newest_mtime <= 0:
-            continue
-
-        iteration_limit_hit = iteration_limit_reached(workspace, max_iterations)
-
-        if iteration_limit_hit:
             continue
 
         output_path = first_existing_output_path(payload, workspace)
@@ -1314,10 +1278,9 @@ def handle_stop(payload: dict, target: str, max_iterations: int) -> int:
     return 0
 
 
-def parse_args() -> tuple[str, str, int]:
+def parse_args() -> tuple[str, str]:
     mode = "stop"
     target = "generic"
-    max_iterations = 0
     args = sys.argv[1:]
     index = 0
     while index < len(args):
@@ -1329,30 +1292,21 @@ def parse_args() -> tuple[str, str, int]:
             index += 1
         elif arg.startswith("--target="):
             target = arg.split("=", 1)[1]
-        elif arg == "--max-iterations" and index + 1 < len(args):
-            value = args[index + 1]
-            if value.isdigit():
-                max_iterations = int(value)
-            index += 1
-        elif arg.startswith("--max-iterations="):
-            value = arg.split("=", 1)[1]
-            if value.isdigit():
-                max_iterations = int(value)
         index += 1
-    return mode, target, max_iterations
+    return mode, target
 
 
 def main() -> int:
-    mode, target, max_iterations = parse_args()
+    mode, target = parse_args()
     payload = load_payload()
     if mode == "pre":
         return handle_pre_tool_use(payload, target)
     if mode == "post":
         return handle_post_tool_use(payload, target)
     if mode == "stop":
-        return handle_stop(payload, target, max_iterations)
+        return handle_stop(payload, target)
     if mode == "goal":
-        return handle_goal_check(payload, target, max_iterations)
+        return handle_goal_check(payload, target)
     return 0
 
 
@@ -1377,19 +1331,15 @@ merge_hooks() {
   cp "$HOOKS_FILE" "$backup"
   echo "[$TARGET_NAME][hooks] Backup: $backup"
 
-  local pre_cmd post_cmd stop_cmd goal_cmd tmp
+  local pre_cmd post_cmd tmp
   pre_cmd="python3 \"$HOOK_SCRIPT\" pre --target $TARGET_NAME --tag $HOOK_TAG"
   post_cmd="python3 \"$HOOK_SCRIPT\" post --target $TARGET_NAME --tag $HOOK_TAG"
-  stop_cmd="python3 \"$HOOK_SCRIPT\" stop --target $TARGET_NAME --max-iterations $MAX_ITERATIONS --tag $HOOK_TAG"
-  goal_cmd="python3 \"$HOOK_SCRIPT\" goal --target $TARGET_NAME --max-iterations $MAX_ITERATIONS --tag $HOOK_TAG"
   tmp=$(mktemp)
 
   jq \
     --arg tag "$HOOK_TAG" \
     --arg pre "$pre_cmd" \
-    --arg post "$post_cmd" \
-    --arg stop "$stop_cmd" \
-    --arg goal "$goal_cmd" '
+    --arg post "$post_cmd" '
     def strip_tagged:
       (. // [])
       | map(.hooks |= (map(select((.command // "") | contains($tag) | not))))
@@ -1404,21 +1354,8 @@ merge_hooks() {
         matcher:"Read|read_file|Write|Edit|MultiEdit|apply_patch|file_replace|shell|Bash",
         hooks:[{type:"command", command:$post, statusMessage:"gpu-kernel-optimizer memory/kernel edit gate", timeout:10}]
       }])
-    | .hooks.Stop = ((.hooks.Stop | strip_tagged) + [{
-        hooks:[{
-          type:"command",
-          command:$stop,
-          statusMessage:"gpu-kernel-optimizer workflow gate",
-          timeout:30
-        }]
-      }, {
-        hooks:[{
-          type:"command",
-          command:$goal,
-          statusMessage:"gpu-kernel-optimizer goal check",
-          timeout:30
-        }]
-      }])
+    | .hooks.Stop = ((.hooks.Stop // []) | strip_tagged)
+    | if (.hooks.Stop | length) == 0 then del(.hooks.Stop) else . end
   ' "$HOOKS_FILE" > "$tmp"
 
   jq empty "$tmp" >/dev/null

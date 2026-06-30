@@ -42,6 +42,12 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - Referencing third-party code for learning is permitted, but the final implementation MUST NOT depend on or copy from external libraries.
 - If a kernel requires utility functions (e.g., memory management helpers, math primitives), they MUST be implemented inline or as project-local utilities — NEVER imported from external packages.
 
+## Benchmark Harness Integrity
+
+- **test_kernel.py is immutable for performance measurement**: DO NOT modify `test_kernel.py` to change the benchmark harness (e.g., warmup count, repetition count, `return_mode`, timing method, input shapes, or any other benchmark parameter) in order to obtain better performance numbers.
+- `test_kernel.py` defines the ground-truth benchmark methodology. Any change to it invalidates cross-version comparisons.
+- If a measurement methodology issue is discovered (e.g., outlier inflation, incorrect return mode), report it in `memory/v<N>.json` under `pitfalls_and_fixes` and propose the fix — but DO NOT apply the fix to `test_kernel.py` within an optimization iteration.
+
 ## Hardware Architecture Constraints
 
 - **blackwell-geforce is NOT blackwell**: `blackwell-geforce` (sm120) and `blackwell` (sm100) are completely different architectures. Do NOT conflate them or assume they share the same optimization strategies.

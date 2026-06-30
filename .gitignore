@@ -17,5 +17,8 @@ __pycache__/
 # rocprof-trace-decoder is cloned by install.sh at runtime
 tools/rocprof-trace-decoder/
 
+# Optimization workspaces created by orchestrator/optimize.py
+kernel_opt_*/
+
 # Git submodules are tracked via .gitmodules
 # reference-projects/ content is managed as submodules

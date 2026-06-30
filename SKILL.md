@@ -173,21 +173,29 @@ Exit criteria:
 - `baseline_report.md` exists.
 - Git commit is complete.
 
-Then the main agent takes over and must enter Stage 2 immediately. It is forbidden to stop, summarize final deliverables, or exit the workflow after Stage 1 unless Stage 2 has also completed or the user explicitly asks to stop.
+Stage 2 (profile-driven optimization) is driven by the **orchestrator** as a series of clean, one-iteration-per-session runs — see `orchestrator/optimize.py` and `orchestrator/prompts/`. When this router is run as the setup session (`orchestrator/prompts/setup.md`), stop after Stage 1: exit once `memory/v0.json` is committed, and let the orchestrator spawn the optimization iterations.
 
-### Stage 2: Profile-Driven Iterative Optimization
+### Stage 2: Profile-Driven Iterative Optimization (orchestrator-driven)
 
 **Sub-skill**: [gpu-kernel-profile-optimizer](skills/gpu-kernel-profile-optimizer/SKILL.md)
 
-Goal: use Step 0 Roofline conclusions and multiple profile -> code change -> validation loops to approach the performance limit.
+**Helper skill**: [gpu-kernel-bottleneck-analysis](skills/gpu-kernel-bottleneck-analysis/SKILL.md)
 
-Stage 2 researches, plans, searches gpu-wiki/reference projects, writes an optimization plan, profiles, modifies code, validates correctness, applies quality gates, commits, and writes `memory/v<N>.json`. It must continually compare against ISA optimization targets recorded in `README.md`.
+Goal: approach the performance limit through repeated profile -> code change -> validation cycles.
+
+The iteration loop is owned by the **orchestrator** (`orchestrator/optimize.py`), not by a single long session. Each iteration is a fresh `claude` session that runs `gpu-kernel-profile-optimizer` for **exactly one** profile -> edit -> validate -> bench cycle and then exits (see `orchestrator/prompts/iteration.md`). State crosses sessions only on disk (`memory/v<N>.json`, `plans/`, `profiles/`, git): each session reads the prior `open_directions` + recorded dead-ends and starts from HEAD (the best kernel so far). A regressing iteration reverts and is never committed, so HEAD stays best.
+
+**Termination is mechanical and owned by the orchestrator, not the model**: it stops on a hard budget (max iterations or token budget), or when a committed, correctness-PASS iteration reaches the target utilization in `README.md` under `Stop Conditions` (default: peak utilization >= 90%). A single session never decides to keep looping.
 
 Entry criteria: Stage 1 passed and `README.md` contains Step 0 Roofline analysis and `Stop Conditions`.
 
-Exit condition: performance reaches the absolute target in `README.md` under `Stop Conditions`.
+Run:
 
-When the exit condition is met, stop optimization and summarize deliverables.
+```bash
+python orchestrator/optimize.py \
+  --name <name> --kernel-demo <path> --platform <P> --framework <F> \
+  [--max-iters 20] [--token-budget 0] [--target-util 90]
+```
 
 ## Recommended Flows
 
