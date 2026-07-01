@@ -40,7 +40,14 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
     - **Input/shape-keyed memoization (C3)**: process-global caches or `lru_cache` keyed on input shape metadata that move per-call work (host sync, python loops, H2D copies) out of the timed region. SOL-ExecBench's allocator only varies `data_ptr`; defeating it with a shape key is a cheat.
     - **Timing-methodology gaming (C4)**: skipping output initialization to exploit the allocator's pre-zeroing / cupti GPU-span measurement. Your kernel must write all output bytes.
     - **Masked-error PASS (C5)**: correctness must use SOL's exact tolerance (`max_atol`/`max_rtol`/`required_matched_ratio`/`max_error_cap`/NaN-Inf/`allow_negative_inf`). Do not substitute a looser global `rel_err` check.
-    - **Fabricated target / Ref=0.000-as-success (C6)**: never invent a performance target (e.g. `peak * 0.9`, "990T"). Targets must derive from a measured reference latency (`T_b`). If no real reference latency is measured, the result is `UNSCORED` — you may not claim a speedup.
+    - **Fabricated target / Ref=0.000-as-success (C6)**: never invent a performance target (e.g. `peak * 0.9`, "990T") or a leaderboard number. Targets must derive from a **measured** baseline latency (`T_b`) — for SOL-ExecBench that is a library baseline (FlashInfer/DeepGEMM/cuDNN/torch) measured through the harness, cross-checked against the leaderboard "Scoring Baseline" row. If no real baseline latency is measured, the result is `UNSCORED` — you may not claim a speedup. `SOL Score` needs the hidden per-workload `T_SOL`; report it only as a clearly-labelled roofline **estimate** (or `N/A`), never as an official number.
+
+12. **SOL-ExecBench leaderboard metrics (mandatory reporting)**: for a SOL-ExecBench problem, EVERY performance result you report (baseline_report, each iteration, final summary) MUST state the four leaderboard metrics, computed by `tools/sol_metrics.py`:
+    - **Latency** = median over workloads of per-workload median `T_k` (ms) — EXACT.
+    - **Fast** = `count(T_k < T_b)/N` — EXACT vs the measured library baseline.
+    - **Avg Speedup** = `mean(T_b / T_k)` — vs the Scoring Baseline `T_b`, NOT the naive reference — EXACT.
+    - **SOL Score** = `mean 1/(1+(T_k-T_SOL)/(T_b-T_SOL))` — ESTIMATE from a roofline `T_SOL` (Step 0), or `N/A`.
+    The performance TARGET is to match or beat the **top-3** leaderboard entries (fetch with `tools/fetch_leaderboard.py --kernel-id <id> --gpu <gpu>`), not merely the roofline peak. Record the top-3 and Scoring Baseline in `README.md` under `Stop Conditions`.
 
 ### Scope Without Exceptions
 
@@ -121,10 +128,16 @@ Goal: use the target `platform` and `kernel_demo` to source hardware specs from 
    - Compute absolute targets as `hardware peak * 90%`, preferring gpu-wiki measured maxima when available, otherwise using documented hardware specs.
    - Write the Roofline analysis to `README.md`, including sourced specs, calculation process, bound classification, and absolute targets such as `compute-bound target >= 185.4 TFLOPS` or `memory-bound target >= 3.87 TB/s`.
    - Copy the targets to `README.md` under `Stop Conditions`.
+3. **SOL-ExecBench problems — leaderboard target + baseline (do this in addition to roofline)**:
+   - **Fetch the leaderboard**: `python tools/fetch_leaderboard.py --kernel-id <id> --gpu <platform> --out kernel_opt_<name>/leaderboard.json`. Record the **top-3** entries and the **Scoring Baseline** (`T_b`, SOL Score 0.5) and **SOL Bound** (`T_SOL`, SOL Score 1.0) rows in `README.md` under `Stop Conditions`. The performance target is to **match/beat the top-3** on Latency + Avg Speedup, not just the roofline peak.
+   - **Build a measured library baseline** in `kernel_opt_<name>/baseline/` (FlashInfer for attention, DeepGEMM/cuBLAS for GEMM, else cuDNN/torch) and run it through the harness to get per-workload `T_b`; confirm its aggregate ≈ the leaderboard "Scoring Baseline" row. This is the `T_b` for Fast / Avg Speedup (measuring stick only — banned in the real kernel).
+   - **Emit per-workload roofline `T_SOL`** to `kernel_opt_<name>/tsol.json` (`{idx: ms}`, `T_SOL_i = max(FLOPs_i/peak_tc, bytes_i/BW)`) so `sol_metrics.py` can produce a labelled SOL Score estimate.
+   - Every result thereafter reports the four metrics via `tools/sol_metrics.py` (Constraint 12).
 
 Completion criteria:
 
 - Hardware specs, Roofline analysis, and `Stop Conditions` are written into workspace `README.md`.
+- For SOL-ExecBench problems: `leaderboard.json` fetched, top-3 + Scoring Baseline recorded, library baseline built (or a TODO noted), `tsol.json` emitted.
 - Bound type is determined.
 - Absolute targets are computed.
 
@@ -219,6 +232,8 @@ All sub-skills share top-level `tools/`:
 - `tools/memory_manager.py`
 - `tools/validate_solution.py` — static anti-cheat validator (single rule source for the library-delegation / camouflage / memoization bans; exit 0=clean, 1=WARN, 2=FAIL).
 - `tools/sol_adapter.py` — SOL-ExecBench `materialize`/`package` adapter (truthful `solution.json`, refuses cheats).
+- `tools/sol_metrics.py` — computes the four SOL leaderboard metrics (Latency / Fast / Avg Speedup exact vs a measured baseline; SOL Score as a labelled roofline estimate).
+- `tools/fetch_leaderboard.py` — fetches the public leaderboard (top-3 targets + Scoring Baseline `T_b` + SOL Bound `T_SOL`) for a kernel id + GPU.
 
 ## Shared References
 

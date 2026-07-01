@@ -119,20 +119,28 @@ README_TMPL = '''\
 `test_kernel.py` is the single promotion gate. It runs, in order:
 1. **Static anti-cheat gate** -- `tools/validate_solution.py` (library delegation,
    language-tag camouflage, shape-keyed memoization, dynamic dispatch).
-2. **Authoritative correctness + performance** -- the real `sol-execbench` CLI
-   with `benchmark_reference=true`, so correctness uses SOL's exact tolerance
-   and timing matches the leaderboard methodology.
-3. **Honest measurement** -- if no real reference latency was measured the result
-   is reported as `UNSCORED` (never "passed with speedup"). Targets are derived
-   from the measured reference, never fabricated.
+2. **Authoritative correctness + performance** -- the real `sol-execbench` CLI,
+   so correctness uses SOL's exact tolerance and timing matches the leaderboard.
+3. **Leaderboard metrics** -- `tools/sol_metrics.py` reports the FOUR SOL-ExecBench
+   leaderboard numbers vs a measured library baseline:
+     * **Latency**     = median over workloads of per-workload median T_k   (EXACT)
+     * **Fast**        = count(T_k < T_b)/N                                 (EXACT vs baseline)
+     * **Avg Speedup** = mean(T_b / T_k)  -- vs the Scoring Baseline, NOT the naive ref (EXACT)
+     * **SOL Score**   = mean 1/(1+(T_k-T_SOL)/(T_b-T_SOL))  (ESTIMATE from roofline T_SOL; official = submit)
 4. **Best-effort dynamic anti-cheat** -- re-runs the kernel across DIFFERENT input
    shapes with cold module state and a NaN output-coverage probe (requires a GPU).
 
-## Stop conditions
-- Correctness PASSED at SOL tolerance for all workloads.
-- A measured speedup vs the SOL reference (or a documented `UNSCORED` if the
-  reference cannot be benchmarked locally).
-- `validate_solution.py` returns clean (no FAIL).
+## Stop conditions (target = leaderboard top-3)
+- Correctness PASSED at SOL tolerance for all workloads; `validate_solution.py` clean (no FAIL).
+- **Report all four metrics (SOL Score / Latency / Fast / Avg Speedup) on every result.**
+- **Baseline T_b**: the SOL "Scoring Baseline" (SOL Score 0.5 point) -- an optimized library impl.
+  Its per-workload values are not public, so measure a library baseline through this harness
+  (FlashInfer for attention, DeepGEMM/cuBLAS for GEMM, cuDNN, or torch) and confirm its aggregate
+  ~ the leaderboard "Scoring Baseline" row (`fetch_leaderboard.py`). Beating T_b => Fast, AvgSpeedup>1.
+- **Target**: match or beat the top-3 leaderboard entries on Latency + Avg Speedup (=> high SOL Score).
+  Fetch them with `tools/fetch_leaderboard.py --kernel-id <id> --gpu <gpu>`.
+- Never fabricate SOL Score / T_b / T_SOL (anti-cheat C6): T_b is measured, T_SOL is a labelled
+  roofline estimate.
 
 ## Baseline
 `baseline.json` is FROZEN (task identity + scoring). Do not edit it.
@@ -231,17 +239,40 @@ else:
     elif statuses:
         print(f"correctness: PASSED ({len(statuses)} workload trace(s))")
 
-    # --- Gate 3: honest measurement (C6) --------------------------------------
-    section("Gate 3: honest measurement (real T_b, no fabricated target)")
+    # --- Gate 3: SOL-ExecBench leaderboard metrics (Latency/Fast/AvgSpeedup/SOL Score) -----
+    section("Gate 3: SOL leaderboard metrics (Latency / Fast / Avg Speedup / SOL Score)")
     if lat is not None:
-        print(f"kernel latency_ms = {lat}")
-    if not ref_lat or ref_lat <= 0.0:
-        warn.append("UNSCORED: no real reference latency (T_b) measured -- "
-                    "cannot claim a speedup. Ensure benchmark_reference=true and "
-                    "that the reference runs; do NOT fabricate a target.")
-        print("verdict for this run: UNSCORED (reference not benchmarked)")
-    elif lat:
-        print(f"reference latency_ms = {ref_lat}  ->  speedup = {ref_lat / lat:.3f}x")
+        print(f"kernel latency_ms (first workload trace) = {lat}")
+    TOOLS = Path(VALIDATOR).resolve().parent
+    METRICS = TOOLS / "sol_metrics.py"
+    BASELINE = WORKSPACE / "baseline" / "solution.json"   # measured library baseline (T_b proxy)
+    LEADERBOARD = WORKSPACE / "leaderboard.json"          # from fetch_leaderboard.py (optional)
+    TSOL = WORKSPACE / "tsol.json"                        # per-workload roofline T_SOL from Step 0 (optional)
+    METRICS_CFG = (WORKSPACE / "dev_config.json") if (WORKSPACE / "dev_config.json").exists() else CONFIG
+    if METRICS.exists() and BASELINE.exists():
+        mcmd = [sys.executable, str(METRICS), "--problem", str(PROBLEM_DIR),
+                "--solution", str(SOLUTION), "--baseline", str(BASELINE),
+                "--config", str(METRICS_CFG)]
+        td = os.environ.get("FLASHINFER_TRACE_DIR")
+        if td:
+            mcmd += ["--trace-dir", td]
+        if LEADERBOARD.exists():
+            mcmd += ["--leaderboard-json", str(LEADERBOARD)]
+        if TSOL.exists():
+            mcmd += ["--tsol-json", str(TSOL)]
+        rm = subprocess.run(mcmd, capture_output=True, text=True)
+        print((rm.stdout or "").strip())
+        if rm.returncode != 0:
+            print((rm.stderr or "")[-800:])
+            warn.append("sol_metrics.py failed; see stderr above")
+    else:
+        warn.append("no measured library baseline at baseline/solution.json -- Fast/Avg Speedup "
+                    "cannot be computed. Build a library baseline (FlashInfer/DeepGEMM/cuDNN/torch), "
+                    "measure it through this harness, and rerun. Also fetch targets with "
+                    "fetch_leaderboard.py. Do NOT fabricate SOL Score / T_b (anti-cheat C6).")
+        if ref_lat and lat:
+            print(f"(fallback) naive-reference latency_ms = {ref_lat} -> {ref_lat / lat:.2f}x vs naive "
+                  f"(NOT the leaderboard Avg Speedup, which is vs the Scoring Baseline)")
 
 # --- Gate 4: best-effort dynamic anti-memo / output-coverage (GPU only) --------
 section("Gate 4: dynamic anti-memo + output-coverage (best-effort, GPU)")
@@ -372,11 +403,37 @@ def cmd_materialize(args: argparse.Namespace) -> int:
         "destination_passing_style": dps,
     }, indent=2), encoding="utf-8")
 
-    # honest bench config (benchmark_reference = true -> real T_b)
+    # honest bench config (benchmark_reference = true -> also times the naive reference)
     (ws / "aka_bench_config.json").write_text(json.dumps({
         "warmup_runs": 10, "iterations": 50,
         "benchmark_reference": True, "lock_clocks": False, "seed": 200,
     }, indent=2), encoding="utf-8")
+    # fast dev config (skip the slow naive reference) -- used for leaderboard-metric runs
+    (ws / "dev_config.json").write_text(json.dumps({
+        "warmup_runs": 10, "iterations": 50,
+        "benchmark_reference": False, "lock_clocks": False, "seed": 200,
+    }, indent=2), encoding="utf-8")
+
+    # library-baseline scaffold: the SOL "Scoring Baseline" (T_b, SOL Score 0.5) is an optimized
+    # library impl whose per-workload values are NOT public. Measure a library proxy through THIS
+    # harness so Fast / Avg Speedup / SOL Score can be computed. NOT your submission.
+    (ws / "baseline").mkdir(exist_ok=True)
+    (ws / "baseline" / "README.md").write_text(
+        "# Library baseline (T_b measuring stick) -- NOT the submission\n\n"
+        f"Build a `baseline/kernel.py` with entry `run({sig})` that calls an optimized LIBRARY\n"
+        "for this op (attention -> flashinfer; GEMM -> deepgemm/cuBLAS; else cuDNN or torch), then\n"
+        "emit `baseline/solution.json` (inline the source). `test_kernel.py` / `sol_metrics.py`\n"
+        "run it through the SAME sol-execbench harness to get per-workload T_b.\n\n"
+        "Sanity-check its AGGREGATE (median latency, avg speedup 1.0x) against the leaderboard\n"
+        "'Scoring Baseline' row via `tools/fetch_leaderboard.py --kernel-id <id> --gpu <gpu>`.\n"
+        "Realistic library usage: include the library's normal per-call setup (plan/workspace) in\n"
+        "the timed path (that is how NVIDIA's baseline is measured -> ~O(100us) on tiny workloads).\n\n"
+        "Then: `python <tools>/sol_metrics.py --problem <problem> --solution ../solution.json \\\n"
+        "  --baseline solution.json --config ../dev_config.json --trace-dir <SOL_root> \\\n"
+        "  [--leaderboard-json ../leaderboard.json] [--tsol-json ../tsol.json]`\n\n"
+        "This is a measuring stick only: flashinfer/flash_attn/etc. are fine HERE but BANNED in\n"
+        "your real kernel.py/solution.json (anti-cheat C1).\n",
+        encoding="utf-8")
 
     # pointer to the problem dir + materialization metadata
     (ws / ".sol_problem.json").write_text(json.dumps({
