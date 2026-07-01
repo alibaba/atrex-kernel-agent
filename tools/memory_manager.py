@@ -99,6 +99,7 @@ SCHEMA_TEMPLATE = {
         "result": None,
         "failure_reason": None,
     },
+    "open_directions": [],
     "git_commit_hash": None,
 }
 
@@ -173,6 +174,13 @@ def parse_typed_value(raw_value: str) -> Any:
         return True
     if raw_value.lower() == "false":
         return False
+    # JSON arrays/objects (e.g. open_directions): --set 'open_directions=[{"direction":"...","rationale":"..."}]'
+    stripped = raw_value.strip()
+    if stripped[:1] in ("[", "{"):
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
     try:
         return int(raw_value)
     except ValueError:

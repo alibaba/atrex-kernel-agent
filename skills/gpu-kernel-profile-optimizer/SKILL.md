@@ -1,7 +1,7 @@
 ---
 name: gpu-kernel-profile-optimizer
 description: |
-  Profile-driven GPU kernel iterative optimization skill. Use this skill to run a closed loop in a temporary git workspace: profile evidence extraction, evidence-driven search and planning, single-category optimization, validation, memory update, and git commit.
+  Profile-driven GPU kernel optimization skill. Use this skill to run ONE optimization iteration in a temporary git workspace: profile evidence extraction, evidence-driven search and planning, single-category optimization, validation, memory update, git commit, and handoff. The outer iteration loop is owned by the orchestrator (orchestrator/optimize.py), not by this skill — run one cycle, then exit.
 ---
 
 # GPU Kernel Profile Optimizer
@@ -16,24 +16,24 @@ Use this skill when the user asks to:
 
 ## Overall Principles
 
-This skill must follow the stage order below. Commands, wiki searches, profiling, validation, records, and commits must be completed inside their corresponding stage.
+This skill runs **exactly ONE iteration** end-to-end, then exits. It does not loop: the orchestrator (`orchestrator/optimize.py`) spawns the next iteration as a separate clean session. Follow the stage order below. Commands, wiki searches, profiling, validation, records, and commits must be completed inside their corresponding stage.
 
 ```text
 Stage 1 Profile and evidence extraction
 Stage 2 Evidence-driven search and planning
 Stage 3 Single-category optimization implementation
 Stage 4 Performance, correctness, and quality gate
-Stage 5 Memory update and git commit
-Stage 6 Stop-condition check or next iteration
+Stage 5 Memory update, git commit, and handoff
 ```
 
 Constraints:
 
 - Do not skip stages.
 - Do not edit code without profile evidence.
+- Implement only one optimization category per iteration so the result can be attributed.
 - Each optimization action must have clear profile evidence attribution.
-- If the quality gate fails, revert to the previous commit, record the failure, and stop the current iteration.
-- If stop conditions are not met, do not exit unless the user explicitly stops the workflow.
+- If the quality gate fails, revert to the previous commit, record the failure, and stop the iteration.
+- Run exactly one iteration, then exit. Do not start another cycle — the orchestrator decides whether the next iteration runs.
 
 ## Workspace Layout
 
@@ -272,6 +272,15 @@ Pass conditions:
 - No unacceptable performance regression, or the regression is clearly explained and supports later optimization.
 - No severe ISA regression, such as new spills or a large occupancy drop.
 
+### Measurement Reliability Guard
+
+Before accepting a large performance delta (especially regressions > 30%), verify the measurement is trustworthy:
+
+1. Compare `kernel.py` and `test_kernel.py` against the previous committed version (`git diff HEAD -- kernel.py test_kernel.py`). If both are unchanged, the kernel binary and benchmark harness are identical — any large latency change is an environment artifact, not a real regression.
+2. Check GPU occupancy: `nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader`. If the current GPU shows significant memory usage (> 1GB from other processes) or high utilization from other workloads, the measurement is unreliable.
+3. If the GPU is occupied, switch to a free GPU by setting `CUDA_VISIBLE_DEVICES=<free_gpu_id>` and re-run the benchmark.
+4. If both files are unchanged but latency differs by more than 30%, do not treat it as a real regression. Re-measure on a confirmed-free GPU before recording.
+
 ### Failure Handling
 
 If the subagent returns FAIL or TIMEOUT_FAIL, the main agent must:
@@ -282,9 +291,9 @@ git reset --hard HEAD
 
 Record the failure reason, skip further planning for this iteration, and do not enter the next iteration. Write the failure into `memory/v<N>.json` under `pitfalls_and_fixes` and `quality_gate`, then commit a revert marker such as `V5: revert V4 (occupancy 25% -> 12%)` when appropriate.
 
-## Stage 5: Memory Update and Git Commit
+## Stage 5: Memory Update, Git Commit, and Handoff
 
-Goal: finalize `memory/v<N>.json` with quality gate result and git commit hash, then commit.
+Goal: finalize `memory/v<N>.json` with quality gate result and git commit hash, commit, then hand off to the next session.
 
 ### Procedure
 
@@ -330,34 +339,37 @@ Examples:
 - `V3: 150 TFLOPS / 1.5 GB/s | XOR16 swizzle layout (bottleneck: ds_read bank conflict stall 12 cycles)`
 - `V5: revert V4 (occupancy 25% -> 12%)`
 
-## Stage 6: Stop-Condition Check or Next Iteration
+### Handoff to the next session
 
-Goal: decide whether to stop or return to Stage 1 for another iteration.
+Before exiting, record the "word for the next session" in `memory/v<N>.json` — this is how a fresh
+clean session (which has none of your conversation context) picks up where you left off:
 
-Default stop condition:
-
-```text
-utilization reaches >= 90% relative to the same-size baseline
-```
-
-If `README.md` or the user specifies a more concrete condition, use the more concrete condition.
-
-When stop conditions are met:
-
-- Output the final performance summary using the memory manager:
+- **`open_directions`** — up to **3** most-promising untried levers for the next session (fewer if you
+  found fewer), including any unfinished-but-promising thread you did not get to. These are *priors, not
+  orders*: the next session may pick one or choose a better lever it sees from a fresh profile.
 
   ```bash
-  python tools/memory_manager.py summary --workspace kernel_opt_<name>
+  python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
+      --set 'open_directions=[{"direction":"<lever>","rationale":"<evidence/why promising>"}]'
   ```
 
-- Summarize key actions and gains for all versions.
-- Preserve `profiles/` so the evidence chain remains auditable.
+- **Dead-ends** — if this iteration regressed or led nowhere, record *why* in `search_log` /
+  `pitfalls_and_fixes` so the next session does not retry it.
+- **Profile-carry-forward** — if you committed, leave the post-edit profile in `profiles/v<N>/` so the
+  next session can reuse it instead of re-profiling.
 
-When stop conditions are not met:
+## End of Iteration
 
-- Return to Stage 1.
-- Read the latest unmasked `memory/v<N>.json` and `README.md`.
-- Profile the current version, extract the latest bottleneck, then search and plan the next iteration.
+This skill runs one iteration. After Stage 5, **exit** — do not return to Stage 1 and do not start another
+cycle. The orchestrator (`orchestrator/optimize.py`) reads `memory/v<N>.json`, decides whether the budget or
+stop conditions are met (default: peak utilization >= 90% on a committed, correctness-PASS iteration), and
+spawns the next clean session if needed.
+
+Print a one-line status and stop:
+
+```text
+v<N>: committed (+X.X%)   |   v<N>: reverted (<reason>)
+```
 
 ## Appendix: Tool-to-Evidence Mapping
 
@@ -372,7 +384,8 @@ Different tools provide different layers of evidence and must not be mixed:
 ## Appendix: Prohibited Actions
 
 - Do not skip `<gpu-wiki>/README.md`.
-- Do not start the next iteration without reading `README.md` and the latest unmasked `memory/v*.json` files.
+- Do not begin the iteration without reading `README.md` and the latest unmasked `memory/v*.json` files (including the previous `open_directions` and recorded dead-ends).
+- Do not loop: run exactly one iteration, then exit. The orchestrator spawns the next session.
 - Do not read `memory/v*.json` files where `masked: true` as active iteration data.
 - Do not reuse profile artifacts across versions.
 - Do not commit performance conclusions without correctness validation.
