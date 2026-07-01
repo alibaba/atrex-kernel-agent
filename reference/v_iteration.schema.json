@@ -66,5 +66,11 @@
     "result": "<PASS / FAIL / TIMEOUT_FAIL>",
     "failure_reason": null
   },
+  "open_directions": [
+    {
+      "direction": "<candidate optimization lever for the NEXT session to try, most-promising first; max 3>",
+      "rationale": "<evidence/intuition for why this is promising, incl. unfinished-but-promising threads>"
+    }
+  ],
   "git_commit_hash": null
 }
