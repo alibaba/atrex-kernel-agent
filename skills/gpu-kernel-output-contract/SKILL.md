@@ -31,7 +31,7 @@ Use this skill when:
 - Among correct implementations, faster implementations are better.
 - Do not degrade a validated optimized implementation while packaging it into `generated_kernel.py`.
 
-> **SOL-ExecBench problems use a different packaging path.** If the workspace was created with `workspace_init.sh --sol-execbench` (it has `reference.py` from `definition.json`, a DPS `run`, and a `.sol_problem.json`), do NOT produce `generated_kernel.py`/`class Model`. Instead package with `python tools/sol_adapter.py package kernel_opt_<name>`, which validates the kernel with `tools/validate_solution.py`, refuses to emit on a hard FAIL, and writes a truthful `solution.json` (with `spec.languages` set to the framework actually launched from `run`). The anti-cheat rules below apply equally to that `kernel.py`.
+> **SOL-ExecBench problems use a different packaging path.** If the workspace was created with `workspace_init.sh --sol-execbench` (it has `reference.py` from `definition.json`, a DPS `run`, and a `.sol_problem.json`), do NOT produce `generated_kernel.py`/`class Model`. Instead package with `python tools/sol_adapter.py package kernel_opt_<name>`, which writes a `solution.json` (with `spec.languages` from a source scan of the kernel). Anti-cheat is a policy in `CLAUDE.md` (C1-C6), not enforced by the adapter; the rules below apply equally to that `kernel.py`.
 
 ## Output Contract
 
@@ -54,7 +54,7 @@ Use this skill when:
 - `Model.forward` must return outputs with the same externally observable structure, shape, device, returned tensor dtype, and numerical behavior as the reference implementation.
 - The main compute path must be implemented using GPU kernels from a supported framework (Triton, Gluon, FlyDSL, CuteDSL, or C++ inline CUDA) launched from `Model.forward`. The kernel must be **reachable from `Model.forward`** — a decorated kernel that is never launched does not satisfy this (and is flagged as language-tag camouflage).
 - You may use PyTorch only for setup or glue logic such as output allocation, reshape/view, indexing, metadata preparation, and launch orchestration.
-- **Do not delegate the operator to a library**: no `flashinfer`, `flash_attn`, `xformers`, `vllm`, `aiter`, and no `torch.nn.functional.scaled_dot_product_attention` (or other whole-operator torch op) as the compute path. Such a candidate is not an optimized kernel and is rejected by `tools/validate_solution.py`.
+- **Do not delegate the operator to a library**: no `flashinfer`, `flash_attn`, `xformers`, `vllm`, `aiter`, and no `torch.nn.functional.scaled_dot_product_attention` (or other whole-operator torch op) as the compute path. Such a candidate is not an optimized kernel — it violates the `CLAUDE.md` anti-cheat policy (C1).
 - **No shape-keyed memoization**: do not cache outputs/intermediate GPU tensors in module-global state or `lru_cache` keyed on input shape metadata. Each call must do its real work in the measured region.
 - **Write all output bytes**: do not rely on allocator/pre-zeroed buffers by skipping output initialization.
 - Internal computation precision, accumulation dtype, approximations, and intermediate layouts may differ from the PyTorch reference.

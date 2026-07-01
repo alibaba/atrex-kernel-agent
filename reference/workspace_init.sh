@@ -21,8 +21,9 @@ PYTHON="${PYTHON:-python3}"
 
 # --- SOL-ExecBench mode: parse a problem dir into an AKA workspace ----------
 # Delegates to tools/sol_adapter.py, which generates reference.py, a DPS kernel.py
-# stub, a SOL-faithful test_kernel.py (static anti-cheat gate + authoritative
-# sol-execbench eval + honest T_b), and a frozen baseline.json.
+# stub, a test_kernel.py (authoritative sol-execbench eval + the 4 leaderboard
+# metrics via sol_metrics.py), a baseline/ scaffold, and a frozen baseline.json.
+# Anti-cheat is a policy in CLAUDE.md (C1-C6), not a code gate.
 if [[ "${1:-}" == "--sol-execbench" ]]; then
     PROBLEM_DIR="${2:-}"
     SOL_NAME="${3:-}"

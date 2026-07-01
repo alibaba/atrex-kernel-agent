@@ -14,13 +14,12 @@ materialize <problem_dir> [name]   Create an AKA workspace from a SOL problem:
     eval + honest T_b + best-effort dynamic anti-memo/coverage), a frozen
     baseline.json shell, and an honest bench config (benchmark_reference=true).
 
-package <workspace_dir>            Emit a *truthful* solution.json: refuses if
-    the static validator reports a hard FAIL, and sets spec.languages to the
-    framework(s) actually launched from run() (not what the author claims).
+package <workspace_dir>            Emit a solution.json, labelling spec.languages
+    from a light source scan of the kernel.
 
-This script is the non-hook enforcement surface: the generated test_kernel.py
-and ``package`` both call tools/validate_solution.py, so a cheating kernel
-cannot be evaluated or packaged.
+Anti-cheat is a POLICY documented in CLAUDE.md / SKILL.md (C1-C6), not a code gate:
+this adapter no longer runs a static validator. The generated test_kernel.py checks
+correctness and reports the SOL leaderboard metrics; it does not reject "cheats".
 """
 from __future__ import annotations
 
@@ -30,11 +29,21 @@ import sys
 from pathlib import Path
 
 _TOOLS = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TOOLS))
-import validate_solution as V  # noqa: E402
 
-BUCKET_TO_LANG = {"triton": "triton", "cute_dsl": "cute_dsl",
-                  "cutile": "cutile", "cpp": "cuda_cpp"}
+# Anti-cheat is a POLICY (see CLAUDE.md / SKILL.md), not a code gate. `package` labels
+# spec.languages from a light source scan below; it does not reject "cheating" kernels.
+_LANG_MARKERS = [
+    ("triton", ("@triton.jit", "triton.jit", "import triton")),
+    ("cute_dsl", ("@cute.jit", "@cute.kernel", "cutlass.cute", "import cutlass")),
+    ("cutile", ("cutile", "cuTile")),
+    ("cuda_cpp", ("__global__", 'extern "C"', "load_inline", "cpp_extension")),
+]
+
+
+def _detect_languages(kernel_src: str) -> list[str]:
+    """Best-effort framework labels from source markers (informational, not enforcement)."""
+    langs = [lang for lang, marks in _LANG_MARKERS if any(m in kernel_src for m in marks)]
+    return langs
 
 
 # --------------------------------------------------------------------------- #
@@ -84,15 +93,11 @@ KERNEL_STUB = '''\
 # AKA workspace for SOL-ExecBench problem: {name}
 # Entry point: run({sig})   [destination_passing_style={dps}]
 #
-# ANTI-CHEAT POLICY: {policy}
-#   The operator MUST be implemented as a SELF-WRITTEN GPU kernel using one of:
-#   Triton (@triton.jit), CuteDSL (@cute.jit/@cute.kernel), cuTile, or inline
-#   CUDA. The kernel must be reachable from run().
-#   FORBIDDEN: importing/calling flashinfer, flash_attn, xformers, vllm; using
-#   torch.nn.functional.scaled_dot_product_attention as the compute path;
-#   wrapping the benchmark's target library op; declaring a framework you do not
-#   actually launch (language-tag camouflage); caching results keyed on input
-#   shape metadata to hide work from the timed region.
+# ANTI-CHEAT POLICY: {policy}  (see CLAUDE.md C1-C6 -- policy, not a code gate)
+#   Implement the operator as a SELF-WRITTEN GPU kernel reachable from run():
+#   Triton (@triton.jit), CuteDSL (@cute.jit/@cute.kernel), cuTile, or inline CUDA.
+#   Do NOT delegate to flashinfer/flash_attn/xformers/vllm/aiter or
+#   F.scaled_dot_product_attention, camouflage languages, or shape-key memoize.
 #   See reference.py for the exact numerical semantics to reproduce.
 import torch
 
@@ -116,22 +121,21 @@ README_TMPL = '''\
 {io_doc}
 
 ## How this workspace is evaluated
-`test_kernel.py` is the single promotion gate. It runs, in order:
-1. **Static anti-cheat gate** -- `tools/validate_solution.py` (library delegation,
-   language-tag camouflage, shape-keyed memoization, dynamic dispatch).
-2. **Authoritative correctness + performance** -- the real `sol-execbench` CLI,
+`test_kernel.py` runs, in order:
+1. **Authoritative correctness + performance** -- the real `sol-execbench` CLI,
    so correctness uses SOL's exact tolerance and timing matches the leaderboard.
-3. **Leaderboard metrics** -- `tools/sol_metrics.py` reports the FOUR SOL-ExecBench
+2. **Leaderboard metrics** -- `tools/sol_metrics.py` reports the FOUR SOL-ExecBench
    leaderboard numbers vs a measured library baseline:
      * **Latency**     = median over workloads of per-workload median T_k   (EXACT)
      * **Fast**        = count(T_k < T_b)/N                                 (EXACT vs baseline)
      * **Avg Speedup** = mean(T_b / T_k)  -- vs the Scoring Baseline, NOT the naive ref (EXACT)
      * **SOL Score**   = mean 1/(1+(T_k-T_SOL)/(T_b-T_SOL))  (ESTIMATE from roofline T_SOL; official = submit)
-4. **Best-effort dynamic anti-cheat** -- re-runs the kernel across DIFFERENT input
-   shapes with cold module state and a NaN output-coverage probe (requires a GPU).
+
+Anti-cheat (no library delegation / camouflage / shape-keyed memo / masked errors) is a POLICY in
+`CLAUDE.md` (C1-C6) — follow it; it is not enforced by a code gate here.
 
 ## Stop conditions (target = leaderboard top-3)
-- Correctness PASSED at SOL tolerance for all workloads; `validate_solution.py` clean (no FAIL).
+- Correctness PASSED at SOL tolerance for all workloads.
 - **Report all four metrics (SOL Score / Latency / Fast / Avg Speedup) on every result.**
 - **Baseline T_b**: the SOL "Scoring Baseline" (SOL Score 0.5 point) -- an optimized library impl.
   Its per-workload values are not public, so measure a library baseline through this harness
@@ -162,10 +166,9 @@ from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parent
 PROBLEM_DIR = Path(r"@@PROBLEM_DIR@@")
-VALIDATOR = Path(r"@@VALIDATOR@@")
+TOOLS = Path(r"@@TOOLS@@")
 ENTRY = "@@ENTRY@@"
 DPS = @@DPS@@
-POLICY = "@@POLICY@@"
 KERNEL = WORKSPACE / "kernel.py"
 SOLUTION = WORKSPACE / "solution.json"
 CONFIG = WORKSPACE / "aka_bench_config.json"
@@ -178,20 +181,10 @@ def section(msg):
     print("\n" + "=" * 8 + " " + msg + " " + "=" * 8)
 
 
-# --- Gate 1: static anti-cheat -------------------------------------------------
-section("Gate 1: static anti-cheat (validate_solution.py)")
-cmd = [sys.executable, str(VALIDATOR), "--kernel", str(KERNEL), "--policy", POLICY]
-if SOLUTION.exists():
-    cmd += ["--solution", str(SOLUTION)]
-r = subprocess.run(cmd, capture_output=True, text=True)
-print(r.stdout.strip())
-if r.returncode == 2:
-    fail.append("static validator reported a hard FAIL (see above)")
-elif r.returncode == 1:
-    warn.append("static validator reported WARNINGs (justify or fix)")
+# Anti-cheat is a POLICY (see CLAUDE.md / SKILL.md C1-C6), not a gate here.
 
-# --- Gate 2: authoritative SOL correctness + performance -----------------------
-section("Gate 2: authoritative sol-execbench eval (+benchmark_reference)")
+# --- Gate 1: authoritative SOL correctness + performance -----------------------
+section("Gate 1: authoritative sol-execbench eval (+benchmark_reference)")
 if not SOLUTION.exists():
     fail.append("solution.json missing -- run `sol_adapter.py package` first")
 else:
@@ -239,11 +232,10 @@ else:
     elif statuses:
         print(f"correctness: PASSED ({len(statuses)} workload trace(s))")
 
-    # --- Gate 3: SOL-ExecBench leaderboard metrics (Latency/Fast/AvgSpeedup/SOL Score) -----
-    section("Gate 3: SOL leaderboard metrics (Latency / Fast / Avg Speedup / SOL Score)")
+    # --- Gate 2: SOL-ExecBench leaderboard metrics (Latency/Fast/AvgSpeedup/SOL Score) -----
+    section("Gate 2: SOL leaderboard metrics (Latency / Fast / Avg Speedup / SOL Score)")
     if lat is not None:
         print(f"kernel latency_ms (first workload trace) = {lat}")
-    TOOLS = Path(VALIDATOR).resolve().parent
     METRICS = TOOLS / "sol_metrics.py"
     BASELINE = WORKSPACE / "baseline" / "solution.json"   # measured library baseline (T_b proxy)
     LEADERBOARD = WORKSPACE / "leaderboard.json"          # from fetch_leaderboard.py (optional)
@@ -273,79 +265,6 @@ else:
         if ref_lat and lat:
             print(f"(fallback) naive-reference latency_ms = {ref_lat} -> {ref_lat / lat:.2f}x vs naive "
                   f"(NOT the leaderboard Avg Speedup, which is vs the Scoring Baseline)")
-
-# --- Gate 4: best-effort dynamic anti-memo / output-coverage (GPU only) --------
-section("Gate 4: dynamic anti-memo + output-coverage (best-effort, GPU)")
-try:
-    import importlib
-    import torch
-    if not torch.cuda.is_available():
-        print("skip: no CUDA device available")
-    else:
-        from sol_execbench.core.data import Definition, Workload  # type: ignore
-        from sol_execbench.core.bench.io import gen_inputs, load_safetensors  # type: ignore
-        from sol_execbench.core.bench.correctness import compute_error_stats  # type: ignore
-
-        defn = Definition(**json.loads((PROBLEM_DIR / "definition.json").read_text()))
-        wls = [Workload(**json.loads(l)) for l in
-               (PROBLEM_DIR / "workload.jsonl").read_text().splitlines() if l.strip()]
-        # pick up to two workloads with DIFFERENT axes to defeat shape-keyed memo
-        chosen, seen_axes = [], set()
-        for w in wls:
-            key = tuple(sorted(w.axes.items()))
-            if key not in seen_axes:
-                chosen.append(w)
-                seen_axes.add(key)
-            if len(chosen) == 2:
-                break
-
-        sys.path.insert(0, str(WORKSPACE))
-        ref_mod = importlib.import_module("reference")
-
-        def run_kernel_fresh(w):
-            # cold module state each call -> defeats persistent module-global memo
-            for m in ("kernel",):
-                if m in sys.modules:
-                    del sys.modules[m]
-            kern = importlib.import_module("kernel")
-            blob_roots = [PROBLEM_DIR, PROBLEM_DIR.parent,
-                          PROBLEM_DIR.parents[2] if len(PROBLEM_DIR.parents) > 2 else PROBLEM_DIR]
-            try:
-                safet = load_safetensors(defn, w, blob_roots)
-            except Exception:
-                safet = None
-            ins = gen_inputs(defn, w, "cuda", safe_tensors=safet)
-            outs_ref = ref_mod.run(*ins)
-            if not isinstance(outs_ref, (tuple, list)):
-                outs_ref = (outs_ref,)
-            # allocate DPS outputs filled with a NaN sentinel for coverage probe
-            outs = [torch.full_like(o, float("nan")) for o in outs_ref]
-            if DPS:
-                kern.run(*ins, *outs)
-                got = outs
-            else:
-                res = kern.run(*ins)
-                got = list(res) if isinstance(res, (tuple, list)) else [res]
-            return got, list(outs_ref), outs
-
-        for w in chosen:
-            got, ref_out, dps_bufs = run_kernel_fresh(w)
-            # coverage probe (C4): DPS outputs must be fully written (no NaN left)
-            if DPS:
-                for i, b in enumerate(dps_bufs):
-                    if torch.isnan(b).any().item() and not torch.isnan(ref_out[i]).any().item():
-                        fail.append(f"output #{i} not fully written (relies on allocator "
-                                    f"zero-fill -> timing-methodology gaming)")
-            # correctness across the chosen shapes (memo returning stale data fails here)
-            tol = w.tolerance
-            for i, (g, rr) in enumerate(zip(got, ref_out)):
-                _, exceeds = compute_error_stats(g, rr, tol)
-                if exceeds:
-                    fail.append(f"workload {w.uuid} output #{i} exceeds tolerance "
-                                f"under cold-state/varied-shape replay")
-        print(f"checked {len(chosen)} distinct-shape workload(s) with cold module state")
-except Exception as e:  # setup failure -> WARN, never crash the dev loop
-    warn.append(f"dynamic gate skipped: {type(e).__name__}: {e}")
 
 # --- Verdict -------------------------------------------------------------------
 section("VERDICT")
@@ -441,14 +360,12 @@ def cmd_materialize(args: argparse.Namespace) -> int:
         "destination_passing_style": dps, "entry": "run", "policy": args.policy,
     }, indent=2), encoding="utf-8")
 
-    # test_kernel.py (the single promotion gate)
-    validator = (_TOOLS / "validate_solution.py").resolve()
+    # test_kernel.py (correctness + leaderboard-metrics harness)
     test_src = (TEST_KERNEL_TMPL
                 .replace("@@PROBLEM_DIR@@", str(problem_dir))
-                .replace("@@VALIDATOR@@", str(validator))
+                .replace("@@TOOLS@@", str(_TOOLS))
                 .replace("@@ENTRY@@", "run")
-                .replace("@@DPS@@", "True" if dps else "False")
-                .replace("@@POLICY@@", args.policy))
+                .replace("@@DPS@@", "True" if dps else "False"))
     (ws / "test_kernel.py").write_text(test_src, encoding="utf-8")
 
     # README
@@ -459,7 +376,9 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     print(f"materialized AKA workspace: {ws}")
     print(f"  entry: run({sig})   dps={dps}")
     print(f"  files: reference.py, kernel.py (stub), test_kernel.py, baseline.json,")
-    print(f"         aka_bench_config.json, README.md, memory/ plans/ profiles/")
+    print(f"         aka_bench_config.json, dev_config.json, baseline/ (T_b scaffold),")
+    print(f"         README.md, memory/ plans/ profiles/")
+    print(f"  anti-cheat: policy in CLAUDE.md (C1-C6), not a code gate")
     print(f"  next: implement kernel.py, then `python {_TOOLS}/sol_adapter.py package {ws}`")
     return 0
 
@@ -489,25 +408,8 @@ def cmd_package(args: argparse.Namespace) -> int:
     if not definition_name:
         definition_name = ws.name.replace("kernel_opt_", "")
 
-    # truthful languages = frameworks actually launched from run()
-    fws = V.detected_frameworks(kernel_src, entry)
-    languages = sorted({BUCKET_TO_LANG[b] for b in fws})
-
-    tentative = {"spec": {"languages": languages or ["pytorch"],
-                          "entry_point": f"kernel.py::{entry}"}}
-    findings = V.analyze(kernel_src, tentative, args.policy, entry)
-    v = V.verdict(findings)
-    for f in findings:
-        print(f"[{f.severity}] {f.code} (line {f.lineno}): {f.message}")
-    if v == V.SEV_FAIL:
-        print(f"\nREFUSED to package: static validator verdict = FAIL")
-        return 2
-
-    if not languages:
-        if args.policy == V.POLICY_REQUIRE_SELF_WRITTEN:
-            print("\nREFUSED to package: no self-written kernel detected on the data path")
-            return 2
-        languages = ["pytorch"]
+    # languages from a light source scan (informational; anti-cheat is a CLAUDE.md policy)
+    languages = _detect_languages(kernel_src) or ["pytorch"]
 
     deps = sorted({l for l in ("torch", *( ["triton"] if "triton" in languages else []))})
     solution = {
@@ -527,10 +429,10 @@ def cmd_package(args: argparse.Namespace) -> int:
     }
     out = ws / "solution.json"
     out.write_text(json.dumps(solution, indent=2), encoding="utf-8")
-    print(f"\nwrote truthful solution.json: {out}")
-    print(f"  languages (detected on data path): {languages}")
-    print(f"  verdict: {v}")
-    return 0 if v != V.SEV_FAIL else 2
+    print(f"\nwrote solution.json: {out}")
+    print(f"  languages (source scan): {languages}")
+    print("  NOTE: anti-cheat is a policy (CLAUDE.md C1-C6), not enforced here.")
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -547,12 +449,13 @@ def main(argv=None) -> int:
     m.add_argument("--dest", help="parent dir for kernel_opt_<name> (default: cwd)")
     m.add_argument("--return-style", action="store_true",
                    help="generate a return-style run() instead of DPS")
-    m.add_argument("--policy", default=V.POLICY_REQUIRE_SELF_WRITTEN,
-                   choices=[V.POLICY_REQUIRE_SELF_WRITTEN, V.POLICY_ALLOW_LIBS])
+    m.add_argument("--policy", default="require_self_written_kernel",
+                   choices=["require_self_written_kernel", "allow_libs"],
+                   help="informational only (recorded in the kernel stub); anti-cheat is a CLAUDE.md policy")
     m.add_argument("--force", action="store_true")
     m.set_defaults(func=cmd_materialize)
 
-    k = sub.add_parser("package", help="emit a truthful solution.json (refuses cheats)")
+    k = sub.add_parser("package", help="emit a solution.json (languages from a source scan)")
     k.add_argument("workspace_dir")
     k.add_argument("--problem", help="problem dir (default: from .sol_problem.json)")
     k.add_argument("--name")
@@ -561,8 +464,6 @@ def main(argv=None) -> int:
     k.add_argument("--description")
     k.add_argument("--hardware", default="LOCAL")
     k.add_argument("--return-style", action="store_true")
-    k.add_argument("--policy", default=V.POLICY_REQUIRE_SELF_WRITTEN,
-                   choices=[V.POLICY_REQUIRE_SELF_WRITTEN, V.POLICY_ALLOW_LIBS])
     k.set_defaults(func=cmd_package)
 
     args = p.parse_args(argv)

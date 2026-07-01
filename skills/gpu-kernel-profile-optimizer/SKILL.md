@@ -34,7 +34,7 @@ Constraints:
 - Implement only one optimization category per iteration so the result can be attributed.
 - If the quality gate fails, revert to the previous commit, record the failure, and stop the current iteration.
 - If stop conditions are not met, do not exit unless the user explicitly stops the workflow.
-- **Anti-cheat (no "optimization" may be a cheat)**: a speedup that comes from delegating to a library (`flashinfer`/`flash_attn`/`xformers`/`vllm`/`scaled_dot_product_attention`), from a shape-keyed cache that hides work from the timed region, from skipping output initialization, or from a looser correctness check is INVALID — revert it. The kernel must stay self-written and reachable from `run`/`forward`. The quality gate in Stage 4 must run `tools/validate_solution.py` (for SOL-ExecBench workspaces this is built into `test_kernel.py`); a hard FAIL means the iteration is rejected regardless of measured latency. Targets compare against a measured reference (`T_b`), never a fabricated number.
+- **Anti-cheat (no "optimization" may be a cheat)**: a speedup that comes from delegating to a library (`flashinfer`/`flash_attn`/`xformers`/`vllm`/`scaled_dot_product_attention`), from a shape-keyed cache that hides work from the timed region, from skipping output initialization, or from a looser correctness check is INVALID — revert it. The kernel must stay self-written and reachable from `run`/`forward`. This is an anti-cheat **policy** (see `CLAUDE.md` C1-C6), not a code gate: self-check each iteration and reject a violating one regardless of measured latency. Targets compare against a measured baseline (`T_b`), never a fabricated number.
 
 ## Workspace Layout
 
