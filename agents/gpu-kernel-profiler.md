@@ -50,16 +50,7 @@ For detailed tool usage, metric interpretation, and troubleshooting, refer to `r
 
 #### NVIDIA Hopper/Blackwell: profile_nvidia.sh
 
-Use the top-level tool script instead of writing `ncu` commands manually:
-
-```bash
-bash tools/profile_nvidia.sh \
-  kernel.py \
-  --output-dir profiles/v<N> \
-  --launch-skip <skip>
-```
-
-For source-level stall hotspot analysis (requires the kernel compiled with `-lineinfo`):
+Use the top-level tool script instead of writing `ncu` commands manually. The `--source` flag is **mandatory** (always included) to ensure source-level localization evidence is produced every run:
 
 ```bash
 bash tools/profile_nvidia.sh \
@@ -75,33 +66,34 @@ To collect only, without symptom classification:
 bash tools/profile_nvidia.sh \
   kernel.py \
   --output-dir profiles/v<N> \
+  --source \
   --no-classify
 ```
 
 The script automatically performs these steps:
 
 1. `ncu --set full` collects the `.ncu-rep` binary report.
-2. (Optional, `--source`) `ncu --set source` collects source-level stall data.
+2. `ncu --set source` collects source-level stall data (always, since `--source` is mandatory).
 3. `analyze_reports.py` (bundled in `tools/ncu_helpers/`) parses key metrics into `metrics_key_run.json`.
-3b. (Only on `--source`) `source_evidence.py` generates the source-level evidence bundle and indexes it in `source_evidence_manifest.json`. Best-effort, never fatal; the artifacts are a dependency-free Python port of VeloQ's `ncu` verbs onto the same `ncu_report` API, emit a `v1` JSON envelope, and do **not** feed `classify_ncu.py` or change `summary.txt`.
+3b. `source_evidence.py` generates the source-level evidence bundle and indexes it in `source_evidence_manifest.json`. Best-effort, never fatal; the artifacts are a dependency-free Python port of VeloQ's `ncu` verbs onto the same `ncu_report` API, emit a `v1` JSON envelope, and do **not** feed `classify_ncu.py` or change `summary.txt`.
 3c. (Optional, `--diff PREV_DIR`) `row_key.py` joins this run's envelopes against a previous run by stable content-derived key and writes `analysis/diff_*.txt`.
 4. `classify_ncu.py` classifies symptoms against the 14 NCU diagnosis patterns, producing `summary.txt`.
 
-Artifacts (always):
+Artifacts (always produced):
 
 - `profiles/v<N>/ncu.ncu-rep` — binary report
 - `profiles/v<N>/analysis/metrics_key_run.{json,txt}` — key metrics
 - `profiles/v<N>/summary.txt` — final summary (metrics + `SYMPTOMS` + `LOCALIZE` + search suggestions)
+- `profiles/v<N>/analysis/source_evidence_manifest.json` — index of all source-level evidence files
+- `profiles/v<N>/analysis/source_metrics_line_run.{json,txt}` — per-line metric attribution
+- `profiles/v<N>/analysis/source_metrics_sass_run.{json,txt}` — per-SASS metric attribution
+- `profiles/v<N>/analysis/warp_stalls_line_run.{json,txt}` — warp-stall attribution per source line
+- `profiles/v<N>/analysis/warp_stalls_reason_run.{json,txt}` — warp-stall attribution by reason
+- `profiles/v<N>/analysis/stall_hotspots_run.txt` — per-line stall hotspots (pcsamp metrics)
+- `profiles/v<N>/analysis/disasm_run.{json,txt}` — structured source-correlated SASS (+PTX when `nvdisasm`/`cuobjdump` present)
+- `profiles/v<N>/analysis/diff_*.txt` — only with `--diff`: per-row delta vs a previous run
 
-Artifacts (only with `--source`, indexed by `analysis/source_evidence_manifest.json`):
-
-- `analysis/stall_hotspots_run.txt` — per-line stall hotspots (pcsamp metrics)
-- `analysis/disasm_run.{json,txt}` — structured source-correlated SASS (+PTX when `nvdisasm`/`cuobjdump` present)
-- `analysis/warp_stalls_{reason,line}_run.{json,txt}` — warp-stall attribution from `timed_warp_samples`
-- `analysis/source_metrics_{line,sass}_run.{json,txt}` — per-line / per-SASS metric attribution
-- `analysis/diff_*.txt` — only with `--diff`: per-row delta vs a previous run
-
-Extract at least: memory throughput / SOL, L2 hit rate, occupancy, warp stall reasons, and Tensor Core / MMA utilization. The `SYMPTOMS` line in `summary.txt` is controlled vocabulary that feeds directly into the Stage 2 gpu-wiki search (see *Symptom-Driven Retrieval* in `<gpu-wiki>/README.md`). The `LOCALIZE` line names which `--source` evidence file maps each fired symptom to a source line / SASS address — to act on it, rerun with `--source` and open that file (or `source_evidence_manifest.json`). Note `warp_stalls_*` (from `timed_warp_samples`) and `stall_hotspots` (from pcsamp metrics) answer the same "where do warps stall" question from two sources; prefer `warp_stalls_*` and use `stall_hotspots` only to cross-check.
+Extract at least: memory throughput / SOL, L2 hit rate, occupancy, warp stall reasons, and Tensor Core / MMA utilization. The `SYMPTOMS` line in `summary.txt` is controlled vocabulary that feeds directly into the Stage 2 gpu-wiki search (see *Symptom-Driven Retrieval* in `<gpu-wiki>/README.md`). The `LOCALIZE` line is always present and names which source-level evidence file maps each fired symptom to a source line / SASS address — downstream agents read these files directly without needing a re-profile. Note `warp_stalls_*` (from `timed_warp_samples`) and `stall_hotspots` (from pcsamp metrics) answer the same "where do warps stall" question from two sources; prefer `warp_stalls_*` and use `stall_hotspots` only to cross-check.
 
 #### AMD CDNA3/CDNA4: ATT Decoder Setup
 
@@ -238,14 +230,9 @@ Check assembly for:
 
 ### Phase 4: Evidence Extraction and Summary
 
-#### Localization rule (mandatory)
+#### Source-level evidence (always produced)
 
-The first profile pass runs **without** `--source` (cheap: no second `ncu` collection). Escalate to `--source` only when a localizable symptom actually drives a change:
-
-- **Trigger** — `summary.txt` emits a `LOCALIZE` line (only localizable symptoms produce one; symptoms with no line-level signal, e.g. occupancy, never do) **and** you are about to choose a concrete code change based on that symptom.
-- **Required action** — before editing `kernel.py`, re-profile the kernel with `--source`, open the evidence file named on the `LOCALIZE` line (or read `source_evidence_manifest.json`), and pin the change to the specific source line / SASS address it identifies. Do not change a line you have not localized.
-
-This makes the signal — not the agent's discretion — decide when the evidence layer turns on: cheap by default, and the source-level evidence is guaranteed to be read at the moment it drives a code change. When no `LOCALIZE` line is present, no `--source` rerun is needed.
+Every profile run includes `--source` by default, so source-level localization evidence is always available in the output. The `LOCALIZE` line in `summary.txt` is always present for localizable symptoms and names the specific evidence file that maps each symptom to a source line / SASS address. Downstream agents (e.g. `kernel-optimize`) can read the evidence files directly without requesting a separate re-profile pass.
 
 #### Evidence Format
 
@@ -269,7 +256,12 @@ Examples:
 | Deliverable | Description |
 |-------------|-------------|
 | `profiles/v<N>/` | Complete profile artifacts for this iteration |
-| `profiles/v<N>/summary.txt` | Unified evidence summary for both NVIDIA and AMD: key metrics, `SYMPTOMS`, `LOCALIZE` (if applicable), and search suggestions |
+| `profiles/v<N>/summary.txt` | Unified evidence summary for both NVIDIA and AMD: key metrics, `SYMPTOMS`, `LOCALIZE`, and search suggestions |
+| `profiles/v<N>/analysis/source_evidence_manifest.json` | Index of all source-level evidence files |
+| `profiles/v<N>/analysis/source_metrics_line_run.txt` | Per-line metric attribution |
+| `profiles/v<N>/analysis/warp_stalls_line_run.txt` | Warp-stall attribution per source line |
+| `profiles/v<N>/analysis/stall_hotspots_run.txt` | Per-line stall hotspots |
+| `profiles/v<N>/analysis/disasm_run.{json,txt}` | Source-correlated SASS disassembly |
 
 The agent must return:
 
@@ -289,4 +281,4 @@ The agent must return:
 - **DO NOT** modify `kernel.py` or any source code — this agent is read-only for source files
 - **DO NOT** run profiling from a subdirectory — always execute from workspace root
 - **DO NOT** reuse profile artifacts from previous iterations
-- **DO NOT** mix `--source` into the first pass unless explicitly requested — follow the localization rule
+- **DO NOT** omit `--source` from the profiling command — source-level evidence is mandatory for every run
