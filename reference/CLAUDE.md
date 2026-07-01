@@ -35,6 +35,13 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - DO NOT proceed to Stage 3 without receiving the subagent's plan output.
 - DO NOT proceed to Stage 5 without receiving the subagent's quality gate result.
 
+## Third-Party Library Prohibition
+
+- Kernel optimization code MUST be implemented from scratch — DO NOT introduce any third-party libraries or external dependencies.
+- All optimization logic, data structures, and algorithms used in kernel implementations MUST be self-written.
+- Referencing third-party code for learning is permitted, but the final implementation MUST NOT depend on or copy from external libraries.
+- If a kernel requires utility functions (e.g., memory management helpers, math primitives), they MUST be implemented inline or as project-local utilities — NEVER imported from external packages.
+
 ## Hardware Architecture Constraints
 
 - **blackwell-geforce is NOT blackwell**: `blackwell-geforce` (sm120) and `blackwell` (sm100) are completely different architectures. Do NOT conflate them or assume they share the same optimization strategies.
