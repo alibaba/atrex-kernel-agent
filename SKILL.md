@@ -179,8 +179,6 @@ Then the main agent takes over and must enter Stage 2 immediately. It is forbidd
 
 **Sub-skill**: [gpu-kernel-profile-optimizer](skills/gpu-kernel-profile-optimizer/SKILL.md)
 
-**Helper skill**: [gpu-kernel-bottleneck-analysis](skills/gpu-kernel-bottleneck-analysis/SKILL.md)
-
 Goal: use Step 0 Roofline conclusions and multiple profile -> code change -> validation loops to approach the performance limit.
 
 Stage 2 researches, plans, searches gpu-wiki/reference projects, writes an optimization plan, profiles, modifies code, validates correctness, applies quality gates, commits, and writes `memory/v<N>.json`. It must continually compare against ISA optimization targets recorded in `README.md`.

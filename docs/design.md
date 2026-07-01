@@ -40,7 +40,6 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 │   └── workspace_init.sh                 # Creates /tmp/kernel_opt_<name>/ workspace
 ├── skills/
 │   ├── gpu-kernel-baseline/              # Stage 1 baseline implementation Agent
-│   ├── gpu-kernel-bottleneck-analysis/   # Roofline and bottleneck helper Skill
 │   ├── gpu-kernel-profile-optimizer/     # Stage 2 profile-driven optimization Skill
 │   ├── gpu-kernel-output-contract/       # Final generated_kernel.py packaging Skill
 │   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Agent
@@ -80,12 +79,6 @@ The router is responsible for:
 Path: `agents/gpu-kernel-baseline.md`
 
 The baseline Skill implements the first correct kernel version from PyTorch logic or a kernel demo. It learns the target framework through `gpu-wiki`, writes `kernel.py` and `test_kernel.py`, validates correctness, records baseline performance, writes `baseline_report.md`, creates `memory/v0.json`, and commits the baseline.
-
-### Bottleneck Analysis Skill
-
-Path: `skills/gpu-kernel-bottleneck-analysis/SKILL.md`
-
-This is a helper Skill used by Step 0 and Stage 2. It provides Roofline analysis, TFLOPS and bandwidth utilization calculation, same-size bandwidth ceiling measurement, profiler evidence extraction, and concrete evidence-to-action formatting.
 
 ### Profile Optimizer Skill
 
