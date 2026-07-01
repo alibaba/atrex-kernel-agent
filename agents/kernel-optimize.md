@@ -1,5 +1,5 @@
 ---
-name: optimize
+name: kernel-optimize
 description: |
   GPU kernel optimization implementation expert. Implements evidence-attributed optimization actions from the
   iteration plan, validates correctness, and updates memory. Each change must be traceable to specific profile

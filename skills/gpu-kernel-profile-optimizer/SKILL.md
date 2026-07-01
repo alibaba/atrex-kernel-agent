@@ -165,18 +165,18 @@ After receiving the subagent output:
 
 ## Stage 3: Optimization Implementation
 
-**Subagent**: `optimize`
+**Subagent**: `kernel-optimize`
 
 ### Goal
 
 Implement the optimization actions from `plans/v<N>_plan.md` with clear evidence attribution for each change, validate correctness, and update iteration memory.
 
-The main agent must directly launch the `optimize` subagent for Stage 3. Do NOT write your own prompt or create an ad-hoc subagent — invoke `optimize` by name as a subagent. The main agent must not implement optimization changes directly.
+The main agent must directly launch the `kernel-optimize` subagent for Stage 3. Do NOT write your own prompt or create an ad-hoc subagent — invoke `kernel-optimize` by name as a subagent. The main agent must not implement optimization changes directly.
 
 Subagent launch instruction:
 
 ```
-Launch subagent: optimize
+Launch subagent: kernel-optimize
 Task type: execution task
 Inputs:
   - workspace_path: <workspace absolute path>
@@ -190,11 +190,11 @@ Inputs:
   - gpu_wiki_path: <gpu-wiki root path>
 ```
 
-The `optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (re-profiling with `--source` if needed), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
+The `kernel-optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (re-profiling with `--source` if needed), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
 
 ### Output Received
 
-The optimize subagent returns:
+The kernel-optimize subagent returns:
 
 | Field | Usage |
 |-------|-------|
@@ -206,7 +206,7 @@ The optimize subagent returns:
 ### Handoff to Stage 4
 
 After receiving the subagent output:
-- `validation_result` must be PASS. The `optimize` subagent is responsible for iteratively fixing correctness failures internally.
+- `validation_result` must be PASS. The `kernel-optimize` subagent is responsible for iteratively fixing correctness failures internally.
 - If PASS: proceed to Stage 4 for performance measurement and quality gate.
 
 ## Stage 4: Performance, Correctness, and Quality Gate
