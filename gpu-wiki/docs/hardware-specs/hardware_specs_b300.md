@@ -47,7 +47,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Parameter | Value |
 |------|------|
 | Graphics Processing Clusters (GPCs) | 8 |
-| Streaming Multiprocessors (SMs) | 160 (dual-die, 80 SMs per die) |
+| Streaming Multiprocessors (SMs) | 148 (dual-die, 74 SMs per die; each die has 80 physical SMs, 74 enabled for yield optimization)  |
 | CUDA Cores | 20,480 |
 | Tensor Cores (5th gen) | 640 |
 | RT Cores (4th gen) | 160 |

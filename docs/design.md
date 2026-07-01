@@ -39,11 +39,10 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 │   ├── v_iteration.schema.json           # Structured memory JSON schema
 │   └── workspace_init.sh                 # Creates /tmp/kernel_opt_<name>/ workspace
 ├── skills/
-│   ├── gpu-kernel-baseline/              # Stage 1 baseline implementation Skill
-│   ├── gpu-kernel-bottleneck-analysis/   # Roofline and bottleneck helper Skill
+│   ├── gpu-kernel-baseline/              # Stage 1 baseline implementation Agent
 │   ├── gpu-kernel-profile-optimizer/     # Stage 2 profile-driven optimization Skill
 │   ├── gpu-kernel-output-contract/       # Final generated_kernel.py packaging Skill
-│   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Skill
+│   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Agent
 └── tools/
     ├── bench_bandwidth.py                # Bandwidth benchmark helper
     ├── compute_utilization.py            # TFLOPS / bandwidth utilization calculator
@@ -75,17 +74,11 @@ The router is responsible for:
 - Ensuring accepted iterations are committed with Git.
 - Treating unmasked memory plus workspace `README.md` as the source of truth.
 
-### Baseline Skill
+### Baseline Agent
 
-Path: `skills/gpu-kernel-baseline/SKILL.md`
+Path: `agents/gpu-kernel-baseline.md`
 
 The baseline Skill implements the first correct kernel version from PyTorch logic or a kernel demo. It learns the target framework through `gpu-wiki`, writes `kernel.py` and `test_kernel.py`, validates correctness, records baseline performance, writes `baseline_report.md`, creates `memory/v0.json`, and commits the baseline.
-
-### Bottleneck Analysis Skill
-
-Path: `skills/gpu-kernel-bottleneck-analysis/SKILL.md`
-
-This is a helper Skill used by Step 0 and Stage 2. It provides Roofline analysis, TFLOPS and bandwidth utilization calculation, same-size bandwidth ceiling measurement, profiler evidence extraction, and concrete evidence-to-action formatting.
 
 ### Profile Optimizer Skill
 
@@ -111,9 +104,9 @@ Path: `skills/gpu-kernel-output-contract/SKILL.md`
 
 This Skill packages a validated implementation into `generated_kernel.py` when a hidden evaluator requires a clean final candidate. The final file must contain valid Python source only, define `class Model(nn.Module)`, preserve the reference contract, and exclude tests, benchmarks, debug prints, Markdown, external file reads, and `__main__` blocks.
 
-### Partial Restart Skill
+### Partial Restart Agent
 
-Path: `skills/gpu-kernel-partial-restart/SKILL.md`
+Path: `agents/gpu-kernel-partial-restart.md`
 
 This Skill is used when no new actionable direction is available but Stop Conditions are not met. It masks about half of the previous optimization memories, preserves the latest successful iteration and baseline, and launches a fresh subagent from the current `kernel.py` and unmasked memory.
 
@@ -184,7 +177,7 @@ From this point, the workspace `README.md` plus all unmasked `memory/v<N>.json` 
 
 ### 4. Stage 1: Baseline Implementation
 
-The main agent launches a subagent that follows `skills/gpu-kernel-baseline/SKILL.md`.
+The main agent launches a subagent that follows `agents/gpu-kernel-baseline.md`.
 
 The subagent must:
 
