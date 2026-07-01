@@ -134,15 +134,17 @@ README_TMPL = '''\
 Anti-cheat (no library delegation / camouflage / shape-keyed memo / masked errors) is a POLICY in
 `CLAUDE.md` (C1-C6) — follow it; it is not enforced by a code gate here.
 
-## Stop conditions (target = leaderboard top-3)
+## Stop conditions (target = beat `Recursive` by 10%)
 - Correctness PASSED at SOL tolerance for all workloads.
 - **Report all four metrics (SOL Score / Latency / Fast / Avg Speedup) on every result.**
 - **Baseline T_b**: the SOL "Scoring Baseline" (SOL Score 0.5 point) -- an optimized library impl.
   Its per-workload values are not public, so measure a library baseline through this harness
   (FlashInfer for attention, DeepGEMM/cuBLAS for GEMM, cuDNN, or torch) and confirm its aggregate
   ~ the leaderboard "Scoring Baseline" row (`fetch_leaderboard.py`). Beating T_b => Fast, AvgSpeedup>1.
-- **Target**: match or beat the top-3 leaderboard entries on Latency + Avg Speedup (=> high SOL Score).
-  Fetch them with `tools/fetch_leaderboard.py --kernel-id <id> --gpu <gpu>`.
+- **Target**: beat the `Recursive` leaderboard entry by 10% -- Latency <= Recursive.latency*0.9 and
+  Avg Speedup >= Recursive.avg_speedup*1.1, SOL Score > Recursive's. Fetch + derive with
+  `tools/fetch_leaderboard.py --name <case> --gpu <gpu> --out leaderboard.json`; `sol_metrics.py`
+  prints PASS/MISS vs this target. (`--target-user`/`--target-margin` to change.)
 - Never fabricate SOL Score / T_b / T_SOL (anti-cheat C6): T_b is measured, T_SOL is a labelled
   roofline estimate.
 

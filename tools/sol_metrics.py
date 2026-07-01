@@ -180,19 +180,30 @@ def main(argv=None):
 
     if args.leaderboard_json:
         lb = json.loads(Path(args.leaderboard_json).read_text())
-        print("\n=== leaderboard (target = top-3) ===")
+        print("\n=== leaderboard ===")
         for e in lb.get("rankings", [])[:5]:
             print(f"  {('#'+str(e.get('rank'))) if e.get('rank') else e.get('username'):>16} {e.get('username','')[:18]:<18} "
                   f"SOL={e.get('sol_score')}  Lat={e.get('latency_ms')}ms  Fast={e.get('fast_1_count')}/{e.get('fast_1_total')}  AvgSpd={e.get('avg_speedup')}x")
         for e in lb.get("reference_entries", []):
             if "aseline" in str(e.get("username", "")):
                 print(f"  {'baseline':>16} {e.get('username',''):<18} SOL={e.get('sol_score')}  Lat={e.get('latency_ms')}ms  AvgSpd={e.get('avg_speedup')}x")
-        top = lb.get("rankings", [])
-        top = [e for e in top if e.get("rank")]
-        if top:
-            best = top[0]
-            print(f"\n  vs #1 ({best.get('username')}): my Latency {m['latency_ms']*1000:.2f}us vs {float(best['latency_ms'])*1000:.2f}us; "
-                  f"my AvgSpeedup {m['avg_speedup']:.1f}x vs {best.get('avg_speedup')}x")
+
+        # ---- primary target: beat <target-user> by <margin> (from fetch_leaderboard's `targets`) ----
+        tg = lb.get("targets")
+        if tg:
+            lat_us = m["latency_ms"] * 1000
+            lat_max_us = tg["latency_ms_max"] * 1000
+            lat_ok = lat_us <= lat_max_us
+            spd_ok = m["avg_speedup"] >= tg["avg_speedup_min"]
+            print(f"\n=== TARGET: beat {tg['target_user']} (rank {tg.get('target_rank')}) by {tg['margin']*100:.0f}% ===")
+            print(f"  Latency    : {lat_us:8.3f} us   target <= {lat_max_us:8.3f} us   "
+                  f"[{tg['target_latency_ms']*1000:.3f}us x {1-tg['margin']:.2f}]   {'PASS' if lat_ok else 'MISS'}")
+            print(f"  Avg Speedup: {m['avg_speedup']:8.2f}x   target >= {tg['avg_speedup_min']:8.2f}x   "
+                  f"[{tg['target_avg_speedup']}x x {1+tg['margin']:.2f}]   {'PASS' if spd_ok else 'MISS'}")
+            if m["sol_score_est"] is not None:
+                print(f"  SOL Score  : {m['sol_score_est']:8.4f}   target >  {tg['sol_score_min']:.4f} (est.)   "
+                      f"{'PASS' if m['sol_score_est'] > tg['sol_score_min'] else 'MISS'}")
+            print(f"  => TARGET {'MET' if (lat_ok and spd_ok) else 'NOT met'} (Latency + Avg Speedup)")
     print()
     return 0
 

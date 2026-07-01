@@ -41,7 +41,7 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
     - **Fast** = `count(T_k < T_b)/N` — EXACT vs the measured library baseline.
     - **Avg Speedup** = `mean(T_b / T_k)` — vs the Scoring Baseline `T_b`, NOT the naive reference — EXACT.
     - **SOL Score** = `mean 1/(1+(T_k-T_SOL)/(T_b-T_SOL))` — ESTIMATE from a roofline `T_SOL` (Step 0), or `N/A`.
-    The performance TARGET is to match or beat the **top-3** leaderboard entries (fetch with `tools/fetch_leaderboard.py --kernel-id <id> --gpu <gpu>`), not merely the roofline peak. Record the top-3 and Scoring Baseline in `README.md` under `Stop Conditions`.
+    The performance TARGET is to **beat the `Recursive` leaderboard entry by 10%** (default; configurable via `tools/fetch_leaderboard.py --target-user <name> --target-margin <frac>`): Latency ≤ Recursive.latency × 0.9 and Avg Speedup ≥ Recursive.avg_speedup × 1.1, SOL Score > Recursive's. `sol_metrics.py` prints PASS/MISS vs this target. Record the target + Scoring Baseline in `README.md` under `Stop Conditions`.
 
 ### Scope Without Exceptions
 
@@ -123,7 +123,8 @@ Goal: use the target `platform` and `kernel_demo` to source hardware specs from 
    - Write the Roofline analysis to `README.md`, including sourced specs, calculation process, bound classification, and absolute targets such as `compute-bound target >= 185.4 TFLOPS` or `memory-bound target >= 3.87 TB/s`.
    - Copy the targets to `README.md` under `Stop Conditions`.
 3. **SOL-ExecBench problems — leaderboard target + baseline (do this in addition to roofline)**:
-   - **Fetch the leaderboard**: `python tools/fetch_leaderboard.py --kernel-id <id> --gpu <platform> --out kernel_opt_<name>/leaderboard.json`. Record the **top-3** entries and the **Scoring Baseline** (`T_b`, SOL Score 0.5) and **SOL Bound** (`T_SOL`, SOL Score 1.0) rows in `README.md` under `Stop Conditions`. The performance target is to **match/beat the top-3** on Latency + Avg Speedup, not just the roofline peak.
+   - **Fetch the leaderboard** (resolve by name, works for any case): `python tools/fetch_leaderboard.py --name <case_name> --gpu <platform> --out kernel_opt_<name>/leaderboard.json` (or `--kernel-id <id>`). This prints the rankings + Scoring Baseline (`T_b`) + SOL Bound (`T_SOL`) and derives the **target: beat `Recursive` by 10%** (`--target-user`/`--target-margin` to change). Record the target + Scoring Baseline in `README.md` under `Stop Conditions`.
+   - **Reference kernels**: some leaderboard teams open-source solutions — e.g. **Recursive** at `github.com/recursive-org/first-steps-toward-automated-ai-research` (`SOL-ExecBench/`, Apache-2.0; 10 of 235 cases, incl. `012_gqa_paged_decode` — GQA head-packing + log2 online softmax + split-K). You MAY build on such open-source bases (respect their license/attribution); the anti-cheat policy (CLAUDE.md) still applies to the final kernel.
    - **Build a measured library baseline** in `kernel_opt_<name>/baseline/` (FlashInfer for attention, DeepGEMM/cuBLAS for GEMM, else cuDNN/torch) and run it through the harness to get per-workload `T_b`; confirm its aggregate ≈ the leaderboard "Scoring Baseline" row. This is the `T_b` for Fast / Avg Speedup (measuring stick only — banned in the real kernel).
    - **Emit per-workload roofline `T_SOL`** to `kernel_opt_<name>/tsol.json` (`{idx: ms}`, `T_SOL_i = max(FLOPs_i/peak_tc, bytes_i/BW)`) so `sol_metrics.py` can produce a labelled SOL Score estimate.
    - Every result thereafter reports the four metrics via `tools/sol_metrics.py` (Constraint 12).
@@ -226,7 +227,7 @@ All sub-skills share top-level `tools/`:
 - `tools/memory_manager.py`
 - `tools/sol_adapter.py` — SOL-ExecBench `materialize`/`package` adapter (workspace + `solution.json`; anti-cheat is a `CLAUDE.md` policy, not enforced here).
 - `tools/sol_metrics.py` — computes the four SOL leaderboard metrics (Latency / Fast / Avg Speedup exact vs a measured baseline; SOL Score as a labelled roofline estimate).
-- `tools/fetch_leaderboard.py` — fetches the public leaderboard (top-3 targets + Scoring Baseline `T_b` + SOL Bound `T_SOL`) for a kernel id + GPU.
+- `tools/fetch_leaderboard.py` — resolves a case by `--name` (or `--kernel-id`) and fetches the public leaderboard (rankings + Scoring Baseline `T_b` + SOL Bound `T_SOL`); derives the target "beat `Recursive` by 10%" (`--target-user`/`--target-margin`).
 
 ## Shared References
 

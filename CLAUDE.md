@@ -38,6 +38,13 @@ inline CUDA. Do NOT do any of the following:
 
 If the user **explicitly allows libraries** (`allow_libs` intent), C1 is relaxed; **C2–C6 still hold.**
 
+**Building on open-source reference kernels is allowed** (and encouraged): adapting an open-source
+kernel — e.g. Recursive's Apache-2.0 SOL-ExecBench kernels
+(`github.com/recursive-org/first-steps-toward-automated-ai-research`, `SOL-ExecBench/`) — into your
+own `@triton.jit`/CuteDSL kernel is *self-written code*, not library delegation (C1). Respect the
+source license/attribution. C1 bans importing/calling the runtime libraries (flashinfer/flash_attn/…),
+not learning from published kernel source.
+
 ## SOL-ExecBench: always report the four leaderboard metrics
 
 For any SOL-ExecBench result, report all four (see `tools/sol_metrics.py`, `tools/fetch_leaderboard.py`):
