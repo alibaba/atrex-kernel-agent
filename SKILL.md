@@ -28,12 +28,12 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
 5. **Missing wiki values**: If a spec cannot be found, write `<metric>: UNKNOWN (gpu-wiki not found)`, record the gap in `memory/v<N>.json` under `pitfalls_and_fixes`, report it to the user, and ask whether a placeholder is acceptable. Do not fill gaps with wording such as "approximately", "should be", "usually", or "similar product".
 6. **Auditable archive**: Any reviewer must be able to verify every spec from the local `<gpu-wiki>/` path in the archive. Non-verifiable archives are invalid.
 7. **Profiling-driven optimization only**:
-   - NVIDIA: `ncu` (wrapped by `./tools/profile_nvidia.sh`)
+   - NVIDIA: `./tools/profile_nvidia.sh`
    - AMD: `./tools/profile_kernel.sh`
-   - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `ncu` or `profile_kernel.sh` for identifying bottlenecks.
+   - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `profile_nvidia.sh` or `profile_kernel.sh` for identifying bottlenecks.
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
 9. Optimization runs in a temporary workspace and every accepted iteration is committed with git.
-10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` sub-skill or by the user manually.
+10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` agent or by the user manually.
 
 ### Scope Without Exceptions
 
@@ -135,19 +135,28 @@ Run the following phases in order. A phase must pass before the next phase start
 
 ### Stage 1: Baseline Implementation
 
-**Sub-skill**: [gpu-kernel-baseline](skills/gpu-kernel-baseline/SKILL.md)
+**Subagent**: `gpu-kernel-baseline`
 
 Goal: understand the PyTorch logic, extract compute pattern, input/output shapes, dtype, dependencies, and accuracy requirements; learn the target framework API and hardware constraints from `<gpu-wiki>/README.md`; then implement correct `kernel.py` and `test_kernel.py`, validate correctness and baseline performance, and create the starting point for profile-driven optimization.
 
-The main agent must launch a subagent for Stage 1. The main agent must not implement the baseline directly. The subagent must read and follow `gpu-kernel-baseline`, read the PyTorch logic, learn framework APIs via `<gpu-wiki>/README.md`, implement `kernel.py` and `test_kernel.py`, validate correctness and performance, write `baseline_report.md`, write `memory/v0.json`, and commit.
+The main agent must directly launch the `gpu-kernel-baseline` subagent for Stage 1. Do NOT write your own prompt or create an ad-hoc subagent — invoke `gpu-kernel-baseline` by name as a subagent. The main agent must not implement the baseline directly.
 
-Subagent requirements:
+Subagent launch instruction:
 
-- **Task type**: editing task.
-- **Required inputs**: workspace path, `README.md`, `memory/` directory, PyTorch logic or `kernel_demo`, platform, framework, dtype, shapes, and correctness threshold.
-- **Must do**: read `gpu-kernel-baseline`; read workspace `README.md`; implement `kernel.py` and `test_kernel.py` base on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
+```
+Launch subagent: gpu-kernel-baseline
+Task type: editing task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - pytorch_logic: <user-provided PyTorch logic or kernel_demo path>
+  - platform: <target platform, e.g. H20, MI308X>
+  - gpu_wiki_path: <gpu-wiki root path>
+```
+
+The `gpu-kernel-baseline` subagent will autonomously: read workspace `README.md`; implement `kernel.py` and `test_kernel.py` based on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
+
 - **Forbidden**: do not skip `<gpu-wiki>/README.md`; do not fabricate hardware specs; do not modify Stage 2 plans or profiles; do not commit if correctness fails.
-- **Return**: paths for `kernel.py` which implemented by CuteDSL or FlyDSL, `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
+- **Expected return**: paths for `kernel.py` (implemented in CuteDSL or FlyDSL), `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
 
 Entry criteria:
 
@@ -169,8 +178,6 @@ Then the main agent takes over and must enter Stage 2 immediately. It is forbidd
 ### Stage 2: Profile-Driven Iterative Optimization
 
 **Sub-skill**: [gpu-kernel-profile-optimizer](skills/gpu-kernel-profile-optimizer/SKILL.md)
-
-**Helper skill**: [gpu-kernel-bottleneck-analysis](skills/gpu-kernel-bottleneck-analysis/SKILL.md)
 
 Goal: use Step 0 Roofline conclusions and multiple profile -> code change -> validation loops to approach the performance limit.
 
