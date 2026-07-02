@@ -35,12 +35,12 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - DO NOT proceed to Stage 3 without receiving the subagent's plan output.
 - DO NOT proceed to Stage 5 without receiving the subagent's quality gate result.
 
-## Third-Party Library Prohibition
+## Framework Constraint
 
-- Kernel optimization code MUST be implemented from scratch — DO NOT introduce any third-party libraries or external dependencies.
-- All optimization logic, data structures, and algorithms used in kernel implementations MUST be self-written.
-- Referencing third-party code for learning is permitted, but the final implementation MUST NOT depend on or copy from external libraries.
-- If a kernel requires utility functions (e.g., memory management helpers, math primitives), they MUST be implemented inline or as project-local utilities — NEVER imported from external packages.
+- Optimization iterations MUST stay within the framework specified by the `--framework` parameter — switching to a different framework is NEVER permitted.
+- Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced to assist optimization, but the final kernel implementation MUST use the designated framework.
+- `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
+- When Triton-level optimizations have converged (i.e., further Triton-only changes yield no significant performance improvement), the kernel SHOULD be rewritten in Gluon to unlock deeper optimization opportunities.
 
 ## Benchmark Harness Integrity
 
