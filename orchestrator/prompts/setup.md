@@ -24,6 +24,11 @@ Read the bundled skill docs by path and follow them, but only through baseline:
 3. **Stage 1 — Baseline.** Follow `skills/gpu-kernel-baseline/SKILL.md`: implement `kernel.py` + `test_kernel.py`,
    validate correctness and baseline performance, write `baseline_report.md`, write `memory/v0.json` (via
    `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
+   **`test_kernel.py` MUST bench every shape in the workspace `shapes.json`** (the full ground-truth set, keyed
+   by integer sid) — not a hand-picked subset. This shape set + harness is the immutable per-campaign benchmark
+   methodology (see `reference/CLAUDE.md` "Benchmark Harness Integrity"); later iterations reuse it unchanged.
+   Record `performance.latency_us_by_shape` (all sids), `latency_us` (their mean), and `priority_ms`
+   (mean over sids of `max(0, latency_ms - roofline.json.shapes[sid].SOL_time_ms[<platform>])`).
 
 Then **STOP**. Do **NOT** enter Stage 2 / any optimization iteration — the orchestrator spawns those as
 separate clean sessions. Exit once `memory/v0.json` exists and the baseline is committed.

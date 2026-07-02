@@ -46,6 +46,12 @@ profile reveals a better lever, pursue that instead. The only hard constraint is
 4. **Validate + bench** (skill Stage 4): correctness first (with the timeout guard), then measure
    latency / TFLOPS / bandwidth / peak-utilization. Bench must be **variance-aware** — a delta only counts as
    real if it clears measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement).
+   **Bench EVERY shape in `shapes.json`** (the full ground-truth shape set, keyed by integer sid) — never a
+   single hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}`
+   for all sids, set `performance.latency_us` = their mean, and compute
+   `performance.priority_ms` = mean over sids of `max(0, latency_ms - SOL_ms)` where `SOL_ms` is
+   `roofline.json.shapes[sid].SOL_time_ms[<platform>]`. This is what the orchestrator ranks boundaries on;
+   an under-benched (single-shape) record silently mis-ranks the whole layer.
 
 ## Step C — Commit or revert (mechanical, no discretion)
 
