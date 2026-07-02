@@ -51,7 +51,7 @@ You will receive the following parameters when invoked:
 Starting from V1, read before any search:
 
 1. `kernel_opt_<name>/README.md`
-2. `<gpu-wiki>/README.md`
+2. `<gpu-wiki>/README.md`, then `<gpu-wiki>/docs/index.md` (flat catalog) and `<gpu-wiki>/CLAUDE.md` (schema + Query operation)
 3. All unmasked `kernel_opt_<name>/memory/v*.json` files (skip `masked: true`)
 4. Current `profiles/v<N>/` profiling artifacts
 5. Previous iteration `kernel_opt_<name>/memory/v<N-1>.json` (if unmasked)
@@ -82,7 +82,7 @@ Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the **Sy
 
 | Layer | Scope | Sources | Search Method |
 |-------|-------|---------|---------------|
-| **L1** (gpu-wiki) | Local curated knowledge | `gpu-wiki/docs/` (kernel-opt, ref-docs, pitfalls, hardware-specs, converter), `gpu-wiki/3rdparty/`, `gpu-wiki/reference-kernels/` | Navigate via README hierarchy; grep by keyword; read targeted files |
+| **L1** (gpu-wiki) | Local curated knowledge | `gpu-wiki/docs/` (vendor-first: `generic/`, `nvidia/{common,hopper,blackwell,blackwell-geforce}/`, `amd/`), `gpu-wiki/3rdparty/`, `gpu-wiki/reference-kernels/` | Architecture-scoped multi-query retrieval (see "Scoped L1 query" below), then README hierarchy + grep |
 | **L2** (reference-projects) | Local code repositories | `reference-projects/` — upstream frameworks and implementations (cutlass, flash-attention, flashinfer, DeepGEMM, triton, etc.) | Search source code for implementation patterns; read specific modules by kernel type |
 | **L3** (public net) | Internet resources | Papers, blog posts, vendor official docs, GitHub issues, community forums | Web search by targeted query; findings provide optimization ideas only; hardware specs still require gpu-wiki or explicit confirmation |
 
@@ -100,6 +100,44 @@ Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the **Sy
    ├── New finding found? → Record it (New? = Yes) → Write plan
    └── No new finding? → Report "search space exhausted" → Return exhaustion status
 ```
+
+#### Scoped L1 query (gpu-wiki/docs)
+
+`gpu-wiki/docs/` has a flat catalog (`docs/index.md`) and an architecture-scoped
+search tool `scripts/query.py`. Prefer it over raw grep so results stay on the
+target architecture — a Blackwell query never returns Hopper or CDNA pages.
+
+Map your input parameters to filters: `platform` → `--vendor`, `framework` →
+`--dsl`, and the target GPU/architecture → `--arch` (codenames or sm/gfx/chip
+aliases, e.g. `sm90`, `gfx942`, `mi300x`, `b200`). Keywords are AND-ed and each
+word is matched independently, so prefer **several narrow queries** over one long
+phrase; add `--any` for OR. Architecture-neutral/general pages are always
+included; only competing architectures are filtered out.
+
+**Run L1 as a short sequence of scoped queries — one query rarely covers both the
+"what" (which kernel) and the "how" (techniques / hardware / bottleneck patterns):**
+
+```bash
+# 1) kernel-type query — locate the target kernel pages (WHAT)
+python3 <gpu-wiki>/scripts/query.py "moe gemm" --arch b200 --vendor nvidia
+
+# 2) symptom / technique queries — the HOW layer, derived from the profiling
+#    bottleneck (Step 3). One query per relevant symptom / technique keyword:
+python3 <gpu-wiki>/scripts/query.py "warp specialization" --arch b200 --vendor nvidia
+python3 <gpu-wiki>/scripts/query.py "tile scheduling persistent" --arch b200 --vendor nvidia
+python3 <gpu-wiki>/scripts/query.py "tcgen05 tmem" --arch b200 --vendor nvidia
+
+# 3) completeness backstop — browse everything in scope (omit keywords), or read
+#    docs/index.md, to catch relevant pages the keyword queries missed
+python3 <gpu-wiki>/scripts/query.py --arch b200 --vendor nvidia --dsl cutedsl
+python3 <gpu-wiki>/scripts/query.py --list-arch          # valid arch values + aliases
+```
+
+Then open the returned pages and `grep` within them to confirm. The kernel-type
+query (1) gives the target kernels; the symptom/technique queries (2) and the
+browse backstop (3) ensure the optimization-technique, bottleneck-pattern, and
+hardware-mechanism pages for the target architecture are not missed. Fall back to
+the README hierarchy only if the scoped queries yield nothing.
 
 ### 3rdparty Knowledge Base Usage Guide
 
