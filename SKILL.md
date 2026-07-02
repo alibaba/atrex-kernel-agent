@@ -74,7 +74,7 @@ This script creates the workspace directory structure (`memory/`, `plans/`, `pro
 
 After global constraints are confirmed and before writing the workspace `README.md`, parse configuration from the user prompt. Do not read the current directory `README.md` for configuration. All configuration must come from explicit user input or defaults.
 
-Flow: **parse user input -> Step 0 (hardware specs + Roofline analysis) -> write workspace README.md**.
+Flow: **parse user input -> decomposition gate (single operator vs whole layer) -> Step 0 (hardware specs + Roofline analysis) -> write workspace README.md**. The gate defaults to **single operator** — the composite/layer path (any input made of more than one separable op, e.g. `rope+attention`, `attention+moe`, or a whole layer) is an optional overlay (see below) and almost every task skips it.
 
 | Field | Description | Default |
 |------|-------------|---------|
@@ -92,6 +92,30 @@ Flow: **parse user input -> Step 0 (hardware specs + Roofline analysis) -> write
 2. Derive `arch` from `platform` using the mapping above.
 3. Validate only the `kernel_demo` path.
 4. If `platform`, `framework`, or `kernel_demo` is missing, ask the user. Do not guess.
+
+### Decomposition Gate: Single Operator vs Composite (default: single operator)
+
+Immediately after parsing, decide whether the input is a **single operator** or a **composite of more than one
+separable op**. This gate **defaults to single operator** — decomposition is a purely optional overlay, and
+almost every task bypasses it. The test is *how many separable operators the input contains*, not whether it is
+a "whole layer".
+
+- **Single operator (default — the common case)**: one fusion-bounded operator — a single compute primitive
+  plus the elementwise epilogue/prologue a real kernel folds in (a matmul, one attention, one norm,
+  `o_proj + residual`, `gate_up + SwiGLU`, `fused_add_rmsnorm`, `silu_and_mul`, a quant, a RoPE). Proceed
+  directly to Step 0 and the normal Stage 1 -> Stage 2 flow below. **Nothing changes.**
+- **Composite (opt-in overlay)**: the input contains **≥ 2 separable ops** that each merit their own kernel
+  boundary — e.g. `rope + attention`, `attention + moe`, `qkv_proj + attention`, or a whole decoder layer
+  (norm -> QKV -> attention -> o_proj -> residual -> norm -> MLP -> residual) — or the user asks to split. In
+  that case do **not** run the single-operator flow directly. Instead invoke the **decomposition overlay**:
+  `orchestrator/optimize.py --layer` (rules in `agents/gpu-kernel-decompose.md`), which carves the input into
+  fused-operator boundaries, gives **each boundary its own standard workspace** (own Step 0 / baseline /
+  optimization / git), schedules a **shared `--max-iters` budget** across them by live ROI (no boundary is ever
+  dropped), and finally recombines + validates. Each boundary workspace then runs exactly the single-operator
+  flow below.
+
+**When in doubt, treat a single heavy op with light epilogues as one operator.** But any input with two or more
+separable ops decomposes — a two-op composite (`rope+attention`) as much as a whole layer.
 
 ## Step 0: Hardware Spec Lookup and Theoretical Roofline Analysis
 
@@ -202,6 +226,7 @@ python orchestrator/optimize.py \
 - PyTorch logic only: Step 0 -> Stage 1 -> Stage 2
 - Existing kernel with "why is it slow": Step 0 -> Stage 2
 - Roofline analysis only: Step 0 only
+- Composite op or whole LLM layer — any input with >1 separable fused op (opt-in overlay): decomposition gate -> `optimize.py --layer` (decompose into boundaries -> one workspace per boundary, each running Step 0 -> Stage 1 -> Stage 2 under a shared budget -> recombine + validate)
 
 ## Shared Tools
 

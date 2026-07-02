@@ -110,6 +110,34 @@ Path: `agents/gpu-kernel-partial-restart.md`
 
 This Skill is used when no new actionable direction is available but Stop Conditions are not met. It masks about half of the previous optimization memories, preserves the latest successful iteration and baseline, and launches a fresh subagent from the current `kernel.py` and unmasked memory.
 
+### Layer Decomposition Overlay (optional)
+
+Path: `agents/gpu-kernel-decompose.md` (rules) + `orchestrator/optimize.py --layer` (driver) +
+`orchestrator/prompts/decompose.md` / `recombine.md`.
+
+By default the whole workflow operates on a **single fusion-bounded operator**, and this overlay is inert. It
+activates **only** when the input is a **composite of more than one separable op** — a whole LLM layer, or a
+smaller multi-op composite such as `rope+attention` or `attention+moe` — or the user explicitly asks to split.
+A single operator (one heavy op plus its fusable epilogue) bypasses it entirely — the common case. When active it:
+
+1. **Decomposes** the layer into fused-operator boundaries per the evidence-backed rules in
+   `agents/gpu-kernel-decompose.md` (the GEMM epilogue is the universal fuse surface; split where a reduction
+   crosses a parallelism boundary or the tiling regime changes; keep the flash attention core and MoE
+   token-sort monolithic). It emits one basic fused kernel per boundary plus a `boundaries.json` manifest
+   (per-boundary op type, shapes, SOL time from `atrex-bench/scripts/roofline.py`, and expected `%SOL` ceiling).
+2. **Fans out** each boundary into its **own standard atrex workspace** — own `kernel.py`, git (HEAD = best),
+   Step 0 roofline, baseline `v0`, and profile-driven optimization. A boundary *is* a single-operator campaign;
+   the per-operator machinery is reused unchanged.
+3. **Schedules a shared budget**: `optimize.py` owns one iteration budget (`--max-iters`) across all boundaries.
+   Each round it advances the highest live-ROI boundary by one version
+   (`priority = max(0, latency − SOL/ceiling) × decay(stall)`), so `Σ (per-boundary versions) == --max-iters`.
+   **No boundary is ever dropped** — a plateaued one is decayed and re-enters contention later. SOL is the
+   yardstick, never a stop gate (termination is plateau + the shared budget).
+4. **Recombines** each boundary's git-HEAD kernel into the full-layer kernel and validates end-to-end.
+
+gpu-wiki holds **no** partitioning content; it remains operator-optimization knowledge only. The single-operator
+path (`Campaign` in `optimize.py`) is untouched by this overlay.
+
 ## End-to-End Workflow
 
 ### 1. Parse Input and Initialize Workspace
