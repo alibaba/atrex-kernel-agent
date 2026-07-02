@@ -421,10 +421,32 @@ def best_perf_by_shape(workspace: Path) -> Optional[dict]:
     return best or None
 
 
+# roofline.json may key SOL_time_ms by a verbose SKU string (atrex-bench native, e.g.
+# "NVIDIA B200 (SM100)") instead of the short platform token the orchestrator uses ("B200").
+# ADD aliases here — the lookup tries the platform token first, then these, so both schemes
+# work. This is a mapping, not a rename: existing short-key roofline files keep resolving.
+_SOL_PLATFORM_KEY_ALIASES: dict[str, list[str]] = {
+    "B200": ["NVIDIA B200 (SM100)"],
+    "B300": ["NVIDIA B300 (SM100)"],
+    "H20":  ["NVIDIA H20"],
+    "A100": ["NVIDIA A100"],
+    "MI308X": ["AMD MI308X"],
+}
+
+
+def _sol_time_ms_for(sol_block: dict, platform: str) -> Optional[float]:
+    """Resolve SOL_time_ms for `platform`, trying the short token then its verbose aliases."""
+    for key in (platform, *_SOL_PLATFORM_KEY_ALIASES.get(platform, [])):
+        v = sol_block.get(key)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
 def sol_ms_by_shape(workspace: Path, platform: str) -> Optional[dict]:
     """Per-shape SOL (ms) for a boundary, read from the workspace's atrex-bench-format
-    ``roofline.json``: ``shapes[sid].SOL_time_ms[<platform>]``. Keyed by the integer sid
-    ("0","1",...) shared with ``shapes.json`` and with the memory latency_us_by_shape.
+    ``roofline.json``: ``shapes[sid].SOL_time_ms[<platform-or-alias>]``. Keyed by the integer
+    sid ("0","1",...) shared with ``shapes.json`` and with the memory latency_us_by_shape.
     Returns None when roofline.json is absent (caller falls back to the scalar path).
     """
     rp = workspace / "roofline.json"
@@ -436,9 +458,11 @@ def sol_ms_by_shape(workspace: Path, platform: str) -> Optional[dict]:
         return None
     out: dict[str, float] = {}
     for sid, entry in shapes.items():
-        sol = (entry.get("SOL_time_ms") or {}).get(platform) if isinstance(entry, dict) else None
-        if isinstance(sol, (int, float)):
-            out[sid] = float(sol)
+        if not isinstance(entry, dict):
+            continue
+        sol = _sol_time_ms_for(entry.get("SOL_time_ms") or {}, platform)
+        if sol is not None:
+            out[sid] = sol
     return out or None
 
 
@@ -487,7 +511,9 @@ class LayerCampaign:
     arch: str = ""
     gpu_wiki: str = ""
     roofline_py: str = ""
-    workload: str = ""             # path to the layer's workload.jsonl (the full shape set)
+    op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
+                                   # metadata.json / input.py / reference.py) — the full shape
+                                   # set + SOL + anchor source. Passed in; never hardcoded.
     max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
     token_budget: int = 0
     plateau_k: int = 3             # all boundaries stall_rounds >= k -> layer short-circuit
@@ -528,7 +554,7 @@ class LayerCampaign:
             PROMPTS_DIR / "decompose.md",
             LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
             PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py, GPU_WIKI=self.gpu_wiki,
-            WORKLOAD=self.workload, NOTES=self.notes,
+            OP_DIR=self.op_dir, NOTES=self.notes,
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
@@ -693,14 +719,13 @@ class LayerCampaign:
         Runs once; skipped on resume (weights already present) or when no workload is configured.
         Non-fatal — if the anchor bench fails, priority falls back to unweighted (w[s]=1).
         """
-        if not self.workload:
-            print("[layer] no --workload; priority uses raw ms-gap (w=1)", flush=True)
+        if not self.op_dir:
+            print("[layer] no --op-dir; priority uses raw ms-gap (w=1)", flush=True)
             return
         if self._read_manifest().get("shape_weights"):
             return  # resume: already computed
-        op_dir = Path(self.workload).parent
         cmd = [sys.executable, str(Path(__file__).parent / "anchor_bench.py"),
-               "--op-dir", str(op_dir), "--manifest", str(self._manifest_path()),
+               "--op-dir", str(self.op_dir), "--manifest", str(self._manifest_path()),
                "--platform", self.platform]
         print(f"[layer] anchor bench (Tb_layer for SOL-score weights): {' '.join(cmd)}", flush=True)
         r = subprocess.run(cmd)
@@ -730,26 +755,42 @@ class LayerCampaign:
         return reason or "done"
 
 
+def _resolve_op(op_dir: str) -> dict:
+    """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
+    --op-dir (+ the non-deducible --platform / --framework). Returns name / reference / roofline_py.
+    """
+    d = Path(op_dir).resolve()
+    if not d.is_dir():
+        raise SystemExit(f"--op-dir not found: {d}")
+    ref = d / "reference.py"
+    if not ref.is_file():
+        raise SystemExit(f"--op-dir has no reference.py: {d}")
+    roofline_py = ""  # atrex-bench root is an ancestor of the op dir; find scripts/roofline.py
+    for p in (d, *d.parents):
+        cand = p / "scripts" / "roofline.py"
+        if cand.is_file():
+            roofline_py = str(cand)
+            break
+    return {"name": d.name, "reference": str(ref), "roofline_py": roofline_py, "op_dir": str(d)}
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Clean-session orchestrator for atrex-kernel-agent.")
-    ap.add_argument("--name", required=True, help="Workspace name -> ./kernel_opt_<name>/")
-    ap.add_argument("--kernel-demo", required=True,
-                    help="Single-op mode: path to the kernel to optimize. "
-                         "Layer mode (--layer): path to the whole LLM-layer module to decompose.")
+    ap.add_argument("--op-dir", required=True,
+                    help="The atrex-bench native op dir (shapes.json / roofline.json / metadata.json / "
+                         "input.py / reference.py). EVERYTHING op-specific is read from here — the workspace "
+                         "name (dir basename), the kernel/layer to optimize (reference.py), the full shape set, "
+                         "per-shape SOL, and the priority anchor (metadata.production_performance). Never hardcoded.")
+    ap.add_argument("--platform", required=True, help="Target hardware, e.g. B200 / H20 / MI308X "
+                                                      "(cannot be deduced from the op dir).")
+    ap.add_argument("--framework", required=True, help="Target DSL, e.g. CuteDSL / FlyDSL "
+                                                       "(cannot be deduced from the op dir).")
     ap.add_argument("--layer", action="store_true",
-                    help="Optional decomposition overlay: treat --kernel-demo as a composite of more than one "
-                         "fused op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
+                    help="Decomposition overlay: treat the op's reference as a composite of more than one fused "
+                         "op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
                          "fused-operator boundaries (per agents/gpu-kernel-decompose.md), optimize each in its "
                          "own workspace under one shared --max-iters budget, then recombine. Default off "
                          "(single-op path unchanged).")
-    ap.add_argument("--roofline-py", default=str(REPO_ROOT.parent / "atrex-bench" / "scripts" / "roofline.py"),
-                    help="Layer mode: per-boundary SOL calculator (default: <repo>/../atrex-bench/scripts/roofline.py).")
-    ap.add_argument("--platform", required=True, help="Target hardware, e.g. H20 / MI308X.")
-    ap.add_argument("--workload", default="",
-                    help="Layer mode: path to the benchmark op's workload.jsonl (the full shape set). Its "
-                         "directory must also hold definition.json + solution.py (the optimized-PyTorch anchor) "
-                         "so the scheduler can weight priority by the official per-shape SOL-score.")
-    ap.add_argument("--framework", required=True, help="e.g. CuteDSL / FlyDSL.")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
     ap.add_argument("--gpu-wiki", default=str(REPO_ROOT / "gpu-wiki"),
                     help="Absolute path to the gpu-wiki knowledge base (default: <repo>/gpu-wiki).")
@@ -768,15 +809,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     arch = args.arch or detect_arch()
-    print(f"[orchestrator] platform={args.platform} runtime_arch="
+    op = _resolve_op(args.op_dir)
+    print(f"[orchestrator] op={op['name']} platform={args.platform} runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
 
     if args.layer:
         layer = LayerCampaign(
-            name=args.name, layer_demo=args.kernel_demo, platform=args.platform,
+            name=op["name"], layer_demo=op["reference"], platform=args.platform,
             framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
-            roofline_py=args.roofline_py, workload=args.workload,
+            roofline_py=op["roofline_py"], op_dir=op["op_dir"],
             max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
         )
@@ -784,7 +826,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     campaign = Campaign(
-        name=args.name, kernel_demo=args.kernel_demo, platform=args.platform,
+        name=op["name"], kernel_demo=op["reference"], platform=args.platform,
         framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
