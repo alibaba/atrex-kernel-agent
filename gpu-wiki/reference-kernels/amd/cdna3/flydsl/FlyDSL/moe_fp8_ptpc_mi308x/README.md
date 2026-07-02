@@ -97,17 +97,17 @@ retained source state: task64 promoted source + task65 documentation-only negati
 
 See the optimization checkpoint for the full table:
 
-- [cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md](../../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md)
+- [cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md](../../../../../../docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md)
 
 The later atrex-open integrated v2 full-pipeline archive is a sibling package,
 not a replacement for this checkpoint:
 
 - [moe_fp8_ptpc_mi308x_atrex_v2/](../moe_fp8_ptpc_mi308x_atrex_v2/)
-- [cdna3-fused-moe-fp8-ptpc-atrex-v2.md](../../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md)
+- [cdna3-fused-moe-fp8-ptpc-atrex-v2.md](../../../../../../docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md)
 
 Pitfalls and invalid evidence boundaries:
 
-- [fused-moe-fp8-ptpc-pitfalls.md](../../../../../../docs/pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md)
+- [fused-moe-fp8-ptpc-pitfalls.md](../../../../../../docs/amd/flydsl/pitfalls/fused-moe-fp8-ptpc-pitfalls.md)
 
 ## Provenance
 

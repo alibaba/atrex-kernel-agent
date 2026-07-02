@@ -38,14 +38,14 @@ End-to-end Path-1 forward (vllm.flash_attn dispatcher + V_final fused-quant) is 
 
 ## Related docs
 
-- **Optimization journey**: [docs/ref-docs/nvidia/cutedsl/sm120/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md)
-- **Deferred true-fusion plan** (cutlass 4.5+): [docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md)
-- **PipelineTmaAsync API notes**: [docs/ref-docs/nvidia/cutedsl/sm120/sm120-pipeline-tma-async-api-notes.md](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-pipeline-tma-async-api-notes.md)
+- **Optimization journey**: [docs/ref-docs/nvidia/cutedsl/sm120/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md](../../../../../docs/nvidia/blackwell-geforce/cutedsl/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md)
+- **Deferred true-fusion plan** (cutlass 4.5+): [docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md](../../../../../docs/nvidia/blackwell-geforce/cutedsl/v3-fa-fusion-deferred-plan.md)
+- **PipelineTmaAsync API notes**: [docs/ref-docs/nvidia/cutedsl/sm120/sm120-pipeline-tma-async-api-notes.md](../../../../../docs/nvidia/blackwell-geforce/cutedsl/sm120-pipeline-tma-async-api-notes.md)
 - **Pitfalls**:
-  - [TMA + warp-spec](../../../../../docs/pitfalls/nvidia/cutedsl/sm120-tma-warp-spec-pitfalls.md)
-  - [vendor flash_attn.cute on cutlass < 4.5](../../../../../docs/pitfalls/nvidia/cutedsl/cute-442-vendor-flash-attn-pitfalls.md)  - [ncu L1/TEX hit rate counts ld.shared](../../../../../docs/pitfalls/nvidia/cutedsl/sm120-ncu-l1-hit-rate-shared-pollution.md)
-  - [vllm flash_attn no fast path on sm_120](../../../../../docs/pitfalls/nvidia/cutedsl/sm120-flash-attn-vllm-no-fast-path.md)
+  - [TMA + warp-spec](../../../../../docs/nvidia/blackwell-geforce/cutedsl/pitfalls/sm120-tma-warp-spec-pitfalls.md)
+  - [vendor flash_attn.cute on cutlass < 4.5](../../../../../docs/nvidia/blackwell-geforce/cutedsl/pitfalls/cute-442-vendor-flash-attn-pitfalls.md)  - [ncu L1/TEX hit rate counts ld.shared](../../../../../docs/nvidia/blackwell-geforce/cutedsl/pitfalls/sm120-ncu-l1-hit-rate-shared-pollution.md)
+  - [vllm flash_attn no fast path on sm_120](../../../../../docs/nvidia/blackwell-geforce/cutedsl/pitfalls/sm120-flash-attn-vllm-no-fast-path.md)
 - **Adjacent sm_120 optimizations**:
-  - [SM120 NVFP4 GEMM (581 TFLOPS = 71% CUTLASS)](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-persistent-gemm-pro5000-optimization.md)
-  - [SM120 GDN decode (100.8% memcpy ceiling)](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md)
+  - [SM120 NVFP4 GEMM (581 TFLOPS = 71% CUTLASS)](../../../../../docs/nvidia/blackwell-geforce/cutedsl/sm120-nvfp4-persistent-gemm-pro5000-optimization.md)
+  - [SM120 GDN decode (100.8% memcpy ceiling)](../../../../../docs/nvidia/blackwell-geforce/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md)
 - **NVFP4 helpers source**: [reference-kernels/nvidia/blackwell/cutedsl/flashinfer/quantization_cute_dsl_utils.py](../../../blackwell/cutedsl/flashinfer/quantization_cute_dsl_utils.py) (datacenter Blackwell, but PTX cvt is arch-agnostic)

@@ -2,7 +2,7 @@
 
 Reference GPU kernel implementations for FlyDSL on the AMD RDNA4 (gfx1250) architecture, focusing on GEMM variants, WMMA instructions, and fused MoE.
 
-> **inline_asm syntax**: See [`docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md`](../../../../../docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md).
+> **inline_asm syntax**: See [`docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md`](../../../../../docs/amd/flydsl/flydsl-inline-asm-patterns.md).
 
 ---
 

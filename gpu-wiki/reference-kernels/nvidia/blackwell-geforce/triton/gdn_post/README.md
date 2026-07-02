@@ -10,10 +10,10 @@ GDN attention path on RTX PRO 5000 (`sm_120`).
 ## Why `BLOCK_M=2` (not larger)
 
 `BLOCK_M=8` is 4× slower at this shape; `BLOCK_M=16/32` are 20-27× slower.
-See [`sm120-fused-rmsnorm-gated-pitfalls.md`](../../../../../docs/pitfalls/nvidia/triton/sm120-fused-rmsnorm-gated-pitfalls.md#3-blockm-sweep-can-show-27-maxmin-spread-at-the-same-shape).
+See [`sm120-fused-rmsnorm-gated-pitfalls.md`](../../../../../docs/nvidia/blackwell-geforce/triton/pitfalls/sm120-fused-rmsnorm-gated-pitfalls.md#3-blockm-sweep-can-show-27-maxmin-spread-at-the-same-shape).
 
 ## Related docs
 
-- Full V1 → V3 journey: [`sm120-fused-rmsnorm-gated-bf16-optimization.md`](../../../../../docs/ref-docs/nvidia/triton/sm120/sm120-fused-rmsnorm-gated-bf16-optimization.md)
-- Pitfalls: [`sm120-fused-rmsnorm-gated-pitfalls.md`](../../../../../docs/pitfalls/nvidia/triton/sm120-fused-rmsnorm-gated-pitfalls.md)
-- CuTeDSL real-fusion attempt (deferred): [`v3-fa-fusion-deferred-plan.md`](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md)
+- Full V1 → V3 journey: [`sm120-fused-rmsnorm-gated-bf16-optimization.md`](../../../../../docs/nvidia/blackwell-geforce/triton/sm120-fused-rmsnorm-gated-bf16-optimization.md)
+- Pitfalls: [`sm120-fused-rmsnorm-gated-pitfalls.md`](../../../../../docs/nvidia/blackwell-geforce/triton/pitfalls/sm120-fused-rmsnorm-gated-pitfalls.md)
+- CuTeDSL real-fusion attempt (deferred): [`v3-fa-fusion-deferred-plan.md`](../../../../../docs/nvidia/blackwell-geforce/cutedsl/v3-fa-fusion-deferred-plan.md)

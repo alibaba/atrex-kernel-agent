@@ -1,8 +1,8 @@
 # Profile Tool Usage Guide
 
-> Source: gpu-wiki (`~/aka_kernel_opt/gpu-wiki/docs/ref-docs/`)
+> Source: gpu-wiki (`~/aka_kernel_opt/gpu-wiki/docs/`)
 > - AMD: `amd/common/rocprofv3-profiling-guide.md`, `amd/gluon/gfx942/profiling_guide.md`
-> - NVIDIA: `nvidia/common/ncu-profiling-guide.md`, `nvidia/gluon/sm90/profiling_guide.md`
+> - NVIDIA: `nvidia/profiling/ncu-profiling-guide.md`, `nvidia/gluon/sm90/profiling_guide.md`
 
 This guide consolidates profile tool usage for both AMD and NVIDIA platforms.
 All profiling evidence must come from these official tools 
