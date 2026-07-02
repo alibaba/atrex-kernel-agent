@@ -242,7 +242,7 @@ bash tools/profile_kernel.sh <kernel.py> --wrapper-name <wrapper> --output-dir .
    ```bash
    env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
        rocprofv3 --att \
-       --att-library-path ./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64 \
+       --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \
        -i tools/input_att.yaml \
        -- python <kernel.py>
    ```
