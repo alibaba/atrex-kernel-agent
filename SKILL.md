@@ -216,10 +216,21 @@ Entry criteria: Stage 1 passed and `README.md` contains Step 0 Roofline analysis
 Run:
 
 ```bash
+# Single op:
 python orchestrator/optimize.py \
-  --name <name> --kernel-demo <path> --platform <P> --framework <F> \
+  --op-dir <atrex-bench native op dir> --platform <P> --framework <F> \
   [--max-iters 20] [--token-budget 0] [--target-util 90]
+
+# Composite op / whole LLM layer (decomposition overlay):
+python orchestrator/optimize.py \
+  --op-dir <atrex-bench native op dir> --platform <P> --framework <F> --layer \
+  [--max-iters 20] [--token-budget 0]
 ```
+
+`--op-dir` is the only op input: the workspace name (dir basename), the kernel/layer to optimize
+(`reference.py`), the full shape set (`shapes.json`), per-shape SOL (`roofline.json`), and the priority
+anchor (`metadata.production_performance`) are all read from it. Only `--platform` and `--framework`
+cannot be deduced from the op dir, so they stay explicit.
 
 ## Recommended Flows
 
