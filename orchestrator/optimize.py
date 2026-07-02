@@ -22,10 +22,19 @@ this file only does mechanism: spawn, time-bound, token-account, read state, dec
 
 Usage
 -----
+    # single operator (default, unchanged):
     python orchestrator/optimize.py \
         --name mla_decode --kernel-demo /path/to/demo.py \
         --platform H20 --framework CuteDSL \
         --max-iters 20 --token-budget 8000000 --target-util 90
+
+    # whole LLM layer (optional decomposition overlay):
+    #   decompose -> N per-boundary workspaces (each a standard single-op campaign) ->
+    #   shared --max-iters budget scheduled by live ROI (no boundary dropped) -> recombine.
+    #   Σ (per-boundary optimization versions) == --max-iters.
+    python orchestrator/optimize.py --layer \
+        --name decoder_layer --kernel-demo /path/to/layer.py \
+        --platform H20 --framework CuteDSL --max-iters 40
 """
 from __future__ import annotations
 
@@ -244,6 +253,24 @@ def hardware_directive(platform: str, arch: str) -> str:
     )
 
 
+def link_runtime(workspace: Path) -> None:
+    """Make the skill's `tools/`, `reference/`, `skills/` resolvable from cwd=workspace.
+
+    The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
+    so symlink them in (absolute targets, so the workspace can live anywhere). gpu-wiki is
+    passed by absolute path instead. Idempotent.
+    """
+    for sub in ("tools", "reference", "skills"):
+        src, dst = REPO_ROOT / sub, workspace / sub
+        if src.exists() and not dst.exists():
+            os.symlink(src, dst)
+    gi = workspace / ".gitignore"
+    existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    if "/tools" not in existing:
+        with gi.open("a", encoding="utf-8") as fh:
+            fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n")
+
+
 # ── campaign ──────────────────────────────────────────────────────────────────
 
 
@@ -276,22 +303,7 @@ class Campaign:
             print(f"[orchestrator] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
 
     def _link_runtime(self) -> None:
-        """Make the skill's `tools/` and `reference/` resolvable from cwd=workspace.
-
-        The gpu-kernel-* skills reference `tools/...` and `reference/...` by relative
-        path; sessions run with cwd=workspace, so symlink them in (absolute targets, so
-        the workspace can live anywhere). gpu-wiki is passed by absolute path instead.
-        Idempotent.
-        """
-        for sub in ("tools", "reference", "skills"):
-            src, dst = REPO_ROOT / sub, self.workspace / sub
-            if src.exists() and not dst.exists():
-                os.symlink(src, dst)
-        gi = self.workspace / ".gitignore"
-        existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
-        if "/tools" not in existing:
-            with gi.open("a", encoding="utf-8") as fh:
-                fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n")
+        link_runtime(self.workspace)
 
     def setup_baseline(self) -> None:
         if not WORKSPACE_INIT.exists():
@@ -360,10 +372,241 @@ class Campaign:
         return reason
 
 
+# ── layer campaign (optional decomposition overlay) ─────────────────────────────
+
+# Default expected achievable %SOL per op class — the ROI ceiling ONLY (never a stop gate).
+# Overridden per-boundary by boundaries.json "ceiling"; see agents/gpu-kernel-decompose.md §5.
+DEFAULT_CEILING = {
+    "gemm": 0.85, "moe_gemm": 0.85,
+    "attention": 0.72,
+    "norm": 0.85, "elementwise": 0.85, "reduce": 0.85,
+    "sort": 0.70, "scatter": 0.70,
+}
+
+
+def best_latency_us(workspace: Path) -> Optional[float]:
+    """Best (min) recorded latency across all versions of a boundary workspace, or None."""
+    lv = latest_version(workspace)
+    best = None
+    for n in range(0, lv + 1):
+        mem = read_memory(workspace, n)
+        if not mem:
+            continue
+        lat = (mem.get("performance") or {}).get("latency_us")
+        if isinstance(lat, (int, float)):
+            best = lat if best is None else min(best, float(lat))
+    return best
+
+
+def stall_rounds(workspace: Path, eps: float = 0.05) -> int:
+    """Trailing count of optimization versions (v1..) that did NOT reduce best latency by >= eps.
+
+    A reverted / no-latency version counts as non-progress. Used for a *decaying* deprioritization —
+    a boundary is never dropped, its priority just shrinks while it stalls.
+    """
+    lv = latest_version(workspace)
+    if lv < 1:
+        return 0
+    best = None
+    progressed: list[bool] = []
+    for n in range(0, lv + 1):
+        mem = read_memory(workspace, n)
+        lat = (mem.get("performance") or {}).get("latency_us") if mem else None
+        lat = float(lat) if isinstance(lat, (int, float)) else None
+        if n == 0:
+            best = lat
+            continue
+        made = bool(lat is not None and best is not None and lat < best * (1.0 - eps))
+        if lat is not None and (best is None or lat < best):
+            best = lat
+        progressed.append(made)
+    trailing = 0
+    for made in reversed(progressed):
+        if made:
+            break
+        trailing += 1
+    return trailing
+
+
+@dataclass
+class LayerCampaign:
+    """Whole-LLM-layer campaign: decompose -> N per-boundary workspaces -> shared-budget
+    scheduler -> recombine. Each boundary is a standard single-operator campaign; this class
+    only adds the decomposition, the live-ROI scheduler, and the recombine. The single-op path
+    (Campaign) is untouched.
+    """
+    name: str
+    layer_demo: str
+    platform: str
+    framework: str
+    notes: str = "none"
+    arch: str = ""
+    gpu_wiki: str = ""
+    roofline_py: str = ""
+    max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
+    token_budget: int = 0
+    plateau_k: int = 3             # all boundaries stall_rounds >= k -> layer short-circuit
+    plateau_eps: float = 0.05
+    iter_timeout: int = 5400
+    setup_timeout: int = 7200
+    decompose_timeout: int = 5400
+    recombine_timeout: int = 5400
+    tokens_spent: int = field(default=0, init=False)
+
+    @property
+    def layer_dir(self) -> Path:
+        return Path.cwd() / f"layer_{self.name}"
+
+    def _boundary_ws(self, bname: str) -> Path:
+        return Path.cwd() / f"kernel_opt_{self.name}__{bname}"
+
+    def _account(self, res: SessionResult, label: str) -> None:
+        self.tokens_spent += res.tokens
+        print(f"[layer] {label}: exit={res.exit_status} timed_out={res.timed_out} "
+              f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
+        if res.exit_status != 0 or res.timed_out:
+            print(f"[layer] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
+
+    def budget_exhausted(self) -> bool:
+        return self.token_budget > 0 and self.tokens_spent >= self.token_budget
+
+    def _manifest_path(self) -> Path:
+        return self.layer_dir / "boundaries.json"
+
+    def _read_manifest(self) -> dict:
+        return json.loads(self._manifest_path().read_text(encoding="utf-8"))
+
+    # ── phase 1: decompose ────────────────────────────────────────────────────
+    def decompose(self) -> None:
+        self.layer_dir.mkdir(parents=True, exist_ok=True)
+        prompt = _render(
+            PROMPTS_DIR / "decompose.md",
+            LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
+            PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py, GPU_WIKI=self.gpu_wiki,
+            NOTES=self.notes,
+            DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
+            HARDWARE=hardware_directive(self.platform, self.arch),
+        )
+        res = run_session(self.layer_dir, prompt, timeout=self.decompose_timeout)
+        self._account(res, "decompose")
+        if not self._manifest_path().exists():
+            raise RuntimeError("decompose did not produce boundaries.json")
+
+    # ── phase 2: per-boundary baseline workspaces ─────────────────────────────
+    def setup_boundaries(self) -> list[dict]:
+        manifest = self._read_manifest()
+        boundaries = manifest.get("boundaries") or []
+        if not boundaries:
+            raise RuntimeError("boundaries.json lists no boundaries")
+        for b in boundaries:
+            ws = self._boundary_ws(b["name"])
+            b["workspace"] = str(ws)
+            if latest_version(ws) >= 0:
+                continue  # already set up (resume)
+            demo = self.layer_dir / b["kernel_demo"]
+            subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)], check=True)
+            link_runtime(ws)
+            prompt = _render(
+                PROMPTS_DIR / "setup.md",
+                WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
+                KERNEL_DEMO=str(demo), NOTES=self.notes, GPU_WIKI=self.gpu_wiki,
+                HARDWARE=hardware_directive(self.platform, self.arch),
+            )
+            res = run_session(ws, prompt, timeout=self.setup_timeout)
+            self._account(res, f"baseline {b['name']}")
+            if read_memory(ws, 0) is None:
+                raise RuntimeError(f"baseline failed for boundary {b['name']} (no memory/v0.json)")
+        # persist workspace paths back into the manifest for the recombine session
+        self._manifest_path().write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        return boundaries
+
+    # ── scheduler helpers ─────────────────────────────────────────────────────
+    def _priority(self, b: dict) -> float:
+        """Live ROI: remaining reachable savings (ms), decayed by how long the boundary has stalled.
+
+        priority = max(0, best_latency_ms - SOL_ms/ceiling) * 0.5**stall_rounds
+        A fresh boundary with no recorded latency gets top priority so it is profiled first.
+        """
+        ws = self._boundary_ws(b["name"])
+        lat_us = best_latency_us(ws)
+        decay = 0.5 ** stall_rounds(ws, self.plateau_eps)
+        if lat_us is None:
+            return 1e12 * decay
+        ceiling = b.get("ceiling") or DEFAULT_CEILING.get(b.get("op_type", ""), 0.85)
+        sol_ms = b.get("sol_time_ms")
+        floor_ms = (float(sol_ms) / ceiling) if isinstance(sol_ms, (int, float)) and ceiling > 0 else 0.0
+        return max(0.0, lat_us / 1000.0 - floor_ms) * decay
+
+    def _total_versions(self, boundaries: list[dict]) -> int:
+        # optimization iterations spent = sum of per-boundary latest versions (v0 = baseline, not counted)
+        return sum(max(0, latest_version(self._boundary_ws(b["name"]))) for b in boundaries)
+
+    def _all_plateaued(self, boundaries: list[dict]) -> bool:
+        return all(stall_rounds(self._boundary_ws(b["name"]), self.plateau_eps) >= self.plateau_k
+                   for b in boundaries)
+
+    # ── phase 3: shared-budget scheduler ──────────────────────────────────────
+    def schedule(self, boundaries: list[dict]) -> Optional[str]:
+        while True:
+            spent = self._total_versions(boundaries)
+            if spent >= self.max_iters:
+                return "budget: max-iters (Σ versions)"
+            if self.budget_exhausted():
+                return "budget: token-budget"
+            if self._all_plateaued(boundaries):
+                return "all boundaries plateaued"
+
+            ranked = sorted(boundaries, key=self._priority, reverse=True)
+            target = ranked[0]
+            if self._priority(target) <= 0.0:
+                return "all boundaries at/above ceiling"
+
+            ws = self._boundary_ws(target["name"])
+            n = latest_version(ws) + 1
+            print(f"[layer] round {spent + 1}/{self.max_iters} -> {target['name']} v{n} "
+                  f"(priority={self._priority(target):.4g})", flush=True)
+            prompt = _render(PROMPTS_DIR / "iteration.md",
+                             WORKSPACE=str(ws), N=n, PREV=n - 1,
+                             PLATFORM=self.platform, NOTES=self.notes,
+                             HARDWARE=hardware_directive(self.platform, self.arch))
+            res = run_session(ws, prompt, timeout=self.iter_timeout)
+            self._account(res, f"{target['name']} v{n}")
+
+    # ── phase 4: recombine ────────────────────────────────────────────────────
+    def recombine(self) -> None:
+        prompt = _render(PROMPTS_DIR / "recombine.md",
+                         LAYER_DIR=str(self.layer_dir),
+                         HARDWARE=hardware_directive(self.platform, self.arch))
+        res = run_session(self.layer_dir, prompt, timeout=self.recombine_timeout)
+        self._account(res, "recombine")
+
+    def run(self) -> str:
+        if not self._manifest_path().exists():
+            self.decompose()
+        boundaries = self.setup_boundaries()
+        reason = self.schedule(boundaries)
+        self.recombine()
+        print(f"\n[layer] STOP — {reason}", flush=True)
+        for b in boundaries:
+            ws = self._boundary_ws(b["name"])
+            print(f"[layer]   {b['name']}: v{latest_version(ws)} best_latency_us={best_latency_us(ws)}", flush=True)
+        return reason or "done"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Clean-session orchestrator for atrex-kernel-agent.")
     ap.add_argument("--name", required=True, help="Workspace name -> ./kernel_opt_<name>/")
-    ap.add_argument("--kernel-demo", required=True, help="Path to the initial kernel to optimize.")
+    ap.add_argument("--kernel-demo", required=True,
+                    help="Single-op mode: path to the kernel to optimize. "
+                         "Layer mode (--layer): path to the whole LLM-layer module to decompose.")
+    ap.add_argument("--layer", action="store_true",
+                    help="Optional decomposition overlay: treat --kernel-demo as a composite of more than one "
+                         "fused op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
+                         "fused-operator boundaries (per agents/gpu-kernel-decompose.md), optimize each in its "
+                         "own workspace under one shared --max-iters budget, then recombine. Default off "
+                         "(single-op path unchanged).")
+    ap.add_argument("--roofline-py", default=str(REPO_ROOT.parent / "atrex-bench" / "scripts" / "roofline.py"),
+                    help="Layer mode: per-boundary SOL calculator (default: <repo>/../atrex-bench/scripts/roofline.py).")
     ap.add_argument("--platform", required=True, help="Target hardware, e.g. H20 / MI308X.")
     ap.add_argument("--framework", required=True, help="e.g. CuteDSL / FlyDSL.")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
@@ -387,6 +630,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"[orchestrator] platform={args.platform} runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
+
+    if args.layer:
+        layer = LayerCampaign(
+            name=args.name, layer_demo=args.kernel_demo, platform=args.platform,
+            framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
+            roofline_py=args.roofline_py, max_iters=args.max_iters, token_budget=args.token_budget,
+            iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
+        )
+        layer.run()
+        return 0
 
     campaign = Campaign(
         name=args.name, kernel_demo=args.kernel_demo, platform=args.platform,
