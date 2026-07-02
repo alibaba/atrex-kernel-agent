@@ -57,7 +57,7 @@ Output structure:
 
 ATT decoding requires the `rocprof-trace-decoder` library. The `profile_kernel.sh` script **auto-detects** the decoder at:
 ```
-tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64
+tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64
 ```
 The script automatically sets `--att-library-path` and `LD_LIBRARY_PATH` — no manual configuration required.
 
@@ -466,7 +466,7 @@ Examples:
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `rocprofv3: command not found` | ROCm not in PATH | `export PATH=/opt/rocm/bin:$PATH` |
-| ATT decoder fails | Missing library at auto-detected path | Verify `tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so` exists |
+| ATT decoder fails | Missing library at auto-detected path | Verify `tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so` exists |
 | Stats CSV empty | Wrong dispatch | Use `--iteration-range "[1]"` to skip warmup |
 | PMC batch fails with Warning | Counter mutual exclusion or GPU busy | Retry; partial results from other batches are still usable |
 | No `.amdgcn` files produced | Kernel uses JIT cache, no recompilation | Check `asm/compile.log`; clear Triton cache or set `TRITON_CACHE_DIR` manually |

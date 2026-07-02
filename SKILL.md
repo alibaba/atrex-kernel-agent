@@ -203,7 +203,7 @@ Stage 2 (profile-driven optimization) is driven by the **orchestrator** as a ser
 
 **Sub-skill**: [gpu-kernel-profile-optimizer](skills/gpu-kernel-profile-optimizer/SKILL.md)
 
-**Helper skill**: [gpu-kernel-bottleneck-analysis](skills/gpu-kernel-bottleneck-analysis/SKILL.md)
+**Bottleneck / Roofline analysis**: inlined in this router — see the **Step 0** section above. There is no separate helper skill.
 
 Goal: approach the performance limit through repeated profile -> code change -> validation cycles.
 

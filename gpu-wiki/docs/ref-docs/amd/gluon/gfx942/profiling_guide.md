@@ -14,7 +14,7 @@ The full feature set is called **Thread Trace**, and the toolchain consists of t
 | Component | Function | Source |
 |------|------|------|
 | **rocprofv3** | Captures instruction-level trace data | Bundled with ROCm installation (`/opt/rocm/bin/rocprofv3`) |
-| **rocprof-trace-decoder** | Decodes raw .att binaries into an analyzable format | [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases), downloaded in this guide to `tools/rocprof-trace-decoder-amd-mainline/` |
+| **rocprof-trace-decoder** | Decodes raw .att binaries into an analyzable format | [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases), downloaded in this guide to `tools/rocprof-trace-decoder/` |
 | **rocprof-compute-viewer** | Visualizes trace data (GUI, optional) | [ROCm docs](https://rocm.docs.amd.com/projects/rocprof-compute-viewer/en/amd-mainline/how-to/using_compute_viewer.html) |
 
 **This guide focuses on CLI-based instruction-level analysis** and does not rely on GUI visualization tools.
@@ -31,7 +31,7 @@ The following commands have been verified in the current environment and can be 
 # Complete command — Use input_att.yaml configuration file + local trace decoder library
 env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
     rocprofv3 --att \
-    --att-library-path ./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64 \
+    --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \
     -i tools/input_att.yaml \
     -- python <kernel.py>
 ```
@@ -427,7 +427,7 @@ TRACE_DIR="tt_test"
 | **ROCm** | 7.0+ | `rocprofv3 --version` |
 | **AQL Profile** | Bundled with ROCm 7.0+, or build from source | `ls /opt/rocm/lib/libhsa-amd-aqlprofile64.so` |
 | **ROCprofiler-SDK** | Bundled with ROCm 7.0+ | `which rocprofv3` |
-| **ROCprof Trace Decoder** | Download from [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases) | This guide assumes the decoder is available at `tools/rocprof-trace-decoder-amd-mainline/` |
+| **ROCprof Trace Decoder** | Download from [GitHub releases](https://github.com/ROCm/rocprof-trace-decoder/releases) | This guide assumes the decoder is available at `tools/rocprof-trace-decoder/` |
 
 ### 7.2 Common Issues and Solutions
 
