@@ -29,10 +29,12 @@ Features:
      - Compute-bound: actual TFLOPS / peak TFLOPS
      - Memory-bound: actual bandwidth / bandwidth ceiling
 
-Supported GPUs:
+Supported GPUs (built-in specs):
   NVIDIA Hopper: h100, h20, h200
   AMD CDNA3:     mi300x, mi308x
   AMD CDNA4:     mi355x
+  Any other GPU (e.g. Blackwell): pass gpu-wiki-sourced peaks via --peak-tflops and
+  --peak-bandwidth-tb-s; the tool never fabricates specs it does not have.
 
 Usage:
     python tools/compute_utilization.py         --gpu h20 --dtype bf16         --flops-expr "2*BM*BN*K" --bytes-expr "(BM*K + BN*K + BM*BN)*2"         --time-ms 0.5 --grid-blocks 64
@@ -528,7 +530,7 @@ def _print_roofline_result(roofline: dict, gpu: str, dtype: str):
 
 
 def _print_compute_utilization(result: dict):
-    """Evaluate a numeric Python expression."""
+    """Print the compute-utilization result (compute-bound case)."""
     desc = HARDWARE_SPECS[result["gpu"].lower()].get("description", "")
 
     print(f"\n{'='*64}")
@@ -545,7 +547,7 @@ def _print_compute_utilization(result: dict):
 
 
 def _print_bandwidth_utilization(result: dict):
-    """Evaluate a numeric Python expression."""
+    """Print the bandwidth-utilization result (memory-bound case)."""
     desc = HARDWARE_SPECS[result["gpu"].lower()].get("description", "")
 
     print(f"\n{'='*64}")
@@ -554,7 +556,8 @@ def _print_bandwidth_utilization(result: dict):
     print(f"  GPU              : {result['gpu'].upper()} ({desc})")
     print(f"  Bytes transferred: {result['bytes_transferred']:.2e}")
     print(f"  latency              : {result['time_ms']:.4f} ms")
-    print(f"  Actual bandwidth : {result['actual_bandwidth_tb_s']:.2f} TB/s")
+    print(f"  Actual bandwidth : {result['actual_bandwidth_tb_s']:.2f} TB/s"
+          f"  ({result['actual_bandwidth_tb_s'] * 1000:.1f} GB/s  <- record as bandwidth_gbps)")
     print(f"  Bandwidth ceiling: {result['bandwidth_ceiling_tb_s']:.2f} TB/s ({result['ceiling_source']})")
     if result["ceiling_source"] == "measured bandwidth ceiling":
         print(f"  Hardware peak    : {result['hardware_peak_bandwidth_tb_s']:.2f} TB/s")
@@ -593,6 +596,11 @@ def main():
 
     parser.add_argument("--measured-bandwidth-tb-s", type=float,
                         help="Measured same-size bandwidth ceiling in TB/s. Use a memcpy kernel with the same data volume as a practical memory-bandwidth baseline.")
+
+    parser.add_argument("--peak-tflops", type=float, default=None,
+                        help="Peak compute throughput in TFLOPS for --dtype. REQUIRED for a GPU not in the built-in table (e.g. Blackwell); source it from gpu-wiki. Overrides the built-in value when the GPU is known.")
+    parser.add_argument("--peak-bandwidth-tb-s", type=float, default=None,
+                        help="Peak HBM bandwidth in TB/s. REQUIRED for a GPU not in the built-in table; source it from gpu-wiki. Overrides the built-in value when the GPU is known.")
 
     parser.add_argument("--grid-blocks", type=int,
                         help="Number of blocks in the grid. If provided, --time-ms is treated as whole-kernel latency and divided by grid-blocks to derive per-tile latency. If omitted, --flops, --bytes, and --time-ms are assumed to be tile-level values.")
@@ -656,6 +664,29 @@ def main():
     dtype = args.dtype.lower()
     grid_blocks = args.grid_blocks
 
+    # Architecture-agnostic peaks: for a GPU not in the built-in table (e.g. Blackwell
+    # sm_100/sm_103) the caller supplies gpu-wiki-sourced peaks via --peak-tflops /
+    # --peak-bandwidth-tb-s. The tool never invents specs it does not have (no fabrication);
+    # when the GPU IS known these flags override the built-in value.
+    if args.peak_tflops is not None or args.peak_bandwidth_tb_s is not None:
+        spec = dict(HARDWARE_SPECS.get(gpu, {}))
+        if args.peak_tflops is not None:
+            spec[dtype] = args.peak_tflops
+        if args.peak_bandwidth_tb_s is not None:
+            spec["memory_bandwidth_tb_s"] = args.peak_bandwidth_tb_s
+        if args.num_units is not None:
+            spec["num_units"] = args.num_units
+        spec.setdefault("unit_type", "SM")
+        spec.setdefault("description", f"{args.gpu} (peaks provided via CLI; source: gpu-wiki)")
+        HARDWARE_SPECS[gpu] = spec
+    elif gpu not in HARDWARE_SPECS:
+        print(
+            f"Error: unknown GPU '{args.gpu}' and no peaks provided. Either pick one of "
+            f"{list(HARDWARE_SPECS.keys())}, or pass gpu-wiki-sourced peaks via "
+            f"--peak-tflops and --peak-bandwidth-tb-s (recommended for new architectures)."
+        )
+        sys.exit(1)
+
     # ──  ──
     num_units = args.num_units
     if num_units is None:
@@ -708,7 +739,7 @@ def main():
         # Analysis inputs: , Output
         if roofline["bottleneck"] == "memory":
             compute_result = compute_utilization(flops, per_tile_time_ms, gpu, dtype)
-            print(f"\n  () : {compute_result['actual_tflops']:.2f} / "
+            print(f"\n  Compute (reference) : {compute_result['actual_tflops']:.2f} / "
                   f"{compute_result['peak_tflops']:.2f} TFLOPS = "
                   f"{compute_result['utilization_pct']:.1f}%")
 
@@ -717,7 +748,7 @@ def main():
             bw_result = compute_bandwidth_utilization(
                 bytes_transferred, per_tile_time_ms, gpu, measured_bw
             )
-            print(f"\n  () : {bw_result['actual_bandwidth_tb_s']:.2f} / "
+            print(f"\n  Bandwidth (reference) : {bw_result['actual_bandwidth_tb_s']:.2f} / "
                   f"{bw_result['bandwidth_ceiling_tb_s']:.2f} TB/s = "
                   f"{bw_result['utilization_pct']:.1f}%")
 
@@ -725,14 +756,15 @@ def main():
         if grid_blocks is not None and num_units is not None:
             actual_kernel_tflops = flops * grid_blocks / (time_ms / 1000.0) / 1e12
             efficiency = actual_kernel_tflops / ceiling["theoretical_tflops"] * 100.0
-            print(f"\n   vs ceiling: {actual_kernel_tflops:.2f} / "
+            print(f"\n  Actual vs ceiling : {actual_kernel_tflops:.2f} / "
                   f"{ceiling['theoretical_tflops']:.2f} TFLOPS = {efficiency:.1f}%")
 
         sys.exit(exit_code)
 
     else:
-        # Analysis inputs bytes: （）
-        print("\n⚠️   --bytes/--bytes-expr,  Roofline , ")
+        # No bytes provided: skip Roofline classification; run compute-utilization only.
+        print("\n⚠️  No --bytes/--bytes-expr provided; skipping Roofline classification, "
+              "running compute-utilization only.")
         result = compute_utilization(flops, per_tile_time_ms, gpu, dtype)
         _print_compute_utilization(result)
         exit_code = _print_exit_status(result["utilization_pct"], "compute")

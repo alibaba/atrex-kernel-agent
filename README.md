@@ -33,13 +33,11 @@ Running optimization tasks also requires platform-specific profiling tools:
 
 ## Installation
 
-### 1. Internal Development Environment Setup (Required for internal users)
+### 1. Internal Development Environment Setup (internal users only — optional)
 
-```bash
-bash setup-dev-env.sh
-```
-
-Configures git `insteadOf` URL redirect rules so that dependencies can be fetched correctly from the internal network. **External users can skip this step.**
+Internal users should configure git `insteadOf` URL redirect rules so that submodules and
+dependencies resolve against the internal network before running `git submodule update` below.
+**External users can skip this step entirely.**
 
 ### 2. Pull reference-projects Submodule
 

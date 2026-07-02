@@ -38,20 +38,30 @@ skip Stage 6, then exit. Honor that skill's subagent requirements for Stage 2 (p
 **`open_directions` are priors, not orders.** Pick the most promising lead — **or**, if a fresh look at the
 profile reveals a better lever, pursue that instead. The only hard constraint is: don't re-run a recorded dead-end.
 
-## Step B — One cycle
+## Step B — One cycle (Stages 1–4)
 
-1. **Profile** the current `kernel.py` into `profiles/v{{N}}/` (skill Stage 1). Extract ≥1 concrete bottleneck.
-2. **Pick exactly ONE optimization lever** (skill Stage 2 → `plans/v{{N}}_plan.md`). One category only, so the result is attributable.
-3. **Edit** `kernel.py` — apply that single change, nothing else (skill Stage 3).
-4. **Validate + bench** (skill Stage 4): correctness first (with the timeout guard), then measure
-   latency / TFLOPS / bandwidth / peak-utilization. Bench must be **variance-aware** — a delta only counts as
-   real if it clears measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement).
-   **Bench EVERY shape in `shapes.json`** (the full ground-truth shape set, keyed by integer sid) — never a
-   single hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}`
-   for all sids, set `performance.latency_us` = their mean, and compute
-   `performance.priority_ms` = mean over sids of `max(0, latency_ms - SOL_ms)` where `SOL_ms` is
-   `roofline.json.shapes[sid].SOL_time_ms[<platform>]`. This is what the orchestrator ranks boundaries on;
-   an under-benched (single-shape) record silently mis-ranks the whole layer.
+Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each stage MUST use the designated subagent — do not run profiling, research, or optimization directly.
+
+1. **Stage 1 — Profile** (subagent: `gpu-kernel-profiler`)
+   Launch the `gpu-kernel-profiler` subagent with workspace path, version V{{N}}, platform, kernel file, gpu-wiki path,
+   and previous profiles dir (if exists). It produces `profiles/v{{N}}/summary.txt` with bottleneck evidence and symptoms.
+   If `summary.txt` emits a `LOCALIZE` line and Stage 3 needs it, re-launch the profiler with `--source` before editing.
+
+2. **Stage 2 — Research and Plan** (subagent: `gpu-kernel-research`)
+   Launch the `gpu-kernel-research` subagent with workspace path, version, platform, framework, kernel type, profiles dir,
+   memory dir, historical plans, stop conditions, and gpu-wiki path. It searches knowledge sources (progressive three-layer
+   expansion) and writes `plans/v{{N}}_plan.md`. One optimization category only, so the result is attributable.
+
+3. **Stage 3 — Implement** (subagent: `kernel-optimize`)
+   Launch the `kernel-optimize` subagent with workspace path, version, platform, kernel file, plan path, profiles dir,
+   summary path, memory dir, and gpu-wiki path. It implements the plan's actions in `kernel.py` with evidence attribution,
+   validates correctness via `test_kernel.py`, and updates `memory/v{{N}}.json`.
+
+4. **Stage 4 — Validate + Bench** (subagent required)
+   Launch a validation subagent: run correctness tests (with `timeout 60`), measure latency / TFLOPS / bandwidth /
+   peak-utilization via `tools/compute_utilization.py`, compare against v{{PREV}}, evaluate ISA metric progress,
+   and update `memory/v{{N}}.json`. Bench must be **variance-aware** — a delta only counts as real if it clears
+   measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement). Return PASS / FAIL.
 
 ## Step C — Commit or revert (mechanical, no discretion)
 

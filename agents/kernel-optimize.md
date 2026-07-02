@@ -55,25 +55,7 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
 3. Read `summary.txt` to confirm the referenced symptoms and metrics exist.
 4. If any action lacks evidence attribution, halt and report the gap — do not proceed with unattributed changes.
 
-### Phase 3: Localization Check
-
-1. For each optimization action, check whether it targets a symptom that produced a `LOCALIZE` line in `summary.txt`.
-2. If a `LOCALIZE` line exists for the targeted symptom:
-   - Re-profile the kernel with `--source` mode before making any code change:
-
-     ```bash
-     bash tools/profile_nvidia.sh \
-       kernel.py \
-       --output-dir profiles/v<N> \
-       --source
-     ```
-
-   - Open the evidence file named on the `LOCALIZE` line (or read `source_evidence_manifest.json`).
-   - Pin the change to the specific source line / SASS address identified by the evidence.
-   - Do NOT edit `kernel.py` until the localization evidence has been read and the target line confirmed.
-3. If no `LOCALIZE` line is present for the targeted symptom, proceed directly to implementation.
-
-### Phase 4: Implementation
+### Phase 3: Implementation
 
 1. Before starting, create the memory file if it does not exist:
 
@@ -82,14 +64,18 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
    ```
 
 2. If framework API or operator interface details are needed, search `<gpu_wiki_path>/reference-kernels/` or clone upstream source to `reference-projects/` first.
-3. Apply each optimization action to `kernel.py`:
+3. For each optimization action, **before making any code change**, read the source-level localization evidence from the profiler output:
+   - Read `profiles/v<N>/analysis/source_metrics_line_run.txt` and/or `profiles/v<N>/analysis/warp_stalls_line_run.txt` to identify which source lines exhibit the targeted bottleneck symptom.
+   - Optionally cross-check with `profiles/v<N>/analysis/source_evidence_manifest.json` for a structured index of all evidence files.
+   - Pin the planned modification to the specific source line(s) indicated by the evidence.
+4. Apply each optimization action to `kernel.py`:
    - Changes must land in workspace `kernel.py`.
    - Auxiliary files may be adjusted only when necessary and must be explained.
    - Each change must correspond to a specific action in the plan with its evidence attribution.
-   - If a `LOCALIZE` symptom was identified in Phase 2, change only the specific line(s) the evidence identifies — not the whole kernel.
-4. Do not mix unrelated refactors, formatting, or cleanup into the optimization edits.
+   - Modify only the specific line(s) identified by the source-level localization evidence — not the whole kernel.
+5. Do not mix unrelated refactors, formatting, or cleanup into the optimization edits.
 
-### Phase 5: Correctness Validation (Iterative)
+### Phase 4: Correctness Validation (Iterative)
 
 1. After editing, immediately run correctness validation:
 
@@ -97,13 +83,37 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
    timeout 60 python test_kernel.py
    ```
 
-2. If validation **passes**, record PASS and proceed to Phase 6.
+2. If validation **passes**, record PASS and proceed to Phase 5 (Performance Validation).
 3. If validation **fails**, enter the fix-retry loop:
    - Analyze the error output to identify the root cause.
    - Apply a targeted fix to `kernel.py` addressing only the failure cause.
    - Re-run correctness validation.
-   - Repeat until validation passes or **3 consecutive fix attempts** have all failed.
-4. If all retry attempts are exhausted without passing, record FAIL with the accumulated failure details and attempted fixes.
+   - Repeat until validation passes.
+
+### Phase 5: Performance Validation
+
+1. After correctness validation passes, immediately run a `--source` mode profile on the modified kernel:
+
+   ```bash
+   bash tools/profile_nvidia.sh \
+     kernel.py \
+     --output-dir profiles/v<N>_post \
+     --source
+   ```
+
+2. Read the newly generated `profiles/v<N>_post/summary.txt` and compare against the original `profiles/v<N>/summary.txt`:
+   - Check whether the bottleneck symptom (Pattern / Symptom) targeted by this optimization has materially improved.
+   - **"Material improvement" criteria**: the key metric associated with the targeted symptom shows ≥10% positive change, OR the Pattern transitions from `detected` to `not detected`.
+
+3. If the bottleneck **has material improvement**:
+   - Record the improvement data (before/after metrics, percentage change).
+   - Proceed to Phase 6 (Memory Update).
+
+4. If the bottleneck **has no material change**:
+   - Record the current attempt as an ineffective optimization.
+   - Roll back to Phase 3 (Implementation): adjust the optimization strategy based on the new profile data and re-implement.
+   - A maximum of **2 performance-validation failures** are allowed before retry (i.e., 3 total implementation attempts).
+   - If the bottleneck still shows no improvement after 3 attempts, record `INEFFECTIVE` result and exit.
 
 ### Phase 6: Memory Update
 
@@ -112,11 +122,15 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
    ```bash
    python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
        --set 'optimization.action_category=<category>' \
-       --set 'optimization.action_description=<description>'
+       --set 'optimization.action_description=<description>' \
+       --set 'optimization.performance_validated=<YES|NO|INEFFECTIVE>' \
+       --set 'optimization.improvement_summary=<before_vs_after_metrics>'
    ```
 
 2. The `action_category` should reflect the type of optimization (e.g., `memory_coalescing`, `shared_memory_optimization`, `register_pressure`, `vectorization`, `tiling`, `async_copy`, `occupancy`).
 3. The `action_description` should summarize all actions applied with their evidence attribution.
+4. The `performance_validated` field records: `YES` (improvement confirmed), `NO` (correctness failed before reaching perf validation), or `INEFFECTIVE` (3 attempts exhausted without improvement).
+5. The `improvement_summary` should describe the key metric changes between `profiles/v<N>/summary.txt` and `profiles/v<N>_post/summary.txt`.
 
 ### Phase 7: Output
 
@@ -130,6 +144,7 @@ Return the following deliverables to the caller.
 |-------------|-------------|
 | `kernel.py` | Modified kernel with optimization actions applied |
 | `memory/v<N>.json` | Updated iteration memory with optimization metadata |
+| `profiles/v<N>_post/` | Post-optimization profile artifacts (when performance validation runs) |
 
 The agent must return:
 
@@ -137,6 +152,9 @@ The agent must return:
 |-------|-------------|
 | `kernel_file` | Path to modified `kernel.py` |
 | `validation_result` | PASS / FAIL from correctness test |
+| `performance_validated` | YES / NO / INEFFECTIVE — result of performance validation |
+| `post_profile_dir` | `profiles/v<N>_post/` — post-optimization profile directory |
+| `improvement_summary` | Description of key metric changes (before vs after) for the targeted bottleneck |
 | `memory_file` | Path to updated `memory/v<N>.json` |
 | `actions_applied` | List of optimization actions implemented with their evidence attribution |
 
@@ -145,10 +163,12 @@ The agent must return:
 ## Constraints
 
 - **DO NOT** implement changes without explicit profile evidence attribution
-- **DO NOT** edit `kernel.py` for a `LOCALIZE` symptom without first running `--source` re-profile and reading the localization evidence
+- **DO NOT** edit `kernel.py` without first reading the source-level localization evidence from the profiler output (`source_metrics_line_run.txt`, `warp_stalls_line_run.txt`)
+- **DO NOT** modify lines beyond those identified by source-level localization evidence unless the optimization action explicitly requires broader structural changes
 - **DO NOT** mix unrelated refactors, formatting, or cleanup into optimization edits
 - **DO NOT** fabricate evidence or infer bottlenecks without measurement
 - **DO NOT** modify files outside the workspace without explanation
 - **DO NOT** skip correctness validation after editing
 - **DO NOT** proceed with unattributed actions from the plan
-- **DO NOT** change lines not identified by localization evidence when a `LOCALIZE` symptom is targeted
+- **DO NOT** mark an optimization as successful without performance validation showing measurable improvement on the targeted bottleneck
+- **DO NOT** retry implementation more than 2 times after performance validation failure (3 total attempts maximum)
