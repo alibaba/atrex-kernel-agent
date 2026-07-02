@@ -112,7 +112,7 @@ def _tokens_from_stream(stdout: str) -> int:
     return result_total if result_total is not None else summed
 
 
-def _run_bounded(cmd: list[str], cwd: Path, timeout: int) -> tuple[str, str, int, bool]:
+def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = None) -> tuple[str, str, int, bool]:
     """Run cmd in its own process group; SIGKILL the whole tree on timeout."""
     proc = subprocess.Popen(
         cmd,
@@ -121,6 +121,7 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int) -> tuple[str, str, int
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,  # own process group -> killpg reaps grandchildren
+        env=env,
     )
     timed_out = False
     try:
@@ -135,6 +136,18 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int) -> tuple[str, str, int
     return stdout or "", stderr or "", proc.returncode, timed_out
 
 
+def _session_env() -> dict:
+    """Env for a nested `claude` session. When a Bearer auth token is available
+    (ANTHROPIC_AUTH_TOKEN — e.g. a gateway like idealab), drop ANTHROPIC_API_KEY so the
+    CLI authenticates via the token instead of sending x-api-key, which such gateways reject
+    with 401. On a plain api-key setup (no auth token) nothing is removed.
+    """
+    env = os.environ.copy()
+    if env.get("ANTHROPIC_AUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+    return env
+
+
 def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
     """One clean `claude` session. Fresh session-id = no memory of prior sessions."""
     session_id = str(uuid.uuid4())
@@ -144,7 +157,7 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
         "--session-id", session_id,
         prompt,
     ]
-    stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout)
+    stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=_session_env())
     return SessionResult(
         exit_status=exit_status,
         timed_out=timed_out,
@@ -440,33 +453,33 @@ def best_perf_by_shape(workspace: Path) -> Optional[dict]:
     return best or None
 
 
-# roofline.json may key SOL_time_ms by a verbose SKU string (atrex-bench native, e.g.
-# "NVIDIA B200 (SM100)") instead of the short platform token the orchestrator uses ("B200").
-# ADD aliases here — the lookup tries the platform token first, then these, so both schemes
-# work. This is a mapping, not a rename: existing short-key roofline files keep resolving.
-_SOL_PLATFORM_KEY_ALIASES: dict[str, list[str]] = {
-    "B200": ["NVIDIA B200 (SM100)"],
-    "B300": ["NVIDIA B300 (SM100)"],
-    "H20":  ["NVIDIA H20"],
-    "A100": ["NVIDIA A100"],
-    "MI308X": ["AMD MI308X"],
-}
-
-
-def _sol_time_ms_for(sol_block: dict, platform: str) -> Optional[float]:
-    """Resolve SOL_time_ms for `platform`, trying the short token then its verbose aliases."""
-    for key in (platform, *_SOL_PLATFORM_KEY_ALIASES.get(platform, [])):
-        v = sol_block.get(key)
-        if isinstance(v, (int, float)):
-            return float(v)
+def shape_sol_ms(entry: dict) -> Optional[float]:
+    """SOL (ms) for one roofline.json shape entry. A campaign targets ONE platform, so we do
+    NOT match a platform key — just take the SOL value however it's stored:
+      - flat:  entry["sol_time_ms"] = 0.123
+      - nested: entry["SOL_time_ms"] = {<anything>: 0.123}  -> take the value (any key)
+    This deliberately ignores the platform label so "B200" / "NVIDIA B200" / "NVIDIA B200
+    (SM100)" all just work — there is no key to get wrong.
+    """
+    if not isinstance(entry, dict):
+        return None
+    flat = entry.get("sol_time_ms")
+    if isinstance(flat, (int, float)):
+        return float(flat)
+    block = entry.get("SOL_time_ms")
+    if isinstance(block, (int, float)):
+        return float(block)
+    if isinstance(block, dict):
+        vals = [v for v in block.values() if isinstance(v, (int, float))]
+        if vals:
+            return float(vals[0])
     return None
 
 
-def sol_ms_by_shape(workspace: Path, platform: str) -> Optional[dict]:
-    """Per-shape SOL (ms) for a boundary, read from the workspace's atrex-bench-format
-    ``roofline.json``: ``shapes[sid].SOL_time_ms[<platform-or-alias>]``. Keyed by the integer
-    sid ("0","1",...) shared with ``shapes.json`` and with the memory latency_us_by_shape.
-    Returns None when roofline.json is absent (caller falls back to the scalar path).
+def sol_ms_by_shape(workspace: Path) -> Optional[dict]:
+    """Per-shape SOL (ms) for a boundary, read from the workspace's ``roofline.json``
+    (``shapes[sid]`` -> SOL via shape_sol_ms). Keyed by the integer sid shared with
+    shapes.json and the memory latency_us_by_shape. None if roofline.json is absent.
     """
     rp = workspace / "roofline.json"
     if not rp.exists():
@@ -475,13 +488,8 @@ def sol_ms_by_shape(workspace: Path, platform: str) -> Optional[dict]:
         shapes = (json.loads(rp.read_text(encoding="utf-8")).get("shapes") or {})
     except (OSError, json.JSONDecodeError):
         return None
-    out: dict[str, float] = {}
-    for sid, entry in shapes.items():
-        if not isinstance(entry, dict):
-            continue
-        sol = _sol_time_ms_for(entry.get("SOL_time_ms") or {}, platform)
-        if sol is not None:
-            out[sid] = sol
+    out = {sid: shape_sol_ms(entry) for sid, entry in shapes.items()}
+    out = {sid: v for sid, v in out.items() if v is not None}
     return out or None
 
 
@@ -658,8 +666,8 @@ class LayerCampaign:
         decay = 0.5 ** stall_rounds(ws, self.plateau_eps)
 
         # ── per-shape path (preferred): score-weighted mean reachable ms over the shape set ──
-        # SOL from the workspace roofline.json; w[s] from the manifest shape_weights (setup).
-        sol_by_shape = sol_ms_by_shape(ws, self.platform)
+        # SOL from the workspace roofline.json (platform-agnostic); w[s] from manifest shape_weights.
+        sol_by_shape = sol_ms_by_shape(ws)
         lat_by_shape = best_perf_by_shape(ws)
         if sol_by_shape and lat_by_shape:
             common = [sid for sid in sol_by_shape if sid in lat_by_shape]
@@ -744,8 +752,7 @@ class LayerCampaign:
         if self._read_manifest().get("shape_weights"):
             return  # resume: already computed
         cmd = [sys.executable, str(Path(__file__).parent / "anchor_bench.py"),
-               "--op-dir", str(self.op_dir), "--manifest", str(self._manifest_path()),
-               "--platform", self.platform]
+               "--op-dir", str(self.op_dir), "--manifest", str(self._manifest_path())]
         print(f"[layer] anchor bench (Tb_layer for SOL-score weights): {' '.join(cmd)}", flush=True)
         r = subprocess.run(cmd)
         if r.returncode != 0:

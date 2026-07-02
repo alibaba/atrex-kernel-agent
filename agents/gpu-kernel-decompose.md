@@ -168,7 +168,7 @@ already ship. Use them as the default carving; adjust to the actual module.
    **SOL is per-shape, over the entire shape set — never one hand-picked "representative" shape.** Convert
    every entry of the layer's workload into the atrex-bench `shapes.json` body (integer sids `"0","1",…`,
    axes under `input_kwargs`). For each boundary, run `roofline.py` **once per sid** and record it in that
-   boundary's `roofline` body under `SOL_time_ms[<platform>]`. This matches how the op is actually scored
+   boundary's `roofline` body as a plain per-shape `sol_time_ms` number. This matches how the op is actually scored
    (every shape scored independently) and is essential because op cost varies with the axes — attention
    scales ∝ B·S², so a single shape's SOL is meaningless for the rest. Two correctness rules when calling
    `roofline.py`:

@@ -28,7 +28,7 @@ Do the following, in order, but only through baseline:
    by integer sid) — not a hand-picked subset. This shape set + harness is the immutable per-campaign benchmark
    methodology (see `reference/CLAUDE.md` "Benchmark Harness Integrity"); later iterations reuse it unchanged.
    Record `performance.latency_us_by_shape` (all sids), `latency_us` (their mean), and `priority_ms`
-   (mean over sids of `max(0, latency_ms - roofline.json.shapes[sid].SOL_time_ms[<platform>])`).
+   (mean over sids of `max(0, latency_ms - roofline.json.shapes[sid].sol_time_ms)`).
 
 Then **STOP**. Do **NOT** enter Stage 2 / any optimization iteration — the orchestrator spawns those as
 separate clean sessions. Exit once `memory/v0.json` exists and the baseline is committed.

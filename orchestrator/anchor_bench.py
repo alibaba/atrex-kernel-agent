@@ -6,7 +6,7 @@ scheduler to rank boundaries by their gradient on the single official layer scor
 Both terms are **prefer-read, else self-compute** — the atrex-bench native op dir already
 ships most of it, so we read it and only fall back to measuring/summing when a value is absent:
 
-  SOL_layer[s]  ← <op-dir>/roofline.json shapes[s].SOL_time_ms[<platform>]   (fused-layer SOL)
+  SOL_layer[s]  ← <op-dir>/roofline.json shapes[s] SOL (any platform key; value taken as-is)
                   else Σ_boundary roofline SOL[b,s] from the manifest.
   Tb_layer[s]   ← <op-dir>/metadata.json shapes[s].production_performance.performance_us
                   else bench the reference (input.py + reference.Model) with the atrex-bench
@@ -16,29 +16,21 @@ The op dir is passed in (never hardcoded). It is the atrex-bench native layout:
 shapes.json / roofline.json / metadata.json / input.py / reference.py.
 
 Usage:
-    python anchor_bench.py --op-dir <native_op_dir> --manifest <boundaries.json> --platform B200
+    python anchor_bench.py --op-dir <native_op_dir> --manifest <boundaries.json>
 """
 from __future__ import annotations
 import argparse, importlib.util, json, sys
 from pathlib import Path
 
-# Mirror optimize.py: roofline/metadata may key by a verbose SKU string; try aliases too.
-_SOL_PLATFORM_KEY_ALIASES = {
-    "B200": ["NVIDIA B200 (SM100)"], "B300": ["NVIDIA B300 (SM100)"],
-    "H20": ["NVIDIA H20"], "A100": ["NVIDIA A100"], "MI308X": ["AMD MI308X"],
-}
-
-
-def _keys(platform: str):
-    return [platform, *_SOL_PLATFORM_KEY_ALIASES.get(platform, [])]
-
-
-def _pick(block: dict, platform: str):
-    for k in _keys(platform):
-        v = (block or {}).get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-    return None
+def _pick(block: dict):
+    """SOL (ms) from a SOL_time_ms block, ignoring the platform label — a campaign targets
+    one platform, so just take the value (any/only key). No key matching to get wrong.
+    """
+    block = block or {}
+    if isinstance(block, (int, float)):
+        return float(block)
+    vals = [v for v in block.values() if isinstance(v, (int, float))]
+    return float(vals[0]) if vals else None
 
 
 def _load(path: Path, name: str):
@@ -62,7 +54,6 @@ def main() -> int:
     ap.add_argument("--op-dir", required=True, help="atrex-bench native op dir (shapes.json/roofline.json/"
                                                     "metadata.json/input.py/reference.py)")
     ap.add_argument("--manifest", required=True)
-    ap.add_argument("--platform", required=True)
     a = ap.parse_args()
 
     op = Path(a.op_dir)
@@ -77,12 +68,12 @@ def main() -> int:
     boundary_sol_sum: dict[str, float] = {}
     for b in manifest["boundaries"]:
         for sid, e in ((b.get("roofline") or {}).get("shapes") or {}).items():
-            ms = _pick(e.get("SOL_time_ms") or {}, a.platform)
+            ms = _pick(e.get("SOL_time_ms") or {})
             if ms is not None:
                 boundary_sol_sum[sid] = boundary_sol_sum.get(sid, 0.0) + ms
 
     def sol_layer(sid: str):
-        v = _pick((op_rf.get(sid) or {}).get("SOL_time_ms") or {}, a.platform)
+        v = _pick((op_rf.get(sid) or {}).get("SOL_time_ms") or {})
         return v if v is not None else boundary_sol_sum.get(sid)
 
     # ── Tb_layer[sid]: prefer metadata production_performance, else bench the reference ──
