@@ -13,8 +13,9 @@ Inputs:
 - `layer_dir` (your cwd): `{{LAYER_DIR}}` — write all outputs here
 - `platform`: `{{PLATFORM}}`
 - `roofline_py` (per-boundary SOL): `{{ROOFLINE_PY}}`
-- `workload` (the full shape set — every shape the op is scored on; convert each entry to an integer-sid
-  `shapes.json` entry): `{{WORKLOAD}}`
+- `op_dir` (the atrex-bench native op dir — **the starting point**): `{{OP_DIR}}`
+  Read the full shape set from `{{OP_DIR}}/shapes.json` (integer-sid, `input_kwargs` axes) and reuse those
+  sids verbatim. `{{OP_DIR}}/roofline.json` holds the layer-level SOL; `input.py` builds inputs.
 - gpu-wiki (operator knowledge only): `{{GPU_WIKI}}`
 - additional_notes: `{{NOTES}}`
 
@@ -29,9 +30,10 @@ Do exactly this, then STOP:
 3. **Emit the deliverables** (§4) into `{{LAYER_DIR}}`:
    - `reference.py` — the full-layer PyTorch reference (for the final end-to-end recombine validation).
    - `<boundary>/kernel_demo.py` — one basic, correct, runnable PyTorch reference per boundary.
-   - `shapes.json` — the layer's full shape set in **atrex-bench format**: `{"0": {"init_kwargs": null,
-     "input_kwargs": {…axes…}}, "1": {…}, …}`, integer string sids `"0","1",…` (convert every entry of
-     `{{WORKLOAD}}` — do not hand-pick). This is the ground-truth bench set for every boundary.
+   - `shapes.json` — copy `{{OP_DIR}}/shapes.json` verbatim (atrex-bench format: integer string sids
+     `"0","1",…`, axes under `input_kwargs`). Keep the sids identical — they are the join key across
+     shapes.json, every boundary's roofline.json, and each version's `latency_us_by_shape`. Do not
+     re-number or hand-pick shapes.
    - per boundary, a **`roofline.json`** in atrex-bench format:
      `{"shapes": {"<sid>": {"semantic_W_flops": {"<dtype>": W}, "semantic_Q_read_bytes": …,
      "semantic_Q_write_bytes": …, "SOL_time_ms": {"{{PLATFORM}}": ms}}}}` — run `{{ROOFLINE_PY}}` on that
