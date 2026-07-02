@@ -56,7 +56,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
     ├── extract_nvidia_asm.py             # NVIDIA SASS extraction / analysis
     ├── ncu_helpers/                      # Bundled ncu-report parsing helpers
     ├── input_att.yaml                    # ATT profiling configuration
-    └── rocprof-trace-decoder-amd-mainline/ # AMD ATT decoder plugin
+    └── rocprof-trace-decoder/ # AMD ATT decoder plugin
 ```
 
 ## Core Components

@@ -319,6 +319,12 @@ class Campaign:
         )
         res = run_session(self.workspace, prompt, timeout=self.setup_timeout)
         self._account(res, "setup")
+        if res.exit_status != 0 and res.tokens == 0:
+            raise RuntimeError(
+                f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
+                "this is likely an API key / authentication issue. "
+                "Run `claude auth status` and `claude --print \"test\"` to diagnose."
+            )
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
 
@@ -333,6 +339,7 @@ class Campaign:
             self._link_runtime()  # ensure runtime symlinks exist for iteration sessions
 
         stall = 0
+        infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
         n = latest_version(self.workspace)  # 0 after baseline
         while True:
             if n >= self.max_iters:
@@ -347,6 +354,18 @@ class Campaign:
                              HARDWARE=hardware_directive(self.platform, self.arch))
             res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
             self._account(res, f"iter v{n}")
+
+            # Early detection of auth/infra failures: exit != 0 with 0 tokens
+            # means the session never even started (bad API key, network, etc.)
+            if res.exit_status != 0 and res.tokens == 0:
+                infra_fails += 1
+                if infra_fails >= 2:
+                    return self._finish(
+                        f"infra: {infra_fails} consecutive sessions crashed with 0 tokens "
+                        "(likely API key / auth issue — run `claude auth status`)"
+                    )
+            else:
+                infra_fails = 0
 
             mem = read_memory(self.workspace, n)
             if target_met(mem, self.target_util):

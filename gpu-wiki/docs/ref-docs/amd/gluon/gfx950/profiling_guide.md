@@ -14,7 +14,7 @@
 rocprofv3 --version
 
 # ATT (Async Trace Tool) library path
-ATT_LIB_PATH="./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64"
+ATT_LIB_PATH="./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64"
 ```
 
 ### Configuration File
@@ -35,7 +35,7 @@ options:
 ```bash
 env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
     rocprofv3 --att \
-    --att-library-path ./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64 \
+    --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \
     -i tools/input_att.yaml \
     -- python <kernel.py>
 ```
@@ -170,7 +170,7 @@ done
 mkdir -p $OUTPUT_DIR
 
 rocprofv3 --att \
-    --att-library-path ./tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64 \
+    --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \
     -i tools/input_att.yaml \
     --python $KERNEL
 

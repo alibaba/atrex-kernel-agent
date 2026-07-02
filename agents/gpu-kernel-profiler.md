@@ -100,13 +100,13 @@ Extract at least: memory throughput / SOL, L2 hit rate, occupancy, warp stall re
 ATT profiling depends on the trace decoder plugin shipped in the tools:
 
 ```text
-tools/rocprof-trace-decoder-amd-mainline/
+tools/rocprof-trace-decoder/
 ```
 
 Before ATT profiling, ensure `rocprofv3` can find the decoder:
 
 ```bash
-export LD_LIBRARY_PATH=<skill_root>/tools/rocprof-trace-decoder-amd-mainline/releases/linux_glibc_2_28_x86_64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=<skill_root>/tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64:$LD_LIBRARY_PATH
 ```
 
 Without this path, `rocprofv3 --att` cannot decode thread-trace binaries and the ATT artifacts are unusable.
