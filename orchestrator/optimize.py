@@ -738,25 +738,22 @@ class LayerCampaign:
                 print(f"[layer] WARNING: {target['name']} v{n} session produced no memory — "
                       f"wrote failed record to advance budget", flush=True)
 
-    # ── phase 2b: anchor weights (score-consistent priority) ──────────────────
+    # ── phase 2b: SOL-score weights (only if a real production baseline exists) ────
     def setup_anchor_weights(self) -> None:
-        """Bench the optimized-PyTorch anchor (`solution.py`) across the full shape set and
-        write per-shape SOL-score weights (`shape_weights`) into the manifest, so the scheduler
-        ranks boundaries by their gradient on the single official layer score rather than raw ms.
-        Runs once; skipped on resume (weights already present) or when no workload is configured.
-        Non-fatal — if the anchor bench fails, priority falls back to unweighted (w[s]=1).
+        """Write per-shape SOL-score weights into the manifest from the op's production
+        baseline (metadata.production_performance). If that baseline is absent, no weights are
+        written and the scheduler uses the unweighted raw ms-gap priority. Pure JSON transform
+        (no bench); always re-run so stale weights are recomputed/cleared. Non-fatal.
         """
         if not self.op_dir:
-            print("[layer] no --op-dir; priority uses raw ms-gap (w=1)", flush=True)
+            print("[layer] no --op-dir; priority uses raw ms-gap (unweighted)", flush=True)
             return
-        if self._read_manifest().get("shape_weights"):
-            return  # resume: already computed
         cmd = [sys.executable, str(Path(__file__).parent / "anchor_bench.py"),
                "--op-dir", str(self.op_dir), "--manifest", str(self._manifest_path())]
-        print(f"[layer] anchor bench (Tb_layer for SOL-score weights): {' '.join(cmd)}", flush=True)
+        print(f"[layer] SOL-score weights (from production baseline, if any): {' '.join(cmd)}", flush=True)
         r = subprocess.run(cmd)
         if r.returncode != 0:
-            print("[layer] WARNING: anchor bench failed — priority falls back to raw ms-gap (w=1)",
+            print("[layer] WARNING: anchor step failed — priority falls back to raw ms-gap (unweighted)",
                   file=sys.stderr, flush=True)
 
     # ── phase 4: recombine ────────────────────────────────────────────────────

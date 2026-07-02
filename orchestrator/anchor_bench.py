@@ -1,58 +1,38 @@
-"""Setup-time anchor weights: produce the per-shape SOL-score weights used by the layer
-scheduler to rank boundaries by their gradient on the single official layer score:
+"""Setup-time SOL-score weights for the layer scheduler:
 
     w[s] = 1 / (Tb_layer[s] - SOL_layer[s])
 
-Both terms are **prefer-read, else self-compute** — the atrex-bench native op dir already
-ships most of it, so we read it and only fall back to measuring/summing when a value is absent:
+Tb_layer[s] must be a REAL optimized baseline — read ONLY from
+`metadata.production_performance.performance_us`. We deliberately do NOT fabricate it:
+benching the eager `reference.py` would give an O(S^2) time of tens of seconds at long
+sequence lengths, which is not an "optimized baseline" and produces meaningless (~1e-5)
+weights. So if any shape lacks a production baseline (e.g. not yet measured on the target
+GPU), we skip weighting ENTIRELY — no `shape_weights` is written and the orchestrator
+falls back to the unweighted raw ms-gap priority (`mean_s max(0, lat[s]-sol[s])`).
 
-  SOL_layer[s]  ← <op-dir>/roofline.json shapes[s] SOL (any platform key; value taken as-is)
-                  else Σ_boundary roofline SOL[b,s] from the manifest.
-  Tb_layer[s]   ← <op-dir>/metadata.json shapes[s].production_performance.performance_us
-                  else bench the reference (input.py + reference.Model) with the atrex-bench
-                  bench.py methodology: median-of-3 × do_bench(warmup=25, rep=100), no_grad.
+SOL_layer[s]: prefer `<op-dir>/roofline.json`, else Σ_boundary SOL from the manifest.
 
-The op dir is passed in (never hardcoded). It is the atrex-bench native layout:
-shapes.json / roofline.json / metadata.json / input.py / reference.py.
+This is a pure JSON transform (no GPU / no torch); run once at setup.
 
 Usage:
     python anchor_bench.py --op-dir <native_op_dir> --manifest <boundaries.json>
 """
 from __future__ import annotations
-import argparse, importlib.util, json, sys
+import argparse, json
 from pathlib import Path
 
-def _pick(block: dict):
-    """SOL (ms) from a SOL_time_ms block, ignoring the platform label — a campaign targets
-    one platform, so just take the value (any/only key). No key matching to get wrong.
-    """
-    block = block or {}
+
+def _pick(block):
+    """SOL (ms) from a SOL_time_ms block, ignoring the platform label (single-platform campaign)."""
     if isinstance(block, (int, float)):
         return float(block)
-    vals = [v for v in block.values() if isinstance(v, (int, float))]
+    vals = [v for v in (block or {}).values() if isinstance(v, (int, float))]
     return float(vals[0]) if vals else None
-
-
-def _load(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    m = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(path.parent))
-    spec.loader.exec_module(m)
-    return m
-
-
-def _median_us(fn) -> float:
-    """atrex-bench bench.py methodology: median of 3 × do_bench(warmup=25, rep=100)."""
-    import torch
-    from triton.testing import do_bench
-    fn(); torch.cuda.synchronize()
-    return float(sorted(do_bench(fn, warmup=25, rep=100) for _ in range(3))[1]) * 1e3
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--op-dir", required=True, help="atrex-bench native op dir (shapes.json/roofline.json/"
-                                                    "metadata.json/input.py/reference.py)")
+    ap.add_argument("--op-dir", required=True)
     ap.add_argument("--manifest", required=True)
     a = ap.parse_args()
 
@@ -61,77 +41,54 @@ def main() -> int:
     manifest_path = Path(a.manifest)
     manifest = json.loads(manifest_path.read_text())
 
-    # ── SOL_layer[sid]: prefer op-dir roofline.json, else Σ boundary SOL from manifest ──
+    # SOL_layer[sid]: prefer op-dir roofline.json, else Σ boundary SOL from the manifest.
     op_rf = {}
     if (op / "roofline.json").exists():
         op_rf = (json.loads((op / "roofline.json").read_text()).get("shapes") or {})
     boundary_sol_sum: dict[str, float] = {}
     for b in manifest["boundaries"]:
         for sid, e in ((b.get("roofline") or {}).get("shapes") or {}).items():
-            ms = _pick(e.get("SOL_time_ms") or {})
+            ms = _pick(e.get("SOL_time_ms") or e.get("sol_time_ms"))
             if ms is not None:
                 boundary_sol_sum[sid] = boundary_sol_sum.get(sid, 0.0) + ms
 
-    def sol_layer(sid: str):
-        v = _pick((op_rf.get(sid) or {}).get("SOL_time_ms") or {})
+    def sol_layer(sid):
+        v = _pick((op_rf.get(sid) or {}).get("SOL_time_ms") or (op_rf.get(sid) or {}).get("sol_time_ms"))
         return v if v is not None else boundary_sol_sum.get(sid)
 
-    # ── Tb_layer[sid]: prefer metadata production_performance, else bench the reference ──
+    # Tb_layer[sid]: ONLY from metadata production baseline (us -> ms). No benching.
     meta_shapes = {}
     if (op / "metadata.json").exists():
         meta_shapes = (json.loads((op / "metadata.json").read_text()).get("shapes") or {})
 
-    def tb_from_metadata(sid: str):
+    def tb(sid):
         pp = (meta_shapes.get(sid) or {}).get("production_performance") or {}
         v = pp.get("performance_us")
-        return (float(v) / 1000.0) if isinstance(v, (int, float)) else None  # us -> ms
+        return (float(v) / 1000.0) if isinstance(v, (int, float)) else None
 
-    need_bench = any(tb_from_metadata(sid) is None for sid in shapes)
-    model = mk = None
-    if need_bench:
-        import torch
-        inp = _load(op / "input.py", "_anchor_inp")
-        ref = _load(op / "reference.py", "_anchor_ref")
-        model = ref.Model().to("cuda").eval()
-        mk = inp._make_inputs
-
-    weights, tb_layer, src = {}, {}, {}
+    # All-or-nothing: weight only if EVERY shape has both a production Tb and a SOL_layer.
+    weights, missing = {}, []
     for sid in shapes:
-        tb = tb_from_metadata(sid)
-        if tb is not None:
-            src[sid] = "metadata"
-        else:
-            import torch
-            try:
-                ins = mk(**shapes[sid]["input_kwargs"])
-                with torch.no_grad():
-                    tb = _median_us(lambda: model(**ins))
-                src[sid] = "benched"
-                del ins
-            except Exception as e:  # e.g. OOM benching the eager reference at large shapes
-                tb = None
-                src[sid] = f"skip({type(e).__name__})"
-            torch.cuda.empty_cache()
-        if tb is None:
-            weights[sid] = 1.0  # no anchor -> unweighted for this shape
-            tb_layer[sid] = None
-            print(f"sid {sid:>2} Tb=  n/a    ({src[sid]}) -> w=1.0", flush=True)
+        t, sl = tb(sid), sol_layer(sid)
+        if t is None or sl is None:
+            missing.append(sid)
             continue
-        sl = sol_layer(sid)
-        tb_layer[sid] = round(tb, 6)
-        if sl is None:
-            weights[sid] = 1.0  # no SOL_layer available -> unweighted
-        else:
-            denom = tb - sl
-            weights[sid] = round(1.0 / denom, 6) if denom > 0 else 0.0  # official denom<=0 guard
-        print(f"sid {sid:>2} Tb={tb:8.4f}ms ({src[sid]:8s}) SOL_layer="
-              f"{(sl if sl is not None else float('nan')):7.4f}ms w={weights[sid]:.4f}", flush=True)
+        denom = t - sl
+        weights[sid] = round(1.0 / denom, 6) if denom > 0 else 0.0  # official denom<=0 guard
+
+    if missing:
+        for k in ("shape_weights", "anchor_tb_layer_ms", "anchor_source"):
+            manifest.pop(k, None)  # clear any stale weights
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        print(f"[anchor] no production baseline for {len(missing)}/{len(shapes)} shapes "
+              f"(e.g. sids {missing[:5]}) -> UNWEIGHTED priority (raw ms-gap). "
+              f"Populate metadata.production_performance to enable SOL-score weighting.", flush=True)
+        return 0
 
     manifest["shape_weights"] = weights
-    manifest["anchor_tb_layer_ms"] = tb_layer
-    manifest["anchor_source"] = src
+    manifest["anchor_tb_layer_ms"] = {sid: round(tb(sid), 6) for sid in shapes}
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"[anchor] wrote shape_weights for {len(weights)} shapes -> {manifest_path}")
+    print(f"[anchor] SOL-score weights for {len(weights)} shapes (Tb from metadata) -> {manifest_path}")
     return 0
 
 
