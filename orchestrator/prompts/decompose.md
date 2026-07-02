@@ -34,11 +34,12 @@ Do exactly this, then STOP:
      `"0","1",…`, axes under `input_kwargs`). Keep the sids identical — they are the join key across
      shapes.json, every boundary's roofline.json, and each version's `latency_us_by_shape`. Do not
      re-number or hand-pick shapes.
-   - per boundary, a **`roofline.json`** in atrex-bench format:
+   - per boundary, a **`roofline.json`**:
      `{"shapes": {"<sid>": {"semantic_W_flops": {"<dtype>": W}, "semantic_Q_read_bytes": …,
-     "semantic_Q_write_bytes": …, "SOL_time_ms": {"{{PLATFORM}}": ms}}}}` — run `{{ROOFLINE_PY}}` on that
-     boundary for **every** sid in `shapes.json`. SOL is **per-shape** (there is no single "representative"
-     shape and no scalar `sol_time_ms`) because op cost varies with the axes — attention ∝ B·S², so one
+     "semantic_Q_write_bytes": …, "sol_time_ms": <ms>}}}` — run `{{ROOFLINE_PY}}` on that boundary for
+     **every** sid in `shapes.json`. Store SOL as a plain per-shape `sol_time_ms` number (the campaign
+     targets one platform `{{PLATFORM}}`, so do **not** nest it under a platform key). SOL is **per-shape**
+     (no single "representative" shape) because op cost varies with the axes — attention ∝ B·S², so one
      shape's SOL is meaningless for the rest. Use the operator's **declared dtype**, and for **causal**
      attention count causal FLOPs (~½ the dense S×S), not the full matrix.
    - `boundaries.json` — the manifest: dataflow-ordered boundaries (`name`, `op_type`, `kernel_demo`,

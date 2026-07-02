@@ -62,6 +62,11 @@ Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each s
    peak-utilization via `tools/compute_utilization.py`, compare against v{{PREV}}, evaluate ISA metric progress,
    and update `memory/v{{N}}.json`. Bench must be **variance-aware** — a delta only counts as real if it clears
    measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement). Return PASS / FAIL.
+   **Bench EVERY shape in `shapes.json`** (the full ground-truth shape set, keyed by integer sid) — never a single
+   hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}` for all sids
+   and set `performance.latency_us` = their mean. Do **not** compute a priority here — the orchestrator computes
+   the (anchor-weighted) priority from this per-shape latency; an under-benched (single-shape) record silently
+   mis-ranks the whole layer.
 
 ## Step C — Commit or revert (mechanical, no discretion)
 
