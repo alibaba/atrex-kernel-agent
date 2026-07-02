@@ -22,3 +22,6 @@ kernel_opt_*/
 
 # Git submodules are tracked via .gitmodules
 # reference-projects/ content is managed as submodules
+
+# Layer decomposition output created by orchestrator/optimize.py --layer
+layer_*/

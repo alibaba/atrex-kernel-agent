@@ -4,6 +4,10 @@
   "timestamp": "<ISO 8601>",
   "performance": {
     "latency_us": null,
+    "latency_us_by_shape": {
+      "<sid>": "REQUIRED: measured latency (us) for EVERY shape in the workspace shapes.json (the full shape set). Keyed by the integer sid ('0','1',...) shared with shapes.json and roofline.json. latency_us above = mean of these. NEVER bench only one representative shape."
+    },
+    "priority_ms": "mean over sids of max(0, latency_ms - SOL_ms), where SOL_ms = roofline.json.shapes[sid].SOL_time_ms[<platform>] — the boundary's reachable savings toward the single layer SOL-score; the orchestrator ranks boundaries by this.",
     "tflops": null,
     "bandwidth_gbps": null,
     "tflops_peak_utilization_pct": null,

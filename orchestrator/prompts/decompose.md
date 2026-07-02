@@ -13,6 +13,8 @@ Inputs:
 - `layer_dir` (your cwd): `{{LAYER_DIR}}` — write all outputs here
 - `platform`: `{{PLATFORM}}`
 - `roofline_py` (per-boundary SOL): `{{ROOFLINE_PY}}`
+- `workload` (the full shape set — every shape the op is scored on; convert each entry to an integer-sid
+  `shapes.json` entry): `{{WORKLOAD}}`
 - gpu-wiki (operator knowledge only): `{{GPU_WIKI}}`
 - additional_notes: `{{NOTES}}`
 
@@ -27,8 +29,21 @@ Do exactly this, then STOP:
 3. **Emit the deliverables** (§4) into `{{LAYER_DIR}}`:
    - `reference.py` — the full-layer PyTorch reference (for the final end-to-end recombine validation).
    - `<boundary>/kernel_demo.py` — one basic, correct, runnable PyTorch reference per boundary.
-   - `boundaries.json` — the manifest (dataflow order; per-boundary `name`, `op_type`, `kernel_demo`,
-     `shapes`, `dtype`, `bound`, `sol_time_ms` from `{{ROOFLINE_PY}}`, `ceiling` per §5).
+   - `shapes.json` — the layer's full shape set in **atrex-bench format**: `{"0": {"init_kwargs": null,
+     "input_kwargs": {…axes…}}, "1": {…}, …}`, integer string sids `"0","1",…` (convert every entry of
+     `{{WORKLOAD}}` — do not hand-pick). This is the ground-truth bench set for every boundary.
+   - per boundary, a **`roofline.json`** in atrex-bench format:
+     `{"shapes": {"<sid>": {"semantic_W_flops": {"<dtype>": W}, "semantic_Q_read_bytes": …,
+     "semantic_Q_write_bytes": …, "SOL_time_ms": {"{{PLATFORM}}": ms}}}}` — run `{{ROOFLINE_PY}}` on that
+     boundary for **every** sid in `shapes.json`. SOL is **per-shape** (there is no single "representative"
+     shape and no scalar `sol_time_ms`) because op cost varies with the axes — attention ∝ B·S², so one
+     shape's SOL is meaningless for the rest. Use the operator's **declared dtype**, and for **causal**
+     attention count causal FLOPs (~½ the dense S×S), not the full matrix.
+   - `boundaries.json` — the manifest: dataflow-ordered boundaries (`name`, `op_type`, `kernel_demo`,
+     `dtype`, `bound`, `ceiling` per §5, and each boundary's `roofline` body), plus the layer-level
+     `shapes` (the shapes.json body). The orchestrator materializes `shapes.json` + `roofline.json` into
+     each boundary workspace from this manifest; sids are the join key across shapes.json, roofline.json,
+     and each version's `performance.latency_us_by_shape`.
    - `decomposition.md` — the evidence chain for each fuse/split decision (`op(s) -> decision -> why`).
 4. Sanity-check that every `kernel_demo.py` runs and matches the corresponding slice of `reference.py`.
 

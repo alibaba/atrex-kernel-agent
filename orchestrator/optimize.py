@@ -398,6 +398,50 @@ def best_latency_us(workspace: Path) -> Optional[float]:
     return best
 
 
+def best_perf_by_shape(workspace: Path) -> Optional[dict]:
+    """Per-shape best (min) latency_us across all versions, keyed by integer sid.
+
+    Reads ``performance.latency_us_by_shape`` from each memory/v<n>.json. Returns
+    None when no version records per-shape latencies (caller falls back to the
+    scalar path). SOL and latency MUST be aggregated over the same shape set, so
+    the sids here match those in the workspace roofline.json (see sol_ms_by_shape).
+    """
+    lv = latest_version(workspace)
+    best: dict[str, float] = {}
+    for n in range(0, lv + 1):
+        mem = read_memory(workspace, n)
+        if not mem:
+            continue
+        per = (mem.get("performance") or {}).get("latency_us_by_shape")
+        if not isinstance(per, dict):
+            continue
+        for sid, lat in per.items():
+            if isinstance(lat, (int, float)):
+                best[sid] = min(best.get(sid, float("inf")), float(lat))
+    return best or None
+
+
+def sol_ms_by_shape(workspace: Path, platform: str) -> Optional[dict]:
+    """Per-shape SOL (ms) for a boundary, read from the workspace's atrex-bench-format
+    ``roofline.json``: ``shapes[sid].SOL_time_ms[<platform>]``. Keyed by the integer sid
+    ("0","1",...) shared with ``shapes.json`` and with the memory latency_us_by_shape.
+    Returns None when roofline.json is absent (caller falls back to the scalar path).
+    """
+    rp = workspace / "roofline.json"
+    if not rp.exists():
+        return None
+    try:
+        shapes = (json.loads(rp.read_text(encoding="utf-8")).get("shapes") or {})
+    except (OSError, json.JSONDecodeError):
+        return None
+    out: dict[str, float] = {}
+    for sid, entry in shapes.items():
+        sol = (entry.get("SOL_time_ms") or {}).get(platform) if isinstance(entry, dict) else None
+        if isinstance(sol, (int, float)):
+            out[sid] = float(sol)
+    return out or None
+
+
 def stall_rounds(workspace: Path, eps: float = 0.05) -> int:
     """Trailing count of optimization versions (v1..) that did NOT reduce best latency by >= eps.
 
@@ -443,6 +487,7 @@ class LayerCampaign:
     arch: str = ""
     gpu_wiki: str = ""
     roofline_py: str = ""
+    workload: str = ""             # path to the layer's workload.jsonl (the full shape set)
     max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
     token_budget: int = 0
     plateau_k: int = 3             # all boundaries stall_rounds >= k -> layer short-circuit
@@ -483,7 +528,7 @@ class LayerCampaign:
             PROMPTS_DIR / "decompose.md",
             LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
             PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py, GPU_WIKI=self.gpu_wiki,
-            NOTES=self.notes,
+            WORKLOAD=self.workload, NOTES=self.notes,
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
@@ -506,6 +551,7 @@ class LayerCampaign:
             demo = self.layer_dir / b["kernel_demo"]
             subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)], check=True)
             link_runtime(ws)
+            self._write_shape_frame(ws, b)
             prompt = _render(
                 PROMPTS_DIR / "setup.md",
                 WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
@@ -520,22 +566,70 @@ class LayerCampaign:
         self._manifest_path().write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return boundaries
 
+    def _write_shape_frame(self, ws: Path, b: dict) -> None:
+        """Materialize the boundary's atrex-bench-format op files into its workspace so the
+        optimization session benches the SAME full shape set every round, keyed by integer sid:
+          - shapes.json  : {"0": {"init_kwargs": null, "input_kwargs": {...}}, ...}  (layer-shared)
+          - roofline.json: {"shapes": {"0": {"semantic_W_flops": {..}, "SOL_time_ms": {"<hw>": ms}}}}
+        sid is the atrex-bench integer id ("0","1",...) shared across shapes.json, roofline.json,
+        and the memory latency_us_by_shape — NOT a uuid hash and NOT a "BxS" string. This is the
+        ground-truth bench set (immutable per campaign); the session must NOT bench a single
+        hand-picked "representative" shape.
+        """
+        manifest = self._read_manifest()
+        shapes = manifest.get("shapes")            # atrex-bench shapes.json body: {sid: {...}}
+        roofline = b.get("roofline")               # {"shapes": {sid: {...SOL_time_ms...}}}
+        if isinstance(shapes, dict) and shapes:
+            (ws / "shapes.json").write_text(json.dumps(shapes, indent=2), encoding="utf-8")
+        if isinstance(roofline, dict) and roofline:
+            (ws / "roofline.json").write_text(json.dumps(roofline, indent=2), encoding="utf-8")
+
     # ── scheduler helpers ─────────────────────────────────────────────────────
     def _priority(self, b: dict) -> float:
-        """Live ROI: remaining reachable savings (ms), decayed by how long the boundary has stalled.
+        """Live ROI = reachable savings toward the *single* layer SOL-score, decayed by stall.
 
-        priority = max(0, best_latency_ms - SOL_ms/ceiling) * 0.5**stall_rounds
-        A fresh boundary with no recorded latency gets top priority so it is profiled first.
+        The whole layer is scored ONCE (official SOL-ExecBench, recombined kernel); the
+        boundaries are not scored separately. Layer latency is additive over boundaries
+        (T_layer = Σ_b T_b), so a boundary's reachable savings is its gradient on the one
+        layer score. The official per-shape score is
+            S[s] = 1 / (1 + (Tk_layer[s]-SOL_layer[s]) / (Tb_layer[s]-SOL_layer[s]))
+        whose sensitivity to cutting a boundary at shape s is the per-shape weight
+            w[s] = 1 / (Tb_layer[s] - SOL_layer[s])        (boundary-independent; from setup)
+        so the score-consistent priority is
+
+            priority(b) = mean_over_shapes( w[s] * max(0, Tk[b,s] - SOL[b,s]) ) * 0.5**stall_rounds
+
+        `w[s]` (manifest `shape_weights`) is measured once at setup by benching the optimized-
+        PyTorch anchor (`solution.py`) — see setup_anchor_weights(). Without it, w[s]=1 (raw
+        ms-gap ROI). The `0.5**stall_rounds` decay is essential: when a boundary stops improving
+        for a few rounds it is deprioritized so the scheduler moves on to boundaries that can
+        still gain (no boundary is ever dropped — its priority just decays). SOL and latency are
+        BOTH aggregated over the full shape set — never one "representative" shape (attention
+        cost ∝ B·S², so a shape mismatch blows up the SOL and zeroes the boundary; that bug
+        starved gqa_attention). Falls back to the scalar path when per-shape data is absent;
+        a fresh boundary with no latency gets top priority.
         """
         ws = self._boundary_ws(b["name"])
-        lat_us = best_latency_us(ws)
         decay = 0.5 ** stall_rounds(ws, self.plateau_eps)
+
+        # ── per-shape path (preferred): score-weighted mean reachable ms over the shape set ──
+        # SOL from the workspace roofline.json; w[s] from the manifest shape_weights (setup).
+        sol_by_shape = sol_ms_by_shape(ws, self.platform)
+        lat_by_shape = best_perf_by_shape(ws)
+        if sol_by_shape and lat_by_shape:
+            common = [sid for sid in sol_by_shape if sid in lat_by_shape]
+            if common:
+                weights = (self._read_manifest().get("shape_weights") or {})
+                gap = sum((float(weights.get(sid, 1.0))) * max(0.0, lat_by_shape[sid] / 1000.0 - sol_by_shape[sid])
+                          for sid in common) / len(common)
+                return gap * decay
+
+        # ── legacy scalar fallback ──
+        lat_us = best_latency_us(ws)
         if lat_us is None:
             return 1e12 * decay
-        ceiling = b.get("ceiling") or DEFAULT_CEILING.get(b.get("op_type", ""), 0.85)
-        sol_ms = b.get("sol_time_ms")
-        floor_ms = (float(sol_ms) / ceiling) if isinstance(sol_ms, (int, float)) and ceiling > 0 else 0.0
-        return max(0.0, lat_us / 1000.0 - floor_ms) * decay
+        sol_ms = float(b["sol_time_ms"]) if isinstance(b.get("sol_time_ms"), (int, float)) else 0.0
+        return max(0.0, lat_us / 1000.0 - sol_ms) * decay
 
     def _total_versions(self, boundaries: list[dict]) -> int:
         # optimization iterations spent = sum of per-boundary latest versions (v0 = baseline, not counted)
@@ -572,6 +666,48 @@ class LayerCampaign:
             res = run_session(ws, prompt, timeout=self.iter_timeout)
             self._account(res, f"{target['name']} v{n}")
 
+            # Guard: if the session exited without producing v<n>.json, write a
+            # minimal failed-iteration record so latest_version() advances.  Without
+            # this the scheduler would keep targeting the same v<N> forever (the
+            # spent count never increments and stall_rounds never sees it).
+            if read_memory(ws, n) is None:
+                mem_dir = ws / "memory"
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                failed = {
+                    "version": f"v{n}",
+                    "correctness": {"status": "FAIL", "details": "session did not produce v{n}.json"},
+                    "quality_gate": {"result": "FAIL"},
+                    "git_commit_hash": None,
+                    "optimization_category": "failed-iteration",
+                    "notes": "orchestrator: session exited without output; recorded to advance budget",
+                }
+                (mem_dir / f"v{n}.json").write_text(json.dumps(failed, indent=2), encoding="utf-8")
+                print(f"[layer] WARNING: {target['name']} v{n} session produced no memory — "
+                      f"wrote failed record to advance budget", flush=True)
+
+    # ── phase 2b: anchor weights (score-consistent priority) ──────────────────
+    def setup_anchor_weights(self) -> None:
+        """Bench the optimized-PyTorch anchor (`solution.py`) across the full shape set and
+        write per-shape SOL-score weights (`shape_weights`) into the manifest, so the scheduler
+        ranks boundaries by their gradient on the single official layer score rather than raw ms.
+        Runs once; skipped on resume (weights already present) or when no workload is configured.
+        Non-fatal — if the anchor bench fails, priority falls back to unweighted (w[s]=1).
+        """
+        if not self.workload:
+            print("[layer] no --workload; priority uses raw ms-gap (w=1)", flush=True)
+            return
+        if self._read_manifest().get("shape_weights"):
+            return  # resume: already computed
+        op_dir = Path(self.workload).parent
+        cmd = [sys.executable, str(Path(__file__).parent / "anchor_bench.py"),
+               "--op-dir", str(op_dir), "--manifest", str(self._manifest_path()),
+               "--platform", self.platform]
+        print(f"[layer] anchor bench (Tb_layer for SOL-score weights): {' '.join(cmd)}", flush=True)
+        r = subprocess.run(cmd)
+        if r.returncode != 0:
+            print("[layer] WARNING: anchor bench failed — priority falls back to raw ms-gap (w=1)",
+                  file=sys.stderr, flush=True)
+
     # ── phase 4: recombine ────────────────────────────────────────────────────
     def recombine(self) -> None:
         prompt = _render(PROMPTS_DIR / "recombine.md",
@@ -584,6 +720,7 @@ class LayerCampaign:
         if not self._manifest_path().exists():
             self.decompose()
         boundaries = self.setup_boundaries()
+        self.setup_anchor_weights()
         reason = self.schedule(boundaries)
         self.recombine()
         print(f"\n[layer] STOP — {reason}", flush=True)
@@ -608,6 +745,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--roofline-py", default=str(REPO_ROOT.parent / "atrex-bench" / "scripts" / "roofline.py"),
                     help="Layer mode: per-boundary SOL calculator (default: <repo>/../atrex-bench/scripts/roofline.py).")
     ap.add_argument("--platform", required=True, help="Target hardware, e.g. H20 / MI308X.")
+    ap.add_argument("--workload", default="",
+                    help="Layer mode: path to the benchmark op's workload.jsonl (the full shape set). Its "
+                         "directory must also hold definition.json + solution.py (the optimized-PyTorch anchor) "
+                         "so the scheduler can weight priority by the official per-shape SOL-score.")
     ap.add_argument("--framework", required=True, help="e.g. CuteDSL / FlyDSL.")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
     ap.add_argument("--gpu-wiki", default=str(REPO_ROOT / "gpu-wiki"),
@@ -635,7 +776,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         layer = LayerCampaign(
             name=args.name, layer_demo=args.kernel_demo, platform=args.platform,
             framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
-            roofline_py=args.roofline_py, max_iters=args.max_iters, token_budget=args.token_budget,
+            roofline_py=args.roofline_py, workload=args.workload,
+            max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
         )
         layer.run()

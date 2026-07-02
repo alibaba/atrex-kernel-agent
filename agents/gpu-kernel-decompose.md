@@ -140,22 +140,46 @@ already ship. Use them as the default carving; adjust to the actual module.
    {
      "layer_name": "<name>",
      "reference": "reference.py",
+     "shapes": {                     // atrex-bench shapes.json body: the FULL shape set, integer sids
+       "0": { "init_kwargs": null, "input_kwargs": { "batch_size": 2, "seq_len": 8192 } },
+       "1": { "init_kwargs": null, "input_kwargs": { "batch_size": 1, "seq_len": 128 } }
+     },
      "boundaries": [
        {
          "name": "qkv_proj",
          "op_type": "gemm",          // gemm | attention | norm | elementwise | moe_gemm | sort | reduce | other
          "kernel_demo": "qkv_proj/kernel_demo.py",
-         "shapes": "...", "dtype": "bf16",
+         "dtype": "bf16",
          "bound": "compute",         // compute | memory
-         "sol_time_ms": 0.123,       // from roofline.py for this op+shape+platform
+         "roofline": {               // atrex-bench roofline.json body, per-shape SOL keyed by the SAME sids
+           "shapes": {
+             "0": {
+               "semantic_W_flops": { "bf16": 824967265152 },
+               "semantic_Q_read_bytes": 0, "semantic_Q_write_bytes": 0,
+               "SOL_time_ms": { "<platform>": 0.123 }
+             }
+           }
+         },
          "ceiling": 0.85             // expected achievable %SOL (see §5)
        }
      ]
    }
    ```
-   Compute `sol_time_ms` by running `roofline.py` on each boundary's op+shape+platform. Record an
-   **evidence chain** for each fuse/split decision (`op(s) -> decision -> why`) in
-   `<layer_dir>/decomposition.md`.
+   **SOL is per-shape, over the entire shape set — never one hand-picked "representative" shape.** Convert
+   every entry of the layer's workload into the atrex-bench `shapes.json` body (integer sids `"0","1",…`,
+   axes under `input_kwargs`). For each boundary, run `roofline.py` **once per sid** and record it in that
+   boundary's `roofline` body under `SOL_time_ms[<platform>]`. This matches how the op is actually scored
+   (every shape scored independently) and is essential because op cost varies with the axes — attention
+   scales ∝ B·S², so a single shape's SOL is meaningless for the rest. Two correctness rules when calling
+   `roofline.py`:
+   - use the operator's **declared dtype** (from the definition / metadata), not whatever the reference
+     happens to upcast to internally;
+   - for **causal** attention, count causal FLOPs (~½ of the full S×S), not the dense S×S.
+
+   The orchestrator materializes each boundary's `shapes.json` + `roofline.json` into its workspace from
+   this manifest; the integer sid is the join key across `shapes.json`, `roofline.json`, and every version's
+   `performance.latency_us_by_shape`. Record an **evidence chain** for each fuse/split decision
+   (`op(s) -> decision -> why`) in `<layer_dir>/decomposition.md`.
 
 The coordinator then creates one standard atrex workspace per boundary (`kernel_demo` = the boundary's
 reference), and each workspace optimizes independently.
@@ -185,6 +209,8 @@ utilization as the ceiling when available; otherwise use the defaults above.
 - **DO NOT** run when the gate says BYPASS — the single-operator path must stay untouched.
 - **DO NOT** author graph/layer-partitioning content into gpu-wiki.
 - **DO NOT** emit a boundary that is not independently runnable and correctness-testable.
-- **DO NOT** fabricate shapes/dtypes — derive them from `layer_logic`; ask if genuinely ambiguous.
+- **DO NOT** fabricate or hand-pick shapes — convert the layer's entire workload into the atrex-bench
+  `shapes.json` body (all of it, integer sids `"0","1",…`, axes under `input_kwargs`); derive dtypes from the
+  operator definition / `layer_logic`; ask if genuinely ambiguous.
 - **DO NOT** optimize kernels here — decomposition only. Optimization happens per-boundary in the normal pipeline.
 - **DO NOT** re-fuse across boundaries later — once drawn, boundaries are fixed for the campaign.
