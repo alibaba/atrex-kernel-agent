@@ -47,7 +47,7 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - **test_kernel.py is immutable for performance measurement**: DO NOT modify `test_kernel.py` to change the benchmark harness (e.g., warmup count, repetition count, `return_mode`, timing method, input shapes, or any other benchmark parameter) in order to obtain better performance numbers.
 - `test_kernel.py` defines the ground-truth benchmark methodology. Any change to it invalidates cross-version comparisons.
 - If a measurement methodology issue is discovered (e.g., outlier inflation, incorrect return mode), report it in `memory/v<N>.json` under `pitfalls_and_fixes` and propose the fix — but DO NOT apply the fix to `test_kernel.py` within an optimization iteration.
-- **Bench EVERY shape defined in the workspace shape set** — never a single hand-picked "representative" shape. Record per-shape latency (`performance.latency_us_by_shape`), set `performance.latency_us` = their mean, and compute `performance.priority_ms` = mean over shapes of `max(0, latency_ms - SOL_ms)`. This is what the orchestrator ranks on; an under-benched (single-shape) record silently mis-ranks the whole layer.
+- **Bench EVERY shape defined in the workspace shape set** — never a single hand-picked "representative" shape. Record per-shape latency (`performance.latency_us_by_shape`) and set `performance.latency_us` = their mean. Do NOT compute a priority in the session — the orchestrator derives the (anchor-weighted) priority from this per-shape latency; an under-benched (single-shape) record silently mis-ranks the whole layer.
 
 ## Hardware Architecture Constraints
 
