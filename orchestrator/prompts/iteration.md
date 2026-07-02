@@ -63,11 +63,10 @@ Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each s
    and update `memory/v{{N}}.json`. Bench must be **variance-aware** — a delta only counts as real if it clears
    measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement). Return PASS / FAIL.
    **Bench EVERY shape in `shapes.json`** (the full ground-truth shape set, keyed by integer sid) — never a single
-   hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}` for all sids,
-   set `performance.latency_us` = their mean, and compute `performance.priority_ms` = mean over sids of
-   `max(0, latency_ms - SOL_ms)` where `SOL_ms` is `roofline.json.shapes[sid].sol_time_ms` (a plain per-shape
-   number — no platform key). This is what the orchestrator ranks boundaries on; an under-benched (single-shape)
-   record silently mis-ranks the whole layer.
+   hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}` for all sids
+   and set `performance.latency_us` = their mean. Do **not** compute a priority here — the orchestrator computes
+   the (anchor-weighted) priority from this per-shape latency; an under-benched (single-shape) record silently
+   mis-ranks the whole layer.
 
 ## Step C — Commit or revert (mechanical, no discretion)
 
