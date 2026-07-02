@@ -28,7 +28,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 │   └── gpu-wiki-design.md                # gpu-wiki knowledge-base design
 ├── gpu-wiki/                             # Local GPU knowledge base and reference index
 │   ├── README.md
-│   ├── docs/                             # Hardware specs, kernel optimization docs, pitfalls, ref docs
+│   ├── docs/                             # Vendor-first knowledge base: nvidia/, amd/, generic/
 │   └── reference-kernels/                # AMD, NVIDIA, and generic reference kernels
 ├── reference/
 │   ├── README.md                         # Workspace README template

@@ -4,6 +4,8 @@ This source wiki does not define Atrex Server, CLI, task runtime input/output fi
 
 **Core Usage**: Start from this README, choose the smallest relevant directory, then read the linked Markdown or source files directly. Use any available file-reading and text-search tools; the wiki itself does not require a specific product or runtime.
 
+**Other entry points**: flat catalog of every page → [`docs/index.md`](docs/index.md); maintenance schema and Ingest/Query/Lint operations → [`CLAUDE.md`](CLAUDE.md); change history → [`log.md`](log.md); architecture-scoped search → `python3 gpu-wiki/scripts/query.py "<keywords>" --arch <blackwell|hopper|cdna3|cdna4|...>` (restricts to one architecture and never leaks a competing one; `--vendor`/`--dsl` narrow further, `--list-arch` lists values).
+
 ## Overall Architecture
 
 **Design Rationale**: GPU kernel optimization is highly architecture-dependent — the optimization direction for the same kernel can be completely opposite across different architectures (for example, the same tile size may be compute-bound on H20 but memory-bound on MI355X). The three-level classification makes it easier to access knowledge for the target architecture and avoid applying experience from the wrong hardware family.
@@ -19,161 +21,64 @@ This source wiki does not define Atrex Server, CLI, task runtime input/output fi
 7. For candidate implementation examples, check the usability status in `reference-kernels/README.md` and the nested README before assuming the code can run unchanged.
 8. Examples are not guaranteed to be directly importable runtime dependencies; adapt them to the consuming benchmark harness and runtime contract.
 
+
 ## Search Priority Guidelines
 
-For GPU-kernel work, follow the layered retrieval strategy below. **Do not load all documents at once**; expand layer by layer as needed.
+For GPU-kernel work, expand layer by layer; do not load everything at once.
 
-### Five-Tier Retrieval Priority
+| Priority | Tier | Where |
+|--------|------|-------|
+| **P0** | Hardware specs | `docs/nvidia/common/hardware-specs/` (hopper/b200/b300/sm120), `docs/amd/hardware-specs/` (mi300x/mi308x/mi355x) |
+| **P1** | Vendor-general | NVIDIA cross-arch: `docs/nvidia/common/` (ptx, profiling, cutedsl fundamentals, theory); AMD: `docs/amd/common/` |
+| **P2** | Architecture | NVIDIA: `docs/nvidia/{hopper,blackwell,blackwell-geforce}/`; AMD: `docs/amd/{common,gluon,flydsl}/{gfx942,gfx950}/` |
+| **P3** | DSL-specific | CuTeDSL/Gluon/Triton/CUDA under the matching arch dir; CuTeDSL fundamentals under `docs/nvidia/common/cutedsl/`; FlyDSL under `docs/amd/flydsl/` |
+| **P4** | Pitfalls | each topic's `pitfalls/` subfolder, e.g. `docs/nvidia/blackwell-geforce/cutedsl/pitfalls/`, `docs/amd/flydsl/pitfalls/` |
+| **P5** | External refs | vendor official docs (below) + `3rdparty/` community wikis |
 
-| Priority | Tier | When to Retrieve | Relevant Directories |
-|--------|------|----------|----------|
-| **P0** | Hardware Specs | **First — after determining the target GPU** — get peak TFLOPS, bandwidth, ridge point, architecture parameters | `docs/hardware-specs/hardware_specs_{mi300x,mi308x,mi355x,hopper,blackwell}.md` |
-| **P1** | Vendor-General | **After determining the target vendor** — general optimizations for AMD or NVIDIA | AMD: `docs/kernel-opt/amd/common/`; NVIDIA: `docs/kernel-opt/nvidia/common/` |
-| **P2** | Architecture-Specific | **After determining the target chip** — optimization points for specific models | NVIDIA Blackwell: `docs/kernel-opt/nvidia/common/blackwell/`; Gluon series: `docs/kernel-opt/{amd,nvidia}/gluon/{gfx942,gfx950,sm90}/`; General architecture: `docs/kernel-opt/amd/common/{gfx942,gfx950}/` |
-| **P3** | DSL-Specific | **After determining the target DSL** — framework-specific knowledge | CuTeDSL: `docs/kernel-opt/nvidia/cutedsl/`, `reference-kernels/`; FlyDSL: `docs/kernel-opt/amd/flydsl/`, `reference-kernels/` |
-| **P4** | Optimization Experience | **After encountering optimization issues** — accumulated experience | `docs/pitfalls/`, `docs/ref-docs/` |
-| **P5** | External References | When P0–P4 do not cover a topic: vendor official docs for ISA/API precision, or community wikis for alternative perspective | Vendor docs (see Architecture & Programming References below); `3rdparty/` — KernelWiki, modern-gpu-programming |
+## Repository Layout
 
-**Retrieval Flow**:
+`docs/` is vendor-first. Within **nvidia/** the second level is **architecture-first**; amd/ and generic/ stay topic-first.
 
 ```
-0. Identify target GPU → Load P0 (hardware specs: peak TFLOPS, ridge point, memory BW)
-1. Identify target vendor → Load P1 (AMD common or NVIDIA common)
-2. Identify target architecture → Load P2 (gfx942 / gfx950 / sm90, etc.)
-3. Identify target DSL → Load P3 (CuTeDSL / FlyDSL / Gluon)
-4. Optimization issues → Load P4 (trap → symptom → why → lesson)
-5. Topic gaps, ISA/API precision, or alternative perspective → Load P5 (vendor official docs + 3rdparty community wikis)
+docs/
+├── generic/      theory + hands-on/ + converter/
+├── amd/          common/(+gfx942,gfx950,hands-on)  flydsl/  gluon/  converter/  hardware-specs/
+└── nvidia/
+    ├── common/              cross-arch: ptx/  profiling/  cutedsl/ (CUTLASS/CuTe fundamentals)
+    │                        gluon/  triton/  hardware-specs/  + general theory cards
+    ├── hopper/        (sm90)  cutedsl/  gluon/  converter/  hands-on/
+    ├── blackwell/     (sm100) hardware/ techniques/ kernels/ patterns/ languages/ migration/
+    │                          hands-on/  articles/  cutedsl/  gluon/  triton/
+    └── blackwell-geforce/ (sm120) cutedsl/  cuda/  triton/
 ```
 
-### Quick Routing for Special Tasks
+### nvidia/ — architecture-first index
 
-| Task | Direct Path |
-|------|----------|
-| **Look up API signatures / source code** | `~/aka_kernel_opt/reference-projects/` — clone upstream framework source (see reference-projects section below), or use vendor official API documentation |
-| **Look up ISA instructions** | Use vendor public documentation (see Architecture & Programming References section below) or clone the relevant upstream project under `~/aka_kernel_opt/reference-projects/` |
-| **Cross-architecture migration** | `docs/RELATIONS.md` (conflict/difference checklist) → `docs/converter/` (conversion rules) |
-| **Troubleshooting / debugging pitfalls** | `docs/pitfalls/` — organized into five steps: trap → symptom → reality → why → lesson |
-| **Writing inline ASM** | CuTeDSL: `docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md` → `reference-kernels/README.md` inline PTX table; FlyDSL: `docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md` → `reference-kernels/README.md` inline_asm table |
-| **Profiling analysis** | NVIDIA: `docs/ref-docs/nvidia/common/ncu-profiling-guide.md`, `docs/ref-docs/nvidia/common/ncu-profile-driven-optimization-workflow.md`, `docs/ref-docs/nvidia/common/ncu-measurement-discipline.md` (trusting profile/timing numbers); AMD: `docs/ref-docs/amd/common/rocprofv3-profiling-guide.md`; Gluon per architecture: `*-profiling_guide.md` |
-| **Code conversion** | PyTorch→Triton: `docs/converter/generic/`; Triton→Gluon: `docs/converter/{amd,nvidia}/` |
+| Dir | Scope | Holds |
+|-----|-------|-------|
+| [`nvidia/common/`](docs/nvidia/common/) | Cross-arch (not tied to one GPU gen) | PTX ISA (`ptx/`), NCU/Nsight profiling (`profiling/`), CuTeDSL/CUTLASS fundamentals (`cutedsl/`), Gluon/Triton general notes, hardware-specs, general optimization theory cards |
+| [`nvidia/hopper/`](docs/nvidia/hopper/) | Hopper sm90 | CuTeDSL, Gluon, Triton→Gluon converter, non-DSL hands-on (TMA/WGMMA/mbarrier/warp-spec) |
+| [`nvidia/blackwell/`](docs/nvidia/blackwell/) | Blackwell datacenter sm100 (B200/B300) | structured knowledge tree (hardware/techniques/kernels/patterns/languages/migration), `hands-on/` (CuTeDSL examples), `articles/` (FA4/B300 deep-dives), CuTeDSL/Gluon, Triton pitfalls |
+| [`nvidia/blackwell-geforce/`](docs/nvidia/blackwell-geforce/) | Blackwell GeForce / RTX PRO sm120 | CuTeDSL, CUDA, Triton (each with `pitfalls/`): NVFP4 GEMM/GEMV, GDN chunk-fwd/decode, MoE data-prep, RMSNorm-MLP PDL |
 
-### Symptom-Driven Retrieval (NVIDIA vs AMD)
+### amd/ and generic/
 
-When a profiler reports a bottleneck symptom, translate it into search keywords
-*here* before grepping — NVIDIA and AMD use different vocabularies and different
-sub-trees, so the retrieval logic is vendor-split.
+| Dir | Holds |
+|-----|-------|
+| [`amd/common/`](docs/amd/common/) | MFMA, CK, rocprofv3, roofline, LDS, occupancy + `hands-on/` + `gfx942/` `gfx950/` |
+| [`amd/flydsl/`](docs/amd/flydsl/) | FlyDSL framework + MI300X/MI355X reports (`gfx942/` `gfx950/`) + `pitfalls/` |
+| [`amd/gluon/`](docs/amd/gluon/) | MI300X/MI355X Gluon (`gfx942/` `gfx950/`) |
+| [`amd/converter/`](docs/amd/converter/) | Triton→Gluon: `common/` + `cdna3/` + `cdna4/` |
+| [`generic/`](docs/generic/) | vendor-agnostic theory + `hands-on/` (Triton patterns) + `converter/` (PyTorch→Triton) |
 
-**NVIDIA** — start from the P1 index `docs/kernel-opt/nvidia/common/` (P2 arch
-`sm90` / `blackwell/`, P3 DSL `cutedsl/`), then
-`grep -ri "<keyword>" docs/kernel-opt/nvidia/`. The NVIDIA `ncu` /
-`classify_ncu.py` `SYMPTOMS` line is controlled vocabulary that maps directly to
-these keywords:
+### Quick routing
 
-| Profiler symptom | gpu-wiki search keywords |
-|---|---|
-| `memory-bound` | coalesced access, vectorized load, async copy / TMA, cp.async |
-| `low-sm-utilization` | occupancy, persistent kernel, split-k, tile rasterization |
-| `register-pressure` | register spill, register pressure, occupancy tuning |
-| `compute-bound` | WGMMA / tcgen05, warp specialization, MMA pipeline |
-| `pipeline-stalls` | software pipeline, double buffering, mbarrier |
-
-**AMD** — search `docs/kernel-opt/amd/` with:
-
-- Memory issues: `coalesced access`, `vectorized load`, `async copy`, `double buffering`
-- Compute issues: `MMA`, `MFMA`, `ILP`, `warp specialization`
-- General issues: `bank conflict`, `register spill`, `occupancy`, `synchronization`
-
-For a `FlyDSL` target, additionally study the `CuTeDSL` implementation of the
-same kernel type under `reference-kernels/nvidia/`,
-then map the optimization ideas onto AMD hardware.
-
----
-
-## docs/hardware-specs/ — Hardware Compute Specification Tables
-
-Centralized hardware specification tables for all target GPUs, providing peak TFLOPS, memory bandwidth, roofline ridge points, and architecture parameters needed for compute utilization and roofline analysis.
-
-| File | GPU | Key Specs |
-|------|-----|-----------|
-| [`hardware_specs_mi300x.md`](docs/hardware-specs/hardware_specs_mi300x.md) | AMD MI300X (CDNA3, gfx942) | 304 CU, 1307T BF16, 5.3 TB/s, ridge ~247 |
-| [`hardware_specs_mi308x.md`](docs/hardware-specs/hardware_specs_mi308x.md) | AMD MI308X (CDNA3, gfx942) | 80 CU, 206T BF16, 5.3 TB/s, ridge ~39 |
-| [`hardware_specs_mi355x.md`](docs/hardware-specs/hardware_specs_mi355x.md) | AMD MI355X (CDNA4, gfx950) | 256 CU, 160KB LDS, ridge ~629 |
-| [`hardware_specs_hopper.md`](docs/hardware-specs/hardware_specs_hopper.md) | NVIDIA H100/H20/H200 (sm_90) | 989T BF16 (H100), 228KB smem, ridge ~295/37 |
-| [`hardware_specs_b200.md`](docs/hardware-specs/hardware_specs_b200.md) | NVIDIA B200 (GB200 / Blackwell / sm_100) | 160 SM, 2250T BF16, 8.0 TB/s, ridge ~281 |
-| [`hardware_specs_b300.md`](docs/hardware-specs/hardware_specs_b300.md) | NVIDIA B300 (GB300 / Blackwell Ultra / sm_103) | 160 SM, 2250T BF16, 8.0 TB/s, 288GB HBM3e, ridge ~281 |
-| [`hardware_specs_sm120.md`](docs/hardware-specs/hardware_specs_sm120.md) | NVIDIA RTX PRO 6000/5000 (sm_120) | Blackwell GeForce / RTX PRO |
-| [`hardware-comparison-cdna3-cdna4.md`](docs/hardware-specs/hardware-comparison-cdna3-cdna4.md) | Cross-architecture | CDNA3 vs CDNA4 vs RDNA4 parameter comparison |
-
----
-
-## docs/ref-docs/ — Complete Reference Articles (142 Articles)
-
-Structured reference documentation, complete optimization reports, and summary content, including detailed sections, code examples, and tables. Organized by vendor/arch/dsl; `kernel-opt/` only retains short knowledge points, pattern cards, and quick references. **Read README.md first for the file list.**
-
-| Directory | Description | Keywords |
-|------|------|--------|
-| [`generic/`](docs/ref-docs/generic/) | GPU general optimization theory + community knowledge (11 articles) | Memory hierarchy, execution model, instruction optimization, Amdahl's Law, GEMM optimization, operator optimization, CUDA basics, LLM inference, AI Agent kernel |
-| **AMD** | | |
-| [`amd/common/`](docs/ref-docs/amd/common/) | AMD general optimization (14 articles) | MFMA, aiter, Composable Kernel, CK-Tile, TileDistribution, GEMM/FMHA pipeline, MX quantization, MoE, ML dispatcher, rocprofv3 |
-| [`amd/flydsl/`](docs/ref-docs/amd/flydsl/) | FlyDSL framework and AMD FlyDSL optimization reports (22 articles) | Topic index: compilation pipeline, layout algebra, API reference, kernel authoring, benchmark, inline_asm, MI300X/MI355X optimization reports, attention/no-mask ISA/mask/mask+LSE SHARE_KV_LDS/pk_fma/occupancy/backward/chunk-GDN, FP16 no-mask CK95 gap, etc.; see directory README and specific articles for details |
-| [`amd/gluon/gfx942/`](docs/ref-docs/amd/gluon/gfx942/) | MI300X Gluon (9 articles) | General optimization, ISA patterns, profiling, CK GEMM, warp pipeline, optimization conclusions/effect summary |
-| [`amd/gluon/gfx950/`](docs/ref-docs/amd/gluon/gfx950/) | MI355X Gluon (7 articles) | matmul, MLA decode, pitfalls, profiling, softmax/reduce, chunk-GDN summary |
-| **NVIDIA** | | |
-| [`nvidia/common/`](docs/ref-docs/nvidia/common/) | NVIDIA general optimization (20 articles) | PTX ISA/MMA/sync, NCU profiling, profile-driven optimization workflow, measurement discipline (Duration≠latency, noise, graph-capture), SMEM swizzling, software pipeline, FP8 accumulation, tile rasterization, warp specialization, register pressure, hierarchical reduction, GPU architecture |
-| [`nvidia/cuda/`](docs/ref-docs/nvidia/cuda/) | CUDA C++ / inline PTX (3 articles) | SM120 NVFP4 Split-K GEMV, consolidated decode/prefill GEMM production lessons, RMSNorm-MLP PDL handoff no-go; CUDA Graph / E2E validation |
-| [`nvidia/cutedsl/`](docs/ref-docs/nvidia/cutedsl/) | CuTeDSL / CUTLASS / QuACK (25 articles) | Topic index: Layout algebra, GEMM tiling, programming model, pipeline, architectural features, Stream-K, FMHA/MLA, Conv, quantization, EVT, QuACK, inline PTX, as well as `sm90/`, `sm100/`, `sm120/` subdirectories; see directory README and specific articles for details |
-| [`nvidia/gluon/sm90/`](docs/ref-docs/nvidia/gluon/sm90/) | Hopper Gluon (7 articles) | General optimization, ISA patterns, hardware specs, linear attention, matmul, pitfalls, profiling |
-
----
-
-## docs/kernel-opt/ — Optimization Quick Reference + Hands-on Patterns
-
-Concise optimization pattern cards (20-100 lines), distilled from code reading. The hands-on/ directory contains hands-on pattern quick references. **Read README.md first for the file list.**
-
-| Directory | Description | Keywords |
-|------|------|--------|
-| [`generic/hands-on/`](docs/kernel-opt/generic/hands-on/) | Triton kernel optimization patterns (8 items) | autotune, persistent kernel, online softmax, flash attention, fused kernel, grouped GEMM, cascade merge, Mamba SSM |
-| **AMD** | | |
-| [`amd/common/`](docs/kernel-opt/amd/common/) | AMD optimization quick reference (9 items) | hardware comparison, occupancy, LDS bank conflict, Triton tuning, GEMM tuning, PyTorch tuning, RCCL, profiling tools |
-| [`amd/common/hands-on/`](docs/kernel-opt/amd/common/hands-on/) | AMD optimization hands-on (10 items) | MFMA selection, LDS swizzle, preshuffle, async DMA, MoE fusion, RDNA4 WMMA |
-| [`amd/common/gfx942/`](docs/kernel-opt/amd/common/gfx942/) | MI300X optimization key points (4 items) | Flash Attention TileLang, Grouped GEMM, Composable Kernel, MI300X kernel practices |
-| [`amd/gluon/gfx942/`](docs/kernel-opt/amd/gluon/gfx942/) | MI300X Gluon optimization guide and pattern cards | config template, strategy, pattern overview, SE zigzag; see `docs/ref-docs/amd/gluon/gfx942/` for summary content |
-| [`amd/gluon/gfx950/`](docs/kernel-opt/amd/gluon/gfx950/) | MI355X Gluon optimization guide and key points | fused attention, hardware specs |
-| [`amd/flydsl/gfx942/`](docs/kernel-opt/amd/flydsl/gfx942/) | FlyDSL MI300X optimization key points (2 items) | Fused MoE W4A16, FP8 PTPC checkpoint |
-| [`amd/flydsl/gfx950/`](docs/kernel-opt/amd/flydsl/gfx950/) | FlyDSL MI355X optimization knowledge point index | Complete optimization reports have been migrated to `docs/ref-docs/amd/flydsl/gfx950/`; this directory only retains quick reference/index entries |
-| **NVIDIA** | | |
-| [`nvidia/common/`](docs/kernel-opt/nvidia/common/) | NVIDIA optimization quick reference (including 51 Blackwell knowledge cards) | Compute Capability, L2 persistence, async copy, TMA, occupancy, thread block cluster, Blackwell hardware mechanisms/kernel/migration/bottleneck patterns/optimization techniques |
-| [`nvidia/common/blackwell/`](docs/kernel-opt/nvidia/common/blackwell/) | Blackwell / Hopper kernel optimization knowledge cards (51 cards) | tcgen05, TMEM, TMA, mbarrier, CLC, NVFP4, FlashMLA, DeepGEMM, MoE, WGMMA→tcgen05, register→TMEM, vectorized loads, warp specialization |
-| [`nvidia/common/hands-on/`](docs/kernel-opt/nvidia/common/hands-on/) | Blackwell (SM100) Optimization Hands-On (11 items) | tcgen05/TMEM, three-role warp specialization, CLC, 2CTA, block-scaled MMA |
-| [`nvidia/common/sm90/hands-on/`](docs/kernel-opt/nvidia/common/sm90/hands-on/) | Hopper (SM90) Optimization Hands-On (13 items) | TMA, WGMMA, mbarrier pipeline, warp specialization, FlashMLA seesaw |
-| [`nvidia/cutedsl/`](docs/kernel-opt/nvidia/cutedsl/) | CuTeDSL Optimization Insights and Quick Reference | Subdirectory: `sm120/`; full optimization reports: `docs/ref-docs/nvidia/cutedsl/` |
-| [`nvidia/gluon/sm90/`](docs/kernel-opt/nvidia/gluon/sm90/) | Hopper Gluon optimization guide and essentials | fused attention, softmax/reduce |
-
----
-
-## docs/pitfalls/ — Implementation/Porting Pitfall Records
-
-Each pitfall follows a five-step process: trap → symptom → reality → why → lesson, specifically documenting "counter-intuitive pitfalls that others are likely to get wrong" and "approaches that were tried but reverted." Complements the optimization reports in `ref-docs/` (reports cover "why we did this + benefits"; pitfalls cover "why we didn't do this + lessons learned").
-
-| Directory | Description | Keywords |
-|------|------|--------|
-| [`amd/flydsl/`](docs/pitfalls/amd/flydsl/) | FlyDSL on AMD (6 articles, 90 traps) | Topic index: flash-attn, no-mask ISA scheduling, FP16 CK95 gap, bit-packed mask, mask+LSE SHARE_KV_LDS/pk_fma/occupancy, attention backward, mask integration, version iteration, chunk-GDN, etc.; specific traps, symptoms, causes, and fixes — see directory README and individual articles |
-| [`nvidia/cuda/`](docs/pitfalls/nvidia/cuda/) | CUDA on NVIDIA (3 articles, 24 traps) | Topic index: SM120 NVFP4 Split-K GEMV, decode/prefill GEMM production pitfalls, RMSNorm-MLP PDL handoff pitfalls; see directory README and individual articles |
-| [`nvidia/cutedsl/`](docs/pitfalls/nvidia/cutedsl/) | CuTeDSL on NVIDIA (8 articles, 54 traps) | Topic index: GDN chunk fwd, TMA, GDN decode, NVFP4 GEMM, INT32 MoE data preparation, Fused FA-epilogue + NVFP4 quant, etc.; specific traps, symptoms, causes, and fixes — see directory README and individual articles |
-| [`nvidia/triton/`](docs/pitfalls/nvidia/triton/) | Triton on NVIDIA (2 articles, 17 traps) | Topic index: sm_120 fused RMSNormGated + SiLU gating; sm_100 DSA sparse-decode split-K (split-K structural win, online-softmax NaN guard, num_stages/static_range, cross-CTA atomic barrier, clusters ⊥ atomics, cache/eviction levers, `.item()` barrier, tl.sort/histogram); see directory README and individual articles |
-| [`nvidia/gluon/`](docs/pitfalls/nvidia/gluon/) | Gluon on NVIDIA (1 article, 6 traps) | Topic index: sm_100 Blackwell primitives — `gl.dot_fma` vs `bw.tcgen05_mma`, dot_fma layout/dtype rules, tcgen05 small-H padding, `gl.barrier` not callable, explicit layouts, `translator_helpers`; see directory README and individual articles |
-
----
-
-## docs/converter/ — Converter Tool Knowledge
-
-| Directory | Description | Keywords |
-|------|------|--------|
-| [`generic/`](docs/converter/generic/) | PyTorch→Triton Conversion | API mapping, conversion rules, model configuration |
-| [`amd/common/`](docs/converter/amd/common/) | Triton→Gluon General Rules | Porting rules, API mapping, learning guide, verification guide |
-| [`amd/cdna3/`](docs/converter/amd/cdna3/) | CDNA3-Specific Triton→Gluon (7 items) | API mapping, pipeline, matrix_multiply, memory_access, layouts, pitfalls |
-| [`amd/cdna4/`](docs/converter/amd/cdna4/) | CDNA4-Specific Triton→Gluon (7 items) | async copy DMA, mfma_scaled |
-| [`nvidia/hopper/`](docs/converter/nvidia/hopper/) | Hopper-Specific Triton→Gluon (7 items) | wgmma, CP_ASYNC |
+| Task | Path |
+|------|------|
+| Writing inline ASM | CuTeDSL: `docs/nvidia/common/cutedsl/cutedsl-inline-ptx-patterns.md`; FlyDSL: `docs/amd/flydsl/flydsl-inline-asm-patterns.md` |
+| Profiling | NVIDIA: `docs/nvidia/common/profiling/`; AMD: `docs/amd/common/rocprofv3-profiling-guide.md` |
+| Cross-architecture migration | `docs/RELATIONS.md` → `docs/{nvidia/hopper,amd}/converter/` |
+| Pitfalls | the `pitfalls/` subfolder inside the relevant arch/topic |
 
 ---
 
@@ -231,3 +136,4 @@ Consult as **P5 priority** — after exhausting `docs/` (P0–P4) and `reference
 |---|---|---|---|---|
 | **KernelWiki** | MIT HAN Lab (Song Han) | Production-grade kernel optimization patterns from 2179 PRs | NVIDIA Blackwell (SM100), Hopper (SM90) | Performance diagnostics, optimization pattern matching, production kernel reference |
 | **modern-gpu-programming-for-mlsys** | MLC-AI (Tianqi Chen) + CMU | Systematic GPU programming textbook: hardware → programming model → SOTA GEMM | NVIDIA Blackwell, Hopper, Ampere | Foundational learning, Roofline model, TMA pipeline, GEMM optimization theory |
+
