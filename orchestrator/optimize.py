@@ -319,8 +319,8 @@ class Campaign:
         )
         res = run_session(self.workspace, prompt, timeout=self.setup_timeout)
         self._account(res, "setup")
-        # if read_memory(self.workspace, 0) is None:
-        #     raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
+        if read_memory(self.workspace, 0) is None:
+            raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
 
     def budget_exhausted(self) -> bool:
         return self.token_budget > 0 and self.tokens_spent >= self.token_budget
