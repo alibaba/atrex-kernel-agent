@@ -26,10 +26,10 @@ Tier 2 — Architecture Specs
   └─ AMD:     amd-gpu-kernel-tuning.md (includes hardware spec tables)
 
 Tier 3 — Deep Dive
-  ├─ NVIDIA CuTeDSL Chain (nvidia/cutedsl/): cutlass-cute-fundamentals.md → cutlass-gemm-optimization.md
-  │                     → kernel-opt/nvidia/cutedsl/ (production optimization: sm120 GDN chunk-fwd V113)
+  ├─ NVIDIA CuTeDSL Chain (nvidia/common/cutedsl/): cutlass-cute-fundamentals.md → cutlass-gemm-optimization.md
+  │                     → nvidia/blackwell-geforce/cutedsl/ (production optimization: sm120 GDN chunk-fwd V113)
   ├─ NVIDIA PTX Chain (nvidia/common/):  ptx-programming-model.md → ptx-instruction-set.md
-  │                     → kernel-opt/nvidia/ptx/ (production optimization: NVFP4 Split-K GEMV)
+  │                     → nvidia/common/ptx/ (production optimization: NVFP4 Split-K GEMV)
   ├─ AMD Framework (amd/common/): amd-kernel-optimization-frameworks.md + amd-mfma-matrix-cores.md
   │                     → kernel-opt/amd/flydsl/ (production optimization: Flash Attention, Chunk-GDN)
   └─ AMD FlyDSL Chain (amd/flydsl/): flydsl-programming-guide.md → flydsl-layout-algebra.md
@@ -80,7 +80,7 @@ Stage 2: Triton → Gluon (Select Target Architecture)
 | FP8 GEMM Hands-on | *none* | `cdna4-fp8-gemm-optimization.md` | *none* |
 
 SM120 CuTeDSL GDN chunk-forward is the NVIDIA Blackwell GeForce counterpart for this row: optimization report at
-`ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`,
+`nvidia/blackwell-geforce/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`,
 final V113 is no-cache directional final-state `0.531-0.533ms = 1.51× same-process FLA`,
 complementary optimization axes with AMD FlyDSL chunk-GDN.
 
@@ -88,13 +88,13 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 
 | Topic | CDNA3 | CDNA4 | Hopper |
 |------|-------|-------|--------|
-| Conversion Guide | [CDNA3 conversion guide](converter/amd/cdna3/conversion-guide.md) | [CDNA4 conversion guide](converter/amd/cdna4/conversion-guide.md) | [Hopper conversion guide](converter/nvidia/hopper/conversion-guide.md) |
-| API Mapping Table | [CDNA3 API mapping](converter/amd/cdna3/api_mapping.md) | [CDNA4 API mapping](converter/amd/cdna4/api_mapping.md) | [Hopper API mapping](converter/nvidia/hopper/api_mapping.md) |
-| Pipeline Mode | [CDNA3 pipeline notes](converter/amd/cdna3/pipeline.md) (software-only) | [CDNA4 pipeline notes](converter/amd/cdna4/pipeline.md) (HW DMA reference) | [Hopper pipeline notes](converter/nvidia/hopper/pipeline.md) (CP_ASYNC) |
-| Matrix Multiply Mode | [CDNA3 matrix multiply notes](converter/amd/cdna3/matrix_multiply.md) (mfma) | [CDNA4 matrix multiply notes](converter/amd/cdna4/matrix_multiply.md) (mfma) | [Hopper matrix multiply notes](converter/nvidia/hopper/matrix_multiply.md) (wgmma) |
-| Memory Access Mode | [CDNA3 memory access notes](converter/amd/cdna3/memory_access.md) | [CDNA4 memory access notes](converter/amd/cdna4/memory_access.md) | [Hopper memory access notes](converter/nvidia/hopper/memory_access.md) |
-| Layout Mapping | [CDNA3 layout mapping](converter/amd/cdna3/layouts.md) | [CDNA4 layout mapping](converter/amd/cdna4/layouts.md) | [Hopper layout mapping](converter/nvidia/hopper/layouts.md) |
-| Common Pitfalls | [CDNA3 common pitfalls](converter/amd/cdna3/common_pitfalls.md) | [CDNA4 common pitfalls](converter/amd/cdna4/common_pitfalls.md) | [Hopper common pitfalls](converter/nvidia/hopper/common_pitfalls.md) |
+| Conversion Guide | [CDNA3 conversion guide](amd/converter/cdna3/conversion-guide.md) | [CDNA4 conversion guide](amd/converter/cdna4/conversion-guide.md) | [Hopper conversion guide](nvidia/hopper/converter/hopper/conversion-guide.md) |
+| API Mapping Table | [CDNA3 API mapping](amd/converter/cdna3/api_mapping.md) | [CDNA4 API mapping](amd/converter/cdna4/api_mapping.md) | [Hopper API mapping](nvidia/hopper/converter/hopper/api_mapping.md) |
+| Pipeline Mode | [CDNA3 pipeline notes](amd/converter/cdna3/pipeline.md) (software-only) | [CDNA4 pipeline notes](amd/converter/cdna4/pipeline.md) (HW DMA reference) | [Hopper pipeline notes](nvidia/hopper/converter/hopper/pipeline.md) (CP_ASYNC) |
+| Matrix Multiply Mode | [CDNA3 matrix multiply notes](amd/converter/cdna3/matrix_multiply.md) (mfma) | [CDNA4 matrix multiply notes](amd/converter/cdna4/matrix_multiply.md) (mfma) | [Hopper matrix multiply notes](nvidia/hopper/converter/hopper/matrix_multiply.md) (wgmma) |
+| Memory Access Mode | [CDNA3 memory access notes](amd/converter/cdna3/memory_access.md) | [CDNA4 memory access notes](amd/converter/cdna4/memory_access.md) | [Hopper memory access notes](nvidia/hopper/converter/hopper/memory_access.md) |
+| Layout Mapping | [CDNA3 layout mapping](amd/converter/cdna3/layouts.md) | [CDNA4 layout mapping](amd/converter/cdna4/layouts.md) | [Hopper layout mapping](nvidia/hopper/converter/hopper/layouts.md) |
+| Common Pitfalls | [CDNA3 common pitfalls](amd/converter/cdna3/common_pitfalls.md) | [CDNA4 common pitfalls](amd/converter/cdna4/common_pitfalls.md) | [Hopper common pitfalls](nvidia/hopper/converter/hopper/common_pitfalls.md) |
 
 ### Converter → Kernel-Opt Relationships
 
@@ -235,8 +235,8 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 |------|---------|------------|
 | Matrix Core Programming | `amd-mfma-matrix-cores.md` | `nvidia-ptx-mma-instructions.md` |
 | Optimization Frameworks | `amd-kernel-optimization-frameworks.md` (FlyDSL/CK/TileLang) | `cutlass-cute-fundamentals.md` + `cutlass-gemm-optimization.md` (CUTLASS/CuTe) |
-| DSL Programming | `amd/flydsl/flydsl-programming-guide.md` (FlyDSL) | `nvidia/cutedsl/cutedsl-programming-model.md` + `cutedsl-pipeline-patterns.md` (CuTeDSL) |
-| Profiling Tools | `amd/common/rocprofv3-profiling-guide.md` (Generic) + `amd/gluon/gfx942|gfx950-..--profiling_guide.md` (ATT Instruction-Level) | `nvidia/common/ncu-profiling-guide.md` + `nvidia/gluon/sm90/hopper-..--profiling_guide.md` (Nsight Compute) |
+| DSL Programming | `amd/flydsl/flydsl-programming-guide.md` (FlyDSL) | `nvidia/common/cutedsl/cutedsl-programming-model.md` + `cutedsl-pipeline-patterns.md` (CuTeDSL) |
+| Profiling Tools | `amd/common/rocprofv3-profiling-guide.md` (Generic) + `amd/gluon/gfx942|gfx950-..--profiling_guide.md` (ATT Instruction-Level) | `nvidia/common/profiling/ncu-profiling-guide.md` + `nvidia/hopper/gluon/hopper-..--profiling_guide.md` (Nsight Compute) |
 | Hardware Specifications | `hardware-specs/hardware_specs_mi300x.md` + `hardware-specs/hardware_specs_mi355x.md` | `nvidia/common/nvidia-compute-capabilities.md` + `hardware-specs/hardware_specs_hopper.md` |
 
 ### Document Groups That Should Be Read Together
@@ -248,7 +248,7 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 
 **Group 2: GEMM Optimization Panorama**
 - `cutlass-gemm-optimization.md` (NVIDIA tiling strategy)
-- `ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (CUDA Split-K: fixing K-dimension parallelism for small `M*N` tiles)
+- `nvidia/blackwell-geforce/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (CUDA Split-K: fixing K-dimension parallelism for small `M*N` tiles)
 - `cdna3-..--warp_pipeline_stage.md` (AMD WPS technology)
 - Architecture-specific `matmul.md` (Roofline + architecture-specific configurations)
 
@@ -279,12 +279,12 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 - `pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md` (shared task66 and atrex-open v2 traps; do not mix isolated target_us and full-pipeline parity gates)
 
 **Group 6: CUDA NVFP4 Split-K GEMV Trilogy**
-- `ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (C1 CUTLASS + C2 Split-K journey, E2E evidence, dispatch recipe)
-- `pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md` (7 pitfalls: full shape substitution, cold standalone, K/S alignment, SF layout, workspace, custom-op graph boundaries, Stream-K confusion)
+- `nvidia/blackwell-geforce/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (C1 CUTLASS + C2 Split-K journey, E2E evidence, dispatch recipe)
+- `nvidia/blackwell-geforce/cuda/pitfalls/nvfp4-split-k-gemv-pitfalls.md` (7 pitfalls: full shape substitution, cold standalone, K/S alignment, SF layout, workspace, custom-op graph boundaries, Stream-K confusion)
 - `reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/` (CUDA kernel + vLLM CUTLASS dispatch example)
-- Complementary background: `ref-docs/nvidia/cutedsl/cutlass-tile-scheduling.md` (Stream-K / split-K scheduler concepts)**Group 7: SM120 CuTeDSL GDN chunk-forward three-piece set**
-- `ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md` (V0→V113 journey, ncu/nsys evidence, V30 direct V rejection, V31 scaled-vnew, V113 reuse-B LDSM, V122 NCU bandwidth)
-- `pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md` (26 pitfalls: cp.async layout, TMA deadlock/regression, direct V regression, K-decay scratch algebra removal, transposed LDSM atom, no-cache acceptance, NCU duration interpretation)
+- Complementary background: `nvidia/common/cutedsl/cutlass-tile-scheduling.md` (Stream-K / split-K scheduler concepts)**Group 7: SM120 CuTeDSL GDN chunk-forward three-piece set**
+- `nvidia/blackwell-geforce/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md` (V0→V113 journey, ncu/nsys evidence, V30 direct V rejection, V31 scaled-vnew, V113 reuse-B LDSM, V122 NCU bandwidth)
+- `nvidia/blackwell-geforce/cutedsl/pitfalls/gdn-chunk-fwd-pitfalls.md` (26 pitfalls: cp.async layout, TMA deadlock/regression, direct V regression, K-decay scratch algebra removal, transposed LDSM atom, no-cache acceptance, NCU duration interpretation)
 - `reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/` (V113 production kernel + V31 0.615ms backup + pre-V31 1.18ms backup)
 - Complementary comparison: `ref-docs/amd/flydsl/gfx950/cdna4-chunk-gdn.md` (AMD FlyDSL chunk-GDN fwd_h different optimization axes)
 
