@@ -48,12 +48,12 @@ For detailed tool usage, metric interpretation, and troubleshooting, refer to `r
 
 ### Phase 2: Run Profiling (Platform-Specific)
 
-#### NVIDIA Hopper/Blackwell: profile_nvidia.sh
+#### NVIDIA Hopper/Blackwell: profile_iter_nvidia.sh
 
 Use the top-level tool script instead of writing `ncu` commands manually:
 
 ```bash
-bash tools/profile_nvidia.sh \
+bash tools/profile_iter_nvidia.sh \
   kernel.py \
   --output-dir profiles/v<N> \
   --launch-skip <skip>
@@ -62,7 +62,7 @@ bash tools/profile_nvidia.sh \
 For source-level stall hotspot analysis (requires the kernel compiled with `-lineinfo`):
 
 ```bash
-bash tools/profile_nvidia.sh \
+bash tools/profile_iter_nvidia.sh \
   kernel.py \
   --output-dir profiles/v<N> \
   --launch-skip <skip> \
@@ -72,7 +72,7 @@ bash tools/profile_nvidia.sh \
 To collect only, without symptom classification:
 
 ```bash
-bash tools/profile_nvidia.sh \
+bash tools/profile_iter_nvidia.sh \
   kernel.py \
   --output-dir profiles/v<N> \
   --no-classify
@@ -84,13 +84,16 @@ The script automatically performs these steps:
 2. (Optional, `--source`) `ncu --set source` collects source-level stall data.
 3. `analyze_reports.py` (bundled in `tools/ncu_helpers/`) parses key metrics into `metrics_key_run.json`.
 3b. (Only on `--source`) `source_evidence.py` generates the source-level evidence bundle and indexes it in `source_evidence_manifest.json`. Best-effort, never fatal; the artifacts are a dependency-free Python port of VeloQ's `ncu` verbs onto the same `ncu_report` API, emit a `v1` JSON envelope, and do **not** feed `classify_ncu.py` or change `summary.txt`.
-3c. (Optional, `--diff PREV_DIR`) `row_key.py` joins this run's envelopes against a previous run by stable content-derived key and writes `analysis/diff_*.txt`.
+3d. (Always) raw SASS text is persisted to `kernel.sass` (via `extract_nvidia_asm.py`), and raw PTX to `kernel.ptx` (best-effort). These make any two rounds comparable at the IR/ISA text layer.
+3e. (Optional, `--diff PREV_DIR`) three-layer cross-round diff: `row_key.py` for per-row metric delta (`analysis/diff_*.txt`), `ptx_diff.sh` for normalized PTX instruction-body diff (`analysis/diff_ptx.txt`), and `sass_hist_diff.sh` for the SASS instruction-category histogram delta (`analysis/diff_sass_hist.txt`).
 4. `classify_ncu.py` classifies symptoms against the 14 NCU diagnosis patterns, producing `summary.txt`.
 
 Artifacts (always):
 
 - `profiles/v<N>/ncu.ncu-rep` — binary report
 - `profiles/v<N>/analysis/metrics_key_run.{json,txt}` — key metrics
+- `profiles/v<N>/kernel.sass` — raw SASS text (for cross-round SASS histogram diff)
+- `profiles/v<N>/kernel.ptx` — raw PTX text (best-effort; for cross-round PTX diff)
 - `profiles/v<N>/summary.txt` — final summary (metrics + `SYMPTOMS` + `LOCALIZE` + search suggestions)
 
 Artifacts (only with `--source`, indexed by `analysis/source_evidence_manifest.json`):
@@ -99,7 +102,12 @@ Artifacts (only with `--source`, indexed by `analysis/source_evidence_manifest.j
 - `analysis/disasm_run.{json,txt}` — structured source-correlated SASS (+PTX when `nvdisasm`/`cuobjdump` present)
 - `analysis/warp_stalls_{reason,line}_run.{json,txt}` — warp-stall attribution from `timed_warp_samples`
 - `analysis/source_metrics_{line,sass}_run.{json,txt}` — per-line / per-SASS metric attribution
-- `analysis/diff_*.txt` — only with `--diff`: per-row delta vs a previous run
+
+Artifacts (only with `--diff PREV_DIR`):
+
+- `analysis/diff_*.txt` — per-row metric delta vs the previous run (`row_key.py`)
+- `analysis/diff_ptx.txt` — normalized PTX instruction-body diff vs the previous run (did the source change reach the IR?)
+- `analysis/diff_sass_hist.txt` — SASS instruction-category histogram delta vs the previous run (which instruction classes did the change land on?)
 
 Extract at least: memory throughput / SOL, L2 hit rate, occupancy, warp stall reasons, and Tensor Core / MMA utilization. The `SYMPTOMS` line in `summary.txt` is controlled vocabulary that feeds directly into the Stage 2 gpu-wiki search (see *Symptom-Driven Retrieval* in `<gpu-wiki>/README.md`). The `LOCALIZE` line names which `--source` evidence file maps each fired symptom to a source line / SASS address — to act on it, rerun with `--source` and open that file (or `source_evidence_manifest.json`). Note `warp_stalls_*` (from `timed_warp_samples`) and `stall_hotspots` (from pcsamp metrics) answer the same "where do warps stall" question from two sources; prefer `warp_stalls_*` and use `stall_hotspots` only to cross-check.
 
@@ -158,11 +166,11 @@ Artifacts:
 
 Beyond `ncu`, NVIDIA kernels also need SASS inspection to confirm tensor core instructions, load/store width, and register spills.
 
-**CuteDSL kernel (recommended flow)**: first collect `.ncu-rep` with `profile_nvidia.sh`, then extract SASS from it:
+**CuteDSL kernel (recommended flow)**: first collect `.ncu-rep` with `profile_iter_nvidia.sh`, then extract SASS from it:
 
 ```bash
 # Step 1: collect .ncu-rep (if not already done)
-bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v<N>
+bash tools/profile_iter_nvidia.sh kernel.py --output-dir profiles/v<N>
 
 # Step 2: extract SASS from .ncu-rep and analyze
 python tools/extract_nvidia_asm.py \
@@ -212,6 +220,28 @@ This tool helps confirm:
 - Instruction classification breakdown (compute / memory / control)
 
 Add `--json` for programmatic consumption.
+
+#### NVIDIA Cross-Round Diff (mandatory when a previous version exists)
+
+This supports **progressive optimization — every source change must show its effect at the IR/ISA layer, not just in aggregate metrics.** When `previous_profiles_dir` is provided, run the profile with `--diff <prev>` and then **read back** the diff artifacts; do not merely generate them.
+
+```bash
+bash tools/profile_iter_nvidia.sh kernel.py --output-dir profiles/v<N> --diff profiles/v<N-1>
+```
+
+Interpret each layer and fold the conclusion into the evidence summary:
+
+- `analysis/diff_ptx.txt` — **did the change reach the IR?** Read the "真指令体差异" (real instruction-body diff) count, not the raw line count (register renaming / block reordering inflates raw lines). A rename shows ~0 instruction-body changes; a new array shows `ld/st.local`; a constant change shows a `setp` immediate. If a code change produces **zero** instruction-body delta, the change did not take — say so.
+- `analysis/diff_sass_hist.txt` — **which instruction classes did the change land on?** Read the per-class Δ (HMMA/QMMA/LDG/STS/… and `FILLER@!UPT` scheduling slots). This is the primary "what actually moved" signal.
+
+**Scheduling-layer SASS analysis (do not stop at instruction counts).** After the histogram tells you *what* changed, classify *why* each stall persists — this decides whether a proposed optimization can even work:
+
+- **Dependency bubble** (RAW chain): math-pipe instructions separated by `NOP`/scoreboard waits but the operands are mutually dependent ⇒ reorderable — more accumulators / software pipelining can break it.
+- **Throughput stall** (pipe saturated): independent instructions *still* separated by `NOP` ⇒ reordering is useless; only more concurrency or fewer instructions helps.
+
+Attribute each NCU stall number to a concrete SASS pattern (e.g. "wait=5.0 ← QMMA bursts separated by NOP but accumulators are independent ⇒ throughput-bound, not a reorderable dependency"), not a bare metric.
+
+**Framework / primitive adaptation.** PTX diff is directly trustworthy for **plain CUDA / CUTLASS** paths. For **JIT frameworks (CuteDSL, Triton, FlyDSL, Gluon)** the emitted PTX form differs (JIT products), so treat `diff_ptx.txt` as advisory there — the **SASS histogram diff and stall attribution remain authoritative** (they come from the emitted cubin regardless of frontend). PTX is persisted best-effort; when `kernel.ptx` is absent the PTX diff is skipped and only the SASS/metric layers apply.
 
 #### AMD Assembly Analysis
 

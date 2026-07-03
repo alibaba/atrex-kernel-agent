@@ -14,21 +14,33 @@
 # limitations under the License.
 
 #
-# NVIDIA kernel profile tool (ncu wrapper)
+# NVIDIA iterative kernel profiling entry point (ncu wrapper, diff-driven)
+#
+# Purpose:
+#     Drives progressive ("每改一次看一次差异") kernel optimization: each round
+#     runs ncu -> parses metrics -> classifies symptoms, and with --diff PREV_DIR
+#     compares this round against the previous one on THREE layers:
+#       - metric  : per-row NCU metric delta            (ncu_helpers/row_key.py)
+#       - PTX     : normalized instruction-body diff     (ptx_diff.sh)
+#       - SASS    : instruction-category histogram delta (sass_hist_diff.sh)
+#     PTX/SASS text is persisted every run so any two rounds stay comparable.
 #
 # Usage:
-#     bash tools/profile_nvidia.sh <kernel.py> [options]
+#     bash tools/profile_iter_nvidia.sh <kernel.py> [options]
 #
 # Examples:
-#     bash tools/profile_nvidia.sh my_kernel.py --output-dir ./profile
-#     bash tools/profile_nvidia.sh my_kernel.py --kernel-name "mla_decode" --launch-skip 1
-#     bash tools/profile_nvidia.sh my_kernel.py --source --output-dir ./profile
+#     bash tools/profile_iter_nvidia.sh my_kernel.py --output-dir profiles/v0
+#     bash tools/profile_iter_nvidia.sh my_kernel.py --kernel-name "mla_decode" --launch-skip 1
+#     bash tools/profile_iter_nvidia.sh my_kernel.py --source --output-dir profiles/v1
+#     bash tools/profile_iter_nvidia.sh my_kernel.py --output-dir profiles/v1 --diff profiles/v0
 #
 # Dependencies:
 #     ncu (NVIDIA Nsight Compute CLI) in PATH
 #     ncu report helpers (for parsing .ncu-rep): bundled in tools/ncu_helpers/
 #       (analyze_reports.py, ncu_utils.py); override with NCU_HELPERS / --ncu-helpers
 #     classify_ncu.py (symptom classification)
+#     extract_nvidia_asm.py (raw SASS/PTX persistence for cross-round diff)
+#     ptx_diff.sh / sass_hist_diff.sh (IR/ISA text diff; only used with --diff)
 #
 # Output:
 #     <output-dir>/ncu.ncu-rep                         binary report
@@ -37,6 +49,8 @@
 #     <output-dir>/analysis/metrics_key_run.txt        key metrics text
 #     <output-dir>/analysis/metrics_all_run.json       full metrics archive
 #     <output-dir>/analysis/stall_hotspots_run.txt     optional (--source): per-line stall hotspots
+#     <output-dir>/kernel.sass                         raw SASS text (for cross-round SASS diff)
+#     <output-dir>/kernel.ptx                          raw PTX text (best-effort; for cross-round PTX diff)
 #     <output-dir>/summary.txt                         final summary (metrics+symptoms+query suggestions)
 #
 #     With --source, source-level evidence is generated in one step and indexed by:
@@ -45,7 +59,9 @@
 #       <output-dir>/analysis/warp_stalls_{reason,line}_run.{json,txt}  warp-stall attribution
 #       <output-dir>/analysis/source_metrics_{line,sass}_run.{json,txt} per-line/SASS metric attribution
 #     With --diff PREV_DIR:
-#       <output-dir>/analysis/diff_*.txt                 per-row delta vs a previous run
+#       <output-dir>/analysis/diff_*.txt                 per-row metric delta vs a previous run
+#       <output-dir>/analysis/diff_ptx.txt               normalized PTX instruction-body diff vs prev
+#       <output-dir>/analysis/diff_sass_hist.txt         SASS instruction-category histogram delta vs prev
 #
 #     The source-evidence artifacts are independent evidence (a Python port of
 #     VeloQ's ncu verbs onto the same ncu_report API); they do NOT feed
@@ -82,13 +98,14 @@ usage() {
 Usage: $0 <kernel.py> [options]
 
 Options:
-    --output-dir DIR        output directory (default: ./profile_output)
+    --output-dir DIR        output directory (default: ./profiles/v0)
     --kernel-name NAME      ncu kernel name filter
     --launch-skip N         skip warmup dispatches (default: 0)
     --launch-count N        number of dispatches to capture (default: 1)
     --source                additionally collect source-level stall data (--set source)
     --no-classify           collect only, skip classification
-    --diff PREV_DIR         after analysis, diff this run's envelopes vs PREV_DIR/analysis
+    --diff PREV_DIR         after analysis, diff this run vs PREV_DIR on three layers:
+                            metric (row_key.py) + PTX (ptx_diff.sh) + SASS (sass_hist_diff.sh)
     --ncu-helpers DIR       ncu-report-skill helpers directory path
     -h, --help              show help
 
@@ -307,27 +324,87 @@ if [[ "$COLLECT_SOURCE" == true && -n "$NCU_HELPERS" \
 fi
 
 # ============================================================
-# Step 3c: Optional cross-run diff (--diff PREV_DIR)
+# Step 3d: persist raw SASS / PTX text (for cross-round IR/ISA diff)
 # ============================================================
-if [[ -n "$DIFF_DIR" && -n "$NCU_HELPERS" && -f "$NCU_HELPERS/row_key.py" ]]; then
+# Always dump the raw SASS/PTX so any two rounds stay comparable by
+# ptx_diff.sh / sass_hist_diff.sh in Step 3e. Best-effort: a failure here only
+# means the corresponding text diff is skipped later; it never aborts the run.
+if [[ -f "$OUTPUT_DIR/ncu.ncu-rep" ]]; then
     echo ""
     echo "=========================================="
-    echo "  Step 3c: diff vs $DIFF_DIR"
+    echo "  Step 3d: persist raw SASS / PTX text"
     echo "=========================================="
-    PREV_AN="$DIFF_DIR/analysis"
-    CUR_AN="$OUTPUT_DIR/analysis"
-    # (envelope basename, ranking field)
-    for spec in "source_metrics_line_run:" "warp_stalls_line_run:total_samples" "warp_stalls_reason_run:total_samples"; do
-        name="${spec%%:*}"
-        field="${spec##*:}"
-        if [[ -f "$PREV_AN/$name.json" && -f "$CUR_AN/$name.json" ]]; then
-            sort_arg=()
-            [[ -n "$field" ]] && sort_arg=(--sort-field "$field")
-            python3 "$NCU_HELPERS/row_key.py" \
-                --a "$PREV_AN/$name.json" --b "$CUR_AN/$name.json" \
-                "${sort_arg[@]}" --output "$CUR_AN/diff_$name.txt" || true
+
+    # SASS: reliable via ncu_report action.sass_by_pc() (works even for CuteDSL/JIT).
+    if python3 "$SCRIPT_DIR/extract_nvidia_asm.py" \
+            --ncu-rep "$OUTPUT_DIR/ncu.ncu-rep" \
+            --output "$OUTPUT_DIR/kernel.sass" >/dev/null 2>&1; then
+        echo "raw SASS: $OUTPUT_DIR/kernel.sass"
+    else
+        echo "Warning: raw SASS not persisted (extract_nvidia_asm.py failed); SASS diff will be skipped"
+    fi
+
+    # PTX: best-effort. cuobjdump --dump-ptx needs a cubin; only fires when one is
+    # discoverable next to the report. For JIT frameworks (CuteDSL) PTX form differs,
+    # so PTX diff is advisory anyway — SASS histogram remains the primary signal.
+    if command -v cuobjdump >/dev/null 2>&1; then
+        CUBIN="$(ls "$OUTPUT_DIR"/*.cubin 2>/dev/null | head -1 || true)"
+        if [[ -n "$CUBIN" ]]; then
+            cuobjdump --dump-ptx "$CUBIN" > "$OUTPUT_DIR/kernel.ptx" 2>/dev/null \
+                && echo "raw PTX: $OUTPUT_DIR/kernel.ptx" || true
         fi
-    done
+    fi
+    [[ -f "$OUTPUT_DIR/kernel.ptx" ]] || \
+        echo "Note: raw PTX not persisted (no cubin available) — PTX diff will be skipped this round"
+fi
+
+# ============================================================
+# Step 3e: Optional cross-run diff (--diff PREV_DIR) — metric + PTX + SASS
+# ============================================================
+if [[ -n "$DIFF_DIR" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "  Step 3e: diff vs $DIFF_DIR (metric + PTX + SASS)"
+    echo "=========================================="
+    CUR_AN="$OUTPUT_DIR/analysis"
+    mkdir -p "$CUR_AN"
+
+    # --- Layer 1: per-row NCU metric delta (row_key.py) ---
+    if [[ -n "$NCU_HELPERS" && -f "$NCU_HELPERS/row_key.py" ]]; then
+        PREV_AN="$DIFF_DIR/analysis"
+        # (envelope basename, ranking field)
+        for spec in "source_metrics_line_run:" "warp_stalls_line_run:total_samples" "warp_stalls_reason_run:total_samples"; do
+            name="${spec%%:*}"
+            field="${spec##*:}"
+            if [[ -f "$PREV_AN/$name.json" && -f "$CUR_AN/$name.json" ]]; then
+                sort_arg=()
+                [[ -n "$field" ]] && sort_arg=(--sort-field "$field")
+                python3 "$NCU_HELPERS/row_key.py" \
+                    --a "$PREV_AN/$name.json" --b "$CUR_AN/$name.json" \
+                    "${sort_arg[@]}" --output "$CUR_AN/diff_$name.txt" || true
+            fi
+        done
+    fi
+
+    # --- Layer 2: normalized PTX instruction-body diff (ptx_diff.sh) ---
+    # Judges whether the source change actually made it into the IR.
+    if [[ -f "$DIFF_DIR/kernel.ptx" && -f "$OUTPUT_DIR/kernel.ptx" && -f "$SCRIPT_DIR/ptx_diff.sh" ]]; then
+        bash "$SCRIPT_DIR/ptx_diff.sh" "$DIFF_DIR/kernel.ptx" "$OUTPUT_DIR/kernel.ptx" \
+            > "$CUR_AN/diff_ptx.txt" 2>&1 \
+            && echo "PTX diff: $CUR_AN/diff_ptx.txt" || true
+    else
+        echo "PTX diff skipped (need kernel.ptx in both $DIFF_DIR and $OUTPUT_DIR)"
+    fi
+
+    # --- Layer 3: SASS instruction-category histogram delta (sass_hist_diff.sh) ---
+    # Judges which instruction classes the change landed on.
+    if [[ -f "$DIFF_DIR/kernel.sass" && -f "$OUTPUT_DIR/kernel.sass" && -f "$SCRIPT_DIR/sass_hist_diff.sh" ]]; then
+        bash "$SCRIPT_DIR/sass_hist_diff.sh" "$DIFF_DIR/kernel.sass" "$OUTPUT_DIR/kernel.sass" \
+            > "$CUR_AN/diff_sass_hist.txt" 2>&1 \
+            && echo "SASS histogram diff: $CUR_AN/diff_sass_hist.txt" || true
+    else
+        echo "SASS diff skipped (need kernel.sass in both $DIFF_DIR and $OUTPUT_DIR)"
+    fi
 fi
 
 # ============================================================
@@ -363,7 +440,12 @@ if [[ -f "$OUTPUT_DIR/summary.txt" ]]; then
     if [[ "$COLLECT_SOURCE" == true ]]; then
         echo "  3. See $OUTPUT_DIR/analysis/stall_hotspots_run.txt for hotspot instructions"
     fi
-    echo "  4. Query gpu-wiki based on the diagnosis for optimization suggestions"
+    if [[ -n "$DIFF_DIR" ]]; then
+        echo "  4. Cross-round diff vs $DIFF_DIR:"
+        [[ -f "$OUTPUT_DIR/analysis/diff_ptx.txt" ]]       && echo "       $OUTPUT_DIR/analysis/diff_ptx.txt        (did the change reach the IR?)"
+        [[ -f "$OUTPUT_DIR/analysis/diff_sass_hist.txt" ]] && echo "       $OUTPUT_DIR/analysis/diff_sass_hist.txt  (which instruction classes changed?)"
+    fi
+    echo "  5. Query gpu-wiki based on the diagnosis for optimization suggestions"
 elif [[ -f "$OUTPUT_DIR/analysis/metrics_key_run.txt" ]]; then
     # Metrics were parsed but classification was skipped (e.g. --no-classify).
     echo "  1. See $OUTPUT_DIR/analysis/metrics_key_run.txt for detailed metrics"

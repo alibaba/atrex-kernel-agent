@@ -18,7 +18,7 @@
 - correctness threshold: rel_err < 0.01 (bf16 default) / 0.05 (fp8/fp4)
 
 ## Hard Constraints
-- profiling: trust only ncu (tools/profile_nvidia.sh) / tools/profile_kernel.sh;
+- profiling: trust only ncu (tools/profile_iter_nvidia.sh) / tools/profile_kernel.sh;
 - performance targets: sourced from gpu-wiki; see Stop Conditions
 - workspace: kernel_opt_<name>/; commit every accepted iteration with git
 - knowledge base: `~/aka_kernel_opt/gpu-wiki/`; the entire repository may be searched, not only docs/ or reference-kernels/;
@@ -30,7 +30,7 @@
 ## Tools (top-level paths)
 - compute_utilization.py / bench_bandwidth.py / measure_bandwidth_ceiling.py
 - measure_kernel_time.py / extract_asm.py / profile_kernel.sh
-- profile_nvidia.sh / classify_ncu.py / extract_nvidia_asm.py (NVIDIA; helpers in ncu_helpers/)
+- profile_iter_nvidia.sh / classify_ncu.py / extract_nvidia_asm.py (NVIDIA; helpers in ncu_helpers/)
 
 ## Stop Conditions
 The following targets are filled by Step 0 after calculation as `hardware peak * 90%`. Prefer measured maxima from gpu-wiki when available; otherwise use hardware spec values.

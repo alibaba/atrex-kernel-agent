@@ -28,7 +28,7 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
 5. **Missing wiki values**: If a spec cannot be found, write `<metric>: UNKNOWN (gpu-wiki not found)`, record the gap in `memory/v<N>.json` under `pitfalls_and_fixes`, report it to the user, and ask whether a placeholder is acceptable. Do not fill gaps with wording such as "approximately", "should be", "usually", or "similar product".
 6. **Auditable archive**: Any reviewer must be able to verify every spec from the local `<gpu-wiki>/` path in the archive. Non-verifiable archives are invalid.
 7. **Profiling-driven optimization only**:
-   - NVIDIA: `ncu` (wrapped by `./tools/profile_nvidia.sh`)
+   - NVIDIA: `ncu` (wrapped by `./tools/profile_iter_nvidia.sh`)
    - AMD: `./tools/profile_kernel.sh`
    - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `ncu` or `profile_kernel.sh` for identifying bottlenecks.
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
@@ -196,7 +196,7 @@ All sub-skills share top-level `tools/`:
 - `tools/measure_kernel_time.py`
 - `tools/extract_asm.py`
 - `tools/profile_kernel.sh`
-- `tools/profile_nvidia.sh`
+- `tools/profile_iter_nvidia.sh`
 - `tools/classify_ncu.py`
 - `tools/extract_nvidia_asm.py`
 - `tools/memory_manager.py`

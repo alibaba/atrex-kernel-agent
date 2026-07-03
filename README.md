@@ -28,7 +28,7 @@ Installation requires:
 
 Running optimization tasks also requires platform-specific profiling tools:
 
-- NVIDIA: `ncu`, wrapped by `tools/profile_nvidia.sh`
+- NVIDIA: `ncu`, wrapped by `tools/profile_iter_nvidia.sh`
 - AMD: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
 ## Installation

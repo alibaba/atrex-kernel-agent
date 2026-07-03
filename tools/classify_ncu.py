@@ -342,7 +342,7 @@ def format_summary(metrics, findings):
 
         # Point at the source-level evidence that localises these symptoms.
         # Deduped, in the order symptoms appear; only symptoms with a line-level
-        # signal contribute. Files are produced by `profile_nvidia.sh --source`.
+        # signal contribute. Files are produced by `profile_iter_nvidia.sh --source`.
         seen = set()
         localize = []
         for s in symptom_list:

@@ -1,7 +1,7 @@
 # ncu_helpers
 
 Bundled helpers for parsing NVIDIA Nsight Compute (`ncu`) reports. Used by
-`tools/profile_nvidia.sh` (metrics parsing + stall hotspots) and
+`tools/profile_iter_nvidia.sh` (metrics parsing + stall hotspots) and
 `tools/extract_nvidia_asm.py` (`--ncu-rep` mode).
 
 - `analyze_reports.py` — parse a `.ncu-rep` into key/all metrics JSON + text.

@@ -62,7 +62,7 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
    - Re-profile the kernel with `--source` mode before making any code change:
 
      ```bash
-     bash tools/profile_nvidia.sh \
+     bash tools/profile_iter_nvidia.sh \
        kernel.py \
        --output-dir profiles/v<N> \
        --source

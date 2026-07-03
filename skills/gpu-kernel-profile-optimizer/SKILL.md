@@ -11,7 +11,7 @@ description: |
 Use this skill when the user asks to:
 
 - Optimize an existing GPU kernel.
-- Continue improving code based on `./tools/profile_nvidia.sh` (`ncu`), `./tools/profile_kernel.sh`, ATT, PMC, or ASM evidence.
+- Continue improving code based on `./tools/profile_iter_nvidia.sh` (`ncu`), `./tools/profile_kernel.sh`, ATT, PMC, or ASM evidence.
 - Use profiling evidence rather than intuition to improve performance.
 
 ## Overall Principles
@@ -81,7 +81,7 @@ Inputs:
   - previous_profiles_dir: <profiles/v<N-1>/ if exists, otherwise omit>
 ```
 
-The `gpu-kernel-profiler` subagent will autonomously: create `profiles/v<N>/` directory, run platform-specific profiling tools (`profile_nvidia.sh` for NVIDIA or `profile_kernel.sh` for AMD), perform SASS/assembly analysis, and extract structured bottleneck evidence.
+The `gpu-kernel-profiler` subagent will autonomously: create `profiles/v<N>/` directory, run platform-specific profiling tools (`profile_iter_nvidia.sh` for NVIDIA or `profile_kernel.sh` for AMD), perform SASS/assembly analysis, and extract structured bottleneck evidence. On NVIDIA, when `previous_profiles_dir` is passed it runs `--diff` and reads back the three-layer cross-round diff (metric / PTX / SASS) so each iteration's change is verified at the IR/ISA layer — this delta is part of the evidence handed to Stage 2.
 
 ### Output Received
 
@@ -363,9 +363,10 @@ When stop conditions are not met:
 
 Different tools provide different layers of evidence and must not be mixed:
 
-- `profile_nvidia.sh` + `classify_ncu.py`: primary NVIDIA profile entry point (wraps `ncu`). Collects the `.ncu-rep`, parses metrics, and classifies symptoms. Artifact: `summary.txt` (symptoms + search suggestions).
-- `extract_nvidia_asm.py`: NVIDIA static SASS evidence for tensor core instructions, load/store width, register spills, and scalar fallback.
-- `ncu_helpers/source_evidence.py` (VeloQ-ported; run automatically by `profile_nvidia.sh --source`, indexed in `source_evidence_manifest.json`): bundles per-line/per-SASS metric attribution (`source_metrics`), warp-stall attribution (`warp_stalls`), and structured source-correlated SASS (`disasm`). **Independent evidence** — read the `analysis/*_run.json` (v1 envelope) or `.txt` digests to localise *which source line / SASS address* a symptom lives on. They do not change `summary.txt`; the `SYMPTOMS` diagnosis still comes only from `classify_ncu.py`, and its `LOCALIZE` line tells you which of these files to open. Use `ncu_helpers/row_key.py` (or `profile_nvidia.sh --diff`) to compare two iterations row-by-row.
+- `profile_iter_nvidia.sh` + `classify_ncu.py`: primary NVIDIA profile entry point (wraps `ncu`). Collects the `.ncu-rep`, parses metrics, and classifies symptoms. Artifact: `summary.txt` (symptoms + search suggestions).
+- `extract_nvidia_asm.py`: NVIDIA static SASS evidence for tensor core instructions, load/store width, register spills, and scalar fallback. Also persists each round's raw `kernel.sass` / `kernel.ptx` used by the cross-round text diffs below.
+- `ncu_helpers/source_evidence.py` (VeloQ-ported; run automatically by `profile_iter_nvidia.sh --source`, indexed in `source_evidence_manifest.json`): bundles per-line/per-SASS metric attribution (`source_metrics`), warp-stall attribution (`warp_stalls`), and structured source-correlated SASS (`disasm`). **Independent evidence** — read the `analysis/*_run.json` (v1 envelope) or `.txt` digests to localise *which source line / SASS address* a symptom lives on. They do not change `summary.txt`; the `SYMPTOMS` diagnosis still comes only from `classify_ncu.py`, and its `LOCALIZE` line tells you which of these files to open.
+- **Cross-round diff (progressive optimization)** — with `profile_iter_nvidia.sh --diff PREV_DIR`, compare two iterations on three layers: `ncu_helpers/row_key.py` for per-row **metric** delta (`diff_*.txt`), `ptx_diff.sh` for the normalized **PTX** instruction-body diff (`diff_ptx.txt` — did the change reach the IR?), and `sass_hist_diff.sh` for the **SASS** instruction-category histogram delta (`diff_sass_hist.txt` — which instruction classes moved?). PTX diff is advisory for JIT frameworks (CuteDSL/Triton); the SASS histogram stays authoritative.
 - `profile_kernel.sh`: primary AMD profile entry point, collecting ATT, PMC, and ASM for instruction width, spills, and LDS access patterns.
 - `kernel.s`: AMD assembly evidence for load/store width, LDS instruction form, scratch operations, and spills.
 

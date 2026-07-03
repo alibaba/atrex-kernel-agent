@@ -28,10 +28,10 @@ Modules:
 
 The envelope/row_key/source_metrics/warp_stalls/disasm modules are a dependency-
 free Python port of VeloQ's `ncu` verbs onto the same ncu_report API. They emit
-independent evidence and do NOT feed classify_ncu.py. profile_nvidia.sh drives
+independent evidence and do NOT feed classify_ncu.py. profile_iter_nvidia.sh drives
 them through source_evidence on `--source` runs; summary.txt's LOCALIZE line
 points the agent at the relevant artifact per symptom.
 
 These are also importable as top-level modules when this directory is placed on
-sys.path (as profile_nvidia.sh / extract_nvidia_asm.py do via NCU_HELPERS).
+sys.path (as profile_iter_nvidia.sh / extract_nvidia_asm.py do via NCU_HELPERS).
 """

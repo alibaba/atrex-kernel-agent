@@ -33,7 +33,7 @@ Usage:
     python tools/extract_nvidia_asm.py --asm-file kernel.sass --check-all
 
 Recommended workflow for CuteDSL:
-    1. bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1
+    1. bash tools/profile_iter_nvidia.sh kernel.py --output-dir profiles/v1
     2. python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
 
     Reason: CuteDSL compiles via NVRTC, and the cubin cache location is not fixed.
@@ -175,7 +175,7 @@ def extract_sass_from_ncu_rep(ncu_rep_path):
     The ncu Python API provides action.sass_by_pc(), which can directly extract
     complete SASS instructions from a profile report without needing a cubin file.
 
-    Requirement: first collect .ncu-rep using profile_nvidia.sh or ncu --set full.
+    Requirement: first collect .ncu-rep using profile_iter_nvidia.sh or ncu --set full.
     """
     ncu_helpers_dir = _find_ncu_helpers()
     if not ncu_helpers_dir:
@@ -223,7 +223,7 @@ def extract_sass_cutedsl(kernel_file):
     Three strategies are provided, sorted by reliability:
 
     Method 1 (recommended): Use --ncu-rep to extract SASS from an existing .ncu-rep
-      - First run profile_nvidia.sh to collect .ncu-rep
+      - First run profile_iter_nvidia.sh to collect .ncu-rep
       - Then use extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
       - The ncu Python API's action.sass_by_pc() directly returns SASS
 
@@ -278,8 +278,8 @@ def extract_sass_cutedsl(kernel_file):
             "CuteDSL compilation artifacts (.cubin or .ptx) not found.\n"
             "\n"
             "Recommended approach:\n"
-            "  1. First collect .ncu-rep with profile_nvidia.sh:\n"
-            "       bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1\n"
+            "  1. First collect .ncu-rep with profile_iter_nvidia.sh:\n"
+            "       bash tools/profile_iter_nvidia.sh kernel.py --output-dir profiles/v1\n"
             "     Then extract SASS from .ncu-rep:\n"
             "       python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all\n"
             "\n"
@@ -707,7 +707,7 @@ def main():
     parser.add_argument("--cubin", help="Directly analyze an existing cubin / .so file")
     parser.add_argument("--ncu-rep",
                         help="Extract SASS from .ncu-rep (recommended for CuteDSL kernels, "
-                             "first collect with profile_nvidia.sh)")
+                             "first collect with profile_iter_nvidia.sh)")
     parser.add_argument("--asm-file", help="Directly analyze an existing SASS text file (skip extraction)")
     parser.add_argument("--arch", default="sm90",
                         help="Architecture (sm90/sm100), affects expected instruction set (default: sm90)")

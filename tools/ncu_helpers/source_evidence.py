@@ -15,7 +15,7 @@
 
 """One entry point for atrex's source-level NCU evidence.
 
-profile_nvidia.sh calls this once (on a `--source` run) instead of invoking the
+profile_iter_nvidia.sh calls this once (on a `--source` run) instead of invoking the
 individual disasm / warp-stalls / source-metrics tools itself. It runs them,
 reuses each tool's own writer, and emits `analysis/source_evidence_manifest.json`
 — a single index telling the agent which evidence exists and what each file is
