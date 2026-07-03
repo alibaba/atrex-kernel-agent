@@ -52,6 +52,12 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
+SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
+
+
+def is_sol_op(op_dir: Path) -> bool:
+    """A SOL-ExecBench op dir carries definition.json + workload.jsonl next to reference.py."""
+    return (op_dir / "definition.json").is_file() and (op_dir / "workload.jsonl").is_file()
 
 
 # ── thin IO ─────────────────────────────────────────────────────────────────
@@ -319,6 +325,13 @@ class Campaign:
         link_runtime(self.workspace)
 
     def setup_baseline(self) -> None:
+        # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
+        # (no baseline session) — sol_seed.py copies the ground-truth files, writes
+        # the DPS wrapper kernel.py + solution.json, and benches V0 via test_kernel.py.
+        op_dir = Path(self.kernel_demo).resolve().parent
+        if is_sol_op(op_dir):
+            self._setup_baseline_sol(op_dir)
+            return
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
         subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo], check=True)
@@ -340,6 +353,21 @@ class Campaign:
             )
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
+
+    def _setup_baseline_sol(self, op_dir: Path) -> None:
+        if not SOL_SEED.exists():
+            raise FileNotFoundError(f"missing {SOL_SEED}")
+        subprocess.run(
+            [sys.executable, str(SOL_SEED),
+             "--op-dir", str(op_dir), "--name", self.name,
+             "--workspace", str(self.workspace),
+             "--framework", self.framework, "--platform", self.platform,
+             "--gpu-wiki", self.gpu_wiki],
+            check=True,
+        )
+        self._link_runtime()
+        if read_memory(self.workspace, 0) is None:
+            raise RuntimeError("sol_seed did not produce memory/v0.json (V0 baseline failed)")
 
     def budget_exhausted(self) -> bool:
         return self.token_budget > 0 and self.tokens_spent >= self.token_budget
@@ -401,6 +429,16 @@ class Campaign:
             )
         except OSError:
             pass
+        # SOL op: emit the self-contained, validated submission (SOL's output format).
+        if (self.workspace / "definition.json").exists() and (self.workspace / "solution.json").exists():
+            try:
+                subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "reference" / "sol_finalize.py"),
+                     "--workspace", str(self.workspace)],
+                    check=False,
+                )
+            except OSError:
+                pass
         return reason
 
 

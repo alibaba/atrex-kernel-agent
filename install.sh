@@ -475,6 +475,7 @@ inside directories named kernel_opt_*.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -1056,6 +1057,28 @@ def memory_write_continuation_prompt(workspace: Path, version: str) -> str:
     )
 
 
+def is_sol_workspace(workspace: Path) -> bool:
+    """SOL-ExecBench workspace: its output format is a SOL solution, not generated_kernel.py."""
+    return (workspace / "definition.json").is_file() and (workspace / "solution.json").is_file()
+
+
+def run_sol_finalize(workspace: Path) -> tuple[bool, str]:
+    """Deterministic SOL output backend: package + validate the submission via a script
+    (no LLM prose). Returns (ok, message). ok=True means the submission is submittable."""
+    script = workspace / "reference" / "sol_finalize.py"
+    if not script.is_file():
+        return False, f"SOL output backend not found at {script} (reference/ not linked into the workspace)."
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--workspace", str(workspace)],
+            capture_output=True, text=True,
+        )
+    except OSError as error:
+        return False, f"SOL output backend failed to run: {error}"
+    tail = (proc.stdout or "")[-800:] + (proc.stderr or "")[-800:]
+    return proc.returncode == 0, tail
+
+
 def output_path_for_workspace(workspace: Path) -> Path:
     return workspace.parent / "generated_kernel.py"
 
@@ -1242,6 +1265,21 @@ def handle_stop(payload: dict, target: str) -> int:
 
         newest_mtime = newest_iteration_artifact_mtime(workspace)
         if newest_mtime <= 0:
+            continue
+
+        # SOL-ExecBench workspace: the output format is a SOL solution. Finalize with the
+        # deterministic backend script (not generated_kernel.py / LLM prose).
+        if is_sol_workspace(workspace):
+            ok, msg = run_sol_finalize(workspace)
+            if not ok:
+                prompt = (
+                    "gpu-kernel-optimizer SOL output gate: the SOL submission failed to package/validate. "
+                    f"Run `python reference/sol_finalize.py --workspace {workspace}` and fix `kernel.py` until "
+                    f"all workloads pass.\n{msg}"
+                )
+                print(json.dumps({"decision": "block", "reason": prompt}, ensure_ascii=False))
+                print(prompt, file=sys.stderr)
+                return 2
             continue
 
         output_path = first_existing_output_path(payload, workspace)

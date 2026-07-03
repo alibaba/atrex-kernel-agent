@@ -35,6 +35,8 @@ Constraints:
 - If the quality gate fails, revert to the previous commit, record the failure, and stop the iteration.
 - Run exactly one iteration, then exit. Do not start another cycle — the orchestrator decides whether the next iteration runs.
 
+**Shape bucketing — when the evidence calls for it.** Not every kernel needs this: simple / uniform kernels are best kept single-path. But the workload set spans very different scales, and a lever that wins on large shapes (bigger tiles, deeper pipelining) can lose on small ones (launch / occupancy / latency bound). Decide per iteration from evidence — `performance.latency_us_by_shape`, the profile, and prior memory / research: if shapes of different scales are bottlenecked differently, group them into a few **buckets of similar scale** (not one path per shape) and give each bucket its own path — a subkernel, or at least its own tile / block config — behind a dispatcher inside `run()`. This is one attributable category ("shape specialization"), stays within the DPS contract (`run()` is still a single entry point), and per-bucket gains land directly in the geomean goal.
+
 ## Workspace Layout
 
 Maintain this structure:
@@ -235,30 +237,28 @@ Subagent requirements:
 
 ### Timeout Guard
 
-All validation runs must enforce a timeout to prevent hanging on compilation errors, infinite loops, or synchronization deadlocks:
+Validation + bench is the SOL-ExecBench harness — run it with an outer hang-backstop:
 
 ```bash
-timeout 60 python test_kernel.py   # 60s max per run
+timeout 1800 python test_kernel.py --version v<N>   # SOL evaluator over all workloads; writes memory/v<N>.json
 ```
 
-- Each individual test case must complete within **30 seconds** (configurable via `TEST_TIMEOUT_SEC` env var).
-- If a case exceeds the timeout, mark it as `TIMEOUT_FAIL`, kill the process, and record the failure in the iteration report.
-- A timeout counts as a quality-gate failure; revert and record the cause.
+- The harness runs the real `sol-execbench` evaluator (its own per-eval subprocess timeout applies) over every
+  workload in `workload.jsonl` with each workload's own tolerance, then records the metrics below. Do NOT edit it.
+- A non-zero exit (some workload failed / hung) counts as a quality-gate failure; revert and record the cause.
 
 ### Metrics to Record
 
-Record every iteration in `memory/v<N>.json`:
+The harness writes these into `memory/v<N>.json` — do not hand-fabricate them:
 
-- latency in `us`
-- TFLOPS
-- bandwidth in `GB/s`
-- TFLOPS peak utilization
-- bandwidth peak utilization
-- delta from previous version
-- correctness result
-- ISA metric progress
+- **`performance.latency_us` = GEOMEAN of per-workload kernel latency — the primary objective (minimize).**
+- `performance.latency_us_by_shape` — per-workload latency (keyed by workload `uuid`).
+- `performance.speedup_vs_ref_geomean` — geomean speedup vs the reference.
+- `correctness.status` / `quality_gate.result` — PASS iff ALL workloads pass.
 
-Do not judge by latency alone; use peak-utilization ratios to decide whether the kernel is close to the limit.
+Judge iterations by the geomean latency (a win = all workloads still PASS AND geomean drops vs HEAD beyond noise).
+TFLOPS / bandwidth / peak-utilization (via `tools/compute_utilization.py`) are OPTIONAL enrichment for reasoning
+about how close the kernel is to the roofline — record them when useful, but they are not the stop metric.
 
 ### Iteration Data
 
