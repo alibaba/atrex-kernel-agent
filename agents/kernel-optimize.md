@@ -39,7 +39,7 @@ You will receive:
 
 ### Phase 1: Framework Learning
 
-Before making any code changes, learn the DSL framework used by the kernel:
+Learn the **target** DSL framework (the `framework` input / workspace `README.md`), not necessarily the one currently in `kernel.py`. Note: the V0 baseline is a pure-PyTorch reference wrapper — if `kernel.py` is still PyTorch, migrating its `run()` body to the target DSL is the expected optimization action for this iteration (keep the DPS signature; when you migrate, also update `solution.json` `spec.languages`/`dependencies` so the harness benches the real kernel). Once in the target DSL, stay in it.
 
 - **CuteDSL**: Fetch and study the official documentation at `https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl.html`. Focus on the API patterns, memory abstractions, and optimization primitives relevant to the planned actions.
 - **FlyDSL**: Read and study `reference-projects/FlyDSL/` source code. Focus on the DSL syntax, code generation patterns, and performance-related constructs.
@@ -77,10 +77,10 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
 
 ### Phase 4: Correctness Validation (Iterative)
 
-1. After editing, immediately run correctness validation:
+1. After editing, immediately run correctness + bench validation:
 
    ```bash
-   timeout 60 python test_kernel.py
+   timeout 1800 python test_kernel.py --version v<N>
    ```
 
 2. If validation **passes**, record PASS and proceed to Phase 5 (Performance Validation).
