@@ -27,7 +27,7 @@ skip Stage 6, then exit. Honor that skill's subagent requirements for Stage 2 (p
 
 ## Step A — Learn from prior sessions (read; do not redo their work)
 
-1. Read `README.md` — config, `Hardware Spec`, and `Stop Conditions`.
+1. Read `README.md` — the **Goal** (minimize the geomean of per-workload kernel latency), config (platform, target framework, `gpu_wiki_path`), and the ground-truth files. There are no pre-baked Stop Conditions — the orchestrator owns termination; your job is to cut the geomean latency this cycle while keeping every workload correct.
 2. Cross-version digest — `python tools/memory_manager.py summary --workspace .` (where we are; the trajectory).
 3. The latest entry, in full — `python tools/memory_manager.py read --workspace . --version v{{PREV}}`. Pay attention to:
    - **`open_directions`** — candidate leads the previous session left for you.
@@ -37,6 +37,12 @@ skip Stage 6, then exit. Honor that skill's subagent requirements for Stage 2 (p
 
 **`open_directions` are priors, not orders.** Pick the most promising lead — **or**, if a fresh look at the
 profile reveals a better lever, pursue that instead. The only hard constraint is: don't re-run a recorded dead-end.
+
+**Consider shape bucketing when the evidence supports it.** Check `performance.latency_us_by_shape` and the
+profile: if different-scale shapes are bottlenecked differently, a valid category is **shape specialization** —
+group shapes into a few buckets of similar scale (not one path per shape) and dispatch inside `run()` to a
+subkernel or tiling/block config per bucket. Many kernels don't need this — decide from memory, research, and
+current latencies. See "Shape bucketing" in the profile-optimizer skill.
 
 ## Step B — One cycle (Stages 1–4)
 
@@ -58,22 +64,24 @@ Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each s
    validates correctness via `test_kernel.py`, and updates `memory/v{{N}}.json`.
 
 4. **Stage 4 — Validate + Bench** (subagent required)
-   Launch a validation subagent: run correctness tests (with `timeout 60`), measure latency / TFLOPS / bandwidth /
-   peak-utilization via `tools/compute_utilization.py`, compare against v{{PREV}}, evaluate ISA metric progress,
-   and update `memory/v{{N}}.json`. Bench must be **variance-aware** — a delta only counts as real if it clears
-   measurement noise (best-of-N or delta > noise band; flat-within-noise is *not* an improvement). Return PASS / FAIL.
-   **Bench EVERY shape in `shapes.json`** (the full ground-truth shape set, keyed by integer sid) — never a single
-   hand-picked "representative" shape. Record `performance.latency_us_by_shape` = `{"<sid>": us, …}` for all sids
-   and set `performance.latency_us` = their mean. Do **not** compute a priority here — the orchestrator computes
-   the (anchor-weighted) priority from this per-shape latency; an under-benched (single-shape) record silently
-   mis-ranks the whole layer.
+   Launch a validation subagent. Validation is the **SOL-ExecBench harness only**: run
+   `python test_kernel.py --version v{{N}}` (cwd = workspace). It runs the real `sol-execbench` evaluator over
+   **EVERY workload in `workload.jsonl`** (the full ground-truth shape set) with each workload's own tolerance,
+   and records into `memory/v{{N}}.json`: `performance.latency_us_by_shape` (keyed by workload `uuid`),
+   `performance.latency_us` = **geomean** of per-workload latency, `speedup_vs_ref_geomean`, and
+   `correctness.status` / `quality_gate.result` = PASS iff **all** workloads pass. Do NOT hand-roll a separate
+   correctness test or edit `test_kernel.py`. The harness exits non-zero if any workload fails.
+   `solution.json` reads the live `kernel.py` from disk — if you changed languages/dependencies/entry_point
+   (e.g. migrating framework), update `solution.json` `spec` to match before benching.
+   Bench must be **variance-aware** — a geomean delta only counts as real if it clears measurement noise
+   (flat-within-noise is *not* an improvement).
 
 ## Step C — Commit or revert (mechanical, no discretion)
 
-- **Real win** (correctness PASS **and** speedup clears noise vs v{{PREV}}) → **commit** (skill Stage 5 format).
-  This kernel becomes the new HEAD/best.
-- **Otherwise** (regression, flat-within-noise, or correctness FAIL) → `git reset --hard HEAD` to restore the
-  best-known `kernel.py`. **Never commit a regression.**
+- **Real win** (all workloads PASS **and** geomean kernel latency `performance.latency_us` drops vs HEAD by more
+  than noise) → **commit** (skill Stage 5 format). This kernel becomes the new HEAD/best.
+- **Otherwise** (geomean regression, flat-within-noise, or any workload FAIL) → `git reset --hard HEAD` to restore
+  the best-known `kernel.py`. **Never commit a regression.** The goal is to minimize the geomean of kernel latency.
 
 ## Step D — Record + hand off (ALWAYS — win *or* dead-end)
 
