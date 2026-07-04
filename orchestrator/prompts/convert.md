@@ -22,9 +22,14 @@ The sheet gives the Triton→Gluon API map, the critical pitfalls, and **pointer
 Triton source** (`reference-projects/triton`). Open that source only for the construct you are
 converting — do not re-derive the whole API.
 
-## Do (delegate to the `gpu-kernel-convert` subagent)
+## Do (delegate to the `gpu-kernel-convert` subagent — **wait for it to complete before exiting**)
 Launch the **`gpu-kernel-convert`** subagent with: workspace, version v{{N}}, the arch, the sheet path,
-and `kernel.py`. It must:
+and `kernel.py`. You may spawn it in the background, but **you MUST wait for it to complete before you
+exit**. If you exit before the subagent finishes, the conversion will be incomplete and the orchestrator
+will see no v2. You are responsible for the full conversion — do not exit until the subagent has reported
+back with its result (committed gluon kernel, or a recorded revert).
+
+The subagent must:
 0. **Learn from prior attempts** — this may be a RETRY. Read `memory/v*.json` entries with
    `optimization.action_category="triton_to_gluon_conversion"` (`python tools/memory_manager.py read --workspace .`);
    do NOT repeat a lowering a previous attempt recorded as failed or >5% slower — take a different approach.
