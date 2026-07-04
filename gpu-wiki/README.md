@@ -165,15 +165,18 @@ Each pitfall follows a five-step process: trap → symptom → reality → why �
 
 ---
 
-## docs/converter/ — Converter Tool Knowledge
+## docs/converter/ — Converter sheets (one per framework transition)
 
-| Directory | Description | Keywords |
+Each sheet is the API map + pitfalls + pointers to the local Triton source; see the router in
+[`docs/converter/README.md`](docs/converter/README.md).
+
+| Sheet | Transition | Keywords |
 |------|------|--------|
-| [`generic/`](docs/converter/generic/) | PyTorch→Triton Conversion | API mapping, conversion rules, model configuration |
-| [`amd/common/`](docs/converter/amd/common/) | Triton→Gluon General Rules | Porting rules, API mapping, learning guide, verification guide |
-| [`amd/cdna3/`](docs/converter/amd/cdna3/) | CDNA3-Specific Triton→Gluon (7 items) | API mapping, pipeline, matrix_multiply, memory_access, layouts, pitfalls |
-| [`amd/cdna4/`](docs/converter/amd/cdna4/) | CDNA4-Specific Triton→Gluon (7 items) | async copy DMA, mfma_scaled |
-| [`nvidia/hopper/`](docs/converter/nvidia/hopper/) | Hopper-Specific Triton→Gluon (7 items) | wgmma, CP_ASYNC |
+| [`pytorch-to-triton.md`](docs/converter/pytorch-to-triton.md) | PyTorch→Triton | full conversion, fusion, weight transpose, tl.dot precision |
+| [`nvidia/blackwell.md`](docs/converter/nvidia/blackwell.md) | Triton→Gluon, Blackwell sm_100 | tcgen05, TMEM, TMA, mbarrier |
+| [`nvidia/hopper.md`](docs/converter/nvidia/hopper.md) | Triton→Gluon, Hopper sm_90 | wgmma, CP_ASYNC |
+| [`amd/cdna3.md`](docs/converter/amd/cdna3.md) | Triton→Gluon, CDNA3 gfx942 | buffer_load, mfma, software pipeline |
+| [`amd/cdna4.md`](docs/converter/amd/cdna4.md) | Triton→Gluon, CDNA4 gfx950 | async_copy DMA, mfma_scaled |
 
 ---
 

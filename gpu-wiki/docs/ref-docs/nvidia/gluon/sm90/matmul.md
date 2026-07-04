@@ -127,4 +127,4 @@ See `pitfalls.md` for details. Summary below:
 - **Cross-Architecture Reference**: [CDNA4 GEMM Optimization](../../../amd/gluon/gfx950/matmul.md) | [CDNA3 GEMM Optimization](../../../../kernel-opt/amd/gluon/gfx942/pattern_overview.md) (5 files)
 - **wgmma Details**: [PTX MMA Instruction Evolution](../../common/nvidia-ptx-mma-instructions.md) — wgmma instruction specification
 - **CuTeDSL**: [CuTeDSL SM90-Specific Features](../../cutedsl/sm90/hopper-cutedsl-sm90.md) — WGMMA usage in CuTeDSL
-- **Converter Reference**: [Hopper Matrix Multiply Conversion](../../../../converter/nvidia/hopper/matrix_multiply.md)
+- **Converter Reference**: [Hopper Matrix Multiply Conversion](../../../../converter/nvidia/hopper.md)
