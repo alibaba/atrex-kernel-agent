@@ -1,8 +1,12 @@
-# Triton → Gluon cheat sheet — NVIDIA Blackwell (sm_100, B200/B300)
+# Triton → Gluon cheat sheet — NVIDIA Blackwell data-center (sm_100 B200 / sm_103 B300)
 
 Single-file conversion reference for a **convert-only** session. Read this once; open the cited
 Triton 3.7 source **only** for the construct you're converting. Do not paraphrase from memory — the
 source is ground truth.
+
+> Covers **data-center Blackwell: sm_100 (B200) and sm_103 (B300)** — they share the tcgen05/TMEM path
+> (sm_103 ≈ sm_100). This is **NOT** for sm_120 (Blackwell GeForce), which uses different Gluon
+> primitives — do not use this sheet there.
 
 Source root: `reference-projects/triton` @ `rel/3.7`
 - API: `python/triton/experimental/gluon/language/nvidia/blackwell/{__init__.py,tma.py,float2.py}`
@@ -17,8 +21,8 @@ sessions. Preserve numerics and per-shape tolerances. Gluon ships inside the `tr
 (`triton.experimental.gluon`), so only the kernel body changes — not the framework declared to the harness.
 
 ## Workflow
-1. `python tools/extract_ttgir.py <driver>.py -o k.ttgir` (driver must launch the kernel).
-2. Confirm `ttg.target = "cuda:100"`. Reuse the real `#blocked/#shared/#tmem` layouts — never fabricate.
+1. **Dump TTGIR FIRST, before drafting any Gluon**: `python tools/extract_ttgir.py <driver>.py -o k.ttgir` (driver must launch the kernel).
+2. Confirm `ttg.target` is `cuda:100` (B200) or `cuda:103` (B300). Use the real `#blocked/#shared/#tmem` layouts **from THIS kernel's TTGIR** — never fabricate, and never copy the reference example's layouts/shapes (the example is for code structure only).
 3. Map with the table below; open source for anything unmapped.
 4. Rewrite loads→TMA+mbarrier, matmuls→tcgen05+TMEM; reproduce the original `num_stages` (nothing more).
 5. Compile-check the module, then verify outputs match the reference within tolerance for every shape.
@@ -54,5 +58,15 @@ Warp-specialized producer/consumer pipeline and TMEM-buffer borrowing: copy the 
 2. **Never reuse one mbarrier for TMA and tcgen05_mma** → UB; use separate bars or `invalidate`+`init`.
 3. Don't replace TMA with `gl.load`+`smem.store` (loses the TMA path).
 4. Warp size 32; a full warpgroup (4 warps/128 threads) is needed for 128 TMEM rows (1 warp = 32 rows).
-5. Layouts from real TTGIR only; confirm `cuda:100`. Don't invent; `get_tmem_reg_layout` derives reg layouts.
+5. Layouts from real TTGIR only; confirm `cuda:100`/`cuda:103`. Don't invent; `get_tmem_reg_layout` derives reg layouts.
 6. No `gl.amd.*` (unregistered-dialect crash).
+
+## Common failures (symptom → cause → fix)
+| Symptom | Cause → Fix |
+|---------|-------------|
+| `LLVM ERROR: ... unregistered dialect` | `gl.amd.*` used on NVIDIA → use the Blackwell APIs above |
+| wrong results / GPU hang | one mbarrier reused for TMA **and** `tcgen05_mma` (UB) → separate barriers, or `mbarrier.invalidate`+`init` between phases |
+| wrong results | RHS not in SMEM `NVMMASharedLayout`, or accumulator not in TMEM → B in SMEM(NVMMAShared), acc in TMEM |
+| >5% slower than Triton | `gl.load`+`smem.store` instead of `tma.async_copy_global_to_shared`, or accumulator round-tripping registers instead of staying in TMEM across the K-loop → use TMA + keep acc TMEM-resident |
+| wrong rows / partial output | TMEM accessed by too few warps (1 warp = 32 rows) → use a full warpgroup (4 warps / 128 threads) for 128 rows |
+| tensor op layout error | missing layout on `gl.arange`/`gl.zeros`/… → pass an explicit layout (from TTGIR or `get_tmem_reg_layout`) |

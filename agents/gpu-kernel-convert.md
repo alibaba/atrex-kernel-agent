@@ -31,10 +31,12 @@ sessions a correct Gluon starting point (Gluon exposes lower-level levers they w
 1. **Read the sheet** (only the one for `arch`). It carries the Triton→Gluon API map, the critical
    pitfalls, and pointers to the exact `reference-projects/triton` source. Open that source **only**
    for the construct you are converting — do not re-derive the whole API or read other arches' sheets.
-2. **Extract real layouts** from the current kernel:
-   `python tools/extract_ttgir.py <driver>.py -o <version>.ttgir`. The driver must launch the kernel
-   (the kernel's `__main__` profiling block works). Confirm the TTGIR target matches `arch`
-   (e.g. `cuda:100`). Reuse the real `#blocked`/`#shared`/`#tmem` layouts — **never fabricate layouts**.
+2. **Extract TTGIR FIRST — before writing any Gluon.** `python tools/extract_ttgir.py <driver>.py -o <version>.ttgir`
+   (the driver must launch the kernel; the kernel's `__main__` profiling block works). Confirm the target
+   matches `arch` (e.g. `cuda:100`). The Gluon kernel's layouts **must be the real `#blocked`/`#shared`/`#tmem`
+   layouts from THIS kernel's TTGIR** — never fabricate them, and never lift the reference example's
+   layouts/shapes (use the example for code *structure*, not its concrete layouts). Do not draft Gluon
+   before this dump exists. (Reading reference source to learn the API is fine at any point.)
 3. **Rewrite `kernel.py` → Gluon** per the sheet: map loads → the arch's async/TMA + barrier pattern,
    matmuls → the arch's MMA + accumulator-residency pattern, and reproduce the original `num_stages`
    (nothing more). Keep the DPS `run(...)` signature (inputs then outputs). Change **only** `kernel.py`;

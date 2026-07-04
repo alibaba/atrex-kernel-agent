@@ -14,7 +14,7 @@ a correct Gluon kernel. Do **one** conversion, then exit.
 
 ## Read first (one file, then source on demand)
 Read the single conversion sheet for the **real arch above** — do not read the others:
-- `sm_100` (Blackwell) → `{{GPU_WIKI}}/docs/converter/nvidia/blackwell.md`
+- `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `{{GPU_WIKI}}/docs/converter/nvidia/blackwell.md`
 - `sm_90` (Hopper) → `{{GPU_WIKI}}/docs/converter/nvidia/hopper.md`
 - `gfx94*` (CDNA3) → `{{GPU_WIKI}}/docs/converter/amd/cdna3.md`; `gfx95*` (CDNA4) → `{{GPU_WIKI}}/docs/converter/amd/cdna4.md`
 

@@ -37,3 +37,13 @@ Imports: `from triton.experimental.gluon.language.nvidia.hopper import async_cop
 3. **`fence_async_shared()` before every wgmma**, and `warpgroup_mma_wait` after — omitting either is UB.
 4. Warp size = 32 (not 64): every `BlockedLayout` `threads_per_warp` product must equal 32.
 5. Layouts from real TTGIR only; confirm `cuda:90` (if `cuda:100`, use `blackwell.md`). `make_block_ptr` is unavailable — compute offsets.
+
+## Common failures (symptom → cause → fix)
+| Symptom | Cause → Fix |
+|---------|-------------|
+| `LLVM ERROR: ... unregistered dialect 'amdg'` | `gl.amd.*` used on NVIDIA → use Hopper APIs (`warpgroup_mma`, `gl.load`/`gl.store`) |
+| Gluon/Triton latency ratio > 1.15 (measured up to **1.50**) | pipelined load used `gl.load`+`smem.store` (2-step register transit) → `async_copy.async_copy_global_to_shared` (CP_ASYNC DMA) |
+| wrong results / occasional crash | missing `fence_async_shared()` before a wgmma that reads smem → call it after every smem write, before wgmma |
+| wrong results / GPU hang | used the wgmma accumulator before completion → `warpgroup_mma_wait(deps=(acc,))` before using it |
+| `NameError` / undefined var after an `if` | var defined inside a runtime `if` block isn't visible outside (Gluon scoping ≠ Python) → keep all uses inside the block |
+| smem OOM | H20 per-block smem limit is **64 KB** → reduce pipeline depth / block size; reuse slots |

@@ -28,3 +28,11 @@ two. **Using `buffer_load` + `smem.store` instead of `async_copy` is 40–60% sl
 1. Warp size = 64. Do not use NVIDIA APIs.
 2. For pipelines use the **hardware `async_copy`** path, not the CDNA3 software prefetch (perf).
 3. Everything in [cdna3.md](cdna3.md) pitfalls also applies (layouts from TTGIR `hip:gfx950`, no `make_block_ptr`, `in_thread_transpose` handling).
+
+## Common failures (symptom → cause → fix)
+Inherits all CDNA3 failures — see [cdna3.md](cdna3.md). CDNA4 deltas:
+| Symptom | Cause → Fix |
+|---------|-------------|
+| Gluon much slower than Triton | used CDNA3 software prefetch (`buffer_load`+`smem.store`) → CDNA4 hardware `async_copy.buffer_load_to_shared` + `load_shared_relaxed` (40–60% faster) |
+| smem OOM | CDNA4 LDS is **160 KB** (vs CDNA3 64 KB) — larger, but still avoid duplicate live buffers |
+| `mfma_scaled` layout error | scales not in the scale layout → build them with `get_mfma_scale_layout` |

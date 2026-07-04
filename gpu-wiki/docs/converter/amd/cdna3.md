@@ -39,3 +39,15 @@ prologue/main/epilogue shape.)
    `buffer_load → convert_layout → allocate_shared_memory + smem.load`; the compiler inserts the equivalent.
 4. Layouts from real TTGIR only (`hip:gfx942`); map TTGIR camelCase param names to gluon snake_case.
 5. `make_block_ptr` unavailable — compute offsets.
+
+## Common failures (symptom → cause → fix)
+| Symptom | Cause → Fix |
+|---------|-------------|
+| `ValueError: Unsupported ptr type for buffer_load` | wrong ptr arg → pass base ptr + `offsets=` per the `buffer_load` signature |
+| `TypeError: arange() missing required argument: 'layout'` | tensor op without a layout → `gl.arange(..., layout=BlockedLayout(...))` (all tensor creation needs a layout) |
+| `TypeError: mfma() inputs must be float16 or bfloat16` | wrong operand dtype → cast A/B to fp16/bf16 before `mfma` |
+| "mask cannot be block type" | block-typed mask → use the scalar/allowed mask form for `buffer_load` |
+| wrong results (numerical) | accumulation dtype/precision → accumulate in fp32 |
+| smem OOM | CDNA3 LDS **64 KB**; duplicate live buffers → pre-allocate `[depth, …]` and reuse `smem.index(i)` |
+| `smem.load()` returns wrong data | missing DotOperandLayout on the load → `smem.index(i).load(layout=dot_op)` |
+| compile > 5 min | block/layout too complex → simpler layouts, smaller blocks |

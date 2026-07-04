@@ -72,6 +72,18 @@ def kernel_is_gluon(workspace: Path) -> bool:
     return k.exists() and "gluon" in k.read_text(encoding="utf-8", errors="ignore")
 
 
+def head_kernel_is_gluon(workspace: Path) -> bool:
+    """True when the COMMITTED HEAD kernel.py is Gluon. Authoritative accept signal for a convert
+    session — more reliable than memory's git_commit_hash, which a session may leave unset even after
+    committing."""
+    try:
+        out = subprocess.run(["git", "show", "HEAD:kernel.py"], cwd=str(workspace),
+                             capture_output=True, text=True)
+    except OSError:
+        return False
+    return out.returncode == 0 and "gluon" in out.stdout
+
+
 # ── thin IO ─────────────────────────────────────────────────────────────────
 
 
@@ -480,26 +492,31 @@ class Campaign:
                 # Accept only a committed gluon kernel whose geomean is within +CONVERT_PERF_TOL of the
                 # incumbent triton HEAD. Otherwise reject, keep triton, and record WHY — then let triton
                 # run another `convert_after` stalled rounds and RETRY conversion (informed by the record).
+                # Accept only when the COMMITTED HEAD kernel is gluon, correctness PASSed, and geomean is
+                # within +CONVERT_PERF_TOL of the incumbent triton HEAD. Detect the committed gluon via git
+                # HEAD (not memory's git_commit_hash, which a session may leave unset even after committing).
                 conv_lat = (mem.get("performance") or {}).get("latency_us") if mem else None
+                gate_pass = bool(mem) and (mem.get("quality_gate") or {}).get("result") == "PASS"
+                head_gluon = head_kernel_is_gluon(self.workspace)
                 prev_best, prev_hash = best_committed_latency(self.workspace, n)
                 parity_ok = (prev_best is None or (isinstance(conv_lat, (int, float))
                              and conv_lat <= prev_best * (1.0 + CONVERT_PERF_TOL)))
-                if kernel_is_gluon(self.workspace) and committed(mem) and isinstance(conv_lat, (int, float)) and parity_ok:
+                if head_gluon and gate_pass and isinstance(conv_lat, (int, float)) and parity_ok:
                     stall = 0            # converted (correctness + <=5% perf parity) -> fresh Gluon phase
                     print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
                     continue
-                # rejected: safety-net revert of a slow committed gluon; persist the failure for the next attempt
-                if kernel_is_gluon(self.workspace) and committed(mem) and prev_hash and not parity_ok:
+                # rejected: if a bad gluon kernel got committed as HEAD, revert to the triton incumbent
+                if head_gluon and prev_hash:
                     subprocess.run(["git", "reset", "--hard", prev_hash], cwd=str(self.workspace),
                                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self._record_failed_convert(n, f"regressed {conv_lat / prev_best - 1:+.1%} vs triton (> {CONVERT_PERF_TOL:.0%})")
-                    print(f"[orchestrator] convert regressed {conv_lat / prev_best - 1:+.1%} "
-                          f"(> {CONVERT_PERF_TOL:.0%}); reverted to triton HEAD {prev_hash[:8]}", flush=True)
-                elif read_memory(self.workspace, n) is None:
-                    self._record_failed_convert(n, "convert session produced no kernel/record")
-                    print("[orchestrator] convert produced no valid gluon kernel; staying on triton", flush=True)
+                    reason = (f"regressed {conv_lat / prev_best - 1:+.1%} vs triton (> {CONVERT_PERF_TOL:.0%})"
+                              if isinstance(conv_lat, (int, float)) and not parity_ok else "correctness gate not PASS")
+                    self._record_failed_convert(n, reason)
+                    print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {prev_hash[:8]}", flush=True)
                 else:
-                    print("[orchestrator] convert rejected (recorded in memory); staying on triton", flush=True)
+                    if read_memory(self.workspace, n) is None:
+                        self._record_failed_convert(n, "convert session produced no committed gluon kernel")
+                    print("[orchestrator] convert produced no committed gluon kernel; staying on triton", flush=True)
                 # keep optimizing triton; conversion re-fires after another `convert_after` stalled rounds
                 stall = 0
                 continue
