@@ -70,7 +70,7 @@ Create an isolated optimization workspace in the **current working directory**ã€
 bash reference/workspace_init.sh <name> <kernel_demo_path>
 ```
 
-This script creates the workspace directory structure (`memory/`, `plans/`, `profiles/`), copies the kernel demo as `kernel.py`, initializes git, and creates `.gitignore`. See `reference/workspace_init.sh` for details.
+This initializes the workspace **directly in the current directory** (`<name>` is just a label): it creates the structure (`memory/`, `plans/`, `profiles/`), copies the kernel demo as `kernel.py`, initializes git, and writes `.gitignore`, `CLAUDE.md`, and a `.gpu_kernel_optimizer_workspace` sentinel (so the hooks gate this directory). See `reference/workspace_init.sh` for details.
 
 After global constraints are confirmed and before writing the workspace `README.md`, parse configuration from the user prompt. Do not read the current directory `README.md` for configuration. All configuration must come from explicit user input or defaults.
 
@@ -81,8 +81,8 @@ Flow: **parse user input -> decomposition gate (single operator vs whole layer) 
 | `platform` | **Required**. Target hardware platform, such as H20, H100, MI308X, or MI355X. | Ask the user if missing. |
 | `arch` | Hardware architecture, derived from platform when possible. | H20/H100/H200 -> Hopper; MI300X/MI308X -> CDNA3; MI355X -> CDNA4. |
 | `framework` | **Required**. Programming language/framework, such as CuteDSL or FlyDSL. | Ask the user if missing. |
-| `gpu_wiki_path` | Local gpu-wiki path. Do not ask the user to confirm it. | `~/aka_kernel_opt/gpu-wiki/` |
-| `reference_project` | Local reference-project path. | `~/aka_kernel_opt/reference-projects/` |
+| `gpu_wiki_path` | Local gpu-wiki path. Do not ask the user to confirm it. | `/tmp/aka-opt/gpu-wiki/` |
+| `reference_project` | Local reference-project path. | `/tmp/aka-opt/reference-projects/` |
 | `kernel_demo` | **Required**. Initial kernel implementation file to optimize. | Ask the user if missing. |
 | `additional_notes` | Extra constraints, known bottlenecks, preferred directions, and edge cases. | `none` |
 
@@ -146,7 +146,7 @@ Before entering any sub-skill, write the initial session constraints into the wo
 Fill `README.md` using `./reference/README.md`. Unknown fields must be `TBD`.
 
 ```bash
-python tools/memory_manager.py init --workspace kernel_opt_<name>
+python tools/memory_manager.py init --workspace .
 ```
 
 Use `tools/memory_manager.py` for all memory JSON operations (create, read, update, mask/unmask, summary). See `python tools/memory_manager.py --help` for full usage.

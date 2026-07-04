@@ -22,9 +22,13 @@ this file only does mechanism: spawn, time-bound, token-account, read state, dec
 
 Usage
 -----
-    # single operator (default, unchanged):
+Everything op-specific is read from a native atrex-bench op dir (``--op-dir``): the workspace
+name (dir basename), the reference kernel/layer, the full shape set, per-shape SOL, and the
+priority anchor. Only ``--platform`` / ``--framework`` cannot be deduced and must be passed.
+
+    # single operator (default):
     python orchestrator/optimize.py \
-        --name mla_decode --kernel-demo /path/to/demo.py \
+        --op-dir /path/to/atrex-bench/data/<set>/<op> \
         --platform H20 --framework CuteDSL \
         --max-iters 20 --token-budget 8000000 --target-util 90
 
@@ -33,17 +37,46 @@ Usage
     #   shared --max-iters budget scheduled by live ROI (no boundary dropped) -> recombine.
     #   Σ (per-boundary optimization versions) == --max-iters.
     python orchestrator/optimize.py --layer \
-        --name decoder_layer --kernel-demo /path/to/layer.py \
+        --op-dir /path/to/atrex-bench/data/<set>/<layer> \
         --platform H20 --framework CuteDSL --max-iters 40
+
+Self-contained run root (``--prefix``, one command)
+---------------------------------------------------
+A run is driven by a single **run root** — one directory that is BOTH the self-contained install
+base AND the workspace the nested ``claude`` sessions operate in::
+
+    python orchestrator/optimize.py --prefix /work/kernelA \\
+        --op-dir <op> --platform B300 --framework CuteDSL ...
+
+At startup ``_setup_run_root()`` natively reproduces ``install.sh --prefix <run_root>`` (message: the
+flow lives in optimize.py, not a shell-out; ``install.sh`` is kept for standalone/codex/uninstall):
+it copies the skill (``reference/ skills/ tools/ SKILL.md``) into ``<run_root>/.claude/skills/…``,
+copies the subagents into ``<run_root>/.claude/agents`` (so the by-name Stage subagents are
+discoverable), installs the hooks (from the single shared ``hooks/gpu_kernel_optimizer_hook.py``) +
+``settings.json`` into ``<run_root>/.claude``, symlinks ``<run_root>/gpu-wiki`` and
+``reference-projects``, copies the orchestrator, and best-effort inits the knowledge submodules +
+rocprof-trace-decoder. It then **chdir's into the run root** and pins each nested session's
+``CLAUDE_CONFIG_DIR`` there, so the workflow gates and subagents are always active.
+
+The **workspace is the run root itself** — ``init_workspace`` creates ``memory/ plans/ profiles/
+kernel.py CLAUDE.md .git`` + a workspace sentinel directly in it (no per-op subdirectory), and every
+agent operation runs with ``cwd`` = the run root. The hook gates a directory by that sentinel.
+
+``--prefix`` defaults to ``DEFAULT_RUN_ROOT`` (``/tmp/aka-opt``); use one ``--prefix`` per kernel to
+keep campaigns isolated (the default is a single shared scratch root). ``--skip-bootstrap`` skips the
+install (rerun of an already-set-up run root). Running the copied orchestrator from inside an
+installed run root also works (the install step is a no-op).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,13 +84,63 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
-SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
+
+# The RUN ROOT is a single directory that is BOTH the self-contained install base AND the workspace
+# the nested `claude` sessions run in: `--prefix <path>` (default DEFAULT_RUN_ROOT). optimize.py
+# installs into it (skill/agents/hooks/orchestrator + gpu-wiki/reference-projects symlinks) and then
+# chdir's there; the workspace (memory/ plans/ profiles/ kernel.py .git + a sentinel) lives directly
+# in it — no per-op subdirectory. _setup_run_root() populates RUN_ROOT / CONFIG_DIR.
+DEFAULT_RUN_ROOT = "/tmp/aka-opt"
+RUN_ROOT: Optional[Path] = None   # set by _setup_run_root(); the campaign workspace when non-None
+
+# Sentinel file marking a directory as a gpu-kernel-optimizer workspace, so the hook can gate it by
+# marker rather than by directory name. MUST match the hook's WORKSPACE_SENTINEL.
+WORKSPACE_SENTINEL = ".gpu_kernel_optimizer_workspace"
+
+# The config home the nested `claude` sessions are pinned to (hooks + subagents live here); after
+# _setup_run_root this is <run_root>/.claude. Provisional value below (the source repo's .claude).
+CONFIG_DIR = REPO_ROOT / ".claude"
+
+# The single shared gpu-kernel-optimizer hook script (install.sh installs the SAME file). Present
+# in the source tree; absent in an install.sh-produced detached base (already installed there).
+_HOOK_NAME = "gpu_kernel_optimizer_hook.py"
+HOOK_SRC = REPO_ROOT / "hooks" / _HOOK_NAME
+
+# Runtime roots — where the skill's helpers (reference/, tools/, skills/) and subagents actually
+# live. SOURCE_MODE = running inside the original source repo, i.e. SKILL.md + agents/ sit at the
+# top level. An `install.sh --prefix <base>` layout is NOT source mode: there SKILL.md/agents were
+# copied under <base>/.claude, so we read them from that installed copy instead. SOURCE_MODE keys
+# off static top-level files (bootstrap never creates them), so it is stable before/after bootstrap.
+SOURCE_MODE = (REPO_ROOT / "SKILL.md").is_file() and (REPO_ROOT / "agents").is_dir()
+
+# Provisional defaults; _resolve_roots() (re)computes them, and main() calls it after bootstrap.
+SKILL_ROOT = REPO_ROOT
+AGENTS_ROOT = REPO_ROOT / "agents"
+
+WORKSPACE_INIT = SKILL_ROOT / "reference" / "workspace_init.sh"
+SOL_SEED = SKILL_ROOT / "reference" / "sol_seed.py"
 
 
 def is_sol_op(op_dir: Path) -> bool:
     """A SOL-ExecBench op dir carries definition.json + workload.jsonl next to reference.py."""
     return (op_dir / "definition.json").is_file() and (op_dir / "workload.jsonl").is_file()
+
+
+def _resolve_roots() -> None:
+    """(Re)compute SKILL_ROOT / AGENTS_ROOT from SOURCE_MODE. Reads happen at call time inside the
+    campaign methods, so calling this once in main() (via _setup_run_root) is sufficient."""
+    global SKILL_ROOT, AGENTS_ROOT, WORKSPACE_INIT, SOL_SEED
+    if SOURCE_MODE:
+        SKILL_ROOT = REPO_ROOT
+        AGENTS_ROOT = REPO_ROOT / "agents"
+    else:
+        SKILL_ROOT = CONFIG_DIR / "skills" / "gpu-kernel-optimizer"
+        AGENTS_ROOT = CONFIG_DIR / "agents"
+    WORKSPACE_INIT = SKILL_ROOT / "reference" / "workspace_init.sh"
+    SOL_SEED = SKILL_ROOT / "reference" / "sol_seed.py"
+
+
+_resolve_roots()
 
 
 # ── thin IO ─────────────────────────────────────────────────────────────────
@@ -120,15 +203,31 @@ def _tokens_from_stream(stdout: str) -> int:
 
 def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = None) -> tuple[str, str, int, bool]:
     """Run cmd in its own process group; SIGKILL the whole tree on timeout."""
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(cwd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,  # own process group -> killpg reaps grandchildren
-        env=env,
-    )
+    import errno as _errno
+    _EXEC_RETRIES = 3
+    for attempt in range(_EXEC_RETRIES):
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(cwd),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,  # own process group -> killpg reaps grandchildren
+                env=env,
+            )
+            break
+        except OSError as e:
+            # Exec format error (errno 8) or ENOENT (errno 2) can occur if the binary
+            # is being replaced by an auto-updater at the exact moment we try to exec it.
+            # Retry a few times with a short delay — the updater finishes in <1s.
+            if e.errno in (_errno.ENOEXEC, _errno.ENOENT) and attempt < _EXEC_RETRIES - 1:
+                wait = 2 ** attempt  # 1s, 2s
+                print(f"[orchestrator] exec failed ({e}); retrying in {wait}s "
+                      f"(attempt {attempt + 1}/{_EXEC_RETRIES})", flush=True)
+                time.sleep(wait)
+                continue
+            raise
     timed_out = False
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
@@ -149,16 +248,40 @@ def _session_env() -> dict:
     with 401. On a plain api-key setup (no auth token) nothing is removed.
     """
     env = os.environ.copy()
-    if env.get("ANTHROPIC_AUTH_TOKEN"):
-        env.pop("ANTHROPIC_API_KEY", None)
+    _drop_api_key_if_token(env)
+    # Pin the nested `claude` session's config home to CONFIG_DIR (this repo/base's .claude), where
+    # _setup_run_root() installed the gpu-kernel-optimizer hooks + subagents. This makes the
+    # workflow gates and by-name subagents active, isolates config/hooks/history per run root, and
+    # makes discovery independent of cwd. Auth still comes from ANTHROPIC_* env vars (above) and
+    # CONFIG_DIR/settings.json (whose ANTHROPIC_API_KEY bootstrap drops when a token is present).
+    if not env.get("CLAUDE_CONFIG_DIR"):
+        env["CLAUDE_CONFIG_DIR"] = str(CONFIG_DIR)
+    # Disable auto-updates in nested sessions.  The claude.exe binary (Bun-compiled) has a
+    # built-in auto-updater that can replace the binary while the orchestrator is spawning
+    # new sessions, causing OSError [Errno 8] Exec format error — a race between the
+    # updater's unlink/link/rename cycle and subprocess.Popen's exec().  Long-running
+    # campaigns (8+ hours, 15+ sessions) are especially vulnerable.
+    env["DISABLE_AUTOUPDATER"] = "1"
+    env["DISABLE_UPDATES"] = "1"
+    env["CLAUDE_CODE_PACKAGE_MANAGER_AUTO_UPDATE"] = "false"
     return env
 
 
 def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
-    """One clean `claude` session. Fresh session-id = no memory of prior sessions."""
+    """One clean `claude` session. Fresh session-id = no memory of prior sessions.
+
+    `--dangerously-skip-permissions`: these nested sessions are fully autonomous and headless
+    (`--print`), so they must run Bash/Write/Edit/Task without an interactive permission prompt.
+    In print mode Claude cannot prompt, so unlisted tools are otherwise denied — and once each
+    session's CLAUDE_CONFIG_DIR is pinned to the workdir's own .claude (see _session_env), it no
+    longer inherits ~/.claude's allow-list. The flag bypasses the permission *prompt* only; the
+    gpu-kernel-optimizer PreToolUse HOOKS still run and can still deny (verified), so the workflow
+    gates remain enforced. This mirrors the operator's own `claude` wrapper.
+    """
     session_id = str(uuid.uuid4())
     cmd = [
         "claude", "--print", "--verbose",
+        "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--session-id", session_id,
         prompt,
@@ -280,17 +403,342 @@ def link_runtime(workspace: Path) -> None:
     passed by absolute path instead. Idempotent.
     """
     for sub in ("tools", "reference", "skills"):
-        src, dst = REPO_ROOT / sub, workspace / sub
+        src, dst = SKILL_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
-    gi = workspace / ".gitignore"
-    existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
-    if "/tools" not in existing:
-        with gi.open("a", encoding="utf-8") as fh:
-            fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n")
+    # (/tools /reference /skills are already excluded by the workspace .gitignore written in
+    # init_workspace, so no append is needed here.)
+
+
+# ── run-root install (native, absorbs install.sh's Claude-target flow) ───────────
+#
+# These helpers install into CONFIG_DIR (retargeted to <run_root>/.claude by _setup_run_root) — the
+# Python, Claude-only equivalent of install.sh's claude target: the shared hook script + merged
+# PreToolUse/PostToolUse hooks in settings.json, the subagents (so they resolve by name), the skill
+# whitelist, gpu-wiki/reference-projects symlinks, the orchestrator copy, and a best-effort init of
+# the knowledge submodules + rocprof-trace-decoder. Idempotent and non-fatal.
+
+_HOOK_TAG = "gpu-kernel-optimizer-claude-hook-v1"
+_HOOK_PRE_MATCHER = "Write|Edit|MultiEdit|apply_patch|file_replace|shell|Bash"
+_HOOK_POST_MATCHER = "Read|read_file|Write|Edit|MultiEdit|apply_patch|file_replace|shell|Bash"
+_ROCPROF_DECODER_REPO = "https://github.com/ROCm/rocprof-trace-decoder.git"
+_NET_TIMEOUT = 600  # hard cap (s) on best-effort startup git so a hung network can't block a run
+
+
+def _drop_api_key_if_token(env: dict) -> None:
+    """If a Bearer auth token is present, drop ANTHROPIC_API_KEY so the CLI authenticates via the
+    token instead of sending x-api-key (gateways like idealab reject x-api-key with 401). Safe
+    no-op when either key is absent. Shared by _session_env (process env) and the settings.json
+    merge (config env) so the rule stays in exactly one place."""
+    if isinstance(env, dict) and env.get("ANTHROPIC_AUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+
+
+def _strip_tagged(existing: Optional[list]) -> list:
+    """Drop our tagged inner hook objects and any matcher entry left with no hooks — the jq
+    `strip_tagged` half of install.sh merge_hooks. Idempotent."""
+    out: list = []
+    for entry in (existing or []):
+        if not isinstance(entry, dict):
+            continue
+        kept = [h for h in (entry.get("hooks") or [])
+                if not (isinstance(h, dict) and _HOOK_TAG in (h.get("command") or ""))]
+        if kept:
+            out.append({**entry, "hooks": kept})
+    return out
+
+
+def _merge_hook_entries(existing: Optional[list], matcher: str, command: str, status: str) -> list:
+    """strip_tagged + append the fresh tagged entry (install.sh merge_hooks). Re-running never
+    accumulates duplicates."""
+    out = _strip_tagged(existing)
+    out.append({
+        "matcher": matcher,
+        "hooks": [{"type": "command", "command": command, "statusMessage": status, "timeout": 10}],
+    })
+    return out
+
+
+def _install_hooks_settings() -> bool:
+    """Install the hook script into CONFIG_DIR/hooks and merge its hooks into CONFIG_DIR/settings.json
+    (install.sh install_hook_script + merge_hooks, in Python). Preserves every non-`hooks` key.
+    Returns True if the gates are in place. Never overwrites a settings.json it could not parse —
+    that file may hold the operator's credentials."""
+    hooks_dir = CONFIG_DIR / "hooks"
+    hook_dst = hooks_dir / _HOOK_NAME
+    if HOOK_SRC.is_file():
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(HOOK_SRC, hook_dst)  # overwrite each run so edits to the shared hook propagate
+        os.chmod(hook_dst, 0o755)
+    elif not hook_dst.is_file():
+        print("[bootstrap] WARNING: no hook script (hooks/gpu_kernel_optimizer_hook.py) in the source "
+              "tree and none already installed — nested sessions will run WITHOUT the workflow gates.",
+              file=sys.stderr, flush=True)
+        return False
+
+    settings_path = CONFIG_DIR / "settings.json"
+    settings: dict = {}
+    if settings_path.is_file():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            # Do NOT clobber a settings.json we can't read — it likely holds the operator's creds.
+            print(f"[bootstrap] WARNING: {settings_path} is not readable/valid JSON ({exc}); leaving it "
+                  "untouched — hooks NOT merged. Fix or remove it to enable the workflow gates.",
+                  file=sys.stderr, flush=True)
+            return False
+        if not isinstance(loaded, dict):
+            print(f"[bootstrap] WARNING: {settings_path} is not a JSON object; leaving it untouched — "
+                  "hooks NOT merged.", file=sys.stderr, flush=True)
+            return False
+        settings = loaded
+
+    # NOTE: we deliberately do NOT copy the source repo's env/model into the run root's settings.json.
+    # Auth for the nested sessions comes from the launch shell's environment (ANTHROPIC_*), passed
+    # through by _session_env(); the run root's settings.json carries ONLY the workflow-gate hooks.
+
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    pre_cmd = f'python3 "{hook_dst}" pre --target claude --tag {_HOOK_TAG}'
+    post_cmd = f'python3 "{hook_dst}" post --target claude --tag {_HOOK_TAG}'
+    hooks["PreToolUse"] = _merge_hook_entries(hooks.get("PreToolUse"), _HOOK_PRE_MATCHER, pre_cmd,
+                                              "gpu-kernel-optimizer pre-edit guard")
+    hooks["PostToolUse"] = _merge_hook_entries(hooks.get("PostToolUse"), _HOOK_POST_MATCHER, post_cmd,
+                                               "gpu-kernel-optimizer memory/kernel edit gate")
+    # install.sh deletes any tagged Stop entry (a legacy install may have written one); mirror that
+    # so an old tagged Stop gate doesn't survive the self-bootstrap.
+    stop = _strip_tagged(hooks.get("Stop"))
+    if stop:
+        hooks["Stop"] = stop
+    else:
+        hooks.pop("Stop", None)
+    settings["hooks"] = hooks
+
+    # Pinning CLAUDE_CONFIG_DIR makes nested sessions read this settings.json env; normalize the auth
+    # key the same way _session_env does (drop x-api-key when a Bearer token is present).
+    _drop_api_key_if_token(settings.get("env"))
+
+    # Atomic write via a UNIQUE temp (concurrent same-repo runs must not race on one fixed name) +
+    # one-time backup — settings.json may hold credentials; never leave it truncated.
+    backup_path = settings_path.parent / (settings_path.name + ".bak")
+    if settings_path.is_file() and not backup_path.exists():
+        try:
+            shutil.copy2(settings_path, backup_path)
+        except OSError:
+            pass
+    fd, tmp_name = tempfile.mkstemp(dir=str(settings_path.parent),
+                                    prefix=settings_path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(settings, indent=2) + "\n")
+        os.replace(tmp_name, settings_path)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def _sync_config_agents() -> None:
+    """Copy the subagent definitions into CONFIG_DIR/agents so the pinned nested sessions can
+    discover the by-name Stage subagents (gpu-kernel-baseline / -profiler / -research /
+    kernel-optimize). Mirrors install.sh copy_agents; re-synced each run so edits propagate.
+    Symlink-safe: replaces a symlinked/file agents path rather than rmtree-ing through it."""
+    src = REPO_ROOT / "agents"
+    if not src.is_dir():
+        return  # detached base: agents already live under CONFIG_DIR/agents (installed by install.sh)
+    dst = CONFIG_DIR / "agents"
+    if dst.is_symlink() or dst.is_file():
+        dst.unlink()
+    elif dst.is_dir():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+
+def _bootstrap_knowledge_repos() -> None:
+    """Best-effort, non-fatal knowledge-repo setup (install.sh prepare_knowledge_repos +
+    clone_decoder_to_tools, source-tree subset). In place, gpu-wiki / reference-projects are already
+    the source dirs, so this reduces to: `git submodule update --init` each group, and clone the
+    rocprof-trace-decoder if absent.
+
+    The submodule init runs UNCONDITIONALLY (git makes it idempotent: a fast local no-op for
+    submodules already at the recorded commit, and it pulls any that are still uninitialized). We do
+    NOT skip a group when it merely *looks* populated — a group is often PARTIALLY initialized (e.g.
+    reference-projects/DeepGEMM present but reference-projects/aiter not), and an "is anything
+    populated?" skip would leave the rest un-pulled.
+
+    We do NOT force `--depth 1`: that overrides each submodule's `.gitmodules` `shallow` setting, and a
+    forced-shallow fetch can end up unable to check out the recorded commit (it fetches only the branch
+    tip) — which left reference-projects/DeepGEMM (shallow=false) with just a `.git` file and no tree.
+    Omitting `--depth` lets git honor per-submodule shallow flags. `--force` completes a checkout that a
+    prior run left half-done (e.g. its batch was SIGKILL'd on timeout mid-checkout), so the step is
+    self-healing across runs. Network hangs are bounded by a timeout; failures are non-fatal (a run
+    proceeds with fewer references) but are surfaced, not swallowed, so a missing reference set is
+    diagnosable."""
+    if (REPO_ROOT / ".gitmodules").is_file():
+        for sub in ("reference-projects/", "gpu-wiki/3rdparty/"):
+            try:
+                r = subprocess.run(["git", "submodule", "update", "--init", "--force", "--", sub],
+                                   cwd=str(REPO_ROOT), check=False, timeout=_NET_TIMEOUT,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                if r.returncode != 0:
+                    tail = ((r.stderr or "").strip().splitlines() or [""])[-1][:200]
+                    print(f"[run-root] NOTE: `git submodule update --init -- {sub}` exited {r.returncode} "
+                          f"(best-effort; some references may be missing — check git remote/network config): "
+                          f"{tail}", file=sys.stderr, flush=True)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"[run-root] NOTE: submodule init for {sub} could not run ({exc}); continuing.",
+                      file=sys.stderr, flush=True)
+    decoder = REPO_ROOT / "tools" / "rocprof-trace-decoder"
+    if not (decoder / ".git").exists():
+        try:
+            subprocess.run(["git", "clone", "--depth", "1", _ROCPROF_DECODER_REPO, str(decoder)],
+                           check=False, timeout=_NET_TIMEOUT,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+_SKILL_WHITELIST = ("reference", "skills", "tools", "SKILL.md")
+
+
+def _copy_skill(run_root: Path) -> None:
+    """Copy the skill whitelist (reference/ skills/ tools/ SKILL.md) from the source repo into
+    <run_root>/.claude/skills/gpu-kernel-optimizer/ — install.sh copy_skill, in Python. Copies (not
+    symlinks) so the run root is self-contained (survives the source repo moving/removing). Rebuilds the
+    skill dir each run so files removed/renamed in the source don't linger (install.sh uses rsync
+    --delete); runs once per optimize.py launch, not per iteration."""
+    dst = run_root / ".claude" / "skills" / "gpu-kernel-optimizer"
+    if dst.is_symlink() or dst.is_file():
+        dst.unlink()
+    elif dst.is_dir():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True)
+    for item in _SKILL_WHITELIST:
+        src = REPO_ROOT / item
+        if src.is_dir():
+            shutil.copytree(src, dst / item)
+        elif src.is_file():
+            shutil.copy2(src, dst / item)
+
+
+def _symlink_gpu_wiki(run_root: Path) -> None:
+    """Symlink <run_root>/gpu-wiki -> <repo>/gpu-wiki (install.sh link_gpu_wiki). Idempotent."""
+    src = REPO_ROOT / "gpu-wiki"
+    if not src.exists():
+        return
+    dst = run_root / "gpu-wiki"
+    target = str(src.resolve())
+    if dst.is_symlink():
+        if os.readlink(dst) == target:
+            return
+        dst.unlink()
+    elif dst.exists():
+        return  # a real gpu-wiki already present; leave it
+    os.symlink(target, dst)
+
+
+def _symlink_reference_projects(run_root: Path) -> None:
+    """Symlink each populated reference-projects submodule into <run_root>/reference-projects/
+    (install.sh prepare_knowledge_repos). Idempotent; skips unpopulated entries."""
+    src_dir = REPO_ROOT / "reference-projects"
+    if not src_dir.is_dir():
+        return
+    dst_dir = run_root / "reference-projects"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for repo in src_dir.glob("*"):
+        if not repo.is_dir() or not (repo / ".git").exists():
+            continue
+        dst = dst_dir / repo.name
+        target = str(repo.resolve())
+        if dst.is_symlink():
+            if os.readlink(dst) == target:
+                continue
+            dst.unlink()
+        elif dst.exists():
+            continue
+        os.symlink(target, dst)
+
+
+def _copy_orchestrator(run_root: Path) -> None:
+    """Copy the orchestrator (optimize.py + prompts/ + anchor_bench.py) into <run_root>/orchestrator
+    so the run root is a self-contained rerun point (install.sh install_orchestrator). Idempotent."""
+    src = REPO_ROOT / "orchestrator"
+    dst = run_root / "orchestrator"
+    if src.resolve() == dst.resolve():
+        return
+    shutil.copytree(src, dst, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+
+
+# The workspace git repo lives in the run root, which ALSO holds the install artifacts (single-op:
+# workspace == run root). Ignore those so `git status` / a stray `git add -A` never sweeps them in.
+_WORKSPACE_GITIGNORE = (
+    "__pycache__/\n"
+    "*.pyc\n"
+    "*.ncu-rep\n"
+    "profiles/*/att/*.att\n"
+    "profiles/*/att/*.out\n"
+    "profiles/*/att/*.pftrace\n"
+    "profiles/*/att/*.otf2\n"
+    "# run-root install artifacts (not part of the kernel workspace)\n"
+    "/.claude/\n"
+    "/orchestrator/\n"
+    "/gpu-wiki\n"
+    "/reference-projects/\n"
+    "/tools\n"
+    "/reference\n"
+    "/skills\n"
+    "# gpu-kernel-optimizer runtime markers\n"
+    ".gpu_kernel_optimizer_*\n"
+)
+
+
+def init_workspace(workspace: Path, kernel_demo: Path, label: str = "") -> None:
+    """Initialize the workspace IN `workspace` (the run root itself, or a layer boundary subdir) —
+    the Python port of reference/workspace_init.sh: the memory/plans/profiles tree, a local git repo,
+    kernel.py (from the demo), .gitignore, CLAUDE.md, and a workspace sentinel (so the hook gates this
+    directory by marker, not by directory name). Only called for a not-yet-initialized
+    workspace (see setup_baseline / setup_boundaries), so it never clobbers an in-progress campaign;
+    git init is guarded on a missing .git. Fails loudly if a required input is missing."""
+    kernel_demo = Path(kernel_demo)
+    if not kernel_demo.is_file():
+        raise FileNotFoundError(f"kernel_demo file not found: {kernel_demo}")
+    claude_md = SKILL_ROOT / "reference" / "CLAUDE.md"
+    if not claude_md.is_file():
+        raise FileNotFoundError(
+            f"agent constraints file not found: {claude_md} — broken skill install? "
+            "(run install.sh, or check SKILL_ROOT resolution)")
+    label = label or workspace.name
+    # (Cross-op reuse of a shared run root is caught reachably in _setup_run_root via the op marker;
+    # init_workspace only ever runs for a not-yet-initialized workspace, so a sentinel check here
+    # would be dead.)
+    workspace.mkdir(parents=True, exist_ok=True)
+    for sub in ("memory", "plans", "profiles"):
+        (workspace / sub).mkdir(exist_ok=True)
+    if not (workspace / ".git").exists():
+        subprocess.run(["git", "init"], cwd=str(workspace), check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "config", "user.email", "gpu-kernel-optimizer@local"],
+                       cwd=str(workspace), check=True)
+        subprocess.run(["git", "config", "user.name", "GPU Kernel Optimizer"],
+                       cwd=str(workspace), check=True)
+    shutil.copy2(kernel_demo, workspace / "kernel.py")
+    (workspace / ".gitignore").write_text(_WORKSPACE_GITIGNORE, encoding="utf-8")
+    shutil.copy2(claude_md, workspace / "CLAUDE.md")
+    (workspace / WORKSPACE_SENTINEL).write_text(label + "\n", encoding="utf-8")
 
 
 # ── campaign ──────────────────────────────────────────────────────────────────
+
+# Number of retry attempts when setup_baseline() completes but v0.json is missing
+# (e.g., the session ended before its subagent finished). Each retry is a lightweight
+# "completion" session that picks up where the previous one left off — it does NOT
+# re-initialize the workspace (no init_workspace, no kernel.py overwrite).
+_SETUP_RETRIES = 2
 
 
 @dataclass
@@ -312,7 +760,9 @@ class Campaign:
 
     @property
     def workspace(self) -> Path:
-        return Path.cwd() / f"kernel_opt_{self.name}"
+        # The run root IS the workspace (set by _setup_run_root); main() always sets it. The fallback
+        # (a bare invocation that skipped _setup_run_root) just uses the current directory.
+        return RUN_ROOT if RUN_ROOT is not None else Path.cwd()
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -320,6 +770,13 @@ class Campaign:
               f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
         if res.exit_status != 0 or res.timed_out:
             print(f"[orchestrator] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
+        # Log stdout tail for debugging — helps diagnose sessions that exit without
+        # producing expected artifacts (subagent killed, early end_turn, etc.)
+        if res.stdout_tail:
+            tail_lines = res.stdout_tail.strip().splitlines()
+            if tail_lines:
+                summary = "; ".join(tail_lines[-3:])[:500]
+                print(f"[orchestrator] {label} stdout tail: {summary}", flush=True)
 
     def _link_runtime(self) -> None:
         link_runtime(self.workspace)
@@ -332,9 +789,7 @@ class Campaign:
         if is_sol_op(op_dir):
             self._setup_baseline_sol(op_dir)
             return
-        if not WORKSPACE_INIT.exists():
-            raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
-        subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo], check=True)
+        init_workspace(self.workspace, self.kernel_demo, self.name)
         self._link_runtime()
         prompt = _render(
             PROMPTS_DIR / "setup.md",
@@ -347,12 +802,56 @@ class Campaign:
         self._account(res, "setup")
         if res.exit_status != 0 and res.tokens == 0:
             raise RuntimeError(
-                f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
-                "this is likely an API key / authentication issue. "
-                "Run `claude auth status` and `claude --print \"test\"` to diagnose."
+                f"setup session failed immediately (exit={res.exit_status}, tokens=0). "
+                "The nested `claude` produced no tokens — often an auth/config issue. "
+                "Nested sessions inherit the shell environment, so make sure ANTHROPIC_* is exported in "
+                "the shell you launch optimize.py from, and try `claude --print --verbose \"test\"`.\n"
+                f"--- nested claude stderr tail ---\n{res.stderr_tail or '(empty)'}\n"
+                f"--- nested claude stdout tail ---\n{res.stdout_tail or '(empty)'}"
             )
+
+        # Retry if v0.json was not produced (session ended before subagent completed, etc.)
+        # The retry is a lightweight "completion" session — it does NOT re-initialize the
+        # workspace (no init_workspace, no kernel.py overwrite). It reviews the current
+        # state and finishes whatever the previous session left incomplete.
+        for attempt in range(_SETUP_RETRIES):
+            if read_memory(self.workspace, 0) is not None:
+                return  # v0.json exists — success
+            print(f"[orchestrator] setup did not produce memory/v0.json "
+                  f"(retry {attempt + 1}/{_SETUP_RETRIES})", flush=True)
+            completion_prompt = (
+                "The previous setup session ended before completing the V0 baseline. "
+                "Review the current workspace state and finish the remaining steps.\n\n"
+                "## Review current state\n"
+                "1. Read `kernel.py` — check if it has been implemented in the target framework "
+                "(Triton/CuteDSL/FlyDSL) or is still the PyTorch reference.\n"
+                "2. Read `test_kernel.py` — check if correctness tests exist for ALL shapes in `shapes.json`.\n"
+                "3. Read `README.md` — check if hardware specs and roofline analysis are present.\n"
+                "4. Check `memory/` — if v0.json exists, the baseline is already done.\n\n"
+                "## Complete remaining steps\n"
+                "- If kernel.py needs implementation: launch the `gpu-kernel-baseline` subagent with "
+                "`run_in_background: false` (CRITICAL — must be synchronous).\n"
+                "- If kernel.py is implemented but not validated: run correctness tests for ALL shapes, "
+                "measure performance, write `baseline_report.md`, write `memory/v0.json` via "
+                "`python tools/memory_manager.py create --workspace . --version v0` then update, "
+                "and `git commit`.\n"
+                "- If only the memory/commit step is missing: write v0.json and commit.\n\n"
+                "## CRITICAL — Subagent Execution Rules\n"
+                "When launching ANY subagent, you MUST pass `run_in_background: false`. "
+                "This makes the call blocking. NEVER end your turn before the subagent returns its result. "
+                "If you launched a subagent and haven't received its result, DO NOT stop.\n\n"
+                f"Platform: {self.platform}, Framework: {self.framework}"
+            )
+            res = run_session(self.workspace, completion_prompt, timeout=self.setup_timeout)
+            self._account(res, f"setup-retry-{attempt + 1}")
+            if res.exit_status != 0 and res.tokens == 0:
+                break  # infra failure, don't retry
+
         if read_memory(self.workspace, 0) is None:
-            raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
+            raise RuntimeError(
+                f"setup did not produce memory/v0.json after {_SETUP_RETRIES + 1} attempts "
+                "(baseline failed — check session logs above for details)"
+            )
 
     def _setup_baseline_sol(self, op_dir: Path) -> None:
         if not SOL_SEED.exists():
@@ -423,7 +922,7 @@ class Campaign:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
         try:
             subprocess.run(
-                [sys.executable, str(REPO_ROOT / "tools" / "memory_manager.py"),
+                [sys.executable, str(SKILL_ROOT / "tools" / "memory_manager.py"),
                  "summary", "--workspace", str(self.workspace)],
                 check=False,
             )
@@ -591,10 +1090,13 @@ class LayerCampaign:
 
     @property
     def layer_dir(self) -> Path:
-        return Path.cwd() / f"layer_{self.name}"
+        # The run root holds the decomposition manifest + per-boundary workspaces (subdirs).
+        return RUN_ROOT if RUN_ROOT is not None else Path.cwd() / f"layer_{self.name}"
 
     def _boundary_ws(self, bname: str) -> Path:
-        return Path.cwd() / f"kernel_opt_{self.name}__{bname}"
+        # Each boundary is its own sentinel'd workspace, under run_root/boundaries/ — a namespace that
+        # can't collide with the run root's install artifacts (.claude/ orchestrator/ gpu-wiki/ tools …).
+        return self.layer_dir / "boundaries" / bname
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -620,7 +1122,7 @@ class LayerCampaign:
             LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
             PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py, GPU_WIKI=self.gpu_wiki,
             OP_DIR=self.op_dir, NOTES=self.notes,
-            DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
+            DECOMPOSE_DOC=str(AGENTS_ROOT / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
         res = run_session(self.layer_dir, prompt, timeout=self.decompose_timeout)
@@ -640,7 +1142,7 @@ class LayerCampaign:
             if latest_version(ws) >= 0:
                 continue  # already set up (resume)
             demo = self.layer_dir / b["kernel_demo"]
-            subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)], check=True)
+            init_workspace(ws, demo, b["name"])
             link_runtime(ws)
             self._write_shape_frame(ws, b)
             prompt = _render(
@@ -835,6 +1337,115 @@ def _resolve_op(op_dir: str) -> dict:
     return {"name": d.name, "reference": str(ref), "roofline_py": roofline_py, "op_dir": str(d)}
 
 
+def _setup_run_root(args: argparse.Namespace) -> None:
+    """Establish the RUN ROOT (`--prefix <path>`, default DEFAULT_RUN_ROOT) as BOTH a self-contained
+    install base AND the workspace, then relocate the run there.
+
+    Native, in-place equivalent of `install.sh --prefix <run_root>` (message 1: the flow lives in
+    optimize.py, not a shell-out): copy the skill/agents/orchestrator into <run_root>, symlink
+    gpu-wiki/reference-projects, install the hooks + settings — then chdir there and point RUN_ROOT /
+    CONFIG_DIR / SKILL_ROOT / AGENTS_ROOT / gpu-wiki at it. The workspace (memory/ kernel.py .git …)
+    is later initialized directly in <run_root> by init_workspace. `install.sh` stays for
+    standalone/codex/uninstall. Best-effort: an I/O hiccup degrades to a warning, not an abort."""
+    global SOURCE_MODE, CONFIG_DIR, RUN_ROOT
+
+    run_root = Path(args.prefix).expanduser().resolve() if args.prefix else Path(DEFAULT_RUN_ROOT).resolve()
+
+    # Resolve user paths to absolute BEFORE we chdir, so relative --op-dir / --gpu-wiki still work.
+    args.op_dir = str(Path(args.op_dir).expanduser().resolve())
+    op_name = Path(args.op_dir).name
+    default_gpu_wiki = str(REPO_ROOT / "gpu-wiki")
+    gpu_wiki_overridden = args.gpu_wiki != default_gpu_wiki
+    if gpu_wiki_overridden:
+        args.gpu_wiki = str(Path(args.gpu_wiki).expanduser().resolve())
+
+    # Guard: never use the source repo checkout as a run root — that would git-init over the repo and
+    # dump kernel work into it (mirrors reference/workspace_init.sh's guard).
+    if (run_root / "install.sh").is_file() and (run_root / "SKILL.md").is_file():
+        raise SystemExit(f"refusing to use the source repo ({run_root}) as a run root — it would git-init "
+                         "over the repo. Pass a dedicated --prefix directory (default /tmp/aka-opt).")
+
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    # Guard: a run root is single-kernel. Refuse to run a DIFFERENT op in a run root that already holds
+    # one — otherwise Campaign.run would silently RESUME the prior op's memory/kernel (the shared default
+    # /tmp/aka-opt makes this easy to hit). This check is reachable on every run, unlike a workspace-level
+    # sentinel that only exists after init_workspace.
+    op_marker = run_root / ".gpu_kernel_optimizer_op"
+    if op_marker.is_file():
+        prev = op_marker.read_text(encoding="utf-8").strip()
+        if prev and prev != args.op_dir:
+            raise SystemExit(
+                f"run root {run_root} already holds op '{Path(prev).name}' ({prev}); refusing to run "
+                f"'{op_name}' there — that would resume/overwrite the other kernel. Use a distinct "
+                f"--prefix per kernel, or clear {run_root}.")
+
+    installable = (REPO_ROOT / "SKILL.md").is_file() and (REPO_ROOT / "agents").is_dir() and HOOK_SRC.is_file()
+    already = ((run_root / ".claude" / "skills" / "gpu-kernel-optimizer").is_dir()
+               and (run_root / ".claude" / "hooks" / _HOOK_NAME).is_file())
+
+    # Warn (always, not only in the install branch) if the operator pinned their own CLAUDE_CONFIG_DIR:
+    # nested sessions would use THAT, not <run_root>/.claude, so the gates here would be inactive.
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    if override and Path(override).resolve() != (run_root / ".claude").resolve():
+        print(f"[run-root] NOTE: CLAUDE_CONFIG_DIR={override} is set; nested sessions use it, not "
+              f"{run_root / '.claude'} — the workflow gates will be INACTIVE unless that dir has them. "
+              "Unset CLAUDE_CONFIG_DIR to use the self-install.", file=sys.stderr, flush=True)
+
+    if args.skip_bootstrap:
+        if not already:
+            raise SystemExit(
+                f"--skip-bootstrap but run root {run_root} is not set up (no installed hooks/skill). "
+                f"Run without --skip-bootstrap to self-install, or `install.sh --prefix {run_root}` first.")
+    elif installable:
+        print(f"[run-root] installing into {run_root} …", flush=True)
+        CONFIG_DIR = run_root / ".claude"   # retarget the hook/agents install helpers at the run root
+
+        def _try(step, label):
+            try:
+                return step()
+            except OSError as exc:  # shutil.Error is an OSError subclass
+                print(f"[run-root] WARNING: {label} failed ({exc}); continuing.", file=sys.stderr, flush=True)
+                return None
+
+        # Hooks are the run root's whole purpose — install them FIRST and let `ok` track ONLY that, so a
+        # failure in a best-effort extra below never skips or mis-reports the gate install. Each step is
+        # isolated: one failure warns and continues.
+        ok = bool(_try(_install_hooks_settings, "hook install"))
+        _try(lambda: _copy_skill(run_root), "skill copy")          # helpers the run reads (SKILL_ROOT)
+        _try(_sync_config_agents, "subagent copy")                 # by-name subagent discovery
+        _try(_bootstrap_knowledge_repos, "submodule / decoder init")
+        _try(lambda: _symlink_gpu_wiki(run_root), "gpu-wiki symlink")
+        _try(lambda: _symlink_reference_projects(run_root), "reference-projects symlink")
+        _try(lambda: _copy_orchestrator(run_root), "orchestrator copy")
+        if not ok:
+            print("[run-root] WARNING: workflow-gate hooks were not installed.", file=sys.stderr, flush=True)
+    elif already:
+        pass  # running the copied orchestrator from an already-installed run root — nothing to do
+    else:
+        raise SystemExit(
+            f"cannot set up run root {run_root}: this is not a source checkout (no top-level SKILL.md/"
+            f"agents/hooks) and {run_root} is not already installed. Run install.sh --prefix {run_root}, "
+            "or pass --skip-bootstrap if it is set up.")
+
+    # Record the op identity so a later run of a different op in this run root is refused (above).
+    try:
+        op_marker.write_text(args.op_dir + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+    # Relocate: the run root becomes cwd (workspace) and the installed config home.
+    os.chdir(run_root)
+    RUN_ROOT = run_root
+    SOURCE_MODE = False
+    CONFIG_DIR = run_root / ".claude"
+    _resolve_roots()
+    if not gpu_wiki_overridden:
+        args.gpu_wiki = str(run_root / "gpu-wiki")  # symlinked above
+    print(f"[run-root] {run_root}  (workspace + config={CONFIG_DIR}, skill={SKILL_ROOT}, "
+          f"gpu_wiki={args.gpu_wiki})", flush=True)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Clean-session orchestrator for atrex-kernel-agent.")
     ap.add_argument("--op-dir", required=True,
@@ -867,7 +1478,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--arch", default="",
                     help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
                          "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
+    ap.add_argument("--skip-bootstrap", action="store_true",
+                    help="Skip the self-install into the run root (reruns / CI, or you ran install.sh). The "
+                         "run root MUST already be set up — otherwise the run aborts with a clear error.")
+    ap.add_argument("--prefix", default="",
+                    help=f"The RUN ROOT: a self-contained directory that is BOTH the install base AND the "
+                         f"workspace (default {DEFAULT_RUN_ROOT}). optimize.py installs the skill/agents/"
+                         "orchestrator + hooks there (native equivalent of `install.sh --prefix <path>`), "
+                         "cd's into it, and initializes the workspace (memory/ kernel.py .git …) directly in "
+                         "it — no per-op subdir. Use one --prefix per kernel; the default is a single shared "
+                         "scratch root.")
     args = ap.parse_args(argv)
+
+    # Establish the run root (install + relocate + workspace); the run root becomes cwd and the
+    # workspace. --prefix names it (default DEFAULT_RUN_ROOT); --skip-bootstrap skips the install.
+    _setup_run_root(args)
 
     arch = args.arch or detect_arch()
     op = _resolve_op(args.op_dir)

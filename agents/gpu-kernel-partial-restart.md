@@ -21,7 +21,7 @@ You will receive the following parameters when invoked:
 
 | Parameter | Description |
 |-----------|-------------|
-| `workspace_path` | Workspace absolute path (kernel_opt_<name>/) |
+| `workspace_path` | Workspace absolute path (the run root — your current working directory) |
 | `readme_path` | Path to workspace `README.md` |
 | `unmasked_memory_paths` | All unmasked `memory/v*.json` file paths |
 | `kernel_py_path` | Path to the current `kernel.py` (latest version) |
@@ -73,7 +73,7 @@ Return the following upon completion:
 ## Constraints
 
 - **DO NOT** revert `kernel.py` to baseline or any earlier version
-- **DO NOT** create a new workspace; continue in `kernel_opt_<name>`
+- **DO NOT** create a new workspace; continue in the current workspace (your working directory)
 - **DO NOT** read masked `memory/v*.json` files as active data
 - **DO NOT** modify `README.md` target thresholds or hardware specs
 - **DO NOT** re-run Stage 1 baseline implementation

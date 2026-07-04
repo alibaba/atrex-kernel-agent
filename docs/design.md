@@ -11,7 +11,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 - **Profile-driven optimization**: Kernel changes must be guided by official profiler evidence instead of intuition or ad-hoc timers.
 - **Traceable hardware assumptions**: Hardware specs must come from the local `gpu-wiki` knowledge base and must be archived with source references.
 - **Auditable optimization history**: Plans, profiles, reports, structured memory, and Git commits preserve every accepted iteration.
-- **Reproducible workspaces**: Each task runs in an isolated `/tmp/kernel_opt_<name>/` workspace.
+- **Reproducible workspaces**: Each task runs in a self-contained run root (the `--prefix` directory, default `/tmp/aka-opt`) that is also the workspace.
 - **Controlled iteration state**: Structured `memory/v<N>.json` files record performance, correctness, profile evidence, search logs, risks, and commit hashes.
 - **Safe final packaging**: Evaluator-facing output is separated into a clean `generated_kernel.py` contract when needed.
 
@@ -37,7 +37,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 │   ├── iteration_report.md               # Iteration report template
 │   ├── profile_guide.md                  # Consolidated NVIDIA / AMD profiling guide
 │   ├── v_iteration.schema.json           # Structured memory JSON schema
-│   └── workspace_init.sh                 # Creates /tmp/kernel_opt_<name>/ workspace
+│   └── workspace_init.sh                 # Initializes the workspace in the current run-root directory
 ├── skills/
 │   ├── gpu-kernel-baseline/              # Stage 1 baseline implementation Agent
 │   ├── gpu-kernel-profile-optimizer/     # Stage 2 profile-driven optimization Skill
@@ -68,7 +68,7 @@ The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill act
 The router is responsible for:
 
 - Enforcing hardware-spec sourcing from `gpu-wiki`.
-- Creating `/tmp/kernel_opt_<name>/` workspaces.
+- Initializing the workspace in the run-root directory (the `--prefix` dir, default `/tmp/aka-opt`).
 - Running Step 0 before baseline or optimization.
 - Choosing between baseline implementation, profile-driven optimization, bottleneck analysis, partial restart, and final packaging.
 - Ensuring accepted iterations are committed with Git.
@@ -153,18 +153,20 @@ The workflow parses required fields from user input:
 | `gpu_wiki_path` | Default | `/tmp/gpu-wiki/`. |
 | `reference_project` | Default | `/tmp/reference-projects/`. |
 
-Workspace initialization uses:
+Workspace initialization uses (run from the target run-root directory; it initializes in place):
 
 ```bash
-bash reference/workspace_init.sh <name> <kernel_demo_path>
+cd <run-root> && bash reference/workspace_init.sh <name> <kernel_demo_path>
 ```
 
-The script creates:
+The script creates, in the current directory:
 
 ```text
-/tmp/kernel_opt_<name>/
+<run-root>/            # your current working directory (the workspace)
 ├── kernel.py          # Copied from kernel_demo
+├── CLAUDE.md
 ├── .gitignore
+├── .gpu_kernel_optimizer_workspace   # workspace sentinel (hooks gate this dir)
 ├── memory/
 ├── plans/
 └── profiles/
@@ -198,7 +200,7 @@ The workspace `README.md` is created from `reference/README.md`. It stores stati
 Structured iteration memory is initialized with:
 
 ```bash
-python tools/memory_manager.py init --workspace /tmp/kernel_opt_<name>
+python tools/memory_manager.py init --workspace .
 ```
 
 From this point, the workspace `README.md` plus all unmasked `memory/v<N>.json` files are the source of truth.
@@ -242,7 +244,7 @@ The optimizer stops when Stop Conditions in workspace `README.md` are met. Other
 A typical optimization task produces:
 
 ```text
-/tmp/kernel_opt_<name>/
+<run-root>/                   # the --prefix dir (default /tmp/aka-opt) — your current working directory
 ├── README.md                 # Static configuration, sourced specs, Roofline analysis, Stop Conditions
 ├── kernel.py                 # Current kernel implementation
 ├── reference.py              # Optional runnable reference, when generated or provided
@@ -281,12 +283,12 @@ Supported operations include:
 Common commands:
 
 ```bash
-python tools/memory_manager.py init --workspace /tmp/kernel_opt_<name>
-python tools/memory_manager.py create --workspace /tmp/kernel_opt_<name> --version v0
-python tools/memory_manager.py read --workspace /tmp/kernel_opt_<name> --unmasked-only
-python tools/memory_manager.py update --workspace /tmp/kernel_opt_<name> --version v1 --set 'correctness.status=PASS'
-python tools/memory_manager.py mask --workspace /tmp/kernel_opt_<name> --version v2 v4
-python tools/memory_manager.py summary --workspace /tmp/kernel_opt_<name>
+python tools/memory_manager.py init --workspace .
+python tools/memory_manager.py create --workspace . --version v0
+python tools/memory_manager.py read --workspace . --unmasked-only
+python tools/memory_manager.py update --workspace . --version v1 --set 'correctness.status=PASS'
+python tools/memory_manager.py mask --workspace . --version v2 v4
+python tools/memory_manager.py summary --workspace .
 ```
 
 The `masked` field allows the workflow to discard stale optimization memory without deleting data. Masked files must not influence active planning, search deduplication, or optimization decisions.

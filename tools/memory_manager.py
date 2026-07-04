@@ -34,18 +34,18 @@ Commands:
     list          List all iteration files with their masked status.
 
 Examples:
-    python tools/memory_manager.py init --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py create --workspace /tmp/kernel_opt_mla --version v0
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --version v1
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --version v1 --field performance.tflops
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --unmasked-only --field correctness.status
-    python tools/memory_manager.py update --workspace /tmp/kernel_opt_mla --version v1 \\
+    python tools/memory_manager.py init --workspace .
+    python tools/memory_manager.py create --workspace . --version v0
+    python tools/memory_manager.py read --workspace . --version v1
+    python tools/memory_manager.py read --workspace . --version v1 --field performance.tflops
+    python tools/memory_manager.py read --workspace . --unmasked-only --field correctness.status
+    python tools/memory_manager.py update --workspace . --version v1 \\
         --set 'performance.tflops=150.2' --set 'correctness.status=PASS'
-    python tools/memory_manager.py mask --workspace /tmp/kernel_opt_mla --version v2 v3
-    python tools/memory_manager.py unmask --workspace /tmp/kernel_opt_mla --version v2
-    python tools/memory_manager.py summary --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py latest --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py list --workspace /tmp/kernel_opt_mla
+    python tools/memory_manager.py mask --workspace . --version v2 v3
+    python tools/memory_manager.py unmask --workspace . --version v2
+    python tools/memory_manager.py summary --workspace .
+    python tools/memory_manager.py latest --workspace .
+    python tools/memory_manager.py list --workspace .
 """
 
 import argparse

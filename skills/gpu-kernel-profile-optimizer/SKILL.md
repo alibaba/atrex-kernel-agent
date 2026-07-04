@@ -42,7 +42,7 @@ Constraints:
 Maintain this structure:
 
 ```text
-kernel_opt_<name>/
+<workspace>/            # the run root == your current working directory
   kernel.py
   reference.py
   README.md
@@ -98,10 +98,9 @@ The profiler subagent returns:
 
 ### Localization rule (mandatory)
 
-The first profile pass runs **without** `--source` (cheap: no second `ncu` collection). Escalate to `--source` only when a localizable symptom actually drives a change:
+The `--source` flag is **mandatory** (always included) to ensure source-level localization evidence is produced every run. There is no separate "escalation" step — the profiler subagent always collects source-correlated metrics in a single pass.
 
-- **Trigger** — `summary.txt` emits a `LOCALIZE` line **and** Stage 3 is about to choose a concrete code change based on that symptom.
-- **Required action** — before editing `kernel.py` in Stage 3, re-launch `gpu-kernel-profiler` with `--source` mode, open the evidence file named on the `LOCALIZE` line, and pin the change to the specific source line / SASS address it identifies. Do not change a line you have not localized.
+- **Evidence usage** — when `summary.txt` emits a `LOCALIZE` line, open the evidence file it names and pin the change to the specific source line / SASS address it identifies. Do not change a line you have not localized.
 
 ### Handoff to Stage 2
 
@@ -136,7 +135,7 @@ The main agent must provide these parameters when launching the `gpu-kernel-rese
 
 | Parameter | Source |
 |-----------|--------|
-| `workspace_path` | Current `kernel_opt_<name>/` absolute path |
+| `workspace_path` | The workspace (run root) absolute path — your current working directory |
 | `version` | Current iteration `V<N>` |
 | `platform` | From workspace `README.md` (nvidia / amd) |
 | `framework` | From workspace `README.md` (triton / cutedsl / flydsl / gluon) |
@@ -192,7 +191,7 @@ Inputs:
   - gpu_wiki_path: <gpu-wiki root path>
 ```
 
-The `kernel-optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (re-profiling with `--source` if needed), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
+The `kernel-optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (source-level evidence is already available from the `--source` profile), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
 
 ### Output Received
 
@@ -306,7 +305,7 @@ Goal: finalize `memory/v<N>.json` with quality gate result and git commit hash, 
 2. Update `memory/v<N>.json` using `tools/memory_manager.py`:
 
    ```bash
-   python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
+   python tools/memory_manager.py update --workspace . --version v<N> \
        --set 'quality_gate.result=PASS' \
        --set 'quality_gate.failure_reason=null'
    ```
@@ -328,7 +327,7 @@ git commit -m "V<N>: <performance: TFLOPS/Bandwidth(GB/s)> | <optimization summa
 
 ```bash
 HASH=$(git rev-parse HEAD)
-python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
+python tools/memory_manager.py update --workspace . --version v<N> \
     --set "git_commit_hash=$HASH"
 git add memory/v<N>.json
 git commit --amend --no-edit
@@ -349,7 +348,7 @@ clean session (which has none of your conversation context) picks up where you l
   orders*: the next session may pick one or choose a better lever it sees from a fresh profile.
 
   ```bash
-  python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
+  python tools/memory_manager.py update --workspace . --version v<N> \
       --set 'open_directions=[{"direction":"<lever>","rationale":"<evidence/why promising>"}]'
   ```
 

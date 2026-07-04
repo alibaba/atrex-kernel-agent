@@ -31,7 +31,7 @@ You will receive the following parameters when invoked:
 
 | Parameter | Description |
 |-----------|-------------|
-| `workspace_path` | Workspace absolute path (kernel_opt_<name>/) |
+| `workspace_path` | Workspace absolute path (the run root — your current working directory) |
 | `version` | Current iteration version `V<N>` |
 | `platform` | Target platform: nvidia / amd |
 | `framework` | DSL/framework: triton / cutedsl / flydsl / gluon |
@@ -50,11 +50,11 @@ You will receive the following parameters when invoked:
 
 Starting from V1, read before any search:
 
-1. `kernel_opt_<name>/README.md`
+1. `README.md`
 2. `<gpu-wiki>/README.md`
-3. All unmasked `kernel_opt_<name>/memory/v*.json` files (skip `masked: true`)
+3. All unmasked `memory/v*.json` files (skip `masked: true`)
 4. Current `profiles/v<N>/` profiling artifacts
-5. Previous iteration `kernel_opt_<name>/memory/v<N-1>.json` (if unmasked)
+5. Previous iteration `memory/v<N-1>.json` (if unmasked)
 6. Historical `plans/v*_plan.md`
 
 ### Step 2: Parse Historical Search Logs
@@ -78,7 +78,8 @@ Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the **Sy
 
 ### Step 4: Three-Layer Progressive Search
 
-**Strictly follow L1 → L2 → L3 order**. Never skip a layer.
+**Strictly follow L1 → L2 → L3 order — never skip a layer, but early exit is allowed.**
+The ordering constraint means you must not jump to a later layer before attempting the earlier one (e.g., never search L2 without first trying L1). However, once you find sufficient evidence at any layer, you may immediately write the plan and exit without proceeding to subsequent layers (consistent with the HIGHEST PRIORITY CONSTRAINT above).
 
 | Layer | Scope | Sources | Search Method |
 |-------|-------|---------|---------------|

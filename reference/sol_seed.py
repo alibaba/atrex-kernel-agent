@@ -118,9 +118,15 @@ def _render_kernel(defn: dict, reference_src: str) -> str:
 
 
 def _solution_json(defn: dict, name: str, framework: str, platform: str) -> dict:
+    # SOL evaluator only accepts 'B200' or 'LOCAL' in target_hardware.
+    # Map unsupported platforms to the closest supported equivalent.
+    _SOL_HW_MAP = {"B300": "B200", "H100": "B200", "H20": "B200", "A100": "B200"}
     hw = []
     if platform and platform.upper() != "LOCAL":
-        hw.append(platform.upper())
+        mapped = _SOL_HW_MAP.get(platform.upper(), platform.upper())
+        if mapped in ("B200", "LOCAL"):
+            hw.append(mapped)
+        # else: drop unsupported — LOCAL below is always present as fallback
     hw.append("LOCAL")
     # V0 is always a pure-PyTorch wrapper (guaranteed correct + submittable).
     # The loop migrates the body to `framework` and updates languages/dependencies then.

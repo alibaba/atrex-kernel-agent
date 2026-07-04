@@ -22,9 +22,9 @@ You will receive:
 | Parameter | Description |
 |-----------|-------------|
 | `pytorch_logic` | User-provided PyTorch logic or kernel demo |
-| `workspace_path` | Workspace absolute path (kernel_opt_<name>/) |
+| `workspace_path` | Workspace absolute path (the run root — your current working directory) |
 | `platform` | Target platform: nvidia / amd |
-| `gpu_wiki_path` | gpu-wiki root path (default: `~/aka_kernel_opt/gpu-wiki/`) |
+| `gpu_wiki_path` | gpu-wiki root path (default: `/tmp/aka-opt/gpu-wiki/`) |
 
 ---
 
@@ -134,10 +134,10 @@ python tools/compute_utilization.py \
 
 ```bash
 # Create the iteration file
-python tools/memory_manager.py create --workspace kernel_opt_<name> --version v0
+python tools/memory_manager.py create --workspace . --version v0
 
 # Fill in performance and metadata
-python tools/memory_manager.py update --workspace kernel_opt_<name> --version v0 \
+python tools/memory_manager.py update --workspace . --version v0 \
     --set 'performance.latency_us=<value>' \
     --set 'performance.tflops=<value>' \
     --set 'performance.bandwidth_gbps=<value>' \

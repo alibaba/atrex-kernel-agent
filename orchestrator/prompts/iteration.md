@@ -9,6 +9,18 @@ Hard rules for this session:
 - **Do NOT try to reach the final target** in this session. Just make this one cycle count and hand off cleanly.
 - The whole point of a clean session is a fresh context: you inherit state from disk, not from a prior conversation.
 
+## CRITICAL — Subagent Execution Rules (MANDATORY)
+
+Every subagent (`gpu-kernel-profiler`, `gpu-kernel-research`, `kernel-optimize`, or **any** Agent tool call) **MUST** be launched **synchronously**:
+
+- **Always** pass `run_in_background: false` on every Agent tool call.
+- This makes the call **blocking** — your session will not continue until the subagent finishes and returns its result.
+- **NEVER** omit `run_in_background` (it defaults to `true`, which is WRONG for this workflow).
+- **NEVER** end your turn (`end_turn`) after launching a subagent. If the subagent has not returned a result yet, you **MUST NOT** stop.
+- After launching a subagent synchronously, you **MUST** process its return value before doing anything else.
+
+**Why this matters**: the orchestrator runs you as a one-shot `--print` session. If you end your turn before a subagent finishes, the session exits, the subagent is killed, `memory/v{{N}}.json` is never created, and the iteration is wasted.
+
 ## Context
 
 - Workspace: `{{WORKSPACE}}` — this is your cwd, and a git repo. **git HEAD is the best kernel so far.**

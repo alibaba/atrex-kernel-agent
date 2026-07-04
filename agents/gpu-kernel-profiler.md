@@ -22,11 +22,11 @@ You will receive:
 
 | Parameter | Description |
 |-----------|-------------|
-| `workspace_path` | Workspace absolute path (`kernel_opt_<name>/`) |
+| `workspace_path` | Workspace absolute path (the run root — your current working directory) |
 | `version` | Current iteration version `V<N>` |
 | `platform` | Target platform: nvidia / amd |
 | `kernel_file` | Kernel file to profile (default: `kernel.py`) |
-| `gpu_wiki_path` | gpu-wiki root path (default: `~/aka_kernel_opt/gpu-wiki/`) |
+| `gpu_wiki_path` | gpu-wiki root path (default: `/tmp/aka-opt/gpu-wiki/`) |
 | `previous_profiles_dir` | (Optional) Previous iteration profile dir for `--diff` comparison |
 
 ---
@@ -35,7 +35,7 @@ You will receive:
 
 ### Phase 1: Setup Profile Directory
 
-All profiling commands must be executed from the workspace root directory (`kernel_opt_<name>/`). The `--output-dir profiles/v<N>` path is relative to this root. Running from a subdirectory will cause profile outputs to land in unexpected locations.
+All profiling commands must be executed from the workspace root directory (your current working directory). The `--output-dir profiles/v<N>` path is relative to this root. Running from a subdirectory will cause profile outputs to land in unexpected locations.
 
 ```bash
 cd <workspace_path>

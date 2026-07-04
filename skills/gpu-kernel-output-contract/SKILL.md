@@ -45,7 +45,7 @@ Use this skill when:
 
 ## Output Contract
 
-- Write the final implementation to `generated_kernel.py` in the project root directory (the parent of the `kernel_opt_*/` workspace), NOT inside the `kernel_opt_*/` subdirectory.
+- Write the final implementation to `generated_kernel.py` in the workspace root directory — your current working directory (the run root).
 - `generated_kernel.py` is what will be evaluated; nothing printed to chat is read as the candidate.
 - The file must contain exactly one self-contained Python module.
 - `generated_kernel.py` must be independently executable/importable and must not depend on any other local `.py` file.
@@ -124,7 +124,7 @@ The final `generated_kernel.py` must not contain:
 
 Before stopping, verify:
 
-- `generated_kernel.py` exists in the project root directory (parent of `kernel_opt_*/`), not inside the workspace subdirectory.
+- `generated_kernel.py` exists in the workspace root directory (your current working directory).
 - It is valid Python source.
 - It imports everything it needs.
 - It is independently executable/importable and does not depend on any other local `.py` file.

@@ -22,7 +22,7 @@ You will receive:
 
 | Parameter | Description |
 |-----------|-------------|
-| `workspace_path` | Workspace absolute path (`kernel_opt_<name>/`) |
+| `workspace_path` | Workspace absolute path (the run root — your current working directory) |
 | `version` | Current iteration version `V<N>` |
 | `platform` | Target platform: nvidia / amd |
 | `kernel_file` | Path to kernel.py (relative to workspace) |
@@ -60,7 +60,7 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
 1. Before starting, create the memory file if it does not exist:
 
    ```bash
-   python tools/memory_manager.py create --workspace kernel_opt_<name> --version v<N>
+   python tools/memory_manager.py create --workspace . --version v<N>
    ```
 
 2. If framework API or operator interface details are needed, search `<gpu_wiki_path>/reference-kernels/` or clone upstream source to `reference-projects/` first.
@@ -120,7 +120,7 @@ Goal: build sufficient understanding of the framework's idioms so that subsequen
 1. Update `memory/v<N>.json` immediately after the edit result is known:
 
    ```bash
-   python tools/memory_manager.py update --workspace kernel_opt_<name> --version v<N> \
+   python tools/memory_manager.py update --workspace . --version v<N> \
        --set 'optimization.action_category=<category>' \
        --set 'optimization.action_description=<description>' \
        --set 'optimization.performance_validated=<YES|NO|INEFFECTIVE>' \

@@ -20,9 +20,9 @@
 ## Hard Constraints
 - profiling: trust only ncu (tools/profile_nvidia.sh) / tools/profile_kernel.sh;
 - performance targets: sourced from gpu-wiki; see Stop Conditions
-- workspace: kernel_opt_<name>/; commit every accepted iteration with git
-- knowledge base: `~/aka_kernel_opt/gpu-wiki/`; the entire repository may be searched, not only docs/ or reference-kernels/;
-- reference_project: `~/aka_kernel_opt/reference-projects/` (optional source of similar optimized kernels)
+- workspace: the run root (your current working directory); commit every accepted iteration with git
+- knowledge base: `/tmp/aka-opt/gpu-wiki/`; the entire repository may be searched, not only docs/ or reference-kernels/;
+- reference_project: `/tmp/aka-opt/reference-projects/` (optional source of similar optimized kernels)
 
 ## Additional Notes (parsed from user input)
 - <extra information such as constraints, known bottlenecks, preferred optimization directions, edge cases; use none if empty>
