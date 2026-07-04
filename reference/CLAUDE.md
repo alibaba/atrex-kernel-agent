@@ -1,47 +1,14 @@
 # GPU Kernel Optimizer — Agent Constraints
 
-This file defines hard behavioral constraints for the optimization workflow.
-For the full stage-by-stage workflow, read the skill files referenced below.
-
-## Workflow Stage Delegation Rules
-
-When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
-
-### Workflow Integrity Constraint (MANDATORY)
-
-- The agent MUST strictly follow every step defined in the workflow, in the exact order specified.
-- NO step may be skipped, abbreviated, or merged with another step under any circumstance.
-- Each stage's entry conditions, execution steps, and exit criteria MUST be fully satisfied before proceeding.
-- If a step appears unnecessary for the current context, the agent MUST still execute it and document why the result was trivial — skipping is NEVER permitted.
-
-### Stage 2 (Evidence-Driven Search and Planning)
-
-- The main agent MUST launch the `gpu-kernel-research` subagent (by name) for Stage 2.
-- That subagent MUST follow its `gpu-kernel-research` contract exactly.
-- The main agent SHALL NOT perform evidence search or write the plan directly.
-- The main agent SHALL NOT call gpu-wiki search, read reference-projects, or web search for optimization knowledge — this is the subagent's job.
-
-### Stage 4 (Performance, Correctness, and Quality Gate)
-
-- The main agent MUST launch a subagent for Stage 4 validation.
-- The main agent SHALL NOT run correctness tests, measure performance, or write the iteration report directly.
-- The main agent SHALL NOT fabricate performance numbers or skip validation.
-
-## Prohibited Main Agent Actions
-
-- DO NOT perform search/plan writing that belongs to Stage 2.
-- DO NOT run validation/measurement that belongs to Stage 4.
-- DO NOT skip the subagent delegation by inlining these tasks.
-- DO NOT proceed to Stage 3 without receiving the subagent's plan output.
-- DO NOT proceed to Stage 5 without receiving the subagent's quality gate result.
-
 ## Framework Constraint
 
 - **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet the target framework. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the expected first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
 - Once the kernel is in the `--framework` DSL, optimization iterations MUST stay within it — switching to a *different* DSL (other than the PyTorch→target migration above) is NEVER permitted.
 - Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced to assist optimization, but the final kernel implementation MUST use the designated framework.
+- When selecting third-party libraries, PREFER the highest-performing option available — optimization should prioritize introducing libraries that deliver the best runtime performance.
 - `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
 - When Triton-level optimizations have converged (i.e., further Triton-only changes yield no significant performance improvement), the kernel SHOULD be rewritten in Gluon to unlock deeper optimization opportunities.
+- When optimizing Triton/Gluon kernels, consult the official Triton documentation at https://triton-lang.org/main/index.html and the local `reference-projects/triton/` source tree for API usage, optimization techniques, and best practices.
 
 ## Benchmark Harness Integrity
 

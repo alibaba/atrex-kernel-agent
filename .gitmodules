@@ -25,6 +25,7 @@
 [submodule "reference-projects/triton"]
 	path = reference-projects/triton
 	url = https://github.com/triton-lang/triton.git
+	branch = v3.7.1
 	shallow = false
 [submodule "reference-projects/DeepGEMM"]
 	path = reference-projects/DeepGEMM
