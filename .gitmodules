@@ -68,3 +68,9 @@
 [submodule "gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys"]
 	path = gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys
 	url = https://github.com/mlc-ai/modern-gpu-programming-for-mlsys.git
+[submodule "3rdparty/ncu-report-skill"]
+	path = 3rdparty/ncu-report-skill
+	url = https://github.com/mit-han-lab/ncu-report-skill
+[submodule "3rdparty/humanize"]
+	path = 3rdparty/humanize
+	url = https://github.com/PolyArch/humanize.git
