@@ -53,6 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
+HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
 CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
 
 
@@ -178,6 +179,34 @@ def _session_env() -> dict:
     return env
 
 
+def ensure_submodules() -> None:
+    """Initialize all git submodules required by the optimization pipeline.
+
+    Covers: gpu-wiki/3rdparty (KernelWiki), 3rdparty/ncu-report-skill, 3rdparty/humanize.
+    Skips reference-projects (large, optional — only needed for L2 search).
+    Idempotent: already-initialized submodules are untouched.
+    """
+    needed = [
+        ("gpu-wiki/3rdparty/", REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md"),
+        ("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md"),
+        ("3rdparty/humanize", HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md"),
+    ]
+    to_init = [path for path, marker in needed if not marker.exists()]
+    if not to_init:
+        return
+    print(f"[orchestrator] initializing submodules: {to_init}", flush=True)
+    cmd = ["git", "submodule", "update", "--init", "--depth", "1", "--"] + to_init
+    subprocess.run(cmd, cwd=str(REPO_ROOT), check=True)
+    # verify
+    for path, marker in needed:
+        if not marker.exists():
+            raise RuntimeError(
+                f"submodule init failed for {path} — {marker} not found. "
+                "Run `git submodule update --init` manually."
+            )
+    print("[orchestrator] all submodules ready", flush=True)
+
+
 def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
     """One clean `claude` session. Fresh session-id = no memory of prior sessions."""
     session_id = str(uuid.uuid4())
@@ -185,8 +214,10 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
         "claude", "--print", "--verbose",
         "--output-format", "stream-json",
         "--session-id", session_id,
-        prompt,
     ]
+    if (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
+        cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
+    cmd.append(prompt)
     stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=_session_env())
     return SessionResult(
         exit_status=exit_status,
@@ -389,21 +420,34 @@ def hardware_directive(platform: str, arch: str) -> str:
 
 
 def link_runtime(workspace: Path) -> None:
-    """Make the skill's `tools/`, `reference/`, `skills/` resolvable from cwd=workspace.
+    """Make the skill's `tools/`, `reference/`, `skills/`, `reference-projects/`, `gpu-wiki/` resolvable from cwd=workspace.
 
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
-    so symlink them in (absolute targets, so the workspace can live anywhere). gpu-wiki is
-    passed by absolute path instead. Idempotent.
+    so symlink them in (absolute targets, so the workspace can live anywhere). Idempotent.
     """
-    for sub in ("tools", "reference", "skills"):
+    for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
+    # Link 3rdparty/ncu-report-skill into .claude/skills/ so `claude` sessions can use it
+    ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
+    ncu_dst = workspace / ".claude" / "skills" / "ncu-report-skill"
+    if ncu_src.exists() and not ncu_dst.exists():
+        ncu_dst.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(ncu_src, ncu_dst)
+    # Link gpu-wiki/3rdparty/KernelWiki into .claude/skills/ for kernel knowledge access
+    kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
+    kw_dst = workspace / ".claude" / "skills" / "KernelWiki"
+    if kw_src.exists() and not kw_dst.exists():
+        kw_dst.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(kw_src, kw_dst)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
     add = ""
     if "/tools" not in existing:
-        add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n"
+        add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n"
+    if "/.claude/skills" not in existing:
+        add += "/.claude/skills\n"
     if "/" + STALL_STATE_FILE not in existing:
         add += ("\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
                 "/" + STALL_STATE_FILE + "\n")
@@ -423,7 +467,6 @@ class Campaign:
     framework: str
     notes: str = "none"
     arch: str = ""                 # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
-    gpu_wiki: str = ""             # abs path to gpu-wiki (default: <repo>/gpu-wiki)
     max_iters: int = 20
     token_budget: int = 0          # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
@@ -463,7 +506,7 @@ class Campaign:
             PROMPTS_DIR / "setup.md",
             WORKSPACE=str(self.workspace), PLATFORM=self.platform,
             FRAMEWORK=self.framework, KERNEL_DEMO=self.kernel_demo,
-            NOTES=self.notes, GPU_WIKI=self.gpu_wiki,
+            NOTES=self.notes,
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
         res = run_session(self.workspace, prompt, timeout=self.setup_timeout)
@@ -484,8 +527,7 @@ class Campaign:
             [sys.executable, str(SOL_SEED),
              "--op-dir", str(op_dir), "--name", self.name,
              "--workspace", str(self.workspace),
-             "--framework", self.framework, "--platform", self.platform,
-             "--gpu-wiki", self.gpu_wiki],
+             "--framework", self.framework, "--platform", self.platform],
             check=True,
         )
         self._link_runtime()
@@ -550,7 +592,7 @@ class Campaign:
                 prompt = _render(PROMPTS_DIR / "convert.md",
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, ARCH=self.arch or "the runtime GPU arch",
-                                 GPU_WIKI=self.gpu_wiki, NOTES=self.notes,
+                                 NOTES=self.notes,
                                  HARDWARE=hardware_directive(self.platform, self.arch))
             else:
                 prompt = _render(PROMPTS_DIR / "iteration.md",
@@ -783,7 +825,6 @@ class LayerCampaign:
     framework: str
     notes: str = "none"
     arch: str = ""
-    gpu_wiki: str = ""
     roofline_py: str = ""
     op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
                                    # metadata.json / input.py / reference.py) — the full shape
@@ -827,7 +868,7 @@ class LayerCampaign:
         prompt = _render(
             PROMPTS_DIR / "decompose.md",
             LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
-            PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py, GPU_WIKI=self.gpu_wiki,
+            PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py,
             OP_DIR=self.op_dir, NOTES=self.notes,
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
@@ -855,7 +896,7 @@ class LayerCampaign:
             prompt = _render(
                 PROMPTS_DIR / "setup.md",
                 WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
-                KERNEL_DEMO=str(demo), NOTES=self.notes, GPU_WIKI=self.gpu_wiki,
+                KERNEL_DEMO=str(demo), NOTES=self.notes,
                 HARDWARE=hardware_directive(self.platform, self.arch),
             )
             res = run_session(ws, prompt, timeout=self.setup_timeout)
@@ -1062,8 +1103,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "own workspace under one shared --max-iters budget, then recombine. Default off "
                          "(single-op path unchanged).")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
-    ap.add_argument("--gpu-wiki", default=str(REPO_ROOT / "gpu-wiki"),
-                    help="Absolute path to the gpu-wiki knowledge base (default: <repo>/gpu-wiki).")
     ap.add_argument("--max-iters", type=int, default=20, help="Hard cap on optimization iterations.")
     ap.add_argument("--token-budget", type=int, default=0,
                     help="Hard token cap across all sessions (0 = no cap; max-iters still bounds it).")
@@ -1083,6 +1122,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     arch = args.arch or detect_arch()
     op = _resolve_op(args.op_dir)
+    ensure_submodules()
     print(f"[orchestrator] op={op['name']} platform={args.platform} runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
@@ -1090,7 +1130,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.layer:
         layer = LayerCampaign(
             name=op["name"], layer_demo=op["reference"], platform=args.platform,
-            framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
+            framework=args.framework, notes=args.notes, arch=arch,
             roofline_py=op["roofline_py"], op_dir=op["op_dir"],
             max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
@@ -1100,7 +1140,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     campaign = Campaign(
         name=op["name"], kernel_demo=op["reference"], platform=args.platform,
-        framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
+        framework=args.framework, notes=args.notes, arch=arch,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
         convert_after=args.convert_after,

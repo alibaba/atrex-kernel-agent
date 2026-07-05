@@ -8,15 +8,15 @@ a correct Gluon kernel. Do **one** conversion, then exit.
 ## Context
 - Workspace: `{{WORKSPACE}}` — your cwd, a git repo. **git HEAD is the best Triton kernel so far.**
 - You are producing version **v{{N}}** (previous: v{{PREV}}).
-- `tools/`, `reference/`, `skills/` are symlinked in; gpu-wiki is at `{{GPU_WIKI}}`.
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are symlinked in.
 
 {{HARDWARE}}
 
 ## Read first (one file, then source on demand)
 Read the single conversion sheet for the **real arch above** — do not read the others:
-- `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `{{GPU_WIKI}}/docs/converter/nvidia/blackwell.md`
-- `sm_90` (Hopper) → `{{GPU_WIKI}}/docs/converter/nvidia/hopper.md`
-- `gfx94*` (CDNA3) → `{{GPU_WIKI}}/docs/converter/amd/cdna3.md`; `gfx95*` (CDNA4) → `{{GPU_WIKI}}/docs/converter/amd/cdna4.md`
+- `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `gpu-wiki/docs/converter/nvidia/blackwell.md`
+- `sm_90` (Hopper) → `gpu-wiki/docs/converter/nvidia/hopper.md`
+- `gfx94*` (CDNA3) → `gpu-wiki/docs/converter/amd/cdna3.md`; `gfx95*` (CDNA4) → `gpu-wiki/docs/converter/amd/cdna4.md`
 
 The sheet gives the Triton→Gluon API map, the critical pitfalls, and **pointers to the exact local
 Triton source** (`reference-projects/triton`). Open that source only for the construct you are
