@@ -77,6 +77,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -907,6 +908,25 @@ class Campaign:
             else:
                 infra_fails = 0
 
+            # Guard: if the session exited without producing v<n>.json, write a
+            # minimal failed-iteration record so latest_version() advances and the
+            # stall counter increments correctly. Without this the orchestrator
+            # would never see progress past a session that crashed mid-flight.
+            if read_memory(self.workspace, n) is None:
+                mem_dir = self.workspace / "memory"
+                mem_dir.mkdir(parents=True, exist_ok=True)
+                failed = {
+                    "version": f"v{n}",
+                    "correctness": {"status": "FAIL", "details": f"session did not produce v{n}.json"},
+                    "quality_gate": {"result": "FAIL"},
+                    "git_commit_hash": None,
+                    "optimization": {"action_category": "failed-iteration"},
+                    "notes": "orchestrator: session exited without output; recorded to advance budget",
+                }
+                (mem_dir / f"v{n}.json").write_text(json.dumps(failed, indent=2), encoding="utf-8")
+                print(f"[orchestrator] WARNING: iter v{n} session produced no memory — "
+                      f"wrote failed record to advance budget", flush=True)
+
             mem = read_memory(self.workspace, n)
             if target_met(mem, self.target_util):
                 return self._finish(f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%")
@@ -968,12 +988,12 @@ def best_latency_us(workspace: Path) -> Optional[float]:
 
 
 def best_perf_by_shape(workspace: Path) -> Optional[dict]:
-    """Per-shape best (min) latency_us across all versions, keyed by integer sid.
+    """Per-workload best (min) latency_us across all versions, keyed by workload uuid.
 
     Reads ``performance.latency_us_by_shape`` from each memory/v<n>.json. Returns
-    None when no version records per-shape latencies (caller falls back to the
-    scalar path). SOL and latency MUST be aggregated over the same shape set, so
-    the sids here match those in the workspace roofline.json (see sol_ms_by_shape).
+    None when no version records per-workload latencies (caller falls back to the
+    scalar path). SOL and latency MUST be aggregated over the same workload set, so
+    the uuids here match those in workload.jsonl (the SOL-ExecBench ground truth).
     """
     lv = latest_version(workspace)
     best: dict[str, float] = {}
@@ -1015,8 +1035,10 @@ def shape_sol_ms(entry: dict) -> Optional[float]:
 
 def sol_ms_by_shape(workspace: Path) -> Optional[dict]:
     """Per-shape SOL (ms) for a boundary, read from the workspace's ``roofline.json``
-    (``shapes[sid]`` -> SOL via shape_sol_ms). Keyed by the integer sid shared with
-    shapes.json and the memory latency_us_by_shape. None if roofline.json is absent.
+    (``shapes[sid]`` -> SOL via shape_sol_ms). Keyed by the integer sid from
+    roofline.json. To match with latency data (keyed by workload uuid), use
+    ``_build_uuid_to_sid()`` to bridge the two key spaces. None if roofline.json
+    is absent.
     """
     rp = workspace / "roofline.json"
     if not rp.exists():
@@ -1028,6 +1050,29 @@ def sol_ms_by_shape(workspace: Path) -> Optional[dict]:
     out = {sid: shape_sol_ms(entry) for sid, entry in shapes.items()}
     out = {sid: v for sid, v in out.items() if v is not None}
     return out or None
+
+
+def _build_uuid_to_sid(workspace: Path) -> dict:
+    """Build a uuid->sid mapping from workload.jsonl (SOL-ExecBench ground truth).
+
+    Each line in workload.jsonl has a ``uuid`` field. The position (0-indexed) is
+    the integer sid used in roofline.json. Returns {} if workload.jsonl is absent
+    or unreadable.
+    """
+    wl = workspace / "workload.jsonl"
+    if not wl.exists():
+        return {}
+    mapping = {}
+    try:
+        for idx, line in enumerate(wl.read_text(encoding="utf-8").splitlines()):
+            if line.strip():
+                entry = json.loads(line)
+                uuid = entry.get("uuid")
+                if uuid:
+                    mapping[str(uuid)] = str(idx)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return mapping
 
 
 def stall_rounds(workspace: Path, eps: float = 0.05) -> int:
@@ -1206,16 +1251,26 @@ class LayerCampaign:
         decay = 0.5 ** stall_rounds(ws, self.plateau_eps)
 
         # ── per-shape path (preferred): score-weighted mean reachable ms over the shape set ──
-        # SOL from the workspace roofline.json (platform-agnostic); w[s] from manifest shape_weights.
-        sol_by_shape = sol_ms_by_shape(ws)
-        lat_by_shape = best_perf_by_shape(ws)
-        if sol_by_shape and lat_by_shape:
-            common = [sid for sid in sol_by_shape if sid in lat_by_shape]
-            if common:
-                weights = (self._read_manifest().get("shape_weights") or {})
-                gap = sum((float(weights.get(sid, 1.0))) * max(0.0, lat_by_shape[sid] / 1000.0 - sol_by_shape[sid])
-                          for sid in common) / len(common)
-                return gap * decay
+        # SOL from the workspace roofline.json (keyed by integer sid); latency from
+        # memory (keyed by workload uuid from test_kernel.py / sol_execbench).
+        # Bridge via workload.jsonl uuid->sid mapping.
+        sol_by_sid = sol_ms_by_shape(ws)
+        lat_by_uuid = best_perf_by_shape(ws)
+        if sol_by_sid and lat_by_uuid:
+            uuid_to_sid = _build_uuid_to_sid(ws)
+            # Remap roofline SOL from sid-keyed to uuid-keyed
+            sol_by_uuid = {}
+            for uuid, sid in uuid_to_sid.items():
+                if sid in sol_by_sid:
+                    sol_by_uuid[uuid] = sol_by_sid[sid]
+            if sol_by_uuid:
+                common = [u for u in sol_by_uuid if u in lat_by_uuid]
+                if common:
+                    weights = (self._read_manifest().get("shape_weights") or {})
+                    gap = sum((float(weights.get(uuid_to_sid.get(u, u), 1.0)))
+                              * max(0.0, lat_by_uuid[u] / 1000.0 - sol_by_uuid[u])
+                              for u in common) / len(common)
+                    return gap * decay
 
         # ── legacy scalar fallback ──
         lat_us = best_latency_us(ws)

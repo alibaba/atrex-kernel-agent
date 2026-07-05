@@ -1,7 +1,7 @@
 ---
 name: gpu-kernel-profile-optimizer
 description: |
-  Profile-driven GPU kernel optimization skill. Use this skill to run ONE optimization iteration in a temporary git workspace: profile evidence extraction, evidence-driven search and planning, single-category optimization, validation, memory update, git commit, and handoff. The outer iteration loop is owned by the orchestrator (orchestrator/optimize.py), not by this skill — run one cycle, then exit.
+  Profile-driven GPU kernel optimization skill. Use this skill to run ONE optimization iteration in a temporary git workspace: profile evidence extraction, evidence-driven search and ranked action planning, optimization implementation, validation, memory update, git commit, and handoff. The outer iteration loop is owned by the orchestrator (orchestrator/optimize.py), not by this skill — run one cycle, then exit.
 ---
 
 # GPU Kernel Profile Optimizer
@@ -20,8 +20,8 @@ This skill runs **exactly ONE iteration** end-to-end, then exits. It does not lo
 
 ```text
 Stage 1 Profile and evidence extraction
-Stage 2 Evidence-driven search and planning
-Stage 3 Single-category optimization implementation
+Stage 2 Evidence-driven search and ranked action planning
+Stage 3 Optimization implementation (primary action from ranked plan)
 Stage 4 Performance, correctness, and quality gate
 Stage 5 Memory update, git commit, and handoff
 ```
@@ -30,7 +30,7 @@ Constraints:
 
 - Do not skip stages.
 - Do not edit code without profile evidence.
-- Implement only one optimization category per iteration so the result can be attributed.
+- The `kernel-optimize` subagent handles iterative action retry internally: it implements the primary action first, validates via lightweight `do_bench`, and falls back to secondary/fallback actions only if the primary shows no improvement. The session receives the final result (improved action or INEFFECTIVE).
 - Each optimization action must have clear profile evidence attribution.
 - If the quality gate fails, revert to the previous commit, record the failure, and stop the iteration.
 - Run exactly one iteration, then exit. Do not start another cycle — the orchestrator decides whether the next iteration runs.
@@ -155,7 +155,7 @@ The research subagent returns:
 | `plan_path` | Written `plans/v<N>_plan.md` — direct input for Stage 3 |
 | `evidence_summary` | Bottleneck evidence for iteration report |
 | `search_sources` | Sources searched (with new/used annotation) |
-| `optimization_actions` | The action(s) to implement in Stage 3 |
+| `optimization_actions` | Ranked list of actions (primary / secondary / fallback) — Stage 3 implements the primary action |
 | `expected_impact` | Expected performance improvement |
 | `risks` | Risk assessment and rollback strategy |
 
@@ -170,7 +170,7 @@ After receiving the subagent output:
 
 ### Goal
 
-Implement the optimization actions from `plans/v<N>_plan.md` with clear evidence attribution for each change, validate correctness, and update iteration memory.
+Implement the primary (top-ranked) optimization action from `plans/v<N>_plan.md` with clear evidence attribution, validate correctness, and update iteration memory. The plan contains up to 3 ranked actions (primary / secondary / fallback); this stage implements only the primary action to maintain single-action attribution per iteration.
 
 The main agent must directly launch the `kernel-optimize` subagent for Stage 3. Do NOT write your own prompt or create an ad-hoc subagent — invoke `kernel-optimize` by name as a subagent. The main agent must not implement optimization changes directly.
 
@@ -191,7 +191,7 @@ Inputs:
   - gpu_wiki_path: <gpu-wiki root path>
 ```
 
-The `kernel-optimize` subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (source-level evidence is already available from the `--source` profile), implement each optimization action in `kernel.py`, run correctness validation via `test_kernel.py`, and update `memory/v<N>.json` with optimization metadata.
+The kernel-optimize subagent will autonomously: validate the plan's evidence attribution, perform localization checks for `LOCALIZE` symptoms (source-level evidence is already available from the `--source` profile), implement optimization actions from the ranked plan in `kernel.py` (iterating through primary/secondary/fallback via lightweight `do_bench` comparison), and update `memory/v<N>.json` with optimization metadata.
 
 ### Output Received
 
@@ -201,14 +201,17 @@ The kernel-optimize subagent returns:
 |-------|-------|
 | `kernel_file` | Path to modified `kernel.py` |
 | `validation_result` | PASS / FAIL from correctness test |
+| `performance_validated` | YES / NO / INEFFECTIVE — YES means `do_bench` showed improvement; INEFFECTIVE means all plan actions exhausted |
+| `improvement_summary` | `do_bench` latency comparison (baseline_ms vs modified_ms, percentage change) |
 | `memory_file` | Path to updated `memory/v<N>.json` |
 | `actions_applied` | List of optimization actions implemented with their evidence attribution |
 
 ### Handoff to Stage 4
 
 After receiving the subagent output:
-- `validation_result` must be PASS. The `kernel-optimize` subagent is responsible for iteratively fixing correctness failures internally.
-- If PASS: proceed to Stage 4 for performance measurement and quality gate.
+- `validation_result` must be PASS (kernel runs without errors via `do_bench`). The `kernel-optimize` subagent handles correctness fix-retry internally.
+- `performance_validated` should be YES (do_bench showed improvement) or INEFFECTIVE (all actions exhausted). If INEFFECTIVE, record the dead-end and proceed to Stage 4 for a final bench.
+- If PASS: proceed to Stage 4 for full correctness + performance measurement via `test_kernel.py`.
 
 ## Stage 4: Performance, Correctness, and Quality Gate
 
@@ -226,11 +229,10 @@ Subagent requirements:
 - **Required inputs**: workspace path, version `V<N>`, `kernel.py`, `test_kernel.py`, `memory/v<N>.json`, previous `memory/v<N-1>.json` if present, platform, GPU model, `plans/v<N>_plan.md`.
 - **Must do**:
   1. Run correctness validation with timeout guard (see below).
-  2. Measure kernel performance (latency, TFLOPS, bandwidth).
-  3. Calculate peak utilization using `tools/compute_utilization.py`.
-  4. Compare metrics against the previous version.
-  5. Evaluate ISA metric progress against targets in `README.md`.
-  6. Update `memory/v<N>.json` with performance, correctness, and ISA progress data.
+  2. Measure kernel performance (latency via `test_kernel.py`).
+  3. Compare metrics against the previous version.
+  4. Evaluate ISA metric progress against targets in `README.md`.
+  5. Update `memory/v<N>.json` with performance, correctness, and ISA progress data.
 - **Forbidden**: do not modify `kernel.py`; do not perform Stage 3 changes; do not commit; do not skip correctness validation; do not fabricate performance numbers.
 - **Return**: quality-gate result (PASS / FAIL / TIMEOUT_FAIL), `memory/v<N>.json` path, performance summary, correctness result, and failure reason if applicable.
 
@@ -256,7 +258,7 @@ The harness writes these into `memory/v<N>.json` — do not hand-fabricate them:
 - `correctness.status` / `quality_gate.result` — PASS iff ALL workloads pass.
 
 Judge iterations by the geomean latency (a win = all workloads still PASS AND geomean drops vs HEAD beyond noise).
-TFLOPS / bandwidth / peak-utilization (via `tools/compute_utilization.py`) are OPTIONAL enrichment for reasoning
+TFLOPS / bandwidth / peak-utilization are OPTIONAL enrichment for reasoning
 about how close the kernel is to the roofline — record them when useful, but they are not the stop metric.
 
 ### Iteration Data
@@ -386,9 +388,7 @@ Different tools provide different layers of evidence and must not be mixed:
 - Do not begin the iteration without reading `README.md` and the latest unmasked `memory/v*.json` files (including the previous `open_directions` and recorded dead-ends).
 - Do not loop: run exactly one iteration, then exit. The orchestrator spawns the next session.
 - Do not read `memory/v*.json` files where `masked: true` as active iteration data.
-- Do not reuse profile artifacts across versions.
 - Do not commit performance conclusions without correctness validation.
-- Do not record only latency without TFLOPS, bandwidth, and peak-utilization ratios.
 - Do not provide unsourced optimization suggestions.
 - Do not implement optimization actions without corresponding profile evidence.
 - Do not continue planning after the quality gate fails.

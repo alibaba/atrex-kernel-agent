@@ -64,6 +64,8 @@ Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each s
    Launch the `gpu-kernel-profiler` subagent with workspace path, version V{{N}}, platform, kernel file, gpu-wiki path,
    and previous profiles dir (if exists). It produces `profiles/v{{N}}/summary.txt` with bottleneck evidence and symptoms.
    If `summary.txt` emits a `LOCALIZE` line and Stage 3 needs it, re-launch the profiler with `--source` before editing.
+   **Profile reuse after revert**: if the current `kernel.py` matches a previous version's code (e.g. after a revert in
+   the prior iteration), skip profiling and reuse that version's profile directory directly — the profile follows the code.
 
 2. **Stage 2 — Research and Plan** (subagent: `gpu-kernel-research`)
    Launch the `gpu-kernel-research` subagent with workspace path, version, platform, framework, kernel type, profiles dir,
@@ -74,6 +76,10 @@ Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each s
    Launch the `kernel-optimize` subagent with workspace path, version, platform, kernel file, plan path, profiles dir,
    summary path, memory dir, and gpu-wiki path. It implements the plan's actions in `kernel.py` with evidence attribution,
    validates correctness via `test_kernel.py`, and updates `memory/v{{N}}.json`.
+   **Performance-regression revert rule**: when kernel-optimize rolls back code to a previous version due to performance
+   regression or no improvement, it MUST reuse the profile results from that reverted-to version (e.g. `profiles/v{{PREV}}/`)
+   as the baseline for subsequent optimization attempts — do NOT re-profile the reverted code. The profile follows the code:
+   whichever version `kernel.py` reverts to, use that version's existing profile directory and `summary.txt`.
 
 4. **Stage 4 — Validate + Bench** (subagent required)
    Launch a validation subagent. Validation is the **SOL-ExecBench harness only**: run
