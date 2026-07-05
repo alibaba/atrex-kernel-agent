@@ -16,7 +16,7 @@ Inputs:
 - `op_dir` (the atrex-bench native op dir — **the starting point**): `{{OP_DIR}}`
   Read the full shape set from `{{OP_DIR}}/shapes.json` (integer-sid, `input_kwargs` axes) and reuse those
   sids verbatim. `{{OP_DIR}}/roofline.json` holds the layer-level SOL; `input.py` builds inputs.
-- gpu-wiki (operator knowledge only): `{{GPU_WIKI}}`
+- gpu-wiki (operator knowledge only): `gpu-wiki/`
 - additional_notes: `{{NOTES}}`
 
 {{HARDWARE}}

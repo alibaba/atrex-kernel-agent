@@ -8,16 +8,16 @@ The workspace already exists at your cwd (`{{WORKSPACE}}`) — it was created by
 **Do NOT re-run `workspace_init.sh`.**
 
 Environment (resolve all paths against your cwd = the workspace):
-- `tools/`, `reference/`, and `skills/` are symlinked into the workspace — read/use them by relative path
-  (e.g. `tools/profile_nvidia.sh`, `python tools/memory_manager.py --workspace .`,
-  `reference/v_iteration.schema.json`, `skills/gpu-kernel-profile-optimizer/SKILL.md`).
-- The gpu-wiki knowledge base is at `{{GPU_WIKI}}` — record this as `gpu_wiki_path` in `README.md` and resolve every `<gpu-wiki>/...` reference to it.
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are symlinked into the workspace — read/use them by relative path
+  (e.g. `python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
+- `.claude/skills/ncu-report-skill/` — NVIDIA profiling skill.
+- `.claude/skills/KernelWiki/` — kernel optimization knowledge base.
 
 {{HARDWARE}}
 Do the following, in order, but only through baseline:
 
 1. **Step 0 — Hardware specs + Roofline.** Source
-   every hardware spec from `{{GPU_WIKI}}/` (**no fabrication** — every spec value must cite a gpu-wiki path),
+   every hardware spec from `gpu-wiki/` (**no fabrication** — every spec value must cite a gpu-wiki path),
    do the Roofline analysis, compute absolute targets (`hardware peak * 90%`), and write `Hardware Spec`,
    the Roofline analysis, and `Stop Conditions` into the workspace `README.md`.
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
