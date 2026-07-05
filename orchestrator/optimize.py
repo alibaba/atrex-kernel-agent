@@ -223,8 +223,91 @@ def read_memory(workspace: Path, n: int) -> Optional[dict]:
         return None
 
 
-def committed(mem: Optional[dict]) -> bool:
-    return bool(mem and mem.get("git_commit_hash"))
+# ── git is the SINGLE source of truth for a "committed win" ───────────────────
+# A real win is a commit that CHANGES kernel.py. A dead-end "record" commit leaves kernel.py
+# identical to its parent. Everything (stall counter, target-met, convert incumbent) keys off
+# this git fact, NOT off the LLM-filled git_commit_hash / quality_gate in memory (which can drift
+# from what actually got committed). One primitive, reused everywhere: commit_changed_kernel().
+
+STALL_STATE_FILE = ".orchestrator_state.json"
+
+
+def git_head(workspace: Path) -> str:
+    """Current HEAD sha, or '' if not a repo / no commits yet."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(workspace),
+                           capture_output=True, text=True)
+    except OSError:
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def commit_changed_kernel(workspace: Path, ref: str) -> bool:
+    """True iff commit `ref` changed kernel.py vs its parent (i.e. a real win, not a dead-end
+    record commit). The one git primitive the win/stall/incumbent logic all share."""
+    if not ref:
+        return False
+    try:
+        r = subprocess.run(["git", "show", "--numstat", "--format=", ref, "--", "kernel.py"],
+                           cwd=str(workspace), capture_output=True, text=True)
+    except OSError:
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def kernel_won(workspace: Path, pre_head: str) -> bool:
+    """True iff the session produced a real win: kernel.py differs between pre_head and HEAD.
+    (A transition check across the session — the session may make several commits.)"""
+    if not pre_head:
+        return False
+    try:
+        r = subprocess.run(["git", "diff", "--quiet", pre_head, "HEAD", "--", "kernel.py"],
+                           cwd=str(workspace), capture_output=True)
+    except OSError:
+        return False
+    return r.returncode == 1  # 0 = identical, 1 = differs
+
+
+def read_stall(workspace: Path) -> Optional[int]:
+    """Persisted live stall counter, or None when absent (caller reconstructs)."""
+    p = workspace / STALL_STATE_FILE
+    if not p.exists():
+        return None
+    try:
+        v = json.loads(p.read_text(encoding="utf-8")).get("stall")
+    except (OSError, ValueError):
+        return None
+    return int(v) if isinstance(v, int) else None
+
+
+def write_stall(workspace: Path, stall: int) -> None:
+    """Persist the live stall counter so a restart resumes the exact value (survives git reset —
+    the file is gitignored). This is the single source of truth for the stall->convert cooldown."""
+    try:
+        (workspace / STALL_STATE_FILE).write_text(
+            json.dumps({"stall": int(stall)}, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def reconstruct_stall(workspace: Path) -> int:
+    """Best-effort rebuild of the live stall counter from git when no persisted state exists yet
+    (e.g. a workspace from before state was tracked). Counts trailing commits from HEAD that did
+    NOT change kernel.py; a win (kernel.py change) stops the count. read_stall() is authoritative —
+    this only bootstraps it, so it does not attempt to replay convert-issued resets."""
+    try:
+        r = subprocess.run(["git", "rev-list", "HEAD"], cwd=str(workspace),
+                           capture_output=True, text=True)
+    except OSError:
+        return 0
+    if r.returncode != 0:
+        return 0
+    trailing = 0
+    for h in r.stdout.split():
+        if commit_changed_kernel(workspace, h):   # a win -> stop counting
+            break
+        trailing += 1
+    return trailing
 
 
 def peak_util(mem: Optional[dict]) -> float:
@@ -236,28 +319,22 @@ def peak_util(mem: Optional[dict]) -> float:
     return max([float(v) for v in vals if isinstance(v, (int, float))] or [0.0])
 
 
-def best_committed_latency(workspace: Path, upto_n: int) -> tuple[Optional[float], Optional[str]]:
-    """Incumbent best: min committed geomean latency (performance.latency_us) over versions [0, upto_n),
-    with its git commit hash — used to check a convert session's performance parity and to revert to it."""
+def incumbent_latency(workspace: Path, upto_n: int) -> Optional[float]:
+    """Best committed geomean latency (performance.latency_us) over versions [0, upto_n): the min
+    among versions whose recorded commit git confirms was a real win (commit_changed_kernel). Git
+    is the arbiter, so a reverted dead-end is excluded even if it recorded a hash. Used only for a
+    convert session's performance-parity check — the revert TARGET is the pre-convert HEAD, which is
+    always the incumbent (wins commit, dead-ends don't touch kernel.py)."""
     best: Optional[float] = None
-    best_hash: Optional[str] = None
     for i in range(0, upto_n):
         m = read_memory(workspace, i)
-        if not m or not m.get("git_commit_hash"):
+        h = m.get("git_commit_hash") if m else None
+        if not commit_changed_kernel(workspace, h):
             continue
         lat = (m.get("performance") or {}).get("latency_us")
         if isinstance(lat, (int, float)) and (best is None or lat < best):
-            best, best_hash = float(lat), m["git_commit_hash"]
-    return best, best_hash
-
-
-def target_met(mem: Optional[dict], target_util: float) -> bool:
-    """Mechanical success: a committed, correctness-PASS iteration at/above target util."""
-    if not committed(mem):
-        return False
-    if (mem.get("quality_gate") or {}).get("result") != "PASS":
-        return False
-    return peak_util(mem) >= target_util
+            best = float(lat)
+    return best
 
 
 def detect_arch() -> str:
@@ -324,9 +401,15 @@ def link_runtime(workspace: Path) -> None:
             os.symlink(src, dst)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    add = ""
     if "/tools" not in existing:
+        add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n"
+    if "/" + STALL_STATE_FILE not in existing:
+        add += ("\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
+                "/" + STALL_STATE_FILE + "\n")
+    if add:
         with gi.open("a", encoding="utf-8") as fh:
-            fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n")
+            fh.write(add)
 
 
 # ── campaign ──────────────────────────────────────────────────────────────────
@@ -437,7 +520,12 @@ class Campaign:
             print(f"[orchestrator] resuming: latest = v{latest_version(self.workspace)}", flush=True)
             self._link_runtime()  # ensure runtime symlinks exist for iteration sessions
 
-        stall = 0
+        stall = read_stall(self.workspace)   # persisted live counter (single source of truth)
+        if stall is None:
+            stall = reconstruct_stall(self.workspace)  # bootstrap from git when no state file yet
+            write_stall(self.workspace, stall)
+        if stall > 0:
+            print(f"[orchestrator] stall counter restored: {stall} rounds without progress", flush=True)
         infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
         n = latest_version(self.workspace)  # 0 after baseline
         while True:
@@ -449,7 +537,8 @@ class Campaign:
             n += 1
             # Triton→Gluon escalation: after `convert_after` stalled triton iterations, spend ONE
             # session purely converting the kernel to Gluon (no optimization). Gluon is lower-level,
-            # so the following sessions can go further. Fires at most once (marker guards re-tries).
+            # so the following sessions can go further. Re-fires after each `convert_after` stalled
+            # rounds — the cooldown resets on every convert issued, win or lose (see below).
             do_convert = (
                 self.convert_after > 0
                 and _is_triton_family(self.framework)
@@ -468,6 +557,7 @@ class Campaign:
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, NOTES=self.notes,
                                  HARDWARE=hardware_directive(self.platform, self.arch))
+            pre_head = git_head(self.workspace)  # win = a commit that changes kernel.py vs this
             res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
             self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
 
@@ -484,7 +574,8 @@ class Campaign:
                 infra_fails = 0
 
             mem = read_memory(self.workspace, n)
-            if target_met(mem, self.target_util):
+            won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
+            if won and peak_util(mem) >= self.target_util:
                 return self._finish(f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%")
 
             if do_convert:
@@ -498,33 +589,40 @@ class Campaign:
                 conv_lat = (mem.get("performance") or {}).get("latency_us") if mem else None
                 gate_pass = bool(mem) and (mem.get("quality_gate") or {}).get("result") == "PASS"
                 head_gluon = head_kernel_is_gluon(self.workspace)
-                prev_best, prev_hash = best_committed_latency(self.workspace, n)
+                prev_best = incumbent_latency(self.workspace, n)
                 parity_ok = (prev_best is None or (isinstance(conv_lat, (int, float))
                              and conv_lat <= prev_best * (1.0 + CONVERT_PERF_TOL)))
                 if head_gluon and gate_pass and isinstance(conv_lat, (int, float)) and parity_ok:
                     stall = 0            # converted (correctness + <=5% perf parity) -> fresh Gluon phase
+                    write_stall(self.workspace, stall)
                     print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
                     continue
                 # rejected: if a bad gluon kernel got committed as HEAD, revert to the triton incumbent
-                if head_gluon and prev_hash:
-                    subprocess.run(["git", "reset", "--hard", prev_hash], cwd=str(self.workspace),
+                # (pre_head — the HEAD before this convert session, which is always the best triton kernel)
+                if head_gluon and pre_head:
+                    subprocess.run(["git", "reset", "--hard", pre_head], cwd=str(self.workspace),
                                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     reason = (f"regressed {conv_lat / prev_best - 1:+.1%} vs triton (> {CONVERT_PERF_TOL:.0%})"
-                              if isinstance(conv_lat, (int, float)) and not parity_ok else "correctness gate not PASS")
+                              if isinstance(conv_lat, (int, float)) and prev_best and not parity_ok
+                              else "correctness gate not PASS")
                     self._record_failed_convert(n, reason)
-                    print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {prev_hash[:8]}", flush=True)
+                    print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {pre_head[:8]}", flush=True)
                 else:
                     if read_memory(self.workspace, n) is None:
                         self._record_failed_convert(n, "convert session produced no committed gluon kernel")
                     print("[orchestrator] convert produced no committed gluon kernel; staying on triton", flush=True)
-                # keep optimizing triton; conversion re-fires after another `convert_after` stalled rounds
+                # A convert was issued -> reset the cooldown regardless of outcome; conversion
+                # re-fires only after another `convert_after` stalled rounds.
                 stall = 0
+                write_stall(self.workspace, stall)
                 continue
 
-            if committed(mem):
+            if won:                        # reuse the git-native win computed above
                 stall = 0
+                write_stall(self.workspace, stall)
             else:
                 stall += 1
+                write_stall(self.workspace, stall)
                 if self.max_stall > 0 and stall >= self.max_stall:
                     return self._finish(f"stall: {stall} iterations with no commit")
 
@@ -640,11 +738,13 @@ def sol_ms_by_shape(workspace: Path) -> Optional[dict]:
     return out or None
 
 
-def stall_rounds(workspace: Path, eps: float = 0.05) -> int:
+def plateau_rounds(workspace: Path, eps: float = 0.05) -> int:
     """Trailing count of optimization versions (v1..) that did NOT reduce best latency by >= eps.
 
-    A reverted / no-latency version counts as non-progress. Used for a *decaying* deprioritization —
-    a boundary is never dropped, its priority just shrinks while it stalls.
+    LAYER MODE ONLY: drives per-boundary priority decay and the all-boundaries-plateaued short-
+    circuit. Distinct from the single-op stall->convert counter (see kernel_won / read_stall),
+    which keys off committed kernel.py changes, not latency deltas. A reverted / no-latency
+    version counts as non-progress — a boundary is never dropped, its priority just shrinks.
     """
     lv = latest_version(workspace)
     if lv < 1:
@@ -690,7 +790,7 @@ class LayerCampaign:
                                    # set + SOL + anchor source. Passed in; never hardcoded.
     max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
     token_budget: int = 0
-    plateau_k: int = 3             # all boundaries stall_rounds >= k -> layer short-circuit
+    plateau_k: int = 3             # all boundaries plateau_rounds >= k -> layer short-circuit
     plateau_eps: float = 0.05
     iter_timeout: int = 5400
     setup_timeout: int = 7200
@@ -797,11 +897,11 @@ class LayerCampaign:
             w[s] = 1 / (Tb_layer[s] - SOL_layer[s])        (boundary-independent; from setup)
         so the score-consistent priority is
 
-            priority(b) = mean_over_shapes( w[s] * max(0, Tk[b,s] - SOL[b,s]) ) * 0.5**stall_rounds
+            priority(b) = mean_over_shapes( w[s] * max(0, Tk[b,s] - SOL[b,s]) ) * 0.5**plateau_rounds
 
         `w[s]` (manifest `shape_weights`) is measured once at setup by benching the optimized-
         PyTorch anchor (`solution.py`) — see setup_anchor_weights(). Without it, w[s]=1 (raw
-        ms-gap ROI). The `0.5**stall_rounds` decay is essential: when a boundary stops improving
+        ms-gap ROI). The `0.5**plateau_rounds` decay is essential: when a boundary stops improving
         for a few rounds it is deprioritized so the scheduler moves on to boundaries that can
         still gain (no boundary is ever dropped — its priority just decays). SOL and latency are
         BOTH aggregated over the full shape set — never one "representative" shape (attention
@@ -810,7 +910,7 @@ class LayerCampaign:
         a fresh boundary with no latency gets top priority.
         """
         ws = self._boundary_ws(b["name"])
-        decay = 0.5 ** stall_rounds(ws, self.plateau_eps)
+        decay = 0.5 ** plateau_rounds(ws, self.plateau_eps)
 
         # ── per-shape path (preferred): score-weighted mean reachable ms over the shape set ──
         # SOL from the workspace roofline.json (platform-agnostic); w[s] from manifest shape_weights.
@@ -836,7 +936,7 @@ class LayerCampaign:
         return sum(max(0, latest_version(self._boundary_ws(b["name"]))) for b in boundaries)
 
     def _all_plateaued(self, boundaries: list[dict]) -> bool:
-        return all(stall_rounds(self._boundary_ws(b["name"]), self.plateau_eps) >= self.plateau_k
+        return all(plateau_rounds(self._boundary_ws(b["name"]), self.plateau_eps) >= self.plateau_k
                    for b in boundaries)
 
     # ── phase 3: shared-budget scheduler ──────────────────────────────────────
@@ -869,7 +969,7 @@ class LayerCampaign:
             # Guard: if the session exited without producing v<n>.json, write a
             # minimal failed-iteration record so latest_version() advances.  Without
             # this the scheduler would keep targeting the same v<N> forever (the
-            # spent count never increments and stall_rounds never sees it).
+            # spent count never increments and plateau_rounds never sees it).
             if read_memory(ws, n) is None:
                 mem_dir = ws / "memory"
                 mem_dir.mkdir(parents=True, exist_ok=True)
