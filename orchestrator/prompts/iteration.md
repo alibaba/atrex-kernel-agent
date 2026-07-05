@@ -1,13 +1,9 @@
-# One optimization iteration (clean session)
+# Optimization Iteration (Clean Session)
 
-You are one **clean session** in a profile-driven GPU-kernel optimization campaign.
-Run **exactly one cycle** — profile → pick ONE lever → edit → validate → bench → record — then **exit**.
+You are a **clean session** in a profile-driven GPU-kernel optimization campaign.
+Workflow: profile → research → implement → validate → bench → record.
 
-Hard rules for this session:
-
-- **Do NOT loop.** One cycle, then stop. There is no Stage 6 here — the orchestrator owns the outer loop and decides whether another session runs.
-- **Do NOT try to reach the final target** in this session. Just make this one cycle count and hand off cleanly.
-- The whole point of a clean session is a fresh context: you inherit state from disk, not from a prior conversation.
+You inherit state from disk, not from a prior conversation.
 
 ## CRITICAL — Subagent Execution Rules (MANDATORY)
 
@@ -25,17 +21,12 @@ Every subagent (`gpu-kernel-profiler`, `gpu-kernel-research`, `kernel-optimize`,
 
 - Workspace: `{{WORKSPACE}}` — this is your cwd, and a git repo. **git HEAD is the best kernel so far.**
 - You are producing version **v{{N}}**. Previous version: **v{{PREV}}**.
-- `tools/`, `reference/`, and `skills/` are symlinked into the workspace — read/use them by relative path
+- `tools/`, `reference/` are symlinked into the workspace — read/use them by relative path
   (`tools/profile_nvidia.sh`, `python tools/memory_manager.py --workspace .`,
-  `reference/v_iteration.schema.json`, `skills/gpu-kernel-profile-optimizer/SKILL.md`).
+  `reference/v_iteration.schema.json`).
   The gpu-wiki path is recorded as `gpu_wiki_path` in `README.md`.
 
 {{HARDWARE}}
-
-Read and follow **`skills/gpu-kernel-profile-optimizer/SKILL.md`** for the *mechanics* — profiling commands,
-evidence format (`evidence -> inference -> action`), the localization rule, plan format, the Stage 4 quality
-gate, and the Stage 5 commit format. This prompt **overrides its loop/stop behavior**: do Stages 1–5 once,
-skip Stage 6, then exit. Honor that skill's subagent requirements for Stage 2 (planning) and Stage 4 (validation).
 
 ## Step A — Learn from prior sessions (read; do not redo their work)
 
@@ -54,45 +45,139 @@ profile reveals a better lever, pursue that instead. The only hard constraint is
 profile: if different-scale shapes are bottlenecked differently, a valid category is **shape specialization** —
 group shapes into a few buckets of similar scale (not one path per shape) and dispatch inside `run()` to a
 subkernel or tiling/block config per bucket. Many kernels don't need this — decide from memory, research, and
-current latencies. See "Shape bucketing" in the profile-optimizer skill.
+current latencies. See "Shape Bucketing" in Step B below.
 
-## Step B — One cycle (Stages 1–4)
+## Step B — Stages 1–4
 
-Follow `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics. Each stage MUST use the designated subagent — do not run profiling, research, or optimization directly.
+Each stage MUST use the designated subagent — do not run profiling, research, or optimization directly.
 
-1. **Stage 1 — Profile** (subagent: `gpu-kernel-profiler`)
-   Launch the `gpu-kernel-profiler` subagent with workspace path, version V{{N}}, platform, kernel file, gpu-wiki path,
-   and previous profiles dir (if exists). It produces `profiles/v{{N}}/summary.txt` with bottleneck evidence and symptoms.
-   If `summary.txt` emits a `LOCALIZE` line and Stage 3 needs it, re-launch the profiler with `--source` before editing.
-   **Profile reuse after revert**: if the current `kernel.py` matches a previous version's code (e.g. after a revert in
-   the prior iteration), skip profiling and reuse that version's profile directory directly — the profile follows the code.
+### Evidence Format
 
-2. **Stage 2 — Research and Plan** (subagent: `gpu-kernel-research`)
-   Launch the `gpu-kernel-research` subagent with workspace path, version, platform, framework, kernel type, profiles dir,
-   memory dir, historical plans, stop conditions, and gpu-wiki path. It searches knowledge sources (progressive three-layer
-   expansion) and writes `plans/v{{N}}_plan.md`. One optimization category only, so the result is attributable.
+Every optimization action in this workflow follows the **evidence → inference → action** chain:
+- **Evidence**: concrete metric or symptom from the profiler (e.g., "ds_read bank conflict stall 12 cycles")
+- **Inference**: what the evidence implies about the bottleneck (e.g., "shared memory access pattern causes serialization")
+- **Action**: specific code change to address the inferred bottleneck (e.g., "apply XOR16 swizzle layout to shared memory allocation")
 
-3. **Stage 3 — Implement** (subagent: `kernel-optimize`)
-   Launch the `kernel-optimize` subagent with workspace path, version, platform, kernel file, plan path, profiles dir,
-   summary path, memory dir, and gpu-wiki path. It implements the plan's actions in `kernel.py` with evidence attribution,
-   validates correctness via `test_kernel.py`, and updates `memory/v{{N}}.json`.
-   **Performance-regression revert rule**: when kernel-optimize rolls back code to a previous version due to performance
-   regression or no improvement, it MUST reuse the profile results from that reverted-to version (e.g. `profiles/v{{PREV}}/`)
-   as the baseline for subsequent optimization attempts — do NOT re-profile the reverted code. The profile follows the code:
-   whichever version `kernel.py` reverts to, use that version's existing profile directory and `summary.txt`.
+Do not implement any action without completing this chain.
 
-4. **Stage 4 — Validate + Bench** (subagent required)
-   Launch a validation subagent. Validation is the **SOL-ExecBench harness only**: run
-   `python test_kernel.py --version v{{N}}` (cwd = workspace). It runs the real `sol-execbench` evaluator over
-   **EVERY workload in `workload.jsonl`** (the full ground-truth shape set) with each workload's own tolerance,
-   and records into `memory/v{{N}}.json`: `performance.latency_us_by_shape` (keyed by workload `uuid`),
-   `performance.latency_us` = **geomean** of per-workload latency, `speedup_vs_ref_geomean`, and
-   `correctness.status` / `quality_gate.result` = PASS iff **all** workloads pass. Do NOT hand-roll a separate
-   correctness test or edit `test_kernel.py`. The harness exits non-zero if any workload fails.
-   `solution.json` reads the live `kernel.py` from disk — if you changed languages/dependencies/entry_point
-   (e.g. migrating framework), update `solution.json` `spec` to match before benching.
-   Bench must be **variance-aware** — a geomean delta only counts as real if it clears measurement noise
-   (flat-within-noise is *not* an improvement).
+### Localization Rule (Mandatory)
+
+The `--source` flag is always included in profiling to ensure source-level localization evidence is produced every run. When `summary.txt` emits a `LOCALIZE` line, open the evidence file it names and pin the change to the specific source line / SASS address it identifies. **Do not change a line you have not localized.**
+
+### Shape Bucketing — When the Evidence Calls For It
+
+Not every kernel needs this: simple / uniform kernels are best kept single-path. But the workload set spans very different scales, and a lever that wins on large shapes (bigger tiles, deeper pipelining) can lose on small ones (launch / occupancy / latency bound). Decide per iteration from evidence — `performance.latency_us_by_shape`, the profile, and prior memory / research: if shapes of different scales are bottlenecked differently, group them into a few **buckets of similar scale** (not one path per shape) and give each bucket its own path — a subkernel, or at least its own tile / block config — behind a dispatcher inside `run()`. This is one attributable category ("shape specialization"), stays within the DPS contract (`run()` is still a single entry point), and per-bucket gains land directly in the geomean goal.
+
+---
+
+### Stage 1 — Profile (subagent: `gpu-kernel-profiler`)
+
+Launch the `gpu-kernel-profiler` subagent to profile the current kernel and extract bottleneck evidence.
+
+```
+Launch subagent: gpu-kernel-profiler
+Task type: execution task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - version: V{{N}}
+  - platform: <nvidia / amd>
+  - kernel_file: kernel.py
+  - gpu_wiki_path: <gpu-wiki root path>
+  - previous_profiles_dir: <profiles/v{{PREV}}/ if exists, otherwise omit>
+```
+
+The profiler subagent will: create `profiles/v{{N}}/`, run platform-specific profiling tools (`profile_nvidia.sh --source` for NVIDIA or `profile_kernel.sh` for AMD), perform SASS/assembly analysis, and produce `profiles/v{{N}}/summary.txt` with bottleneck evidence and symptoms.
+
+**Output**: `profiles_dir` (path to `profiles/v{{N}}/`) and `summary_path` (path to `summary.txt`).
+
+**Profile reuse after revert**: if the current `kernel.py` matches a previous version's code (e.g. after a revert in the prior iteration), skip profiling and reuse that version's profile directory directly — the profile follows the code.
+
+---
+
+### Stage 2 — Research and Plan (subagent: `gpu-kernel-research`)
+
+Launch the `gpu-kernel-research` subagent to perform thorough cross-layer research and write the optimal plan.
+
+```
+Launch subagent: gpu-kernel-research
+Task type: research and planning task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - version: V{{N}}
+  - platform: <nvidia / amd>
+  - framework: <triton / cutedsl / flydsl / gluon>
+  - kernel_type: <from README.md>
+  - profiles_dir: profiles/v{{N}}/
+  - memory_dir: memory/
+  - historical_plans: <all plans/v*_plan.md paths>
+  - stop_conditions: <from README.md>
+  - gpu_wiki_path: <gpu-wiki root path>
+```
+
+The research subagent searches knowledge sources (progressive three-layer expansion: gpu-wiki → reference-projects → public net) and writes `plans/v{{N}}_plan.md` containing exactly **one optimal optimization action** — the single best evidence-backed path selected after thorough research.
+
+**Output**: `plan_path` (written plan), `optimization_action` (the selected optimal action with justification), `expected_impact`, `risks`.
+
+---
+
+### Stage 3 — Implement (subagent: `kernel-optimize`)
+
+Launch the `kernel-optimize` subagent to implement the optimization action from the plan.
+
+```
+Launch subagent: kernel-optimize
+Task type: execution task
+Inputs:
+  - workspace_path: <workspace absolute path>
+  - version: V{{N}}
+  - platform: <nvidia / amd>
+  - kernel_file: kernel.py
+  - plan_path: plans/v{{N}}_plan.md
+  - profiles_dir: profiles/v{{N}}/
+  - summary_path: profiles/v{{N}}/summary.txt
+  - memory_dir: memory/
+  - gpu_wiki_path: <gpu-wiki root path>
+```
+
+The kernel-optimize subagent will: validate the plan's evidence attribution, perform localization checks, implement the optimization action in `kernel.py`, validate correctness via lightweight `do_bench`, and update `memory/v{{N}}.json`.
+
+**Output**: `kernel_file`, `validation_result` (PASS/FAIL), `performance_validated` (YES/NO/INEFFECTIVE), `improvement_summary`, `memory_file`, `actions_applied`.
+
+**Performance-regression revert rule**: when kernel-optimize rolls back code to a previous version due to performance regression or no improvement, it MUST reuse the profile results from that reverted-to version (e.g. `profiles/v{{PREV}}/`) as the baseline — do NOT re-profile the reverted code.
+
+---
+
+### Stage 4 — Validate + Bench (subagent required)
+
+Launch a validation subagent to run the full correctness + performance measurement.
+
+**Execution**: the SOL-ExecBench harness with timeout guard:
+
+```bash
+timeout 1800 python test_kernel.py --version v{{N}}
+```
+
+This runs the real `sol-execbench` evaluator over **EVERY workload in `workload.jsonl`** (the full ground-truth shape set) with each workload's own tolerance, and records into `memory/v{{N}}.json`:
+- `performance.latency_us` = **geomean** of per-workload latency (the primary objective — minimize)
+- `performance.latency_us_by_shape` (keyed by workload `uuid`)
+- `performance.speedup_vs_ref_geomean`
+- `correctness.status` / `quality_gate.result` = PASS iff **all** workloads pass
+
+Do NOT hand-roll a separate correctness test or edit `test_kernel.py`. The harness exits non-zero if any workload fails. `solution.json` reads the live `kernel.py` from disk — if you changed languages/dependencies/entry_point (e.g. migrating framework), update `solution.json` `spec` to match before benching.
+
+**Variance-aware**: a geomean delta only counts as real if it clears measurement noise (flat-within-noise is *not* an improvement).
+
+**Measurement Reliability Guard**: before accepting a large performance delta (especially regressions > 30%), verify the measurement is trustworthy:
+1. Compare `kernel.py` and `test_kernel.py` against the previous committed version (`git diff HEAD -- kernel.py test_kernel.py`). If both are unchanged, any large latency change is an environment artifact.
+2. Check GPU occupancy: `nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader`. If the current GPU shows significant memory usage (> 1GB from other processes), the measurement is unreliable.
+3. If the GPU is occupied, switch to a free GPU by setting `CUDA_VISIBLE_DEVICES=<free_gpu_id>` and re-run.
+4. If both files are unchanged but latency differs by > 30%, do not treat it as a real regression — re-measure on a confirmed-free GPU.
+
+**Quality Gate** — pass conditions:
+- Correctness validation PASS
+- No unacceptable performance regression (or clearly explained and supports later optimization)
+
+**On failure** (FAIL or TIMEOUT_FAIL): `git reset --hard HEAD`, record the failure in `memory/v{{N}}.json` under `pitfalls_and_fixes` and `quality_gate`.
 
 ## Step C — Commit or revert (mechanical, no discretion)
 
@@ -131,7 +216,7 @@ untracked until you commit it, so it survives `git reset --hard`.
 
 ## Finish
 
-Print one line and stop — do **not** start another cycle:
+Print one line:
 
 ```
 v{{N}}: committed (+X.X%)   |   v{{N}}: reverted (<reason>)
