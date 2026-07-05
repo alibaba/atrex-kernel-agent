@@ -41,11 +41,11 @@ profile reveals a better lever, pursue that instead. The only hard constraint is
 profile: if different-scale shapes are bottlenecked differently, a valid category is **shape specialization** —
 group shapes into a few buckets of similar scale (not one path per shape) and dispatch inside `run()` to a
 subkernel or tiling/block config per bucket. Many kernels don't need this — decide from memory, research, and
-current latencies. See "Shape bucketing" in the profile-optimizer skill.
+current latencies.
 
 ## Step B — One cycle (Stages 1–4)
 
-Refer to `skills/gpu-kernel-profile-optimizer/SKILL.md` for full mechanics and tool-to-evidence mapping. Execute each stage directly in this session.
+Execute each stage (1–4) directly in this session. All rules are defined inline below.
 
 ### Stage 1 — Profile and Bottleneck Evidence Extraction
 
