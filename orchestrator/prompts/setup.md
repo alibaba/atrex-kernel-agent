@@ -21,7 +21,7 @@ Do the following, in order, but only through baseline:
    do the Roofline analysis, compute absolute targets (`hardware peak * 90%`), and write `Hardware Spec`,
    the Roofline analysis, and `Stop Conditions` into the workspace `README.md`.
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
-3. **Stage 1 — Baseline.** Launch the `gpu-kernel-baseline` subagent (by name): implement `kernel.py` + `test_kernel.py`,
+3. **Stage 1 — Baseline.** Launch the `gpu-kernel-baseline` subagent (by name). You may spawn it in the background, but **you MUST wait for it to complete before you exit**: implement `kernel.py` + `test_kernel.py`,
    validate correctness and baseline performance, write `baseline_report.md`, write `memory/v0.json` (via
    `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
    **`test_kernel.py` MUST bench every shape in the workspace `shapes.json`** (the full ground-truth set, keyed

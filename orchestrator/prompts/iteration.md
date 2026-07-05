@@ -8,6 +8,7 @@ Hard rules for this session:
 - **Do NOT loop.** One cycle, then stop. There is no Stage 6 here — the orchestrator owns the outer loop and decides whether another session runs.
 - **Do NOT try to reach the final target** in this session. Just make this one cycle count and hand off cleanly.
 - The whole point of a clean session is a fresh context: you inherit state from disk, not from a prior conversation.
+- **ALL subagent launches must complete before you exit.** When you spawn a subagent (profiler, research, optimize, validate), you may spawn it in the background, but **you MUST wait for it to complete before you exit the session**. If you exit early, the orchestrator sees incomplete work. You are responsible for the full cycle — do not exit until each subagent has reported back with its result.
 
 ## Context
 
