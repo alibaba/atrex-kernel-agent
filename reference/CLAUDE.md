@@ -1,12 +1,5 @@
 # GPU Kernel Optimizer — Agent Constraints
 
-## Hardware Spec Sourcing
-
-- **No fabrication**: Every hardware spec value (compute throughput, HBM bandwidth, cache/SMEM/LDS capacity, register counts, SM/CU count, occupancy limits, or any microarchitecture limit) MUST be sourced from the local `<gpu-wiki>/` knowledge base.
-- **Source format**: Record every cited spec as: `<metric>: <value> <unit> <- <gpu-wiki>/<relative-path>:<line-or-section>`.
-- **Missing values**: If a spec cannot be found in gpu-wiki, write `<metric>: UNKNOWN (gpu-wiki not found)`, record the gap in `memory/v<N>.json` under `pitfalls_and_fixes`, and ask whether a placeholder is acceptable. Never fill gaps with "approximately", "should be", "usually", or "similar product".
-- Full rules: `SKILL.md` §Mandatory Rule.
-
 ## Benchmark Harness Integrity
 
 - **`test_kernel.py` is immutable**: do not modify it to change warmup count, repetition count, `return_mode`, timing method, input shapes, or any benchmark parameter. It defines the ground-truth benchmark methodology; any change invalidates cross-version comparisons.
@@ -38,7 +31,10 @@ All profiling conclusions must follow the chain: `evidence → inference → opt
 
 - Once the kernel is implemented in the target DSL, optimization iterations MUST stay within it — switching to a *different* DSL is NEVER permitted.
 - **`triton` and `gluon` belong to the same framework family** (`triton/gluon`). When either is specified, both are acceptable implementation targets. When Triton-level optimizations have converged (further Triton-only changes yield no significant improvement), the kernel SHOULD be rewritten in Gluon to unlock deeper optimization opportunities.
-- Third-party helper libraries MAY be introduced, but the final kernel implementation MUST use the designated framework.
+- Third-party helper libraries MAY be introduced, but:
+  1. The library MUST be verified as the **best-performing option** in the open-source community for the target operation — do NOT blindly adopt the first available library.
+  2. Integration MUST include **hardware-architecture-specific interface adaptation** (e.g., selecting the correct backend, enabling arch-specific code paths, passing device-specific tuning parameters) — a raw import without arch adaptation is NEVER acceptable.
+  3. Surrounding operators that integrate with the third-party library MUST be implemented in the designated framework.
 - **SOL-ExecBench workspaces** (where `definition.json` + `solution.json` are present): the initial `kernel.py` is a pure-PyTorch reference wrapper. Migrating `run()` from PyTorch to the target DSL is the expected first optimization lever — update `solution.json` `spec.languages`/`dependencies` in the same iteration.
 
 ## Hardware Architecture Pitfalls
@@ -50,15 +46,7 @@ All profiling conclusions must follow the chain: `evidence → inference → opt
 
 | Resource | Path |
 |----------|------|
-| Full optimization workflow (router) | `SKILL.md` |
-| Profile-optimizer (one iteration) | `skills/gpu-kernel-profile-optimizer/SKILL.md` |
 | Plan template | `reference/plan.md` |
 | Iteration memory schema | `reference/v_iteration.schema.json` |
-| Workspace README template | `reference/README.md` |
 | Profile tool guide | `reference/profile_guide.md` |
 | Memory management tool | `tools/memory_manager.py` |
-| Baseline agent | `agents/gpu-kernel-baseline.md` |
-| Profiler agent | `agents/gpu-kernel-profiler.md` |
-| Research agent | `agents/gpu-kernel-research.md` |
-| Optimizer agent | `agents/kernel-optimize.md` |
-| Partial restart agent | `agents/gpu-kernel-partial-restart.md` |
