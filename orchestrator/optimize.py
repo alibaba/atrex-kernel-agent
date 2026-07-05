@@ -53,11 +53,35 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
+CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
 
 
 def is_sol_op(op_dir: Path) -> bool:
     """A SOL-ExecBench op dir carries definition.json + workload.jsonl next to reference.py."""
     return (op_dir / "definition.json").is_file() and (op_dir / "workload.jsonl").is_file()
+
+
+def _is_triton_family(framework: str) -> bool:
+    """Triton and Gluon are one framework family — Gluon is the lower-level escalation of Triton."""
+    return framework.strip().lower() in ("triton", "gluon", "triton/gluon")
+
+
+def kernel_is_gluon(workspace: Path) -> bool:
+    """True once kernel.py has been converted to Gluon (import present)."""
+    k = workspace / "kernel.py"
+    return k.exists() and "gluon" in k.read_text(encoding="utf-8", errors="ignore")
+
+
+def head_kernel_is_gluon(workspace: Path) -> bool:
+    """True when the COMMITTED HEAD kernel.py is Gluon. Authoritative accept signal for a convert
+    session — more reliable than memory's git_commit_hash, which a session may leave unset even after
+    committing."""
+    try:
+        out = subprocess.run(["git", "show", "HEAD:kernel.py"], cwd=str(workspace),
+                             capture_output=True, text=True)
+    except OSError:
+        return False
+    return out.returncode == 0 and "gluon" in out.stdout
 
 
 # ── thin IO ─────────────────────────────────────────────────────────────────
@@ -212,6 +236,21 @@ def peak_util(mem: Optional[dict]) -> float:
     return max([float(v) for v in vals if isinstance(v, (int, float))] or [0.0])
 
 
+def best_committed_latency(workspace: Path, upto_n: int) -> tuple[Optional[float], Optional[str]]:
+    """Incumbent best: min committed geomean latency (performance.latency_us) over versions [0, upto_n),
+    with its git commit hash — used to check a convert session's performance parity and to revert to it."""
+    best: Optional[float] = None
+    best_hash: Optional[str] = None
+    for i in range(0, upto_n):
+        m = read_memory(workspace, i)
+        if not m or not m.get("git_commit_hash"):
+            continue
+        lat = (m.get("performance") or {}).get("latency_us")
+        if isinstance(lat, (int, float)) and (best is None or lat < best):
+            best, best_hash = float(lat), m["git_commit_hash"]
+    return best, best_hash
+
+
 def target_met(mem: Optional[dict], target_util: float) -> bool:
     """Mechanical success: a committed, correctness-PASS iteration at/above target util."""
     if not committed(mem):
@@ -308,6 +347,7 @@ class Campaign:
     iter_timeout: int = 5400       # 90 min hang-backstop per optimization session
     setup_timeout: int = 7200      # 120 min for the baseline session
     max_stall: int = 0             # 0 = disabled (budget-only); >0 = stop after N no-commit iters
+    convert_after: int = 5         # triton-only: after N stalled iters, run ONE triton->gluon convert session (0=off)
     tokens_spent: int = field(default=0, init=False)
 
     @property
@@ -369,6 +409,24 @@ class Campaign:
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("sol_seed did not produce memory/v0.json (V0 baseline failed)")
 
+    def _record_failed_convert(self, n: int, reason: str) -> None:
+        """Persist a failed/reverted triton->gluon conversion as memory/v<N>.json so the NEXT convert
+        attempt reads it and avoids repeating the same lowering. Survives the safety-net git reset
+        (which would otherwise destroy a committed record)."""
+        mem_dir = self.workspace / "memory"
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        (mem_dir / f"v{n}.json").write_text(json.dumps({
+            "version": f"v{n}", "masked": False,
+            "optimization": {"action_category": "triton_to_gluon_conversion",
+                             "action_description": "reverted defective conversion"},
+            "correctness": {"status": "FAIL"},
+            "quality_gate": {"result": "FAIL", "failure_reason": reason},
+            "pitfalls_and_fixes": [{"error_type": "performance", "error_message": reason,
+                                    "lesson": "this triton->gluon lowering was rejected; try a different "
+                                              "approach (check async/TMA copy, layouts, accumulator residency) next attempt"}],
+            "git_commit_hash": None,
+        }, indent=2), encoding="utf-8")
+
     def budget_exhausted(self) -> bool:
         return self.token_budget > 0 and self.tokens_spent >= self.token_budget
 
@@ -389,12 +447,29 @@ class Campaign:
                 return self._finish("budget: token-budget")
 
             n += 1
-            prompt = _render(PROMPTS_DIR / "iteration.md",
-                             WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
-                             PLATFORM=self.platform, NOTES=self.notes,
-                             HARDWARE=hardware_directive(self.platform, self.arch))
+            # Triton→Gluon escalation: after `convert_after` stalled triton iterations, spend ONE
+            # session purely converting the kernel to Gluon (no optimization). Gluon is lower-level,
+            # so the following sessions can go further. Fires at most once (marker guards re-tries).
+            do_convert = (
+                self.convert_after > 0
+                and _is_triton_family(self.framework)
+                and not kernel_is_gluon(self.workspace)
+                and stall >= self.convert_after
+            )
+            if do_convert:
+                print(f"[orchestrator] triton stalled {stall} iters -> triton->gluon convert session v{n}", flush=True)
+                prompt = _render(PROMPTS_DIR / "convert.md",
+                                 WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
+                                 PLATFORM=self.platform, ARCH=self.arch or "the runtime GPU arch",
+                                 GPU_WIKI=self.gpu_wiki, NOTES=self.notes,
+                                 HARDWARE=hardware_directive(self.platform, self.arch))
+            else:
+                prompt = _render(PROMPTS_DIR / "iteration.md",
+                                 WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
+                                 PLATFORM=self.platform, NOTES=self.notes,
+                                 HARDWARE=hardware_directive(self.platform, self.arch))
             res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
-            self._account(res, f"iter v{n}")
+            self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
 
             # Early detection of auth/infra failures: exit != 0 with 0 tokens
             # means the session never even started (bad API key, network, etc.)
@@ -411,6 +486,40 @@ class Campaign:
             mem = read_memory(self.workspace, n)
             if target_met(mem, self.target_util):
                 return self._finish(f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%")
+
+            if do_convert:
+                # A direct triton->gluon translation must preserve BOTH correctness and performance.
+                # Accept only a committed gluon kernel whose geomean is within +CONVERT_PERF_TOL of the
+                # incumbent triton HEAD. Otherwise reject, keep triton, and record WHY — then let triton
+                # run another `convert_after` stalled rounds and RETRY conversion (informed by the record).
+                # Accept only when the COMMITTED HEAD kernel is gluon, correctness PASSed, and geomean is
+                # within +CONVERT_PERF_TOL of the incumbent triton HEAD. Detect the committed gluon via git
+                # HEAD (not memory's git_commit_hash, which a session may leave unset even after committing).
+                conv_lat = (mem.get("performance") or {}).get("latency_us") if mem else None
+                gate_pass = bool(mem) and (mem.get("quality_gate") or {}).get("result") == "PASS"
+                head_gluon = head_kernel_is_gluon(self.workspace)
+                prev_best, prev_hash = best_committed_latency(self.workspace, n)
+                parity_ok = (prev_best is None or (isinstance(conv_lat, (int, float))
+                             and conv_lat <= prev_best * (1.0 + CONVERT_PERF_TOL)))
+                if head_gluon and gate_pass and isinstance(conv_lat, (int, float)) and parity_ok:
+                    stall = 0            # converted (correctness + <=5% perf parity) -> fresh Gluon phase
+                    print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
+                    continue
+                # rejected: if a bad gluon kernel got committed as HEAD, revert to the triton incumbent
+                if head_gluon and prev_hash:
+                    subprocess.run(["git", "reset", "--hard", prev_hash], cwd=str(self.workspace),
+                                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    reason = (f"regressed {conv_lat / prev_best - 1:+.1%} vs triton (> {CONVERT_PERF_TOL:.0%})"
+                              if isinstance(conv_lat, (int, float)) and not parity_ok else "correctness gate not PASS")
+                    self._record_failed_convert(n, reason)
+                    print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {prev_hash[:8]}", flush=True)
+                else:
+                    if read_memory(self.workspace, n) is None:
+                        self._record_failed_convert(n, "convert session produced no committed gluon kernel")
+                    print("[orchestrator] convert produced no committed gluon kernel; staying on triton", flush=True)
+                # keep optimizing triton; conversion re-fires after another `convert_after` stalled rounds
+                stall = 0
+                continue
 
             if committed(mem):
                 stall = 0
@@ -864,6 +973,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
     ap.add_argument("--max-stall", type=int, default=0,
                     help="Optional: stop after N consecutive no-commit iterations (0 = disabled).")
+    ap.add_argument("--convert-after", type=int, default=5,
+                    help="Triton only: after N consecutive stalled iterations, spend ONE session converting "
+                         "the kernel Triton->Gluon (no optimization), then optimize the Gluon kernel. 0 = disabled.")
     ap.add_argument("--arch", default="",
                     help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
                          "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
@@ -891,6 +1003,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
+        convert_after=args.convert_after,
     )
     campaign.run()
     return 0

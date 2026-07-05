@@ -41,7 +41,7 @@ When executing `skills/gpu-kernel-profile-optimizer/SKILL.md`:
 - Once the kernel is in the `--framework` DSL, optimization iterations MUST stay within it — switching to a *different* DSL (other than the PyTorch→target migration above) is NEVER permitted.
 - Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced to assist optimization, but the final kernel implementation MUST use the designated framework.
 - `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
-- When Triton-level optimizations have converged (i.e., further Triton-only changes yield no significant performance improvement), the kernel SHOULD be rewritten in Gluon to unlock deeper optimization opportunities.
+- When Triton-level optimization plateaus, the orchestrator spawns a dedicated **convert-only session** (`orchestrator/prompts/convert.md` → `gpu-kernel-convert`) that lowers the kernel Triton→Gluon with NO optimization, gated on correctness alone; the following sessions then optimize the Gluon kernel (deeper levers). Do not hand-trigger the rewrite inside a normal optimization iteration.
 
 ## Benchmark Harness Integrity
 
