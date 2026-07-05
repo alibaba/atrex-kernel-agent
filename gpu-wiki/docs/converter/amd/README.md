@@ -1,11 +1,8 @@
-# AMD Platform Conversion Tools
+# AMD Triton→Gluon conversion sheets
 
-Triton→Gluon conversion rules, covering AMD general and CDNA3/CDNA4 architecture-specific content.
+One sheet per architecture (see the transition router in [../README.md](../README.md)).
 
----
-
-| Directory | Description |
-|-----------|-------------|
-| [common/](common/) | AMD general: Triton→Gluon basic operations, verification guide, HSACO launcher |
-| [cdna3/](cdna3/) | CDNA3 (MI300X/gfx942) specific Triton→Gluon conversion |
-| [cdna4/](cdna4/) | CDNA4 (MI355X/gfx950) specific Triton→Gluon conversion |
+| File | Target |
+|------|--------|
+| [cdna3.md](cdna3.md) | CDNA3 (MI300X, gfx942) — buffer_load / mfma, software pipeline |
+| [cdna4.md](cdna4.md) | CDNA4 (MI355X, gfx950) — inherits CDNA3 + hardware async_copy, mfma_scaled |

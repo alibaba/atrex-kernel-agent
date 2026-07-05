@@ -154,4 +154,4 @@ CDNA4's ping-pong scheduling optimization is only activated by the compiler when
 - **Prerequisites**: [CDNA4 Hardware Specs](../../../../hardware-specs/hardware_specs_mi355x.md) + [General Optimization Checklist](common_optimizations.md)
 - **Cross-Architecture Comparison**: [Hopper GEMM Optimization](../../../nvidia/gluon/sm90/matmul.md) | [CDNA3 GEMM Optimization](../../../../kernel-opt/amd/gluon/gfx942/pattern_overview.md) (5 files)
 - **FP8 Deep Dive**: [CDNA4 FP8 GEMM Optimization Practice](../../common/gfx950/cdna4-fp8-gemm-optimization.md) — CDNA4 vs CDNA3 FP8 Hardware Comparison
-- **Converter Reference**: [CDNA4 Matrix Multiplication Conversion](../../../../converter/amd/cdna4/matrix_multiply.md)
+- **Converter Reference**: [CDNA4 Matrix Multiplication Conversion](../../../../converter/amd/cdna4.md)

@@ -86,15 +86,16 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 
 ### Converter Documentation Cross-Reference
 
-| Topic | CDNA3 | CDNA4 | Hopper |
-|------|-------|-------|--------|
-| Conversion Guide | [CDNA3 conversion guide](converter/amd/cdna3/conversion-guide.md) | [CDNA4 conversion guide](converter/amd/cdna4/conversion-guide.md) | [Hopper conversion guide](converter/nvidia/hopper/conversion-guide.md) |
-| API Mapping Table | [CDNA3 API mapping](converter/amd/cdna3/api_mapping.md) | [CDNA4 API mapping](converter/amd/cdna4/api_mapping.md) | [Hopper API mapping](converter/nvidia/hopper/api_mapping.md) |
-| Pipeline Mode | [CDNA3 pipeline notes](converter/amd/cdna3/pipeline.md) (software-only) | [CDNA4 pipeline notes](converter/amd/cdna4/pipeline.md) (HW DMA reference) | [Hopper pipeline notes](converter/nvidia/hopper/pipeline.md) (CP_ASYNC) |
-| Matrix Multiply Mode | [CDNA3 matrix multiply notes](converter/amd/cdna3/matrix_multiply.md) (mfma) | [CDNA4 matrix multiply notes](converter/amd/cdna4/matrix_multiply.md) (mfma) | [Hopper matrix multiply notes](converter/nvidia/hopper/matrix_multiply.md) (wgmma) |
-| Memory Access Mode | [CDNA3 memory access notes](converter/amd/cdna3/memory_access.md) | [CDNA4 memory access notes](converter/amd/cdna4/memory_access.md) | [Hopper memory access notes](converter/nvidia/hopper/memory_access.md) |
-| Layout Mapping | [CDNA3 layout mapping](converter/amd/cdna3/layouts.md) | [CDNA4 layout mapping](converter/amd/cdna4/layouts.md) | [Hopper layout mapping](converter/nvidia/hopper/layouts.md) |
-| Common Pitfalls | [CDNA3 common pitfalls](converter/amd/cdna3/common_pitfalls.md) | [CDNA4 common pitfalls](converter/amd/cdna4/common_pitfalls.md) | [Hopper common pitfalls](converter/nvidia/hopper/common_pitfalls.md) |
+Each Triton→Gluon transition is one per-arch sheet (API map + pitfalls + source pointers); the
+PyTorch→Triton transition is its own sheet. See the router in [converter/README.md](converter/README.md).
+
+| Transition | Sheet |
+|-----------|-------|
+| PyTorch → Triton | [pytorch-to-triton.md](converter/pytorch-to-triton.md) |
+| Triton → Gluon (Blackwell sm_100) | [nvidia/blackwell.md](converter/nvidia/blackwell.md) |
+| Triton → Gluon (Hopper sm_90) | [nvidia/hopper.md](converter/nvidia/hopper.md) |
+| Triton → Gluon (CDNA3 gfx942) | [amd/cdna3.md](converter/amd/cdna3.md) |
+| Triton → Gluon (CDNA4 gfx950) | [amd/cdna4.md](converter/amd/cdna4.md) |
 
 ### Converter → Kernel-Opt Relationships
 
@@ -261,7 +262,7 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 - Architecture-specific `hardware-specs/hardware_specs_*.md` (peak TFLOPS for compute utilization calculation)
 
 **Group 4: Conversion + Optimization Closed Loop**
-- `converter/*--pipeline.md` (Conversion produces pipeline code)
+- `converter/<arch>.md` (Conversion produces the Gluon/Triton kernel)
 - `kernel-opt/*--common_optimizations.md` (Optimizing the ISA of that code)
 - `kernel-opt/*--profiling_guide.md` (Verifying optimization results)
 
@@ -291,10 +292,6 @@ complementary optimization axes with AMD FlyDSL chunk-GDN.
 ---
 
 ## 5. Known Issues
-
-### Content displacement in converter/amd/common/hopper-conversion-guide.md
-
-This file is located under `amd/common/` but actually contains **Hopper (NVIDIA sm_90)** content. Its original package metadata identified a Hopper converter, and the content references `cuda:90`, `wgmma`, `NVMMASharedLayout`, and other NVIDIA APIs. It is suspected to have been copied from Hopper conversion guidance without modification.
 
 ### Inconsistent CDNA3 documentation structure
 
