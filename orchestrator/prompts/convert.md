@@ -129,9 +129,15 @@ Re-read the sheet's pitfalls and the cited source, fix the specific construct, a
 - Never use another vendor's Gluon APIs (e.g. `gl.amd.*` on NVIDIA → unregistered-dialect crash).
 - Do not edit `test_kernel.py`, `definition.json`, `reference.py`, or `workload.jsonl`.
 
-## Finish
+## Record + finish (ALWAYS — success OR failure)
 
-Print one line and stop:
+**Always write `memory/v{{N}}.json`** with `optimization.action_category="triton_to_gluon_conversion"`,
+and on failure the exact cause (compile error / correctness mismatch / which construct made it >5% slower)
+in `pitfalls_and_fixes`. **Commit the record even on revert**
+(`git add memory/v{{N}}.json plans/ && git commit -m "v{{N}}: conversion reverted (<reason>)"`) so the
+next conversion attempt — after Triton plateaus again — learns from it.
+
+Then print one line and stop:
 ```
 v{{N}}: converted to gluon (PASS, <±X%> vs triton)   |   v{{N}}: conversion reverted (<reason>)
 ```
