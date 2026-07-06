@@ -54,6 +54,10 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
+CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) barely ran -> "bailed"
+                              # (set below a genuine-but-incomplete attempt, e.g. ~336K; the launch-and-
+                              # exit bail we saw was ~85K — only that class should trip the give-up)
+CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continue triton-only
 
 
 def is_sol_op(op_dir: Path) -> bool:
@@ -185,8 +189,14 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
         "claude", "--print", "--verbose",
         "--output-format", "stream-json",
         "--session-id", session_id,
-        prompt,
     ]
+    # Route nested sessions to a specific settings profile (model/base-url/token) without touching
+    # the user's active ~/.claude/settings.json — e.g. run the experiment on a different backend
+    # than the monitoring session. Command-line --settings has higher precedence than user settings.
+    session_settings = os.environ.get("ATREX_SESSION_SETTINGS")
+    if session_settings:
+        cmd += ["--settings", session_settings]
+    cmd += [prompt]
     stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=_session_env())
     return SessionResult(
         exit_status=exit_status,
@@ -527,6 +537,7 @@ class Campaign:
         if stall > 0:
             print(f"[orchestrator] stall counter restored: {stall} rounds without progress", flush=True)
         infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
+        convert_bails = 0  # consecutive convert sessions that bailed early (low tokens, no gluon)
         n = latest_version(self.workspace)  # 0 after baseline
         while True:
             if n >= self.max_iters:
@@ -611,6 +622,22 @@ class Campaign:
                     if read_memory(self.workspace, n) is None:
                         self._record_failed_convert(n, "convert session produced no committed gluon kernel")
                     print("[orchestrator] convert produced no committed gluon kernel; staying on triton", flush=True)
+                # Classify the failed convert. A "bail" (session barely ran — low tokens AND no gluon)
+                # is a model-compliance failure (e.g. launched work then exited), not a genuinely hard
+                # conversion. Retrying it identically just loops forever, so after a few bails disable
+                # the escalation and stay triton-only rather than burning cooldown cycles for nothing.
+                # A genuine attempt (did real work: extracted TTGIR, rewrote, validated) uses many tokens
+                # even when it fails parity — that resets the streak and keeps the learning-retry path.
+                if res.tokens < CONVERT_MIN_TOKENS:
+                    convert_bails += 1
+                    print(f"[orchestrator] convert v{n} bailed early ({res.tokens} tokens, no gluon) "
+                          f"[{convert_bails}/{CONVERT_MAX_BAILS}]", flush=True)
+                    if convert_bails >= CONVERT_MAX_BAILS:
+                        self.convert_after = 0  # disable escalation for the rest of this run
+                        print("[orchestrator] convert repeatedly bailed -> disabling triton->gluon "
+                              "escalation; continuing triton-only", flush=True)
+                else:
+                    convert_bails = 0
                 # A convert was issued -> reset the cooldown regardless of outcome; conversion
                 # re-fires only after another `convert_after` stalled rounds.
                 stall = 0
