@@ -12,50 +12,120 @@ a correct Gluon kernel. Do **one** conversion, then exit.
 
 {{HARDWARE}}
 
-## Read first (one file, then source on demand)
-Read the single conversion sheet for the **real arch above** — do not read the others:
+## Workflow
+
+### Step 0 — Learn from prior attempts (this may be a RETRY)
+
+Read `memory/v*.json` entries with `optimization.action_category="triton_to_gluon_conversion"`:
+```bash
+python tools/memory_manager.py read --workspace .
+```
+The orchestrator re-issues conversion each time Triton re-plateaus, so earlier attempts may have
+failed or come out >5% slower — their `pitfalls_and_fixes` tell you which lowering to avoid.
+Take a **different** approach this time; do not repeat a recorded dead-end.
+
+### Step 1 — Read the conversion sheet
+
+Read the single conversion sheet for the **real arch** (do not read the others):
 - `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `gpu-wiki/docs/converter/nvidia/blackwell.md`
 - `sm_90` (Hopper) → `gpu-wiki/docs/converter/nvidia/hopper.md`
 - `gfx94*` (CDNA3) → `gpu-wiki/docs/converter/amd/cdna3.md`; `gfx95*` (CDNA4) → `gpu-wiki/docs/converter/amd/cdna4.md`
 
-The sheet gives the Triton→Gluon API map, the critical pitfalls, and **pointers to the exact local
-Triton source** (`reference-projects/triton`). Open that source only for the construct you are
-converting — do not re-derive the whole API.
+The sheet gives the Triton→Gluon API map, the critical pitfalls, and pointers to the exact
+`reference-projects/triton` source. Open that source **only** for the construct you are converting
+— do not re-derive the whole API or read other arches' sheets.
 
-## Do (delegate to the `gpu-kernel-convert` subagent — **wait for it to complete before exiting**)
-Launch the **`gpu-kernel-convert`** subagent with: workspace, version v{{N}}, the arch, the sheet path,
-and `kernel.py`. You may spawn it in the background, but **you MUST wait for it to complete before you
-exit**. If you exit before the subagent finishes, the conversion will be incomplete and the orchestrator
-will see no v2. You are responsible for the full conversion — do not exit until the subagent has reported
-back with its result (committed gluon kernel, or a recorded revert).
+### Step 2 — Extract TTGIR FIRST (before writing any Gluon)
 
-The subagent must:
-0. **Learn from prior attempts** — this may be a RETRY. Read `memory/v*.json` entries with
-   `optimization.action_category="triton_to_gluon_conversion"` (`python tools/memory_manager.py read --workspace .`);
-   do NOT repeat a lowering a previous attempt recorded as failed or >5% slower — take a different approach.
-1. Extract real layouts from the current kernel: `python tools/extract_ttgir.py <driver>.py -o v{{N}}.ttgir` (confirm the target arch). Never fabricate layouts.
-2. Rewrite `kernel.py` to Gluon per the sheet — **same algorithm/tiling**, no new optimizations. If entry/deps change, keep `solution.json` in sync (Gluon still `languages:["triton"]`).
-3. Validate: `python -c "import kernel"` then `python test_kernel.py --version v{{N}}` — the real evaluator over EVERY workload with its own tolerance.
+```bash
+python tools/extract_ttgir.py <driver>.py -o v{{N}}.ttgir
+```
+(The driver must launch the kernel; the kernel's `__main__` profiling block works.)
+Confirm the target matches `arch` (e.g. `cuda:100`). The Gluon kernel's layouts **must be the
+real `#blocked`/`#shared`/`#tmem` layouts from THIS kernel's TTGIR** — never fabricate them, and
+never lift the reference example's layouts/shapes (use the example for code *structure*, not its
+concrete layouts). Do not draft Gluon before this dump exists.
+
+### Step 3 — Rewrite `kernel.py` → Gluon
+
+Per the sheet: map loads → the arch's async/TMA + barrier pattern, matmuls → the arch's MMA +
+accumulator-residency pattern, and reproduce the original `num_stages` (nothing more).
+
+- Keep the DPS `run(...)` signature (inputs then outputs).
+- Change **only** `kernel.py`; if languages/deps/entry change, keep `solution.json` in sync
+  (Gluon stays `languages:["triton"]`).
+- Do **not** add tiling changes, split-K, fusion, or new pipelining — those are for later sessions.
+
+### Step 4 — Validate (iterate on fixes until pass or give up)
+
+```bash
+python -c "import kernel"    # must compile
+timeout 1800 python test_kernel.py --version v{{N}}    # real evaluator, every workload
+```
+
+If RUNTIME_ERROR or correctness FAIL: **iterate on fixes** (up to 3-4 attempts). Common issues:
+- Wrong tensor shape/layout → re-check TTGIR layouts vs Gluon code
+- Type mismatch → check `.to()` / cast operations
+- Missing barrier/sync → check async copy patterns
+
+If you cannot fix after 3-4 attempts, proceed to the revert path below.
 
 ## Commit gate — correctness AND performance parity (±5%)
-A direct translation must be **as fast as the Triton kernel it came from** — same algorithm, same
-work. Commit only if BOTH hold:
-1. **All workloads PASS** (correctness).
-2. **Geomean kernel latency is within +5% of the Triton HEAD** you converted from (compare v{{N}}'s
-   `performance.latency_us` against v{{PREV}}'s in memory). Faster is fine; **>5% slower means the
-   conversion is defective** (missed async/TMA copy, wrong layout, register round-trip instead of
-   direct SMEM/TMEM) — fix it, don't accept it.
-- Both hold → `git commit -m "v{{N}}: triton->gluon conversion (no opt, perf parity)"`. This Gluon kernel becomes HEAD and unlocks the deeper Gluon phase.
-- Correctness FAIL or >5% slower after fix attempts → `git reset --hard HEAD` (restore the Triton kernel), record why in `memory/v{{N}}.json` (`pitfalls_and_fixes`), and exit.
 
-The orchestrator **mechanically re-checks this parity** and will revert a convert that committed a
->5%-slower kernel — so do not commit a slow translation hoping it slips through.
+A direct translation preserves the algorithm and the work, so the Gluon kernel must be **as fast
+as the Triton kernel it came from**. Commit only if BOTH hold:
+1. **All workloads PASS** (correctness), and
+2. **Geomean latency within +5% of the Triton HEAD** — compare v{{N}}'s `performance.latency_us`
+   to v{{PREV}}'s in memory. Faster is fine; **>5% slower is a defective conversion**.
 
-**Always write `memory/v{{N}}.json`** — success OR failure — with
-`optimization.action_category="triton_to_gluon_conversion"`, and on failure the exact cause (compile
-error / correctness mismatch / which construct made it >5% slower) in `pitfalls_and_fixes`. **Commit the
-record even on revert** (`git add memory/v{{N}}.json plans/ && git commit -m "v{{N}}: conversion reverted (<reason>)"`)
-so the next conversion attempt — after Triton plateaus again — learns from it. Then print one line and stop:
+### Win path
+Both hold → `git commit -m "v{{N}}: triton->gluon conversion (no opt, perf parity)"`.
+This Gluon kernel is the new HEAD and unlocks the deeper Gluon phase.
+
+Record `memory/v{{N}}.json` with:
+```bash
+python tools/memory_manager.py create --workspace . --version v{{N}}
+python tools/memory_manager.py update --workspace . --version v{{N}} \
+    --set 'optimization.action_category=triton_to_gluon_conversion' \
+    --set 'optimization.action_description=Triton to Gluon direct translation' \
+    --set 'correctness.status=PASS' \
+    --set 'quality_gate.result=PASS'
+```
+
+### Revert path
+Correctness FAIL, or >5% slower after fix attempts → `git reset --hard HEAD` (restore Triton).
+
+Record the blocker in `pitfalls_and_fixes` and **commit the record even on revert**:
+```bash
+python tools/memory_manager.py create --workspace . --version v{{N}}
+python tools/memory_manager.py update --workspace . --version v{{N}} \
+    --set 'optimization.action_category=triton_to_gluon_conversion' \
+    --set 'optimization.action_description=reverted defective conversion' \
+    --set 'correctness.status=FAIL' \
+    --set 'quality_gate.result=FAIL'
+git add memory/v{{N}}.json && \
+    git commit -m "v{{N}}: conversion reverted (<reason>)"
+```
+
+The orchestrator mechanically re-checks parity and will revert a >5%-slower commit anyway —
+so never force a slow/broken conversion through.
+
+## Diagnosing a >5% regression (fix, don't accept)
+
+A slower Gluon kernel almost always means a mechanical miss: `gl.load`+`smem.store` instead of
+the arch's async/TMA copy; a wrong or fabricated layout forcing extra conversions; accumulator
+not resident in the right memory (registers vs TMEM); or a missing pipeline the Triton had.
+Re-read the sheet's pitfalls and the cited source, fix the specific construct, and re-measure.
+
+## Constraints
+- Convert only — no optimization, no algorithm change, no shape bucketing.
+- Never fabricate layouts; extract from TTGIR or derive via the arch's documented helpers.
+- Never use another vendor's Gluon APIs (e.g. `gl.amd.*` on NVIDIA → unregistered-dialect crash).
+- Do not edit `test_kernel.py`, `definition.json`, `reference.py`, or `workload.jsonl`.
+
+## Finish
+
+Print one line and stop:
 ```
 v{{N}}: converted to gluon (PASS, <±X%> vs triton)   |   v{{N}}: conversion reverted (<reason>)
 ```
