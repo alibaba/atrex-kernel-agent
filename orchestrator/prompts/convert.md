@@ -5,6 +5,12 @@ This is a framework lowering, **not** an optimization: preserve the algorithm, t
 Gluon is a lower-level DSL, so the *following* sessions will optimize deeper — your job is to hand them
 a correct Gluon kernel. Do **one** conversion, then exit.
 
+**Do the conversion yourself, in THIS session — do not delegate it to a subagent.** The steps below are
+your work directly: read the sheet, extract TTGIR, rewrite `kernel.py`, validate, and commit or revert.
+(You may still spawn a short-lived helper for a narrow diagnostic — e.g. a profiler to explain a >5%
+regression — but the conversion itself is yours, and you must finish it before you exit. A session that
+launches work and exits early produces no v{{N}} and wastes the whole attempt.)
+
 ## Context
 - Workspace: `{{WORKSPACE}}` — your cwd, a git repo. **git HEAD is the best Triton kernel so far.**
 - You are producing version **v{{N}}** (previous: v{{PREV}}).
