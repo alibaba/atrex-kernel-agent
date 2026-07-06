@@ -1,14 +1,14 @@
 # Triton → Gluon cheat sheet — NVIDIA Blackwell data-center (sm_100 B200 / sm_103 B300)
 
 Single-file conversion reference for a **convert-only** session. Read this once; open the cited
-Triton 3.7 source **only** for the construct you're converting. Do not paraphrase from memory — the
+Triton 3.7.1 source **only** for the construct you're converting. Do not paraphrase from memory — the
 source is ground truth.
 
 > Covers **data-center Blackwell: sm_100 (B200) and sm_103 (B300)** — they share the tcgen05/TMEM path
 > (sm_103 ≈ sm_100). This is **NOT** for sm_120 (Blackwell GeForce), which uses different Gluon
 > primitives — do not use this sheet there.
 
-Source root: `reference-projects/triton` @ `rel/3.7`
+Source root: `reference-projects/triton` @ `v3.7.1`
 - API: `python/triton/experimental/gluon/language/nvidia/blackwell/{__init__.py,tma.py,float2.py}`
 - Reference kernel (**read this first — it's our op class**): `python/examples/gluon/01-attention-forward.py`
   (tcgen05 + TMEM + TMA + mbarrier, warp-specialized flash-attention forward)
