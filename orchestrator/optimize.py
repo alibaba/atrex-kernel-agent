@@ -491,6 +491,7 @@ class Campaign:
     framework: str
     notes: str = "none"
     arch: str = ""                 # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
+    work_dir: str = ""             # explicit working directory; "" = Path.cwd() (backward compat)
     max_iters: int = 20
     token_budget: int = 0          # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
@@ -502,7 +503,8 @@ class Campaign:
 
     @property
     def workspace(self) -> Path:
-        return Path.cwd() / f"kernel_opt_{self.name}"
+        base = Path(self.work_dir) if self.work_dir else Path.cwd()
+        return base / f"kernel_opt_{self.name}"
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -524,7 +526,10 @@ class Campaign:
             return
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
-        subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo], check=True)
+        # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
+        # so cwd must be the work_dir (or the process cwd when --workspace is absent).
+        subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo],
+                       cwd=str(self.workspace.parent), check=True)
         self._link_runtime()
         prompt = _render(
             PROMPTS_DIR / "setup.md",
@@ -849,6 +854,7 @@ class LayerCampaign:
     framework: str
     notes: str = "none"
     arch: str = ""
+    work_dir: str = ""             # explicit working directory; "" = Path.cwd() (backward compat)
     roofline_py: str = ""
     op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
                                    # metadata.json / input.py / reference.py) — the full shape
@@ -865,10 +871,12 @@ class LayerCampaign:
 
     @property
     def layer_dir(self) -> Path:
-        return Path.cwd() / f"layer_{self.name}"
+        base = Path(self.work_dir) if self.work_dir else Path.cwd()
+        return base / f"layer_{self.name}"
 
     def _boundary_ws(self, bname: str) -> Path:
-        return Path.cwd() / f"kernel_opt_{self.name}__{bname}"
+        base = Path(self.work_dir) if self.work_dir else Path.cwd()
+        return base / f"kernel_opt_{self.name}__{bname}"
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -914,7 +922,8 @@ class LayerCampaign:
             if latest_version(ws) >= 0:
                 continue  # already set up (resume)
             demo = self.layer_dir / b["kernel_demo"]
-            subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)], check=True)
+            subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)],
+                           cwd=str(ws.parent), check=True)
             link_runtime(ws)
             self._write_shape_frame(ws, b)
             prompt = _render(
@@ -1142,7 +1151,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--arch", default="",
                     help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
                          "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
+    ap.add_argument("--workspace", default="",
+                    help="Working directory for the optimization campaign. The workspace (kernel_opt_<name>/) "
+                         "will be created under this directory. Default: current working directory.")
     args = ap.parse_args(argv)
+
+    # Create working directory if specified, so the campaign can write into it immediately.
+    if args.workspace:
+        Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
     arch = args.arch or detect_arch()
     op = _resolve_op(args.op_dir)
@@ -1155,6 +1171,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         layer = LayerCampaign(
             name=op["name"], layer_demo=op["reference"], platform=args.platform,
             framework=args.framework, notes=args.notes, arch=arch,
+            work_dir=args.workspace,
             roofline_py=op["roofline_py"], op_dir=op["op_dir"],
             max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
@@ -1165,6 +1182,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     campaign = Campaign(
         name=op["name"], kernel_demo=op["reference"], platform=args.platform,
         framework=args.framework, notes=args.notes, arch=arch,
+        work_dir=args.workspace,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
         convert_after=args.convert_after,
