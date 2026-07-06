@@ -212,13 +212,19 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
     session_id = str(uuid.uuid4())
     cmd = [
         "claude", "--print", "--verbose",
+        "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "--session-id", session_id,
+        "--effort", "max",
     ]
+    # humanize is loaded via --plugin-dir pointing to the local 3rdparty submodule;
+    # it is NOT installed as a skill in .claude/skills/.
     if (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
         cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
     cmd.append(prompt)
-    stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=_session_env())
+    env = _session_env()
+    env["IS_SANDBOX"] = "1"
+    stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=env)
     return SessionResult(
         exit_status=exit_status,
         timed_out=timed_out,
@@ -419,35 +425,53 @@ def hardware_directive(platform: str, arch: str) -> str:
     )
 
 
+
 def link_runtime(workspace: Path) -> None:
     """Make the skill's `tools/`, `reference/`, `skills/`, `reference-projects/`, `gpu-wiki/` resolvable from cwd=workspace.
 
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
     so symlink them in (absolute targets, so the workspace can live anywhere). Idempotent.
+
+    Also installs agent definitions into ``.claude/`` so inner ``claude`` sessions can discover
+    subagents (gpu-kernel-baseline, gpu-kernel-profiler, etc.).
+
+    humanize is loaded via ``--plugin-dir`` (see ``run_session``); it is NOT installed as a
+    skill into ``.claude/skills/``.
     """
     for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
+    # ── .claude/ skills ──
+    claude_dir = workspace / ".claude"
+    claude_skills_dir = claude_dir / "skills"
+    claude_agents_dir = claude_dir / "agents"
+    claude_skills_dir.mkdir(parents=True, exist_ok=True)
     # Link 3rdparty/ncu-report-skill into .claude/skills/ so `claude` sessions can use it
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    ncu_dst = workspace / ".claude" / "skills" / "ncu-report-skill"
+    ncu_dst = claude_skills_dir / "ncu-report-skill"
     if ncu_src.exists() and not ncu_dst.exists():
-        ncu_dst.parent.mkdir(parents=True, exist_ok=True)
         os.symlink(ncu_src, ncu_dst)
     # Link gpu-wiki/3rdparty/KernelWiki into .claude/skills/ for kernel knowledge access
     kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
-    kw_dst = workspace / ".claude" / "skills" / "KernelWiki"
+    kw_dst = claude_skills_dir / "KernelWiki"
     if kw_src.exists() and not kw_dst.exists():
-        kw_dst.parent.mkdir(parents=True, exist_ok=True)
         os.symlink(kw_src, kw_dst)
+    # ── .claude/ agents ──
+    # The prompts (setup.md, convert.md, gpu-kernel-profile-optimizer) reference agents by
+    # name (gpu-kernel-baseline, gpu-kernel-convert, gpu-kernel-profiler, gpu-kernel-research,
+    # kernel-optimize). Link the repo's agents/ into .claude/agents/ so inner claude sessions
+    # discover them as subagent types.
+    agents_src = REPO_ROOT / "agents"
+    if agents_src.exists() and not claude_agents_dir.exists():
+        os.symlink(agents_src, claude_agents_dir)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
     add = ""
     if "/tools" not in existing:
         add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n"
-    if "/.claude/skills" not in existing:
-        add += "/.claude/skills\n"
+    if "/.claude" not in existing:
+        add += "/.claude\n"
     if "/" + STALL_STATE_FILE not in existing:
         add += ("\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
                 "/" + STALL_STATE_FILE + "\n")
