@@ -3,11 +3,11 @@
 This file defines hard behavioral constraints for the optimization workflow.
 The full stage-by-stage workflow is defined in `orchestrator/prompts/iteration.md` (self-contained per session).
 
-## Framework Constraint
+## Framework Guidance
 
-- **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet the target framework. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the expected first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
-- Once the kernel is in the `--framework` DSL, optimization iterations MUST stay within it — switching to a *different* DSL (other than the PyTorch→target migration above) is NEVER permitted.
-- Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced to assist optimization, but the final kernel implementation MUST use the designated framework.
+- **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet in any optimized DSL. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the *suggested* first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
+- The `--framework` value is a **recommended optimization direction**, not a hard constraint. Sessions MAY use a different DSL or mixed approaches if evidence shows a better performance path.
+- Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced freely to assist optimization.
 - `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
 - When Triton-level optimization plateaus, the orchestrator spawns a dedicated **convert-only session** (`orchestrator/prompts/convert.md` → `gpu-kernel-convert`) that lowers the kernel Triton→Gluon with NO optimization, gated on correctness alone; the following sessions then optimize the Gluon kernel (deeper levers). Do not hand-trigger the rewrite inside a normal optimization iteration.
 
