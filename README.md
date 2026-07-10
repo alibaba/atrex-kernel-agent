@@ -50,17 +50,23 @@ Downloads all reference projects managed under `reference-projects/`.
 ### 3. Run the Installer
 
 ```bash
-bash install.sh --prefix [install-path]
+bash install.sh --prefix "$(pwd)"
 ```
 
-The install path is optional; defaults to `~/aka_kernel_opt`.
+The install path is optional and defaults to `~/aka_kernel_opt`. Using the repository root as
+the prefix installs a self-contained optimizer under:
+
+```text
+.codex/skills/gpu-kernel-optimizer/
+.claude/skills/gpu-kernel-optimizer/
+```
 
 Common options:
 
 ```bash
-bash install.sh ~/my_path          # Install to a custom directory
+bash install.sh --prefix ~/my_path # Install to a custom directory
 bash install.sh --hooks-only        # Install or update hooks only
-bash install.sh --max-iterations N  # Configure hook stop behavior after memory/vN.json exceeds N
+bash install.sh --without-github    # Skip GitHub-hosted reference repositories
 bash install.sh --uninstall         # Remove hooks installed by this script
 ```
 
@@ -70,19 +76,110 @@ After installation, restart the coding runtime or open a new session so the hook
 
 ## Quick Start
 
-Ask the Agent to optimize a kernel with at least:
+### 1. Install the Optimizer
+
+From the repository root:
+
+```bash
+git submodule update --init
+bash install.sh --prefix "$(pwd)"
+export AKA_KERNEL_OPT_HOME="$(pwd)"
+```
+
+Restart the coding runtime or open a new session after installation so the installed hooks are
+loaded.
+
+### 2. Prepare an Operator Directory
+
+`--op-dir` points to an atrex-bench operator directory. A typical operator looks like:
+
+```text
+/path/to/ops/mla_decode/
+├── reference.py
+├── input.py
+├── shapes.json
+├── roofline.json
+└── metadata.json
+```
+
+| File | Purpose |
+| --- | --- |
+| `reference.py` | Required reference implementation and initial kernel source. |
+| `input.py` | Input construction and operator-specific test data. |
+| `shapes.json` | Complete benchmark shape set; every optimization round should test all shapes. |
+| `roofline.json` | Per-shape theoretical work, SOL time, and utilization targets. |
+| `metadata.json` | Production-performance metadata used for priority weighting when available. |
+
+`reference.py` is required by the orchestrator. Include the remaining files for complete
+correctness, benchmark, Roofline, and scheduling behavior.
+
+### 3. Run Optimization
+
+Run the orchestrator from a directory where you want optimization workspaces to be created:
+
+```bash
+mkdir -p "$HOME/kernel-optimization-runs"
+cd "$HOME/kernel-optimization-runs"
+```
+
+With Codex:
+
+```bash
+python "$AKA_KERNEL_OPT_HOME/.codex/skills/gpu-kernel-optimizer/orchestrator/optimize.py" \
+  --op-dir /path/to/ops/mla_decode \
+  --platform H20 \
+  --framework CuteDSL \
+  --agent codex \
+  --max-iters 20 \
+  --token-budget 8000000 \
+  --target-util 90
+```
+
+With Claude:
+
+```bash
+python "$AKA_KERNEL_OPT_HOME/.claude/skills/gpu-kernel-optimizer/orchestrator/optimize.py" \
+  --op-dir /path/to/ops/mla_decode \
+  --platform H20 \
+  --framework CuteDSL \
+  --agent claude \
+  --max-iters 20 \
+  --target-util 90
+```
+
+Claude remains the default provider when `--agent` is omitted. The main runtime parameters are:
 
 - `platform`: target hardware platform, such as `H20` or `MI308X`.
 - `framework`: target implementation framework, such as `CuteDSL` or `FlyDSL`.
-- `kernel_demo`: path to the initial PyTorch logic or kernel implementation file.
+- `agent`: clean-session provider, either `codex` or `claude`.
+- `max-iters`: hard limit on optimization iterations.
+- `token-budget`: optional token limit across all sessions; `0` disables this limit.
+- `target-util`: utilization percentage that can stop the campaign after a validated commit.
 
-Example:
+Each iteration runs in a fresh agent session. Cross-session state is carried through Git,
+`memory/vN.json`, `plans/`, and `profiles/` rather than conversation history.
+
+### 4. Find the Result
+
+For an operator directory named `mla_decode`, the orchestrator creates:
 
 ```text
-/gpu-kernel-optimizer Optimize /path/to/kernel_demo.py on MI308X with FlyDSL, dtype bf16, rel_err < 0.01.
+$HOME/kernel-optimization-runs/kernel_opt_mla_decode/
+├── kernel.py
+├── test_kernel.py
+├── README.md
+├── memory/
+├── plans/
+└── profiles/
 ```
 
-The Agent will initialize a workspace, source hardware specs from `gpu-wiki`, write the workspace configuration, build a baseline, profile the kernel, and iterate until the configured Stop Conditions are met.
+`kernel.py` at Git `HEAD` is always the best accepted implementation. Regressing or incorrect
+iterations are reverted, while their evidence is retained in `memory/`, `plans/`, and `profiles/`.
+
+```bash
+cd "$HOME/kernel-optimization-runs/kernel_opt_mla_decode"
+git log --oneline
+```
 
 ## Main Files
 
@@ -91,6 +188,8 @@ The Agent will initialize a workspace, source hardware specs from `gpu-wiki`, wr
 ├── SKILL.md                         # Top-level gpu-kernel-optimizer router manifest
 ├── install.sh                       # Installer / uninstaller
 ├── docs/                            # Detailed project design docs
+├── orchestrator/                    # Clean-session optimization runner and prompts
+├── agents/                          # Profiling, research, baseline, and implementation playbooks
 ├── reference/                       # Workspace, plan, memory, and profiling templates
 ├── skills/                          # Baseline, optimizer, restart, and output-contract modules
 ├── tools/                           # Profiling, utilization, memory, and measurement tools

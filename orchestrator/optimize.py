@@ -4,9 +4,9 @@
 Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
-Each iteration is a **fresh `claude` session** (`--print`, new `--session-id`) over the
-*same* git workspace. State crosses the session boundary only through disk — exactly the
-artifacts atrex already maintains: `memory/v<N>.json`, `plans/`, `profiles/`, and git.
+Each iteration is a **fresh agent session** (Claude or Codex) over the *same* git
+workspace. State crosses the session boundary only through disk — exactly the artifacts
+atrex already maintains: `memory/v<N>.json`, `plans/`, `profiles/`, and git.
 HEAD is always the best kernel (a regressing iteration reverts and is never committed).
 
 Termination policy
@@ -24,16 +24,16 @@ Usage
 -----
     # single operator (default, unchanged):
     python orchestrator/optimize.py \
-        --name mla_decode --kernel-demo /path/to/demo.py \
+        --op-dir /path/to/atrex-bench/ops/mla_decode \
         --platform H20 --framework CuteDSL \
-        --max-iters 20 --token-budget 8000000 --target-util 90
+        --agent codex --max-iters 20 --token-budget 8000000 --target-util 90
 
     # whole LLM layer (optional decomposition overlay):
     #   decompose -> N per-boundary workspaces (each a standard single-op campaign) ->
     #   shared --max-iters budget scheduled by live ROI (no boundary dropped) -> recombine.
     #   Σ (per-boundary optimization versions) == --max-iters.
     python orchestrator/optimize.py --layer \
-        --name decoder_layer --kernel-demo /path/to/layer.py \
+        --op-dir /path/to/atrex-bench/ops/decoder_layer \
         --platform H20 --framework CuteDSL --max-iters 40
 """
 from __future__ import annotations
@@ -73,11 +73,11 @@ def _render(template_path: Path, **kw: str) -> str:
     return text
 
 
-def _tokens_from_stream(stdout: str) -> int:
-    """Sum core token usage from a `--output-format stream-json` stdout.
+def _tokens_from_stream(stdout: str, agent: str = "claude") -> int:
+    """Sum core token usage from Claude or Codex JSONL stdout.
 
-    Prefer the terminal `{"type":"result", ...,"usage":{...}}` event (cumulative);
-    fall back to summing per-message usage. Counts input+output (+cache) tokens.
+    Claude prefers its terminal `result` event; Codex sums `turn.completed` events.
+    Counts input+output (+cache) tokens when those fields are reported.
     Never raises — budget accounting degrades to max-iters if the stream is unparseable.
     """
     def _usage_tokens(u: dict) -> int:
@@ -102,7 +102,10 @@ def _tokens_from_stream(stdout: str) -> int:
             continue
         if not isinstance(evt, dict):
             continue
-        if evt.get("type") == "result" and isinstance(evt.get("usage"), dict):
+        event_type = evt.get("type")
+        if agent == "codex" and event_type != "turn.completed":
+            continue
+        if agent == "claude" and event_type == "result" and isinstance(evt.get("usage"), dict):
             result_total = _usage_tokens(evt["usage"])
         usage = evt.get("usage")
         if usage is None and isinstance(evt.get("message"), dict):
@@ -136,32 +139,59 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = 
     return stdout or "", stderr or "", proc.returncode, timed_out
 
 
-def _session_env() -> dict:
+def _session_env(agent: str) -> dict:
     """Env for a nested `claude` session. When a Bearer auth token is available
     (ANTHROPIC_AUTH_TOKEN — e.g. a gateway like idealab), drop ANTHROPIC_API_KEY so the
     CLI authenticates via the token instead of sending x-api-key, which such gateways reject
     with 401. On a plain api-key setup (no auth token) nothing is removed.
     """
     env = os.environ.copy()
-    if env.get("ANTHROPIC_AUTH_TOKEN"):
+    if agent == "claude" and env.get("ANTHROPIC_AUTH_TOKEN"):
         env.pop("ANTHROPIC_API_KEY", None)
     return env
 
 
-def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
-    """One clean `claude` session. Fresh session-id = no memory of prior sessions."""
+def _agent_directive(agent: str) -> str:
+    if agent == "codex":
+        return (
+            "## Codex execution mode\n\n"
+            "You are running under Codex CLI. When a stage names a subagent, treat the matching "
+            "`agents/<name>.md` file as that stage's authoritative playbook. If native subagent "
+            "delegation is available, use it; otherwise execute that playbook yourself in this "
+            "session while preserving the same stage boundaries, artifacts, and validation gates.\n"
+        )
+    return (
+        "## Claude execution mode\n\n"
+        "Use the named Claude subagents exactly as required by the prompt and skill.\n"
+    )
+
+
+def _session_command(agent: str, workspace: Path, prompt: str) -> list[str]:
+    if agent == "codex":
+        return [
+            "codex", "exec", "--json", "--ephemeral",
+            "--sandbox", "danger-full-access", "-C", str(workspace), prompt,
+        ]
     session_id = str(uuid.uuid4())
-    cmd = [
+    return [
         "claude", "--print", "--verbose",
         "--output-format", "stream-json",
         "--session-id", session_id,
         prompt,
     ]
-    stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=_session_env())
+
+
+def run_session(workspace: Path, prompt: str, timeout: int, agent: str = "claude") -> SessionResult:
+    """Run one clean Claude or Codex session with no conversational carry-over."""
+    full_prompt = f"{_agent_directive(agent)}\n{prompt}"
+    cmd = _session_command(agent, workspace, full_prompt)
+    stdout, stderr, exit_status, timed_out = _run_bounded(
+        cmd, cwd=workspace, timeout=timeout, env=_session_env(agent)
+    )
     return SessionResult(
         exit_status=exit_status,
         timed_out=timed_out,
-        tokens=_tokens_from_stream(stdout),
+        tokens=_tokens_from_stream(stdout, agent),
         stdout_tail=stdout[-2000:],
         stderr_tail=stderr[-2000:],
     )
@@ -267,21 +297,30 @@ def hardware_directive(platform: str, arch: str) -> str:
 
 
 def link_runtime(workspace: Path) -> None:
-    """Make the skill's `tools/`, `reference/`, `skills/` resolvable from cwd=workspace.
+    """Make runtime playbooks and tools resolvable from cwd=workspace.
 
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
     so symlink them in (absolute targets, so the workspace can live anywhere). gpu-wiki is
     passed by absolute path instead. Idempotent.
     """
-    for sub in ("tools", "reference", "skills"):
+    for sub in ("tools", "reference", "skills", "agents"):
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
+    claude_rules = workspace / "CLAUDE.md"
+    codex_rules = workspace / "AGENTS.md"
+    if claude_rules.is_file() and not codex_rules.exists():
+        if codex_rules.is_symlink():
+            codex_rules.unlink()
+        os.symlink("CLAUDE.md", codex_rules)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
-    if "/tools" not in existing:
+    missing = [entry for entry in ("/tools", "/reference", "/skills", "/agents")
+               if entry not in existing.splitlines()]
+    if missing:
         with gi.open("a", encoding="utf-8") as fh:
-            fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n")
+            fh.write("\n# orchestrator runtime symlinks (not part of the workspace)\n")
+            fh.write("\n".join(missing) + "\n")
 
 
 # ── campaign ──────────────────────────────────────────────────────────────────
@@ -296,6 +335,7 @@ class Campaign:
     notes: str = "none"
     arch: str = ""                 # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
     gpu_wiki: str = ""             # abs path to gpu-wiki (default: <repo>/gpu-wiki)
+    agent: str = "claude"          # clean-session provider: claude or codex
     max_iters: int = 20
     token_budget: int = 0          # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
@@ -330,13 +370,13 @@ class Campaign:
             NOTES=self.notes, GPU_WIKI=self.gpu_wiki,
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
-        res = run_session(self.workspace, prompt, timeout=self.setup_timeout)
+        res = run_session(self.workspace, prompt, timeout=self.setup_timeout, agent=self.agent)
         self._account(res, "setup")
         if res.exit_status != 0 and res.tokens == 0:
             raise RuntimeError(
                 f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
                 "this is likely an API key / authentication issue. "
-                "Run `claude auth status` and `claude --print \"test\"` to diagnose."
+                f"Check `{self.agent}` CLI authentication with a minimal non-interactive run."
             )
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
@@ -365,7 +405,7 @@ class Campaign:
                              WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                              PLATFORM=self.platform, NOTES=self.notes,
                              HARDWARE=hardware_directive(self.platform, self.arch))
-            res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
+            res = run_session(self.workspace, prompt, timeout=self.iter_timeout, agent=self.agent)
             self._account(res, f"iter v{n}")
 
             # Early detection of auth/infra failures: exit != 0 with 0 tokens
@@ -375,7 +415,7 @@ class Campaign:
                 if infra_fails >= 2:
                     return self._finish(
                         f"infra: {infra_fails} consecutive sessions crashed with 0 tokens "
-                        "(likely API key / auth issue — run `claude auth status`)"
+                        f"(likely {self.agent} CLI authentication or infrastructure issue)"
                     )
             else:
                 infra_fails = 0
@@ -541,6 +581,7 @@ class LayerCampaign:
     op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
                                    # metadata.json / input.py / reference.py) — the full shape
                                    # set + SOL + anchor source. Passed in; never hardcoded.
+    agent: str = "claude"
     max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
     token_budget: int = 0
     plateau_k: int = 3             # all boundaries stall_rounds >= k -> layer short-circuit
@@ -585,7 +626,7 @@ class LayerCampaign:
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
         )
-        res = run_session(self.layer_dir, prompt, timeout=self.decompose_timeout)
+        res = run_session(self.layer_dir, prompt, timeout=self.decompose_timeout, agent=self.agent)
         self._account(res, "decompose")
         if not self._manifest_path().exists():
             raise RuntimeError("decompose did not produce boundaries.json")
@@ -611,7 +652,7 @@ class LayerCampaign:
                 KERNEL_DEMO=str(demo), NOTES=self.notes, GPU_WIKI=self.gpu_wiki,
                 HARDWARE=hardware_directive(self.platform, self.arch),
             )
-            res = run_session(ws, prompt, timeout=self.setup_timeout)
+            res = run_session(ws, prompt, timeout=self.setup_timeout, agent=self.agent)
             self._account(res, f"baseline {b['name']}")
             if read_memory(ws, 0) is None:
                 raise RuntimeError(f"baseline failed for boundary {b['name']} (no memory/v0.json)")
@@ -716,7 +757,7 @@ class LayerCampaign:
                              WORKSPACE=str(ws), N=n, PREV=n - 1,
                              PLATFORM=self.platform, NOTES=self.notes,
                              HARDWARE=hardware_directive(self.platform, self.arch))
-            res = run_session(ws, prompt, timeout=self.iter_timeout)
+            res = run_session(ws, prompt, timeout=self.iter_timeout, agent=self.agent)
             self._account(res, f"{target['name']} v{n}")
 
             # Guard: if the session exited without producing v<n>.json, write a
@@ -761,7 +802,7 @@ class LayerCampaign:
         prompt = _render(PROMPTS_DIR / "recombine.md",
                          LAYER_DIR=str(self.layer_dir),
                          HARDWARE=hardware_directive(self.platform, self.arch))
-        res = run_session(self.layer_dir, prompt, timeout=self.recombine_timeout)
+        res = run_session(self.layer_dir, prompt, timeout=self.recombine_timeout, agent=self.agent)
         self._account(res, "recombine")
 
     def run(self) -> str:
@@ -808,6 +849,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                                       "(cannot be deduced from the op dir).")
     ap.add_argument("--framework", required=True, help="Target DSL, e.g. CuteDSL / FlyDSL "
                                                        "(cannot be deduced from the op dir).")
+    ap.add_argument("--agent", choices=("claude", "codex"), default="claude",
+                    help="Agent CLI used for every clean session (default: claude).")
     ap.add_argument("--layer", action="store_true",
                     help="Decomposition overlay: treat the op's reference as a composite of more than one fused "
                          "op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
@@ -833,7 +876,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     arch = args.arch or detect_arch()
     op = _resolve_op(args.op_dir)
-    print(f"[orchestrator] op={op['name']} platform={args.platform} runtime_arch="
+    print(f"[orchestrator] op={op['name']} platform={args.platform} agent={args.agent} runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
 
@@ -842,6 +885,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             name=op["name"], layer_demo=op["reference"], platform=args.platform,
             framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
             roofline_py=op["roofline_py"], op_dir=op["op_dir"],
+            agent=args.agent,
             max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
         )
@@ -851,6 +895,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     campaign = Campaign(
         name=op["name"], kernel_demo=op["reference"], platform=args.platform,
         framework=args.framework, notes=args.notes, arch=arch, gpu_wiki=args.gpu_wiki,
+        agent=args.agent,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
     )
