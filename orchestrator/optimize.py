@@ -307,6 +307,12 @@ def link_runtime(workspace: Path) -> None:
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
+    claude_rules = workspace / "CLAUDE.md"
+    codex_rules = workspace / "AGENTS.md"
+    if claude_rules.is_file() and not codex_rules.exists():
+        if codex_rules.is_symlink():
+            codex_rules.unlink()
+        os.symlink("CLAUDE.md", codex_rules)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
     missing = [entry for entry in ("/tools", "/reference", "/skills", "/agents")

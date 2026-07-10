@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,24 @@ class RuntimeLinkTests(unittest.TestCase):
             self.assertTrue((workspace / "agents").is_symlink())
             self.assertIn("/agents", (workspace / ".gitignore").read_text())
 
+    def test_adds_codex_rules_to_existing_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "CLAUDE.md").write_text("shared rules")
+            optimize.link_runtime(workspace)
+            agents_md = workspace / "AGENTS.md"
+            self.assertTrue(agents_md.is_symlink())
+            self.assertEqual(agents_md.readlink(), Path("CLAUDE.md"))
+
+    def test_preserves_existing_agents_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "CLAUDE.md").write_text("claude rules")
+            (workspace / "AGENTS.md").write_text("custom codex rules")
+            optimize.link_runtime(workspace)
+            self.assertFalse((workspace / "AGENTS.md").is_symlink())
+            self.assertEqual((workspace / "AGENTS.md").read_text(), "custom codex rules")
+
     def test_adds_agents_ignore_to_existing_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -78,6 +97,27 @@ class InstallerContractTests(unittest.TestCase):
             install_script,
         )
         self.assertIn("link_skill_gpu_wiki", install_script)
+
+
+class WorkspaceInitializationTests(unittest.TestCase):
+    def test_creates_codex_rules_symlink(self):
+        init_script = Path(__file__).parents[2] / "reference" / "workspace_init.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            kernel_demo = run_dir / "reference.py"
+            kernel_demo.write_text("def run():\n    return None\n")
+            subprocess.run(
+                ["bash", str(init_script), "demo", str(kernel_demo)],
+                cwd=run_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            workspace = run_dir / "kernel_opt_demo"
+            agents_md = workspace / "AGENTS.md"
+            self.assertTrue(agents_md.is_symlink())
+            self.assertEqual(agents_md.readlink(), Path("CLAUDE.md"))
+            self.assertEqual(agents_md.read_text(), (workspace / "CLAUDE.md").read_text())
 
 
 if __name__ == "__main__":

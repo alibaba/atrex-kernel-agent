@@ -70,8 +70,14 @@ profiles/*/att/*.pftrace
 profiles/*/att/*.otf2
 EOF
 
-# Step 5: Deploy CLAUDE.md (agent behavior constraints)
+# Step 5: Deploy shared agent behavior constraints. CLAUDE.md remains the
+# canonical file; AGENTS.md is a relative symlink so Codex and Claude read the
+# same rules even if the workspace is moved or resumed with another provider.
 cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
+if [[ -e "$WORKSPACE/AGENTS.md" || -L "$WORKSPACE/AGENTS.md" ]]; then
+    rm -f "$WORKSPACE/AGENTS.md"
+fi
+ln -s "CLAUDE.md" "$WORKSPACE/AGENTS.md"
 
 echo ""
 echo "Workspace initialized at: $WORKSPACE"
@@ -80,6 +86,7 @@ echo "Directory structure:"
 echo "  $WORKSPACE/"
 echo "  ├── kernel.py          (copied from kernel_demo)"
 echo "  ├── CLAUDE.md          (agent behavior constraints)"
+echo "  ├── AGENTS.md          -> CLAUDE.md (Codex rules entrypoint)"
 echo "  ├── .gitignore"
 echo "  ├── memory/            (iteration JSON files)"
 echo "  ├── plans/             (optimization plans)"
