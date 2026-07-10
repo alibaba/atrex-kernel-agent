@@ -11,9 +11,9 @@
 #             ~/aka_kernel_opt/reference-projects/
 #
 # Skill directory whitelist (only these are copied):
-#   reference/  skills/  tools/  SKILL.md
+#   orchestrator/  agents/  reference/  skills/  tools/  SKILL.md
 #
-# agents/ is copied separately to $TARGET_DIR/agents/ (not inside the skill dir).
+# agents/ is also copied separately to $TARGET_DIR/agents/ for native agent discovery.
 #
 # Usage:
 #   ./install.sh                       # install/update all detected targets
@@ -279,12 +279,36 @@ configure_claude_target() {
 # ---------------------------------------------------------------------------
 # 3. Copy skill files into the active target skill directory
 # ---------------------------------------------------------------------------
-# Whitelist of paths to copy into the skill directory
-SKILL_WHITELIST=(reference skills tools SKILL.md)
+# Whitelist of paths to copy into the skill directory. Keep the installed skill
+# self-contained so orchestrator/optimize.py can resolve REPO_ROOT/{agents,reference,
+# skills,tools,gpu-wiki} regardless of whether it is launched via Codex or Claude.
+SKILL_WHITELIST=(orchestrator agents reference skills tools SKILL.md)
+
+link_skill_gpu_wiki() {
+  local link_path="$TARGET_SKILL_DIR/gpu-wiki"
+  local real_gpu_wiki
+  real_gpu_wiki="$(cd "$GPU_WIKI_DIR" && pwd)"
+
+  if [ -L "$link_path" ]; then
+    local current_target
+    current_target="$(readlink "$link_path")"
+    if [ "$current_target" = "$real_gpu_wiki" ]; then
+      echo "[$TARGET_NAME][skill] gpu-wiki symlink up-to-date"
+      return
+    fi
+    rm -f "$link_path"
+  elif [ -e "$link_path" ]; then
+    rm -rf "$link_path"
+  fi
+
+  ln -s "$real_gpu_wiki" "$link_path"
+  echo "[$TARGET_NAME][skill] Symlinked gpu-wiki -> $real_gpu_wiki"
+}
 
 copy_skill() {
   if [ "$SCRIPT_DIR" = "$TARGET_SKILL_DIR" ]; then
     echo "[$TARGET_NAME][skill] Already at $TARGET_SKILL_DIR (skip copy)"
+    link_skill_gpu_wiki
     return
   fi
 
@@ -293,7 +317,14 @@ copy_skill() {
   if command -v rsync >/dev/null 2>&1; then
     for item in "${SKILL_WHITELIST[@]}"; do
       if [ -e "$SCRIPT_DIR/$item" ]; then
-        rsync -a --delete "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/"
+        if [ "$item" = "orchestrator" ]; then
+          rsync -a --delete --delete-excluded \
+            --exclude '__pycache__/' \
+            --exclude 'tests/' \
+            "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/"
+        else
+          rsync -a --delete "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/"
+        fi
       fi
     done
   else
@@ -301,11 +332,16 @@ copy_skill() {
       if [ -d "$SCRIPT_DIR/$item" ]; then
         mkdir -p "$TARGET_SKILL_DIR/$item"
         cp -R "$SCRIPT_DIR/$item"/. "$TARGET_SKILL_DIR/$item"/
+        if [ "$item" = "orchestrator" ]; then
+          rm -rf "$TARGET_SKILL_DIR/orchestrator/tests" "$TARGET_SKILL_DIR/orchestrator/__pycache__"
+          find "$TARGET_SKILL_DIR/orchestrator" -type d -name __pycache__ -prune -exec rm -rf {} +
+        fi
       elif [ -f "$SCRIPT_DIR/$item" ]; then
         cp "$SCRIPT_DIR/$item" "$TARGET_SKILL_DIR/$item"
       fi
     done
   fi
+  link_skill_gpu_wiki
 }
 
 copy_agents() {
