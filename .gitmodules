@@ -68,3 +68,9 @@
 [submodule "gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys"]
 	path = gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys
 	url = https://github.com/mlc-ai/modern-gpu-programming-for-mlsys.git
+[submodule "gpu-wiki/3rdparty/accelerated-computing-hub"]
+	path = gpu-wiki/3rdparty/accelerated-computing-hub
+	url = https://github.com/NVIDIA/accelerated-computing-hub.git
+[submodule "reference-projects/how-to-optim-algorithm-in-cuda"]
+	path = reference-projects/how-to-optim-algorithm-in-cuda
+	url = https://github.com/BBuf/how-to-optim-algorithm-in-cuda.git

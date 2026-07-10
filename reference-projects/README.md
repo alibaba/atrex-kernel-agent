@@ -32,3 +32,4 @@ git submodule update --remote
 | aiter | ROCm AIter |
 | quack | Dao-AILab Quack |
 | tilelang | TileLang |
+| how-to-optim-algorithm-in-cuda | CUDA kernels and engineering notes covering CUTLASS/CuTe, Triton, PTX, PyTorch, and LLM systems; upstream currently has no repository-level license, so treat it as read-only reference material |

@@ -224,10 +224,15 @@ Official vendor documentation including ISA manuals, programming guides, and arc
 
 ## 3rdparty/ — Community GPU Kernel Knowledge (P5)
 
-External open-source GPU kernel wikis managed as git submodules.
+External GPU learning and kernel knowledge repositories managed as git submodules.
 Consult as **P5 priority** — after exhausting `docs/` (P0–P4) and `reference-kernels/`.
 
 | Repository | Maintainer | Focus | Hardware | Best For |
 |---|---|---|---|---|
 | **KernelWiki** | MIT HAN Lab (Song Han) | Production-grade kernel optimization patterns from 2179 PRs | NVIDIA Blackwell (SM100), Hopper (SM90) | Performance diagnostics, optimization pattern matching, production kernel reference |
 | **modern-gpu-programming-for-mlsys** | MLC-AI (Tianqi Chen) + CMU | Systematic GPU programming textbook: hardware → programming model → SOTA GEMM | NVIDIA Blackwell, Hopper, Ampere | Foundational learning, Roofline model, TMA pipeline, GEMM optimization theory |
+| **accelerated-computing-hub** | NVIDIA | Official tutorials for CUDA C++, CUDA Tile, accelerated Python, Warp, standard parallelism, and profiling workflows | NVIDIA GPUs; tutorial-specific requirements | Structured official courses, runnable notebooks, Nsight-assisted learning, and broader accelerated-computing topics |
+
+License notes:
+
+- `accelerated-computing-hub` uses CC BY-NC-SA 4.0 for learning materials and Apache-2.0 for code; check the upstream `LICENSE` and `LICENSE-CODE` before reuse.
