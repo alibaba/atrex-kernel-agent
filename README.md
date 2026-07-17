@@ -84,6 +84,22 @@ The Agent will initialize a workspace, source hardware specs from `gpu-wiki`, wr
 └── gpu-wiki/                        # Local GPU knowledge base
 ```
 
+## Citation
+
+Please cite our [paper](https://arxiv.org/abs/2607.14541) if it is helpful to your research.
+
+```bibtex
+@misc{atrex2026,
+  title         = {Are LLM-Generated GPU Kernels Production-Ready? A Trace-Driven Benchmark and Optimization Agent},
+  author        = {Lingyun Yang and Yuxiao Wang and Shenghao Liang and Linfeng Yang and Daocheng Ying and Chunbo You and Rui Zhang and Luping Wang and Yinghao Yu and Guodong Yang and Liping Zhang},
+  year          = {2026},
+  eprint        = {2607.14541},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2607.14541}
+}
+```
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
