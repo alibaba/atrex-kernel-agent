@@ -124,9 +124,38 @@ _REPORT_ANCHOR = weakref.WeakKeyDictionary()
 def load_report(path):
     """Load a .ncu-rep file and return the first action (= first kernel launch).
 
+    When the environment variable ``NCU_KERNEL_NAME`` is set, scan every action in
+    every range and return the first whose kernel name contains the given substring.
+    This lets the caller pick the right kernel out of a multi-launch report — e.g.
+    a profiling driver often also runs torch RNG / setup kernels, and the default
+    ``action_by_idx(0)`` would otherwise return one of those instead of the kernel
+    we actually care about. Falls back to range 0 / action 0 if no match is found
+    (best-effort: never raises on selection failure).
+
     Returns (report, action) tuple — keep the report alive while using the action.
     """
+    import os as _os_lf
     r = _import_ncu_report().load_report(str(path))
+    # Optional: select a specific action by kernel-name substring (env NCU_KERNEL_NAME).
+    # Without this, a profiling driver that also launches helper kernels (e.g. torch RNG)
+    # causes range_by_idx(0) to return the first (unwanted) kernel.
+    _want = _os_lf.environ.get("NCU_KERNEL_NAME", "").strip()
+    if _want:
+        try:
+            for ri in range(r.num_ranges()):
+                rng_i = r.range_by_idx(ri)
+                for ai in range(rng_i.num_actions()):
+                    act_i = rng_i.action_by_idx(ai)
+                    nm = ""
+                    for getter in ("kernel_name", "name"):
+                        v = getattr(act_i, getter, None)
+                        if v:
+                            nm = v if isinstance(v, str) else str(v)
+                            break
+                    if nm and (_want in nm):
+                        return r, act_i
+        except Exception:
+            pass  # best-effort: fall back to range 0
     rng = r.range_by_idx(0)
     action = rng.action_by_idx(0)
     return r, action
