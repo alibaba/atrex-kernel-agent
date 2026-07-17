@@ -76,6 +76,10 @@ def _run_eval(workspace: Path, traces_path: Path) -> None:
     cmd = _sol_execbench_cmd() + [".", "--solution", "solution.json", "-o", str(traces_path)]
     if (workspace / "config.json").exists():
         cmd += ["--config", "config.json"]
+    # Allow overriding the evaluator subprocess timeout via env var (seconds).
+    # The PyTorch V0 reference can be very slow on large workloads; default 1200s.
+    eval_timeout = os.environ.get("SOL_EVAL_TIMEOUT", "1200")
+    cmd += ["--timeout", str(eval_timeout)]
     print(f"[test_kernel] {' '.join(cmd)}", flush=True)
     # Stream the evaluator's own table to stderr; traces go to the JSONL file.
     subprocess.run(cmd, cwd=str(workspace), check=False)
@@ -136,14 +140,21 @@ def _summarize(traces: list[dict]) -> dict:
 
 
 def _infer_version(workspace: Path) -> str:
+    """Largest STRICT integer version present as memory/v<N>.json.
+
+    Accepts only stems matching ^v\\d+\\.json$ exactly — experimental files
+    like v71_512.json (scratch variants of v71) MUST NOT be misread as v71512
+    (Python's PEP 515 underscores-in-numeric-literals trap).
+    """
+    import re
+    _STRICT = re.compile(r"^v(\d+)\.json$")
     mem = workspace / "memory"
     best = 0
     if mem.exists():
         for p in mem.glob("v*.json"):
-            try:
-                best = max(best, int(p.stem[1:]))
-            except ValueError:
-                continue
+            m = _STRICT.match(p.name)
+            if m is not None:
+                best = max(best, int(m.group(1)))
     return f"v{best}"
 
 
@@ -204,17 +215,35 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", default=".", help="Workspace dir (default: cwd).")
     ap.add_argument("--version", default=None, help="memory version to record, e.g. v3 (default: latest / v0).")
     ap.add_argument("--no-memory", action="store_true", help="Run + print only; do not write memory/.")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Random seed for input generation. If not set, uses sol-execbench default.")
+    ap.add_argument("--multi-seed", type=int, default=0, metavar="N",
+                    help="Run N additional seeds (1..N) for robustness check. Reports PASS only if ALL seeds pass.")
     args = ap.parse_args(argv)
 
     workspace = Path(args.workspace).resolve()
     if not (workspace / "solution.json").exists():
         raise SystemExit(f"[test_kernel] no solution.json in {workspace}")
 
+    # Set seed if provided (before any eval calls)
+    if args.seed is not None:
+        import torch as _torch_seed
+        _torch_seed.manual_seed(args.seed)
+        import random as _rnd_seed
+        _rnd_seed.seed(args.seed)
+        try:
+            import numpy as _np_seed
+            _np_seed.random.seed(args.seed)
+        except ImportError:
+            pass
+
     traces_path = workspace / "traces.jsonl"
     _run_eval(workspace, traces_path)
     s = _summarize(_parse_traces(traces_path))
 
     print("\n[test_kernel] ── SOL-ExecBench result ─────────────────────────────")
+    if args.seed is not None:
+        print(f"  SEED                     : {args.seed}")
     print(f"  workloads PASSED         : {s['passed']}/{s['total']}")
     print(f"  GEOMEAN kernel latency   : {s['latency_us_geomean']:.1f} us   <-- OPTIMIZATION GOAL (minimize)")
     print(f"  arith-mean kernel latency: {s['latency_us_arith_mean']:.1f} us")
@@ -223,6 +252,49 @@ def main(argv: list[str] | None = None) -> int:
     if s["failures"]:
         print(f"  FAILURES                 : {'; '.join(s['failures'])}")
     print("  ────────────────────────────────────────────────────────────────")
+
+    # Multi-seed robustness check.
+    #
+    # The production evaluator uses freshly-randomized inputs every call; a kernel
+    # that passes on a single seed/smoke run can still fail correctness on a
+    # different draw (e.g. numerical edge-cases that only manifest at certain
+    # magnitudes). Re-running the evaluator N times under different seeds gives
+    # cheap confidence that the kernel is robust, not just lucky.
+    if args.multi_seed > 0:
+        print(f"\n[test_kernel] ── Multi-seed robustness ({args.multi_seed} seeds) ──")
+        all_seeds_pass = s["all_pass"]
+        worst_abs_all = s["max_abs_err"]
+        worst_rel_all = s["max_rel_err"]
+        for seed_i in range(1, args.multi_seed + 1):
+            import torch as _torch_ms
+            _torch_ms.manual_seed(seed_i * 1000 + 42)
+            import random as _rnd_ms
+            _rnd_ms.seed(seed_i * 1000 + 42)
+            try:
+                import numpy as _np_ms
+                _np_ms.random.seed(seed_i * 1000 + 42)
+            except ImportError:
+                pass
+            traces_seed = workspace / f"traces_seed{seed_i}.jsonl"
+            _run_eval(workspace, traces_seed)
+            ss = _summarize(_parse_traces(traces_seed))
+            tag = "PASS" if ss["all_pass"] else "FAIL"
+            print(f"  seed {seed_i}: {ss['passed']}/{ss['total']} passed, "
+                  f"abs_err={ss['max_abs_err']:.2e}, rel_err={ss['max_rel_err']:.2e} -> {tag}")
+            if not ss["all_pass"]:
+                all_seeds_pass = False
+            worst_abs_all = max(worst_abs_all, ss["max_abs_err"])
+            worst_rel_all = max(worst_rel_all, ss["max_rel_err"])
+            try:
+                traces_seed.unlink()
+            except OSError:
+                pass
+        print(f"  ────────────────────────────────────────────────────────────────")
+        print(f"  MULTI-SEED RESULT        : {'PASS' if all_seeds_pass else 'FAIL'}")
+        print(f"  worst abs / rel (all)    : {worst_abs_all:.2e} / {worst_rel_all:.2e}")
+        if not all_seeds_pass:
+            print(f"  *** KERNEL NOT ROBUST — fails on some seeds ***")
+            s["all_pass"] = False
 
     if not args.no_memory:
         version = args.version or _infer_version(workspace)
