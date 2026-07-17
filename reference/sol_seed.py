@@ -193,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--platform", default="LOCAL", help="Target hardware token, e.g. B200 (default: LOCAL).")
     ap.add_argument("--gpu-wiki", default="", help="Absolute path to gpu-wiki (recorded in README).")
     ap.add_argument("--no-bench", action="store_true", help="Skip the V0 test_kernel.py bench (no memory/v0.json).")
+    ap.add_argument("--skip-bench-if-v0-exists", action="store_true",
+                    help="If memory/v0.json already exists (e.g. produced by a synthetic seed), "
+                         "skip the V0 bench step entirely. Used to unblock the optimizer "
+                         "for ops whose torch reference is too slow to bench within a reasonable budget.")
     args = ap.parse_args(argv)
 
     op = Path(args.op_dir).resolve()
@@ -231,7 +235,11 @@ def main(argv: list[str] | None = None) -> int:
     (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
 
     # 5) V0 baseline metrics (real evaluator)
-    if not args.no_bench:
+    pre_existing_v0 = (ws / "memory" / "v0.json").exists() and args.skip_bench_if_v0_exists
+    if pre_existing_v0:
+        print("[sol_seed] skipping V0 bench — memory/v0.json already provided "
+              "(synthetic seed); ground-truth files refreshed in-place.", file=sys.stderr)
+    elif not args.no_bench:
         r = subprocess.run([sys.executable, str(ws / "test_kernel.py"), "--version", "v0"], cwd=str(ws))
         if r.returncode != 0:
             print("[sol_seed] WARNING: V0 baseline did not pass all workloads — check solution.json / reference.",

@@ -248,15 +248,23 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
 
 
 def latest_version(workspace: Path) -> int:
+    """Largest STRICT integer version present as memory/v<N>.json.
+
+    Note: int('71_512') == 71512 in Python (PEP 515 underscores-in-numeric-literals).
+    Experimental files named like v71_512.json (an experiment branch for the v71 round) must
+    NOT count as v71512 — they're scratch variants of v71, not real iterations. We therefore
+    accept only stems matching ^v\\d+\\.json$ exactly.
+    """
+    import re
+    _STRICT = re.compile(r"^v(\d+)\.json$")
     mem = workspace / "memory"
     if not mem.exists():
         return -1
     vs = []
     for p in mem.glob("v*.json"):
-        try:
-            vs.append(int(p.stem[1:]))
-        except ValueError:
-            continue
+        m = _STRICT.match(p.name)
+        if m is not None:
+            vs.append(int(m.group(1)))
     return max(vs) if vs else -1
 
 
@@ -562,13 +570,17 @@ class Campaign:
     def _setup_baseline_sol(self, op_dir: Path) -> None:
         if not SOL_SEED.exists():
             raise FileNotFoundError(f"missing {SOL_SEED}")
-        subprocess.run(
-            [sys.executable, str(SOL_SEED),
-             "--op-dir", str(op_dir), "--name", self.name,
-             "--workspace", str(self.workspace),
-             "--framework", self.framework, "--platform", self.platform],
-            check=True,
-        )
+        cmd = [sys.executable, str(SOL_SEED),
+               "--op-dir", str(op_dir), "--name", self.name,
+               "--workspace", str(self.workspace),
+               "--framework", self.framework, "--platform", self.platform]
+        # Set AKA_SKIP_BENCH_IF_V0=1 in the env if the operator pre-seeded
+        # memory/v0.json (e.g. via a synthetic seed script for ops whose torch
+        # reference is too slow to bench within a reasonable budget). When set,
+        # sol_seed.py skips the V0 bench step entirely.
+        if os.environ.get("AKA_SKIP_BENCH_IF_V0", "").lower() in ("1", "true", "yes"):
+            cmd.append("--skip-bench-if-v0-exists")
+        subprocess.run(cmd, check=True)
         self._link_runtime()
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("sol_seed did not produce memory/v0.json (V0 baseline failed)")
@@ -643,15 +655,32 @@ class Campaign:
             res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
             self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
 
-            # Early detection of auth/infra failures: exit != 0 with 0 tokens
-            # means the session never even started (bad API key, network, etc.)
-            if res.exit_status != 0 and res.tokens == 0:
+            # Robust infra-failure handling: distinguish crash vs timeout, retry up to 15
+            # consecutive failures with progressive backoff before giving up. A 2-fail
+            # cutoff was too aggressive — transient API rate-limits and short network blips
+            # regularly produced back-to-back non-zero exits with low tokens, killing the
+            # whole campaign for a recoverable hiccup. Backoff avoids hammering a
+            # rate-limited endpoint.
+            if res.exit_status != 0 and not res.timed_out:
                 infra_fails += 1
-                if infra_fails >= 2:
+                if infra_fails >= 15:
                     return self._finish(
-                        f"infra: {infra_fails} consecutive sessions crashed with 0 tokens "
+                        f"infra: {infra_fails} consecutive sessions crashed (exit={res.exit_status}) "
                         "(likely API key / auth issue — run `claude auth status`)"
                     )
+                # Back off before retrying to avoid hammering a rate-limited API
+                import time as _time
+                _backoff = min(30 * infra_fails, 180)
+                print(f"[orchestrator] infra fail #{infra_fails} (exit={res.exit_status}), backing off {_backoff}s", flush=True)
+                _time.sleep(_backoff)
+            elif res.exit_status != 0 and res.timed_out:
+                infra_fails += 1
+                if infra_fails >= 15:
+                    return self._finish(f"infra: {infra_fails} consecutive timeouts")
+                import time as _time
+                _backoff = min(60 * infra_fails, 300)
+                print(f"[orchestrator] timeout #{infra_fails}, backing off {_backoff}s", flush=True)
+                _time.sleep(_backoff)
             else:
                 infra_fails = 0
 

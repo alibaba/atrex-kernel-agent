@@ -116,6 +116,36 @@ Execution steps:
    python test_kernel.py
    ```
    If validation fails, iteratively fix until it passes. Do not proceed to Stage 4 with broken correctness.
+
+   **Multi-seed robustness (MANDATORY before commit)**: A single-seed PASS is NOT sufficient.
+   The production evaluator uses **freshly randomized inputs every call**, and a kernel that
+   passes only on one seed can fail on another (numerical edge-cases, magnitude-dependent
+   accumulation error, etc.). Before committing, run multi-seed validation:
+
+   ```bash
+   # Run 5 additional seeds (1..5). Reports PASS only if ALL seeds pass.
+   python test_kernel.py --version v{{N}} --multi-seed 5
+   ```
+
+   Or, if you want explicit per-seed traces, run them one at a time:
+   ```bash
+   python test_kernel.py --version v{{N}}_seed1 --seed 1 --no-memory
+   python test_kernel.py --version v{{N}}_seed2 --seed 2 --no-memory
+   python test_kernel.py --version v{{N}}_seed3 --seed 3 --no-memory
+   ```
+
+   **ALL seeds must PASS.** If ANY seed fails correctness, the kernel is BROKEN — revert
+   immediately with `git reset --hard HEAD`. Do NOT commit a kernel that passes only on
+   specific seeds.
+
+   Never rely on:
+   - Input data values being stable across calls (no memoization / precomputation of outputs)
+   - Tensor `data_ptr()` being stable (no pointer-equality caching)
+   - Specific input patterns (no sentinel detection / value-dependent branching)
+   - Cached computation results from previous calls (no `_cache` dict keyed by input values)
+
+   Only shape/dtype/layout-based dispatch is safe. Weight format pre-conversion (transpose,
+   contiguous) is allowed since weights are stable during evaluation.
 5. **Create/update memory**:
    ```bash
    python tools/memory_manager.py create --workspace . --version v{{N}}
