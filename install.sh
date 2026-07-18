@@ -126,9 +126,41 @@ link_gpu_wiki() {
   echo "[repo] Symlinked gpu-wiki: $GPU_WIKI_DIR -> $real_source"
 }
 
+# 整体软链接 reference-projects 目录（与 link_gpu_wiki 对称）。
+link_reference_projects() {
+  local src="$SCRIPT_DIR/reference-projects"
+
+  if [ ! -d "$src" ]; then
+    echo "[repo] No reference-projects/ in source (skip)"
+    return
+  fi
+  if [ "$src" = "$REFERENCE_PROJECTS_DIR" ]; then
+    echo "[repo] reference-projects source is already $REFERENCE_PROJECTS_DIR (skip)"
+    return
+  fi
+
+  local real_source
+  real_source="$(cd "$src" && pwd)"
+
+  if [ -L "$REFERENCE_PROJECTS_DIR" ]; then
+    local current_target
+    current_target="$(readlink "$REFERENCE_PROJECTS_DIR")"
+    if [ "$current_target" = "$real_source" ]; then
+      echo "[repo] reference-projects symlink up-to-date"
+      return
+    fi
+    rm -f "$REFERENCE_PROJECTS_DIR"
+  elif [ -e "$REFERENCE_PROJECTS_DIR" ]; then
+    # 旧的拷贝目录（或逐仓库软链接目录）存在，替换为整体软链接
+    rm -rf "$REFERENCE_PROJECTS_DIR"
+  fi
+
+  ln -s "$real_source" "$REFERENCE_PROJECTS_DIR"
+  echo "[repo] Symlinked reference-projects: $REFERENCE_PROJECTS_DIR -> $real_source"
+}
+
 prepare_knowledge_repos() {
   link_gpu_wiki
-  mkdir -p "$REFERENCE_PROJECTS_DIR"
 
   # 初始化 submodules（如果在源码目录中）
   local script_dir
@@ -146,8 +178,14 @@ prepare_knowledge_repos() {
     }
   fi
 
-  # 将 submodule 目录软链接到工作目录
-  if [ -d "$submodule_dir" ]; then
+  if [ ! -d "$submodule_dir" ]; then
+    echo "[repo] No reference-projects submodule directory found at $submodule_dir"
+    echo "[repo] Please run 'git submodule update --init --depth 1' first"
+  elif [ "$WITHOUT_GITHUB" = "1" ]; then
+    # --without-github：逐个软链接非 GitHub 仓库，以便排除 GitHub 托管的参考项目。
+    # 该模式下目标必须是真实目录（而非整体软链接）。
+    [ -L "$REFERENCE_PROJECTS_DIR" ] && rm -f "$REFERENCE_PROJECTS_DIR"
+    mkdir -p "$REFERENCE_PROJECTS_DIR"
     for repo_dir in "$submodule_dir"/*/; do
       [ -d "$repo_dir" ] || continue
       local repo_name
@@ -156,14 +194,12 @@ prepare_knowledge_repos() {
       # 跳过 README.md 等非目录项
       [ -d "$repo_dir/.git" ] || [ -f "$repo_dir/.git" ] || continue
 
-      # 如果设置了 --without-github，检查该 submodule 的 URL 是否是 GitHub
-      if [ "$WITHOUT_GITHUB" = "1" ]; then
-        local repo_url
-        repo_url="$(git config --file "$script_dir/.gitmodules" "submodule.reference-projects/$repo_name.url" 2>/dev/null || true)"
-        if [[ "$repo_url" == *"github.com"* ]]; then
-          echo "[repo] Skipping GitHub repo (--without-github): $repo_name"
-          continue
-        fi
+      # 检查该 submodule 的 URL 是否是 GitHub
+      local repo_url
+      repo_url="$(git config --file "$script_dir/.gitmodules" "submodule.reference-projects/$repo_name.url" 2>/dev/null || true)"
+      if [[ "$repo_url" == *"github.com"* ]]; then
+        echo "[repo] Skipping GitHub repo (--without-github): $repo_name"
+        continue
       fi
 
       # 创建软链接到目标工作目录
@@ -172,7 +208,6 @@ prepare_knowledge_repos() {
       real_repo_dir="$(cd "$repo_dir" && pwd)"
 
       if [ -L "$link_target" ]; then
-        # 已是软链接，检查是否指向正确目标
         local current_target
         current_target="$(readlink "$link_target")"
         if [ "$current_target" = "$real_repo_dir" ]; then
@@ -183,7 +218,6 @@ prepare_knowledge_repos() {
           echo "[repo] Updated symlink: $repo_name -> $real_repo_dir"
         fi
       elif [ -e "$link_target" ]; then
-        # 旧的拷贝目录存在，替换为软链接
         rm -rf "$link_target"
         ln -s "$real_repo_dir" "$link_target"
         echo "[repo] Replaced copy with symlink: $repo_name -> $real_repo_dir"
@@ -193,8 +227,8 @@ prepare_knowledge_repos() {
       fi
     done
   else
-    echo "[repo] No reference-projects submodule directory found at $submodule_dir"
-    echo "[repo] Please run 'git submodule update --init --depth 1' first"
+    # 默认：整体软链接 reference-projects 目录（与 gpu-wiki 一致）。
+    link_reference_projects
   fi
 
   echo "[repo] gpu-wiki: $GPU_WIKI_DIR"
@@ -333,6 +367,75 @@ copy_agents() {
   else
     cp -R "$agents_src"/. "$agents_dst/"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# 3c. Deploy the SKILL-route agent constraints as the working-directory CLAUDE.md
+# ---------------------------------------------------------------------------
+# The SKILL.md (torch) route is run from the install base ($INSTALL_BASE); Claude
+# auto-loads $INSTALL_BASE/CLAUDE.md as project memory for that session. Deploy
+# reference/CLAUDE.skill.md there so the SKILL route gets its own constraints via
+# install.sh (not per-workspace via workspace_init.sh). The orchestrator/optimize.py
+# route is unaffected: it runs from the repo and still receives reference/CLAUDE.md
+# per workspace through workspace_init.sh.
+deploy_skill_claude_md() {
+  local src="$SCRIPT_DIR/reference/CLAUDE.skill.md"
+  local dst="$INSTALL_BASE/CLAUDE.md"
+
+  if [ ! -f "$src" ]; then
+    echo "[$TARGET_NAME][claude-md] Source $src not found (skip)"
+    return
+  fi
+  if [ "$src" = "$dst" ]; then
+    echo "[$TARGET_NAME][claude-md] Source and destination identical (skip)"
+    return
+  fi
+  if [ -f "$dst" ] && ! cmp -s "$src" "$dst"; then
+    local backup="$dst.bak.$(date +%Y%m%d-%H%M%S)"
+    cp "$dst" "$backup"
+    echo "[$TARGET_NAME][claude-md] Backed up existing CLAUDE.md -> $backup"
+  fi
+  cp "$src" "$dst"
+  echo "[$TARGET_NAME][claude-md] Deployed $src -> $dst"
+}
+
+# ---------------------------------------------------------------------------
+# 3d. Install each sub-skill as an independently-discoverable top-level skill
+# ---------------------------------------------------------------------------
+# Besides the gpu-kernel-optimizer router (installed by copy_skill), publish each
+# skills/<name>/ as a sibling skill under the target's skills/ directory, so it can
+# be invoked directly and not only through the router's relative-path references.
+# Codex/Claude discover skills at <target>/skills/<name>/SKILL.md. Copied (like the
+# router) so the installed skill set stays self-contained.
+install_subskills() {
+  local src_skills="$SCRIPT_DIR/skills"
+  local dst_skills
+  dst_skills="$(dirname "$TARGET_SKILL_DIR")"   # <target>/skills
+
+  if [ ! -d "$src_skills" ]; then
+    echo "[$TARGET_NAME][subskills] No skills/ directory in source (skip)"
+    return
+  fi
+  if [ "$src_skills" = "$dst_skills" ]; then
+    echo "[$TARGET_NAME][subskills] Source and destination identical (skip)"
+    return
+  fi
+
+  mkdir -p "$dst_skills"
+  local sub sub_nots name
+  for sub in "$src_skills"/*/; do
+    sub_nots="${sub%/}"
+    [ -d "$sub_nots" ] || continue
+    [ -f "$sub_nots/SKILL.md" ] || continue   # only directories that are real skills
+    name="$(basename "$sub_nots")"
+    echo "[$TARGET_NAME][subskills] Installing sub-skill: $name -> $dst_skills/$name"
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete "$sub_nots" "$dst_skills/"
+    else
+      rm -rf "$dst_skills/$name"
+      cp -R "$sub_nots" "$dst_skills/"
+    fi
+  done
 }
 
 
@@ -1444,6 +1547,7 @@ install_codex() {
   if [ "$MODE" != "hooks-only" ]; then
     copy_skill
     copy_agents
+    install_subskills
   fi
   enable_hooks_feature
   ensure_codex_agents_config
@@ -1456,6 +1560,8 @@ install_claude() {
   if [ "$MODE" != "hooks-only" ]; then
     copy_skill
     copy_agents
+    deploy_skill_claude_md
+    install_subskills
   fi
   install_hook_script
   merge_hooks
@@ -1508,11 +1614,14 @@ for target in "${DETECTED_TARGETS[@]}"; do
   case "$target" in
     codex)
       [ "$MODE" = "install" ] && echo "  Codex skill:    $CODEX_SKILL_DIR"
+      [ "$MODE" = "install" ] && echo "  Codex subskills:$CODEX_TARGET_DIR/skills/"
       [ "$MODE" != "uninstall" ] && echo "  Codex hooks:    $CODEX_HOOKS_FILE"
       [ "$MODE" != "uninstall" ] && echo "  Codex hook bin: $CODEX_HOOK_SCRIPT"
       ;;
     claude)
       [ "$MODE" = "install" ] && echo "  Claude skill:   $CLAUDE_SKILL_DIR"
+      [ "$MODE" = "install" ] && echo "  Claude subskills:$CLAUDE_TARGET_DIR/skills/"
+      [ "$MODE" = "install" ] && echo "  Claude CLAUDE.md:$INSTALL_BASE/CLAUDE.md"
       [ "$MODE" != "uninstall" ] && echo "  Claude hooks:   $CLAUDE_HOOKS_FILE"
       [ "$MODE" != "uninstall" ] && echo "  Claude hook bin:$CLAUDE_HOOK_SCRIPT"
       ;;
