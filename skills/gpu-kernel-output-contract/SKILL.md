@@ -5,18 +5,6 @@ description: Final output contract for GPU kernel optimization tasks. Use this s
 
 # GPU Kernel Output Contract
 
-## SOL-ExecBench workspaces (definition.json + solution.json present)
-
-If the workspace contains `definition.json` and `solution.json`, the output format is a **SOL solution**, NOT `generated_kernel.py`. Do not follow the `generated_kernel.py` / `class Model` contract below. Finalize deterministically with the backend script:
-
-```bash
-python reference/sol_finalize.py --workspace <workspace>
-```
-
-It packages the best `kernel.py` into a self-contained `submission.json` and re-validates it with the real `sol-execbench` evaluator over every workload (exit 0 ⇒ submittable). The rest of this document applies only to non-SOL (hidden-evaluator) workspaces.
-
----
-
 This skill controls the final candidate packaging step for GPU kernel optimization work. It does not replace baseline implementation or profile-driven optimization. It is used when the workflow has a candidate implementation and must produce the exact file consumed by the hidden evaluator.
 
 ## When to Use

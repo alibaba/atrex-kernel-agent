@@ -28,12 +28,12 @@ Any target-hardware spec value, including compute throughput, HBM bandwidth, cac
 5. **Missing wiki values**: If a spec cannot be found, write `<metric>: UNKNOWN (gpu-wiki not found)`, record the gap in `memory/v<N>.json` under `pitfalls_and_fixes`, report it to the user, and ask whether a placeholder is acceptable. Do not fill gaps with wording such as "approximately", "should be", "usually", or "similar product".
 6. **Auditable archive**: Any reviewer must be able to verify every spec from the local `<gpu-wiki>/` path in the archive. Non-verifiable archives are invalid.
 7. **Profiling-driven optimization only**:
-   - NVIDIA: `./tools/profile_nvidia.sh`
+   - NVIDIA: `ncu` (wrapped by `./tools/profile_nvidia.sh`)
    - AMD: `./tools/profile_kernel.sh`
-   - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `profile_nvidia.sh` or `profile_kernel.sh` for identifying bottlenecks.
+   - `triton.testing.do_bench` is the designated tool for end-to-end kernel latency measurement used in Stop Conditions evaluation and performance recording. This is a timing tool, not a profiler — it may determine whether the target is met, but must not replace `ncu` or `profile_kernel.sh` for identifying bottlenecks.
 8. Step 0 computes the performance targets and writes them into `README.md` under `Stop Conditions`.
 9. Optimization runs in a temporary workspace and every accepted iteration is committed with git.
-10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` agent or by the user manually.
+10. **Masked memory**: When reading `memory/v*.json` files, check the `masked` field in each file. Skip any file where `masked` is `true`. Masked files are treated as discarded memory and must not influence planning, search deduplication, or optimization decisions. The `masked` field defaults to `false` and can be set to `true` by the `gpu-kernel-partial-restart` sub-skill or by the user manually.
 
 ### Scope Without Exceptions
 
@@ -74,7 +74,7 @@ This script creates the workspace directory structure (`memory/`, `plans/`, `pro
 
 After global constraints are confirmed and before writing the workspace `README.md`, parse configuration from the user prompt. Do not read the current directory `README.md` for configuration. All configuration must come from explicit user input or defaults.
 
-Flow: **parse user input -> decomposition gate (single operator vs whole layer) -> Step 0 (hardware specs + Roofline analysis) -> write workspace README.md**. The gate defaults to **single operator** — the composite/layer path (any input made of more than one separable op, e.g. `rope+attention`, `attention+moe`, or a whole layer) is an optional overlay (see below) and almost every task skips it.
+Flow: **parse user input -> Step 0 (hardware specs + Roofline analysis) -> write workspace README.md**.
 
 | Field | Description | Default |
 |------|-------------|---------|
@@ -92,30 +92,6 @@ Flow: **parse user input -> decomposition gate (single operator vs whole layer) 
 2. Derive `arch` from `platform` using the mapping above.
 3. Validate only the `kernel_demo` path.
 4. If `platform`, `framework`, or `kernel_demo` is missing, ask the user. Do not guess.
-
-### Decomposition Gate: Single Operator vs Composite (default: single operator)
-
-Immediately after parsing, decide whether the input is a **single operator** or a **composite of more than one
-separable op**. This gate **defaults to single operator** — decomposition is a purely optional overlay, and
-almost every task bypasses it. The test is *how many separable operators the input contains*, not whether it is
-a "whole layer".
-
-- **Single operator (default — the common case)**: one fusion-bounded operator — a single compute primitive
-  plus the elementwise epilogue/prologue a real kernel folds in (a matmul, one attention, one norm,
-  `o_proj + residual`, `gate_up + SwiGLU`, `fused_add_rmsnorm`, `silu_and_mul`, a quant, a RoPE). Proceed
-  directly to Step 0 and the normal Stage 1 -> Stage 2 flow below. **Nothing changes.**
-- **Composite (opt-in overlay)**: the input contains **≥ 2 separable ops** that each merit their own kernel
-  boundary — e.g. `rope + attention`, `attention + moe`, `qkv_proj + attention`, or a whole decoder layer
-  (norm -> QKV -> attention -> o_proj -> residual -> norm -> MLP -> residual) — or the user asks to split. In
-  that case do **not** run the single-operator flow directly. Instead invoke the **decomposition overlay**:
-  `orchestrator/optimize.py --layer` (rules in `agents/gpu-kernel-decompose.md`), which carves the input into
-  fused-operator boundaries, gives **each boundary its own standard workspace** (own Step 0 / baseline /
-  optimization / git), schedules a **shared `--max-iters` budget** across them by live ROI (no boundary is ever
-  dropped), and finally recombines + validates. Each boundary workspace then runs exactly the single-operator
-  flow below.
-
-**When in doubt, treat a single heavy op with light epilogues as one operator.** But any input with two or more
-separable ops decomposes — a two-op composite (`rope+attention`) as much as a whole layer.
 
 ## Step 0: Hardware Spec Lookup and Theoretical Roofline Analysis
 
@@ -159,28 +135,19 @@ Run the following phases in order. A phase must pass before the next phase start
 
 ### Stage 1: Baseline Implementation
 
-**Subagent**: `gpu-kernel-baseline`
+**Sub-skill**: [gpu-kernel-baseline](skills/gpu-kernel-baseline/SKILL.md)
 
 Goal: understand the PyTorch logic, extract compute pattern, input/output shapes, dtype, dependencies, and accuracy requirements; learn the target framework API and hardware constraints from `<gpu-wiki>/README.md`; then implement correct `kernel.py` and `test_kernel.py`, validate correctness and baseline performance, and create the starting point for profile-driven optimization.
 
-The main agent must directly launch the `gpu-kernel-baseline` subagent for Stage 1. Do NOT write your own prompt or create an ad-hoc subagent — invoke `gpu-kernel-baseline` by name as a subagent. The main agent must not implement the baseline directly.
+The main agent must launch a subagent for Stage 1. The main agent must not implement the baseline directly. The subagent must read and follow `gpu-kernel-baseline`, read the PyTorch logic, learn framework APIs via `<gpu-wiki>/README.md`, implement `kernel.py` and `test_kernel.py`, validate correctness and performance, write `baseline_report.md`, write `memory/v0.json`, and commit.
 
-Subagent launch instruction:
+Subagent requirements:
 
-```
-Launch subagent: gpu-kernel-baseline
-Task type: editing task
-Inputs:
-  - workspace_path: <workspace absolute path>
-  - pytorch_logic: <user-provided PyTorch logic or kernel_demo path>
-  - platform: <target platform, e.g. H20, MI308X>
-  - gpu_wiki_path: <gpu-wiki root path>
-```
-
-The `gpu-kernel-baseline` subagent will autonomously: read workspace `README.md`; implement `kernel.py` and `test_kernel.py` based on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
-
+- **Task type**: editing task.
+- **Required inputs**: workspace path, `README.md`, `memory/` directory, PyTorch logic or `kernel_demo`, platform, framework, dtype, shapes, and correctness threshold.
+- **Must do**: read `gpu-kernel-baseline`; read workspace `README.md`; implement `kernel.py` and `test_kernel.py` base on CuteDSL or FlyDSL; run correctness and baseline performance validation; write `baseline_report.md`; write `memory/v0.json`; commit with git.
 - **Forbidden**: do not skip `<gpu-wiki>/README.md`; do not fabricate hardware specs; do not modify Stage 2 plans or profiles; do not commit if correctness fails.
-- **Expected return**: paths for `kernel.py` (implemented in CuteDSL or FlyDSL), `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
+- **Return**: paths for `kernel.py` which implemented by CuteDSL or FlyDSL, `test_kernel.py`, and `baseline_report.md`; maximum `rel_err`; baseline performance; git commit hash; unresolved issues.
 
 Entry criteria:
 
@@ -197,47 +164,29 @@ Exit criteria:
 - `baseline_report.md` exists.
 - Git commit is complete.
 
-Stage 2 (profile-driven optimization) is driven by the **orchestrator** as a series of clean, one-iteration-per-session runs — see `orchestrator/optimize.py` and `orchestrator/prompts/`. When this router is run as the setup session (`orchestrator/prompts/setup.md`), stop after Stage 1: exit once `memory/v0.json` is committed, and let the orchestrator spawn the optimization iterations.
+Then the main agent takes over and must enter Stage 2 immediately. It is forbidden to stop, summarize final deliverables, or exit the workflow after Stage 1 unless Stage 2 has also completed or the user explicitly asks to stop.
 
-### Stage 2: Profile-Driven Iterative Optimization (orchestrator-driven)
+### Stage 2: Profile-Driven Iterative Optimization
 
 **Sub-skill**: [gpu-kernel-profile-optimizer](skills/gpu-kernel-profile-optimizer/SKILL.md)
 
-**Bottleneck / Roofline analysis**: inlined in this router — see the **Step 0** section above. There is no separate helper skill.
+**Helper skill**: [gpu-kernel-bottleneck-analysis](skills/gpu-kernel-bottleneck-analysis/SKILL.md)
 
-Goal: approach the performance limit through repeated profile -> code change -> validation cycles.
+Goal: use Step 0 Roofline conclusions and multiple profile -> code change -> validation loops to approach the performance limit.
 
-The iteration loop is owned by the **orchestrator** (`orchestrator/optimize.py`), not by a single long session. Each iteration is a fresh `claude` session that runs `gpu-kernel-profile-optimizer` for **exactly one** profile -> edit -> validate -> bench cycle and then exits (see `orchestrator/prompts/iteration.md`). State crosses sessions only on disk (`memory/v<N>.json`, `plans/`, `profiles/`, git): each session reads the prior `open_directions` + recorded dead-ends and starts from HEAD (the best kernel so far). A regressing iteration reverts and is never committed, so HEAD stays best.
-
-**Termination is mechanical and owned by the orchestrator, not the model**: it stops on a hard budget (max iterations or token budget), or when a committed, correctness-PASS iteration reaches the target utilization in `README.md` under `Stop Conditions` (default: peak utilization >= 90%). A single session never decides to keep looping.
+Stage 2 researches, plans, searches gpu-wiki/reference projects, writes an optimization plan, profiles, modifies code, validates correctness, applies quality gates, commits, and writes `memory/v<N>.json`. It must continually compare against ISA optimization targets recorded in `README.md`.
 
 Entry criteria: Stage 1 passed and `README.md` contains Step 0 Roofline analysis and `Stop Conditions`.
 
-Run:
+Exit condition: performance reaches the absolute target in `README.md` under `Stop Conditions`.
 
-```bash
-# Single op:
-python orchestrator/optimize.py \
-  --op-dir <atrex-bench native op dir> --platform <P> --framework <F> \
-  [--max-iters 20] [--token-budget 0] [--target-util 90]
-
-# Composite op / whole LLM layer (decomposition overlay):
-python orchestrator/optimize.py \
-  --op-dir <atrex-bench native op dir> --platform <P> --framework <F> --layer \
-  [--max-iters 20] [--token-budget 0]
-```
-
-`--op-dir` is the only op input: the workspace name (dir basename), the kernel/layer to optimize
-(`reference.py`), the full shape set (`shapes.json`), per-shape SOL (`roofline.json`), and the priority
-anchor (`metadata.production_performance`) are all read from it. Only `--platform` and `--framework`
-cannot be deduced from the op dir, so they stay explicit.
+When the exit condition is met, stop optimization and summarize deliverables.
 
 ## Recommended Flows
 
 - PyTorch logic only: Step 0 -> Stage 1 -> Stage 2
 - Existing kernel with "why is it slow": Step 0 -> Stage 2
 - Roofline analysis only: Step 0 only
-- Composite op or whole LLM layer — any input with >1 separable fused op (opt-in overlay): decomposition gate -> `optimize.py --layer` (decompose into boundaries -> one workspace per boundary, each running Step 0 -> Stage 1 -> Stage 2 under a shared budget -> recombine + validate)
 
 ## Shared Tools
 
