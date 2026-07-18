@@ -70,8 +70,13 @@ profiles/*/att/*.pftrace
 profiles/*/att/*.otf2
 EOF
 
-# Step 5: Deploy CLAUDE.md (agent behavior constraints)
-cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
+# Step 5: Deploy CLAUDE.md (agent behavior constraints), when this distribution ships one.
+# The orchestrator/optimize.py route ships reference/CLAUDE.md and deploys it per workspace.
+# The SKILL.md route does NOT install reference/CLAUDE.md — its constraints live at the install
+# base as CLAUDE.md (deployed by install.sh) — so skip gracefully when it is absent.
+if [ -f "$SCRIPT_DIR/CLAUDE.md" ]; then
+    cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
+fi
 
 echo ""
 echo "Workspace initialized at: $WORKSPACE"

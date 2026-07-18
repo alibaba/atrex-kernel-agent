@@ -6,14 +6,19 @@
 #   - Codex:  ~/aka_kernel_opt/.codex/skills/gpu-kernel-optimizer/
 #             ~/aka_kernel_opt/.codex/hooks/
 #   - Claude: ~/aka_kernel_opt/.claude/skills/gpu-kernel-optimizer/
+#             ~/aka_kernel_opt/.claude/skills/<sub-skill>/   (each skills/* published as a top-level skill)
 #             ~/aka_kernel_opt/.claude/hooks/
-#   - Shared: ~/aka_kernel_opt/gpu-wiki/
-#             ~/aka_kernel_opt/reference-projects/
+#             ~/aka_kernel_opt/CLAUDE.md                      (SKILL-route constraints, from reference/CLAUDE.skill.md)
+#   - Shared: ~/aka_kernel_opt/gpu-wiki/            (symlink)
+#             ~/aka_kernel_opt/reference-projects/  (symlink)
 #
 # Skill directory whitelist (only these are copied):
 #   reference/  skills/  tools/  SKILL.md
 #
-# agents/ is copied separately to $TARGET_DIR/agents/ (not inside the skill dir).
+# This installer ships ONLY the SKILL.md route. The orchestrator/optimize.py route
+# (agents/, orchestrator/, and the SOL/orchestrator helpers under reference/ such as
+# CLAUDE.md, sol_seed.py, sol_finalize.py, test_kernel.py) runs from the source repo
+# and is pruned from the installed skill dir (see prune_non_skill_files).
 #
 # Usage:
 #   ./install.sh                       # install/update all detected targets
@@ -342,31 +347,20 @@ copy_skill() {
   fi
 }
 
-copy_agents() {
-  local agents_src="$SCRIPT_DIR/agents"
-  local agents_dst
-
-  if [ "$TARGET_NAME" = "codex" ]; then
-    agents_dst="$CODEX_TARGET_DIR/agents"
-  elif [ "$TARGET_NAME" = "claude" ]; then
-    agents_dst="$CLAUDE_TARGET_DIR/agents"
-  else
-    echo "[$TARGET_NAME][agents] Unknown target, skipping agents copy"
-    return
-  fi
-
-  if [ ! -d "$agents_src" ]; then
-    echo "[$TARGET_NAME][agents] No agents/ directory in source, skipping"
-    return
-  fi
-
-  echo "[$TARGET_NAME][agents] Copying $agents_src -> $agents_dst"
-  mkdir -p "$agents_dst"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$agents_src/" "$agents_dst/"
-  else
-    cp -R "$agents_src"/. "$agents_dst/"
-  fi
+# Remove orchestrator/optimize.py-route files that copy_skill pulled into the installed
+# skill dir. install.sh installs ONLY the SKILL.md route; the optimize.py route (agents/,
+# orchestrator/, and the SOL/orchestrator helpers under reference/) runs from the source
+# repo and must not be installed into the working directory.
+prune_non_skill_files() {
+  local ref="$TARGET_SKILL_DIR/reference"
+  [ -d "$ref" ] || return 0
+  rm -f "$ref/CLAUDE.md" \
+        "$ref/sol_seed.py" \
+        "$ref/sol_finalize.py" \
+        "$ref/test_kernel.py" \
+        "$ref/link_skill_runtime.py"
+  rm -rf "$ref/__pycache__"
+  echo "[$TARGET_NAME][skill] Pruned optimize.py-route files from reference/ (SKILL-route install)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1546,7 +1540,7 @@ install_codex() {
   configure_codex_target
   if [ "$MODE" != "hooks-only" ]; then
     copy_skill
-    copy_agents
+    prune_non_skill_files
     install_subskills
   fi
   enable_hooks_feature
@@ -1559,7 +1553,7 @@ install_claude() {
   configure_claude_target
   if [ "$MODE" != "hooks-only" ]; then
     copy_skill
-    copy_agents
+    prune_non_skill_files
     deploy_skill_claude_md
     install_subskills
   fi
