@@ -149,4 +149,5 @@ All third-party code included in this repository is licensed under one of:
   - BSD-3-Clause (compatible with Apache-2.0)
 
 These licenses are all permissive and compatible with the Apache License 2.0
-used by this project. Original copyright headers are preserved in each file.
+used by this project. Original copyright headers, where present in the upstream
+sources, are preserved in the corresponding files.

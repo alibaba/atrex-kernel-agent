@@ -123,7 +123,7 @@ link_gpu_wiki() {
     fi
     rm -f "$GPU_WIKI_DIR"
   elif [ -e "$GPU_WIKI_DIR" ]; then
-    # 旧的拷贝目录存在，替换为软链接
+    # An old copied directory exists; replace it with a symlink
     rm -rf "$GPU_WIKI_DIR"
   fi
 
@@ -131,7 +131,7 @@ link_gpu_wiki() {
   echo "[repo] Symlinked gpu-wiki: $GPU_WIKI_DIR -> $real_source"
 }
 
-# 整体软链接 reference-projects 目录（与 link_gpu_wiki 对称）。
+# Symlink the whole reference-projects directory (mirrors link_gpu_wiki).
 link_reference_projects() {
   local src="$SCRIPT_DIR/reference-projects"
 
@@ -156,7 +156,7 @@ link_reference_projects() {
     fi
     rm -f "$REFERENCE_PROJECTS_DIR"
   elif [ -e "$REFERENCE_PROJECTS_DIR" ]; then
-    # 旧的拷贝目录（或逐仓库软链接目录）存在，替换为整体软链接
+    # An old copied directory (or per-repo symlink directory) exists; replace it with a whole-dir symlink
     rm -rf "$REFERENCE_PROJECTS_DIR"
   fi
 
@@ -167,7 +167,7 @@ link_reference_projects() {
 prepare_knowledge_repos() {
   link_gpu_wiki
 
-  # 初始化 submodules（如果在源码目录中）
+  # Initialize submodules (when running from the source directory)
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local submodule_dir="$script_dir/reference-projects"
@@ -187,8 +187,8 @@ prepare_knowledge_repos() {
     echo "[repo] No reference-projects submodule directory found at $submodule_dir"
     echo "[repo] Please run 'git submodule update --init --depth 1' first"
   elif [ "$WITHOUT_GITHUB" = "1" ]; then
-    # --without-github：逐个软链接非 GitHub 仓库，以便排除 GitHub 托管的参考项目。
-    # 该模式下目标必须是真实目录（而非整体软链接）。
+    # --without-github: symlink non-GitHub repos one by one, so GitHub-hosted reference projects are excluded.
+    # In this mode the target must be a real directory (not a whole-dir symlink).
     [ -L "$REFERENCE_PROJECTS_DIR" ] && rm -f "$REFERENCE_PROJECTS_DIR"
     mkdir -p "$REFERENCE_PROJECTS_DIR"
     for repo_dir in "$submodule_dir"/*/; do
@@ -196,10 +196,10 @@ prepare_knowledge_repos() {
       local repo_name
       repo_name="$(basename "$repo_dir")"
 
-      # 跳过 README.md 等非目录项
+      # Skip non-directory entries such as README.md
       [ -d "$repo_dir/.git" ] || [ -f "$repo_dir/.git" ] || continue
 
-      # 检查该 submodule 的 URL 是否是 GitHub
+      # Check whether this submodule's URL is on GitHub
       local repo_url
       repo_url="$(git config --file "$script_dir/.gitmodules" "submodule.reference-projects/$repo_name.url" 2>/dev/null || true)"
       if [[ "$repo_url" == *"github.com"* ]]; then
@@ -207,7 +207,7 @@ prepare_knowledge_repos() {
         continue
       fi
 
-      # 创建软链接到目标工作目录
+      # Create a symlink into the target working directory
       local link_target="$REFERENCE_PROJECTS_DIR/$repo_name"
       local real_repo_dir
       real_repo_dir="$(cd "$repo_dir" && pwd)"
@@ -232,7 +232,7 @@ prepare_knowledge_repos() {
       fi
     done
   else
-    # 默认：整体软链接 reference-projects 目录（与 gpu-wiki 一致）。
+    # Default: symlink the whole reference-projects directory (consistent with gpu-wiki).
     link_reference_projects
   fi
 
