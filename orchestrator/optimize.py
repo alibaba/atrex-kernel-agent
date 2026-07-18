@@ -173,7 +173,7 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = 
 
 def _session_env() -> dict:
     """Env for a nested `claude` session. When a Bearer auth token is available
-    (ANTHROPIC_AUTH_TOKEN — e.g. a gateway like idealab), drop ANTHROPIC_API_KEY so the
+    (ANTHROPIC_AUTH_TOKEN — e.g. an Anthropic-compatible gateway), drop ANTHROPIC_API_KEY so the
     CLI authenticates via the token instead of sending x-api-key, which such gateways reject
     with 401. On a plain api-key setup (no auth token) nothing is removed.
     """
