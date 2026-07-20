@@ -32,6 +32,9 @@ gpu-wiki/
 │   ├── amd/
 │   ├── generic/
 │   └── nvidia/
+├── scripts/
+│   ├── query.py               # Architecture/vendor/DSL-scoped live-tree search
+│   └── check-self-contained.py # Link, path, and source-policy validation
 └── .skill/                    # Repository maintenance skills and automation docs
 ```
 
@@ -39,14 +42,14 @@ Current scale, based on the working tree at the time this file was rewritten:
 
 | Category | Count |
 |----------|------:|
-| Total markdown files | 983 |
-| `docs/` markdown files | 254 |
-| `docs/ref-docs/` markdown files | 109 |
-| `docs/kernel-opt/` markdown files | 89 |
-| `docs/converter/` markdown files | 30 |
-| `docs/pitfalls/` markdown files | 21 |
-| `docs/hardware-specs/` markdown files | 3 |
-| `reference-kernels/` Python files | 304 |
+| Total markdown files | 505 |
+| `docs/` markdown files | 416 |
+| `docs/ref-docs/` markdown files | 212 |
+| `docs/kernel-opt/` markdown files | 156 |
+| `docs/converter/` markdown files | 8 |
+| `docs/pitfalls/` markdown files | 29 |
+| `docs/hardware-specs/` markdown files | 9 |
+| `reference-kernels/` Python files | 488 |
 
 ## 3. Organization Principles
 
@@ -72,6 +75,11 @@ reference-kernels/nvidia/hopper/cutedsl/
 ```
 
 This structure prevents Agents from accidentally applying NVIDIA Hopper experience to AMD CDNA3/CDNA4 kernels, or applying FlyDSL-specific implementation details to Gluon or CuTeDSL tasks.
+
+Because the repository is role-first rather than vendor-first, agents should use
+`scripts/query.py` before broad text search. The tool derives scope from path
+taxonomy, keeps architecture-neutral pages, and excludes pages assigned to a
+different architecture/vendor/DSL. Unknown filters fail closed.
 
 ### 3.2 Short Cards First, Full Reports Second
 
@@ -102,7 +110,12 @@ Current files:
 |------|-------|
 | `hardware_specs_mi300x.md` | AMD MI300X / CDNA3 / gfx942 hardware specification table |
 | `hardware_specs_mi308x.md` | AMD MI308X / CDNA3 / gfx942 hardware specification table |
+| `hardware_specs_mi355x.md` | AMD MI355X / CDNA4 / gfx950 hardware specification table |
 | `hardware_specs_hopper.md` | NVIDIA Hopper / SM90 hardware specification table |
+| `hardware_specs_b200.md` | NVIDIA B200 / Blackwell / SM100 hardware specification table |
+| `hardware_specs_b300.md` | NVIDIA B300 / Blackwell Ultra / SM103 hardware specification table |
+| `hardware_specs_sm120.md` | NVIDIA Blackwell GeForce / SM120 hardware specification table |
+| `hardware-comparison-cdna3-cdna4.md` | Cross-architecture AMD comparison and migration reference |
 
 These files provide peak FLOPS, memory bandwidth, ridge points, and architecture parameters used by profiling and optimization documents.
 
@@ -121,7 +134,8 @@ Key subtrees:
 | `amd/gluon/gfx942/` | MI300X Gluon optimization skill and pattern cards |
 | `amd/flydsl/gfx942/` | FlyDSL MI300X optimization notes |
 | `nvidia/common/` | NVIDIA common optimization references: compute capability, L2 persistence, async copy, TMA, occupancy |
-| `nvidia/common/hands-on/` | NVIDIA hands-on cards for TMA, WGMMA, mbarrier pipeline, warp specialization |
+| `nvidia/common/hands-on/` | Blackwell SM100 hands-on cards for tcgen05, TMEM, CLC, 2CTA, and three-role warp specialization |
+| `nvidia/common/sm90/hands-on/` | Hopper SM90 hands-on cards for TMA, WGMMA, mbarrier pipelines, and warp specialization |
 | `nvidia/common/sm90/hands-on/` | Hopper-specific hands-on cards |
 | `nvidia/cutedsl/` | CuTeDSL optimization insights and quick references |
 | `nvidia/gluon/sm90/` | Hopper Gluon optimization essentials |

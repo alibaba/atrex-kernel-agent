@@ -293,17 +293,17 @@ Use Stage 1 profile evidence to extract the current bottleneck, search knowledge
 
 ### Execution: Subagent Required
 
-The main agent must launch a subagent for Stage 2. The main agent must not perform evidence search or write the plan directly.
+The main agent must launch the `gpu-kernel-research` subagent by name for Stage 2. The main agent must not perform evidence search or write the plan directly.
 
-The subagent reads current profile artifacts, workspace constraints, historical `plans/v*_plan.md`, gpu-wiki, optional reference projects, and public web sources. Once it finds one executable non-duplicate path that matches the current bottleneck, it must write the plan and return. It must not keep broadening the search unnecessarily.
+The subagent reads current profile artifacts, workspace constraints, historical `plans/v*_plan.md`, gpu-wiki, optional reference projects, and public web sources. Once it finds one eligible executable path that matches the current bottleneck, it must write the plan and return. In normal mode an untried historical finding is eligible; after three consecutive stalls, a new finding is required. It must not keep broadening the search unnecessarily.
 
 Subagent requirements:
 
 - **Task type**: read-only research plus plan-writing task.
-- **Required inputs**: workspace path, version `V<N>`, `README.md`, `memory/` directory, all unmasked `memory/v*.json` files, historical plan paths, `profiles/v<N>/` artifacts, previous `memory/v<N-1>.json` if present, platform, framework, kernel type, and Stop Conditions.
+- **Required inputs**: workspace path, version `V<N>`, `README.md`, `memory/` directory, all unmasked `memory/v*.json` files, historical plan paths, `profiles/v<N>/` artifacts, previous `memory/v<N-1>.json` if present, platform, architecture, framework, kernel type, Stop Conditions, and the consecutive reverted/no-improvement `stall_count`.
 - **Must do**: read all prerequisite files; skip `memory/v*.json` files where `masked: true`; summarize attempted historical methods from unmasked memory files; extract bottlenecks from profile evidence; search gpu-wiki, then reference project, then public web by priority; stop after the first actionable non-duplicate path; write `plans/v<N>_plan.md`.
 - **Forbidden**: do not modify `kernel.py`; do not perform Stage 3; do not skip gpu-wiki; do not fabricate specs; do not repeat prior plans; do not read `masked: true` memory files as active data; do not output multiple parallel optimization actions; do not return only a verbal plan.
-- **Return**: `plans/v<N>_plan.md` path, evidence summary, search-source summary, the single optimization action, expected impact, risks, and rollback.
+- **Return**: `plans/v<N>_plan.md` path, evidence summary, search-source summary, search mode/stall count, the single optimization action, measurable performance expectation, conditional ISA-escalation trigger, risks, and rollback.
 
 ### Mandatory Reads per Iteration
 
@@ -321,8 +321,10 @@ Starting from V1, read:
 Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the
 **Symptom-Driven Retrieval (NVIDIA vs AMD)** guidance in `<gpu-wiki>/README.md` —
 NVIDIA and AMD use different vocabularies and sub-trees, and that vendor-split
-mapping is maintained there, not in this skill. Then apply the Search Priority
-below.
+mapping is maintained there, not in this skill. Start with
+`python3 <gpu-wiki>/scripts/query.py` using `--arch`, `--vendor`, and, when
+applicable, `--dsl`, `--symptom`, `--operator`, and `--section`; then apply the
+Search Priority below.
 
 ### Search Priority
 

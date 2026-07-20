@@ -78,20 +78,29 @@ Execution steps:
 1. **Mandatory reads**: workspace `README.md`, `gpu-wiki/README.md`, all unmasked `memory/v*.json`, historical `plans/v*_plan.md`.
 2. **Parse historical Search Logs** from prior plans to build a used-knowledge set (deduplication reference).
 3. **Determine stall count**: Count the number of consecutive most-recent reverted versions (no improvement) from the memory summary. Record as `STALL_COUNT`.
-4. **Research strategy** (adaptive based on stall count):
+4. **Architecture-scoped L1 retrieval**: Read the target architecture from workspace `README.md`, then query main's role-first wiki before broad grep. Use narrow symptom, operator, and mechanism queries; open the returned pages and follow their local links:
+   ```bash
+   python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
+     --section kernel-opt --symptom <controlled-symptom>
+   python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
+     --dsl <dsl> --operator <operator> --section ref-docs --section pitfalls
+   ```
+   Unknown filters must fail closed. Do not remove `--arch` to make an empty result look successful.
+5. **Research strategy** (adaptive based on stall count):
    - **Normal mode** (`STALL_COUNT < 3`): No novelty requirement. Reusing known directions from `open_directions`, prior search findings, or profile evidence is not prohibited.
    - **Forced expansion mode** (`STALL_COUNT >= 3`): The previous directions have failed repeatedly — you MUST expand the search space. Do not limit searches to the current kernel's DSL/language; look at optimization techniques from **other languages or DSLs targeting the same or similar hardware architectures** (e.g., CUDA C++ tricks applicable to Triton, or CuteDSL patterns that inspire Gluon rewrites) and adapt the ideas. Execute the full three-layer progressive search (strict order):
-     - **L1 (KernelWiki + gpu-wiki)**: Translate bottleneck diagnoses from `profiles/v{{N}}/REPORT.md` into search keywords. Search `.claude/skills/KernelWiki` first (it is linked in the workspace — use its `scripts/query.py` for semantic search on NVIDIA SM90/SM100). Then navigate `gpu-wiki/docs/`, `gpu-wiki/reference-kernels/` using Symptom-Driven Retrieval guidance in `gpu-wiki/README.md`.
+     - **L1 (gpu-wiki)**: Translate bottleneck diagnoses from `profiles/v{{N}}/REPORT.md` into search keywords. Search architecture-scoped `gpu-wiki/docs/` first, then `gpu-wiki/reference-kernels/`. Only after those P0-P4 sources are insufficient, use `.claude/skills/KernelWiki` or `gpu-wiki/3rdparty/` as P5 sources for NVIDIA SM90/SM100.
      - **L2 (reference-projects)**: Only if L1 yields no new actionable path. Search relevant modules in `reference-projects/` for implementation patterns.
      - **L3 (public web)**: Only if L1+L2 yield nothing new. Use web search for papers, docs, or community posts.
      - The draft MUST contain at least one `New? = Yes` entry. If all layers produce no new finding, report search space exhaustion and stop — do not fabricate a draft or invoke gen-plan.
-5. **Stop early**: Once you find **one viable optimization direction** with supporting evidence, proceed to draft immediately. Do not exhaustively search all layers.
-6. **Write draft** to `plans/v{{N}}_draft.md` — a concise summary of:
+6. **Stop early**: Once you find **one viable optimization direction** with supporting evidence, proceed to draft immediately. Do not exhaustively search all layers.
+7. **Write draft** to `plans/v{{N}}_draft.md` — a concise summary of:
    - Input Evidence: key metrics and diagnoses from `profiles/v{{N}}/REPORT.md`
    - Search findings: what you found (with Layer, New? annotations) and the chosen optimization direction
    - Constraints: target framework, platform, correctness requirements
    - Stall context: current `STALL_COUNT` and whether forced expansion was triggered
-7. **Generate plan** via humanize:
+   - Performance expectation: a measurable post-change profile/latency expectation, plus the condition that would justify PTX/SASS inspection if compiler lowering could explain a mismatch
+8. **Generate plan** via humanize:
    ```
    /humanize:gen-plan --input plans/v{{N}}_draft.md --output plans/v{{N}}_plan.md --direct
    ```

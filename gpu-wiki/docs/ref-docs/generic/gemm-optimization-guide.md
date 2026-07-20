@@ -532,4 +532,4 @@ Must exceed the hardware's compute-to-bandwidth ratio (e.g., approximately 25.2 
 - [Persistent Kernel and Tile Scheduling](../../kernel-opt/generic/hands-on/persistent-kernel-tile-scheduling.md) — Scheduling strategies such as Stream-K
 - [NVIDIA General Optimization Documentation](../nvidia/common/) — NCU profiling, async copy, TMA, etc.
 - [Blackwell GEMM Optimization in Practice](../../kernel-opt/nvidia/common/hands-on) — Tensor Core optimization on SM100 architecture
-- [Hopper GEMM Optimization in Practice](../../kernel-opt/nvidia/common/hands-on) — TMA, WGMMA, warp specialization
+- [Hopper GEMM Optimization in Practice](../../kernel-opt/nvidia/common/sm90/hands-on) — TMA, WGMMA, warp specialization
