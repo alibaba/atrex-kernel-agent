@@ -85,7 +85,9 @@ The following issues were encountered and confirmed during actual use — **be s
 | Python execution count | 2 (2 jobs) | 1 |
 | Finalization | ~16s | ~2.4s |
 | Total runtime | ~22s | ~5.6s |
-| Output size | ~470MB | ~68MB |### 1.4 Output File Structure
+| Output size | ~470MB | ~68MB |
+
+### 1.4 Output File Structure
 
 ```
 tt_test/ # output_directory(sys_trace=false nonedirectory)

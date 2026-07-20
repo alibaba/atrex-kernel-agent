@@ -57,7 +57,7 @@ B300 is a full redesign on 4NP process, delivering **+50% overall FLOPS over B20
 
 1. **Increased power**: GB300 / B300 HGX TDP rises to 1.4 kW / 1.2 kW (GB200 series: 1.2 kW / 1 kW)
 2. **Architecture optimization**: CPU↔GPU dynamic power allocation (Power Sloshing)
-3. **Memory upgrade**: HBM3E 8-layer → 12-layer (12-Hi HBM3E), per-GPU **192 GB → 288 GB**, bandwidth maintains 8 TB/s
+3. **Memory upgrade**: HBM3E capacity rises from **180 GB → 288 GB** per GPU, while published bandwidth remains 8 TB/s
 
 ### 5.1 Core Value of Memory Upgrades
 

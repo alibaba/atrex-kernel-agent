@@ -294,7 +294,9 @@ For detailed profile interpretation guide, see `../../../../ref-docs/amd/gluon/g
 | `ds_read/write` high Stall | Bank conflict | Step 3.2 |
 | `ds_bpermute_b32` | Layout conversion overhead | Step 3.3 |
 | `buffer_load/store` + scratch | Register spilling | Step 3.4 |
-| `buffer_load` high Stall + low Idle | Memory access not overlapped | Step 3.5 |## Step 3: Iterative Optimization
+| `buffer_load` high Stall + low Idle | Memory access not overlapped | Step 3.5 |
+
+## Step 3: Iterative Optimization
 
 ### ⚠️ Core Principles
 

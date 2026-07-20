@@ -101,7 +101,9 @@ English description
 | Conv2d / Conv3d | Beneficial | Equivalent to implicit GEMM |
 | LayerNorm / Softmax | No benefit | Simple computation, nothing to overlap |
 | Elementwise | No benefit | Too little computation, warp spec overhead is greater |
-| SSM / Mamba | Significant benefit | Multiple independent data streams, naturally suited for multi-role |## 3. Role Partitioning Strategies
+| SSM / Mamba | Significant benefit | Multiple independent data streams, naturally suited for multi-role |
+
+## 3. Role Partitioning Strategies
 
 ### 3.1 Two-Role Basic (Hopper)
 
@@ -326,7 +328,9 @@ accumulator_pipeline.consumer_wait(state);
 | mbarrier arrive/wait | ~5 cycles | Producer-consumer signaling |
 | OrderedSequenceBarrier | ~10 cycles | Ordered execution within the same role |
 | Named barrier | ~5 cycles | Synchronize a subset of threads |
-| `__syncwarp()` | ~1 cycle | Intra-warp synchronization |## 5. Load Balancing Between Roles
+| `__syncwarp()` | ~1 cycle | Intra-warp synchronization |
+
+## 5. Load Balancing Between Roles
 
 ### 5.1 The Cost of Imbalance
 

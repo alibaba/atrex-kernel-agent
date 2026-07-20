@@ -135,7 +135,9 @@ Maps operations to hardware features:
 | `TmaLoad` | TMA load |
 | `TmaStore` | TMA store |
 | `ClcLoad` | Cluster Launch Control load |
-| `Composite` | Combined operation |## Pipeline Variants
+| `Composite` | Combined operation |
+
+## Pipeline Variants
 
 ### PipelineAsync (Base Class)
 

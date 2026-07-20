@@ -315,7 +315,9 @@ Stream-K improves SM utilization (when the number of tiles is not an integer mul
 | `lts__t_sectors_srcunit_tex_op_read` | Number of sectors read from L2 | Should decrease after swizzling |
 | `lts__t_sector_hit_rate` | L2 hit rate | Should increase after swizzling (> 80%) |
 | `dram__bytes_read` | HBM read bytes | Should approach theoretical minimum after swizzling |
-| `smsp__inst_executed_pipe_lsu` | Number of load/store instructions | Should not change (swizzling does not change instruction count) |### 5.2 Theoretical Analysis
+| `smsp__inst_executed_pipe_lsu` | Number of load/store instructions | Should not change (swizzling does not change instruction count) |
+
+### 5.2 Theoretical Analysis
 
 For a GEMM with M=N=8192, K=4096, tile=128x128, FP16:
 

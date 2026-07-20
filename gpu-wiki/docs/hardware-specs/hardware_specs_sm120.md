@@ -103,7 +103,9 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | ROPs | 192 |
 | GPU Boost Clock | 2,280 MHz |
 | Register File per SM | 256 KB |
-| L1 Data Cache / Shared Memory per SM | 128 KB physical pool |## NVIDIA RTX PRO 5000 Blackwell (GB202 / sm_120a)
+| L1 Data Cache / Shared Memory per SM | 128 KB physical pool |
+
+## NVIDIA RTX PRO 5000 Blackwell (GB202 / sm_120a)
 
 > The RTX PRO 5000 Blackwell is the most common target card for `sm_120` kernel optimization in this repository. NVIDIA's official datasheet explicitly lists 14,080 CUDA Cores, 48/72 GB GDDR7 ECC, 512-bit, 1,344 GB/s, 300 W, 65 TFLOPS Single-Precision Performance, 196 RT TFLOPS, and 2,064 AI TOPS. The table below uses the official `2,064 AI TOPS` (FP4 with sparsity) as the Tensor peak anchor point and expands based on Blackwell Tensor Core throughput ratios `FP4:FP8:FP16/BF16:TF32 = 8:4:2:1`.
 

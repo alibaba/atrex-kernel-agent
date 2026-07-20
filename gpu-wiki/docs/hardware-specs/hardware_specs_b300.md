@@ -25,7 +25,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | **TF32 (Tensor Core)** | 1,100 | 2,200 | Training / inference matrix multiply |
 | **FP16 / BF16 (Tensor Core)** | 2,250 | 4,500 | Training / inference |
 | **FP8 / FP6 (Tensor Core, FP32 Accumulate)** | 4,500 | 9,000 | Inference / low-precision training |
-| **FP4 (Tensor Core, FP32 Accumulate)** | 15,000 TOPS | 20,000 TOPS | NVFP4 / MXFP4 quantized inference (primary target) |
+| **FP4 (Tensor Core, FP32 Accumulate)** | 13,500 TOPS | 18,000 TOPS | Official DGX B300 system figures divided by 8 GPUs |
 | **INT8 (Tensor Core)** | 4,500 TOPS | 9,000 TOPS | Quantized inference |
 
 ### Memory Specifications
@@ -47,7 +47,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Parameter | Value |
 |------|------|
 | Graphics Processing Clusters (GPCs) | 8 |
-| Streaming Multiprocessors (SMs) | 148 (dual-die, 74 SMs per die; each die has 80 physical SMs, 74 enabled for yield optimization)  |
+| Streaming Multiprocessors (SMs) | 160 (consistent with 20,480 CUDA cores at 128 cores/SM) |
 | CUDA Cores | 20,480 |
 | Tensor Cores (5th gen) | 640 |
 | RT Cores (4th gen) | 160 |
@@ -66,9 +66,9 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 | Parameter | B300 (GB300 / sm_103) | B200 (GB200 / sm_100) | Delta |
 |------|------|------|------|
-| VRAM | 288 GB HBM3e | 192 GB HBM3e | +50% |
-| FP4 Peak (dense) | 15,000 TFLOPS (15 PFLOPS) | 9,000 TFLOPS (9 PFLOPS) | +67% |
-| FP4 Peak (sparse) | 20,000 TFLOPS (20 PFLOPS) | 18,000 TFLOPS (18 PFLOPS) | +11% |
+| VRAM | 288 GB HBM3e | 180 GB HBM3e | +60% |
+| FP4 Peak (dense) | 13,500 TFLOPS (13.5 PFLOPS) | 9,000 TFLOPS (9 PFLOPS) | +50% |
+| FP4 Peak (sparse) | 18,000 TFLOPS (18 PFLOPS) | 18,000 TFLOPS (18 PFLOPS) | Same |
 | FP16/BF16 Tensor | 2,250 TFLOPS | 2,250 TFLOPS | Same |
 | FP8 Tensor | 4,500 TFLOPS | 4,500 TFLOPS | Same |
 | FP32 CUDA | 37 TFLOPS | 37.5 TFLOPS | ~Same |
@@ -78,7 +78,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Cooling | Liquid-cooled | Air/Liquid | Mandatory liquid cooling |
 | Compute Capability | 10.3 (`sm_103`) | 10.0 (`sm_100`) | Minor arch revision |
 
-> **Design Philosophy**: B300 sacrifices FP64 throughput to reallocate die area and power budget towards FP4 Tensor Core throughput (15 PFLOPS dense, +67% vs B200), making it the optimal choice for large-scale LLM inference workloads. FP32/FP16/BF16/FP8 performance remains on par with B200.
+> **Official FP4 comparison**: DGX B300 publishes 144 sparse / 108 dense PFLOPS for 8 GPUs, versus DGX B200's 144 sparse / 72 dense PFLOPS. Dividing by eight gives 18 / 13.5 PFLOPS per B300 and 18 / 9 PFLOPS per B200. The dense gain is 50%; sparse peak is unchanged.
 
 ---
 
@@ -104,16 +104,16 @@ These parameters influence optimization decisions:
 
 | Feature | SM103 (B300 Blackwell Ultra) | SM100 (B200 Blackwell) | Optimization Implication |
 |------|------|------|------|
-| FP4 Tensor throughput | 15 PFLOPS dense / 20 PFLOPS sparse | 9 PFLOPS dense / 18 PFLOPS sparse | B300 has +67% FP4 dense throughput |
+| FP4 Tensor throughput | 13.5 PFLOPS dense / 18 PFLOPS sparse | 9 PFLOPS dense / 18 PFLOPS sparse | B300 has +50% FP4 dense throughput |
 | FP64 CUDA throughput | 1.25 TFLOPS | 37 TFLOPS | B300 NOT suitable for FP64 HPC |
 | FP32 CUDA throughput | 37 TFLOPS | 37.5 TFLOPS | ~Same (inference-optimized design) |
-| Memory capacity | 288 GB | 192 GB | B300 fits larger models without sharding |
+| Memory capacity | 288 GB | 180 GB | B300 fits larger models without sharding |
 | PCIe generation | Gen 6 | Gen 5 | Higher host-device transfer bandwidth |
 | `tcgen05.mma` / UMMA | Supported | Supported | Same Tensor Core instruction path |
 | TMEM | Supported | Supported | Accumulators in Tensor Memory |
 | TMA | Supported | Supported | Bulk global-to-shared memory transfers |
 
-> **Key Reminder**: `sm_103` is a minor revision of `sm_100`. Kernel code targeting `sm_100` is generally compatible with `sm_103` without modification. The primary difference is significantly enhanced FP4 Tensor Core throughput (15 PFLOPS vs 9 PFLOPS) and expanded memory (288 GB vs 192 GB). FP32/FP16/BF16/FP8 performance is nearly identical between the two.
+> **Key Reminder**: `sm_103` is a minor revision of `sm_100`. Do not assume binary compatibility without checking the toolchain target. The published product-level differences include higher dense FP4 throughput (13.5 PFLOPS vs 9 PFLOPS) and expanded memory (288 GB vs 180 GB).
 
 ### Memory Hierarchy
 
@@ -162,11 +162,11 @@ otherwise:
 |-----|------|--------------------------|
 | B300 | FP16/BF16 Tensor | 2,250 / 8.0 ≈ **281.25** |
 | B300 | FP8 Tensor | 4,500 / 8.0 ≈ **562.5** |
-| B300 | FP4 Tensor | 15,000 / 8.0 ≈ **1,875** |
+| B300 | FP4 Tensor | 13,500 / 8.0 ≈ **1,688** |
 | B300 | FP32 CUDA | 37 / 8.0 ≈ **4.6** |
 | B300 | TF32 Tensor | 1,100 / 8.0 ≈ **137.5** |
 
-> **Optimization Implication**: The B300's FP4 ridge point of 1,875 FLOPs/Byte is extremely high, meaning FP4 GEMM kernels need very high arithmetic intensity to become compute-bound. For FP4 inference workloads, ensure large tile sizes and maximum data reuse to approach peak throughput. The 288 GB HBM3e capacity allows serving very large models (e.g., 405B parameter models) with fewer GPUs, reducing inter-node communication overhead.
+> **Optimization Implication**: The B300's dense FP4 ridge point is about 1,688 FLOPs/Byte, so FP4 GEMM kernels need very high arithmetic intensity to become compute-bound.
 
 ---
 
@@ -178,7 +178,7 @@ otherwise:
    - Memory-bound transport / quant epilogue intensive → prioritize bandwidth roofline, not Tensor Core peak
    - ⚠️ Do NOT use FP64 for HPC workloads on B300 (1.25 TFLOPS only)
 2. **Identify the target GPU**:
-   - B300 → use 37 FP32, 2,250 BF16, 4,500 FP8, 15,000 FP4, 8.0 TB/s
+   - B300 → use 37 FP32, 2,250 BF16, 4,500 FP8, 13,500 dense FP4, 8.0 TB/s
 3. **Mixed compute**: If the kernel has both Tensor Core computation and element-wise epilogue, compute separate rooflines for the mainloop and epilogue; do not use a single peak to mask bottlenecks.
 4. **Source priority**: NVIDIA official Blackwell Ultra datasheet, NVIDIA developer blog, DGX B300 user guide, and Blackwell tuning guide.
 
@@ -188,5 +188,6 @@ otherwise:
 - **Cross-Vendor Reference**: [MI300X Hardware Specs](hardware_specs_mi300x.md) | [MI308X Hardware Specs](hardware_specs_mi308x.md) | [MI355X Hardware Specs](hardware_specs_mi355x.md)
 - **Blackwell Tuning Guide**: [NVIDIA CUDA Blackwell Tuning Guide](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
 - **Official Product Page**: [NVIDIA DGX B300](https://www.nvidia.com/en-us/data-center/dgx-b300/)
+- **Official system derivation**: DGX B300 lists 8 GPUs and 144 sparse / 108 dense FP4 PFLOPS; the single-GPU figures above divide those totals by 8.
 - **Architecture Analysis**: [Glenn Lockwood B300 Analysis](https://www.glennklockwood.com/garden/processors/b300)
 - **⚠️ Architecture Note**: B300 (SM103) is inference-optimized with minimal FP64 capability. Do not deploy FP64-heavy HPC workloads on B300; use B200 or H100 instead.

@@ -91,7 +91,9 @@ Source: `common_optimizations.md` Appendix A "Large Tile GEMM" row.
 | ⭐⭐ | §3.4 async_copy Pipelining | Second-order benefit when Memory Bound |
 | ⭐⭐ | §3.5 wgmma Correctness | Prerequisite for correctness; moderate performance impact |
 | ⭐ | §3.2 Bank Conflicts | Third-order fine-tuning |
-| — | §3.6 SM Utilization Tuning | SMs already sufficient; not applicable |### Small Matrix GEMM (grid_blocks < num_SMs)
+| — | §3.6 SM Utilization Tuning | SMs already sufficient; not applicable |
+
+### Small Matrix GEMM (grid_blocks < num_SMs)
 
 | Priority | Optimization | Description |
 |----------|--------------|-------------|

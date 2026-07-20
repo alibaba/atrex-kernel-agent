@@ -79,7 +79,9 @@ SWP (Software Pipelining) is a scheduling concept; WASP (Warp Specialization) is
 | Pre-Ampere | WASP | Sync instructions cannot overlap across iterations |
 | Ampere | CTA-aligned SWP | cp.async supports async; WASP's extra warp register overhead cannot be recovered (uniform allocation) |
 | Hopper | WASP Returns | setmaxnreg supports differentiated register allocation; TMA single-thread launch saves registers; mbarrier naturally fits producer-consumer |
-| Blackwell | WASP Deepens | Both TMA and TCGen05 use single-thread launch; TMEM decouples accumulator; Epilogue independently allocates registers |### 2.5 Persistent Kernel: Software Pipelining at the Macro Level
+| Blackwell | WASP Deepens | Both TMA and TCGen05 use single-thread launch; TMEM decouples accumulator; Epilogue independently allocates registers |
+
+### 2.5 Persistent Kernel: Software Pipelining at the Macro Level
 
 Persistent Kernel elevates SWP from intra-tile loops to the multi-tile lifecycle:
 

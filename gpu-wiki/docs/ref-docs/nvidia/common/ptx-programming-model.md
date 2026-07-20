@@ -137,7 +137,9 @@ cvta.shared.to.generic %ptr, %sptr;  // shared → generic
 | `%cluster_ctaid.x/y/z` | CTA index within Cluster |
 | `%cluster_nctaid.x/y/z` | Number of CTAs in Cluster |
 | `%cluster_ctarank` | CTA rank within Cluster |
-| `%cluster_nctarank` | Total number of CTAs in Cluster |### Performance and Debug Registers
+| `%cluster_nctarank` | Total number of CTAs in Cluster |
+
+### Performance and Debug Registers
 
 | Register | Description |
 |----------|-------------|

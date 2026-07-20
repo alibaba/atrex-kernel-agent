@@ -23,6 +23,8 @@ class QueryTests(unittest.TestCase):
                 "# Pipeline Stalls\n\nTMA and tcgen05 pipeline diagnosis.\n",
             "kernel-opt/nvidia/common/sm90/hands-on/wgmma.md":
                 "# Hopper WGMMA GEMM\n\nA Hopper implementation.\n",
+            "kernel-opt/nvidia/common/sm90/hands-on/software-pipeline.md":
+                "# Hopper Software Pipeline\n\nPipeline staging on SM90.\n",
             "ref-docs/nvidia/common/sm80/a100-gemm.md":
                 "# A100 GEMM\n\nAn Ampere implementation.\n",
             "kernel-opt/nvidia/common/hands-on/tcgen05.md":
@@ -33,6 +35,14 @@ class QueryTests(unittest.TestCase):
                 "# CDNA3 Flash Attention FlyDSL\n\nAn AMD attention kernel.\n",
             "ref-docs/amd/gluon/gfx950/matmul.md":
                 "# CDNA4 Gluon Matmul\n\nAn MI355X implementation.\n",
+            "hardware-specs/hardware_specs_mi300x.md":
+                "# MI300X Hardware Specifications\n",
+            "hardware-specs/hardware_specs_mi308x.md":
+                "# MI308X Hardware Specifications\n",
+            "hardware-specs/hardware_specs_b200.md":
+                "# B200 Hardware Specifications\n",
+            "hardware-specs/hardware_specs_b300.md":
+                "# B300 Hardware Specifications\n",
             "kernel-opt/amd/common/gfx942/flash-attention-tilelang.md":
                 "# CDNA3 Flash Attention TileLang\n\nA different DSL.\n",
             "ref-docs/generic/gemm-optimization.md":
@@ -66,6 +76,12 @@ class QueryTests(unittest.TestCase):
         self.assertIn("patterns/pipeline-stalls.md", output)
         self.assertNotIn("gdn.md", output)
 
+    def test_symptom_uses_stable_keywords_outside_blackwell_cards(self):
+        code, output = self.run_query("--arch", "h20", "--symptom", "pipeline-stalls")
+        self.assertEqual(code, 0)
+        self.assertIn("sm90/hands-on/software-pipeline.md", output)
+        self.assertNotIn("blackwell/patterns/pipeline-stalls.md", output)
+
     def test_directory_level_architecture_scope_is_enforced(self):
         _, blackwell = self.run_query("--arch", "b200", "--vendor", "nvidia")
         _, hopper = self.run_query("--arch", "sm90", "--vendor", "nvidia")
@@ -90,6 +106,53 @@ class QueryTests(unittest.TestCase):
         _, mi355x = self.run_query("--arch", "mi355x", "--vendor", "amd")
         self.assertIn("gfx950/matmul.md", mi355x)
         self.assertNotIn("gfx942/flash-attention.md", mi355x)
+
+    def test_architecture_implies_vendor_when_vendor_is_omitted(self):
+        _, a100 = self.run_query("--arch", "a100")
+        self.assertIn("vendor=nvidia", a100)
+        self.assertNotIn("ref-docs/amd/", a100)
+
+        _, mi355x = self.run_query("--arch", "mi355x")
+        self.assertIn("vendor=amd", mi355x)
+        self.assertNotIn("ref-docs/nvidia/", mi355x)
+
+    def test_sm120_only_legacy_pitfalls_do_not_leak_to_hopper(self):
+        pages = {
+            "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md":
+                "# CuTeDSL GDN Decode on sm_120 — Pitfalls\n",
+        }
+        for relative, content in pages.items():
+            path = self.root / "docs" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        _, hopper = self.run_query("gdn", "--arch", "h20", "--section", "pitfalls")
+        self.assertNotIn("gdn-decode-pitfalls.md", hopper)
+
+        _, sm120 = self.run_query("gdn", "--arch", "sm120", "--section", "pitfalls")
+        self.assertIn("gdn-decode-pitfalls.md", sm120)
+
+    def test_product_specific_hardware_pages_exclude_sibling_products(self):
+        _, mi300x = self.run_query("--arch", "mi300x", "--section", "hardware-specs")
+        self.assertIn("hardware_specs_mi300x.md", mi300x)
+        self.assertNotIn("hardware_specs_mi308x.md", mi300x)
+
+        _, mi308x = self.run_query("--arch", "mi308x", "--section", "hardware-specs")
+        self.assertIn("hardware_specs_mi308x.md", mi308x)
+        self.assertNotIn("hardware_specs_mi300x.md", mi308x)
+
+        _, b200 = self.run_query("--arch", "b200", "--section", "hardware-specs")
+        self.assertIn("hardware_specs_b200.md", b200)
+        self.assertNotIn("hardware_specs_b300.md", b200)
+
+        _, b300 = self.run_query("--arch", "b300", "--section", "hardware-specs")
+        self.assertIn("hardware_specs_b300.md", b300)
+        self.assertNotIn("hardware_specs_b200.md", b300)
+
+    def test_architecture_family_query_keeps_cdna3_products(self):
+        _, output = self.run_query("--arch", "gfx942", "--section", "hardware-specs")
+        self.assertIn("hardware_specs_mi300x.md", output)
+        self.assertIn("hardware_specs_mi308x.md", output)
 
     def test_operator_dsl_and_section_filters_compose(self):
         code, output = self.run_query(

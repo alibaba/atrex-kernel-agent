@@ -226,7 +226,9 @@ Threads within a Warp can directly exchange register data through the `__shfl_sy
 | Memory Stall | Waiting for Global Memory (200-400 cycles) | Increase occupancy, prefetch |
 | Sync Stall | Waiting for `__syncthreads()` | Reduce sync points, thread coarsening |
 | Execution Dependency | Waiting for previous instruction result | ILP, loop unrolling |
-| Instruction Overhead | Address arithmetic, loop control | Loop unrolling, template specialization |## 5. Kernel Launch Overhead and Optimization
+| Instruction Overhead | Address arithmetic, loop control | Loop unrolling, template specialization |
+
+## 5. Kernel Launch Overhead and Optimization
 
 ### 5.1 Launch Overhead
 

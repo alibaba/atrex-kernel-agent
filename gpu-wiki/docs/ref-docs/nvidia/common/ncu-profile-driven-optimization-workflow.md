@@ -205,7 +205,9 @@ Common findings and edit families:
 | Excess `bar.sync` / mbarrier | Excessive synchronization or phase lifetime error | Simplify barrier lifetime, adjust pipeline stages |
 | `tcgen05` / `wgmma` sparse or missing in tensor kernel | Lowering took the wrong path | Force tensor path or adjust kernel stack config |
 | Large instruction window with `imc_miss` | I-cache / front-end pressure | Split / specialize kernel, reduce unroll |
-| Cache modifier not as expected | Incorrect cache policy | Use DSL cache-policy primitive or targeted inline PTX |## Metric Grouping and Interpretation
+| Cache modifier not as expected | Incorrect cache policy | Use DSL cache-policy primitive or targeted inline PTX |
+
+## Metric Grouping and Interpretation
 
 ### Execution and Launch Identity
 

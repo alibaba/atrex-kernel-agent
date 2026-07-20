@@ -196,7 +196,9 @@ CUTLASS defines 4 mask types, all implemented in `collective/fmha_fusion.hpp`:
 | `NoMask` | All unmasked | No-op |
 | `ResidualMask` | Last 1 tile masked when seqK % tileN != 0 | Sets `pos >= seqK` to -INF |
 | `CausalMask<kIsQBegin>` | Truncates K tiles by Q row | Sets `q_pos < k_pos` to -INF |
-| `CausalForBackwardMask` | Combination causal + residual | Used for BWD pass |### CausalMask Trip Count Optimization
+| `CausalForBackwardMask` | Combination causal + residual | Used for BWD pass |
+
+### CausalMask Trip Count Optimization
 
 ```cpp
 // CausalMask::get_trip_count: Skip unnecessary KV tiles using causality
@@ -295,7 +297,9 @@ CuTeDSL examples such as `mixed_input_fmha_decode.py` demonstrate mixed-precisio
 | **Pipeline Count** | 2 (Q + KV) | 6 (Q, KV, S0, S1, O, E) |
 | **Multi-WG Coordination** | `OrderedSequenceBarrier` | `PipelineUmmaAsync` |
 | **Register Allocation** | Automatic per warp group | Manual `warpgroup_reg_set<N>()` |
-| **HeadDim Support** | 32, 64, 128, 256 | 32, 64, 128 |### Hopper's GMMA RS Mode
+| **HeadDim Support** | 32, 64, 128, 256 | 32, 64, 128 |
+
+### Hopper's GMMA RS Mode
 
 PV GEMM uses RS (Register-Shared) mode — P reads from registers, V reads from SMEM:
 

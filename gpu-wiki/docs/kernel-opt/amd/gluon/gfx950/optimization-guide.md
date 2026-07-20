@@ -286,7 +286,9 @@ python tools/compute_utilization.py \
 | `ds_read/write` high Stall | Bank conflict | §3.2 |
 | `ds_bpermute_b32` | Layout conversion overhead | §3.3 |
 | `buffer_load/store` + scratch | Register spill | §3.4 |
-| `buffer_load` high Stall + low Idle | Memory access not overlapped | §3.5 |## Step 3: Iterative Optimization
+| `buffer_load` high Stall + low Idle | Memory access not overlapped | §3.5 |
+
+## Step 3: Iterative Optimization
 
 Based on the pattern matched in Step 0:
 

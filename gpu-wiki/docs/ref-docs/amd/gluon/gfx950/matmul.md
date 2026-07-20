@@ -105,7 +105,9 @@ Source: `common_optimizations.md` Appendix A, "Large-tile GEMM" row.
 | ⭐⭐ | §3.6 Increase BLOCK_SIZE_K | Reduces loop overhead |
 | ⭐ | §3.0–3.3 Basic ISA Optimizations | Low-cost micro-optimizations |
 | ❌ | warp_pipeline_stage | Ineffective or negative optimization for small matrix scenarios |
-| ❌ | XCD Remapping | Grid is too small; no load imbalance |## CDNA4-Specific Considerations
+| ❌ | XCD Remapping | Grid is too small; no load imbalance |
+
+## CDNA4-Specific Considerations
 
 ### gfx950 Disables In-Thread Transpose
 

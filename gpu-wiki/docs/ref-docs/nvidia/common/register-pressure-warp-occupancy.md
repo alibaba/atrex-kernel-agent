@@ -238,7 +238,9 @@ kernel(...) {
 | Parameter | Meaning | Impact |
 |------|------|------|
 | `maxThreadsPerBlock` | Maximum threads per block | Compiler optimizes accordingly |
-| `minBlocksPerMultiprocessor` | Minimum blocks per SM | Compiler limits registers to meet this target |### Impact of Register Allocation
+| `minBlocksPerMultiprocessor` | Minimum blocks per SM | Compiler limits registers to meet this target |
+
+### Impact of Register Allocation
 
 The compiler determines the maximum allowed number of registers based on `minBlocksPerMultiprocessor`:
 

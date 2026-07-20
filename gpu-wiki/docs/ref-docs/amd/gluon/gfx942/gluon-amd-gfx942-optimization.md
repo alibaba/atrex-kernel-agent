@@ -276,7 +276,9 @@ ttgl.amd.cdna3.buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scop
 | `gl.full(shape, value, dtype, layout)` | Generate a constant tensor |
 | `gl.warp_specialize()` | Warp specialization (different warps execute different tasks) |
 | `gl.program_id(axis)` | Get program ID |
-| `gl.cdiv(a, b)` | Ceiling division |## 3. Layout Type Quick Reference
+| `gl.cdiv(a, b)` | Ceiling division |
+
+## 3. Layout Type Quick Reference
 
 | Layout Type | Usage | Typical Configuration |
 |---------|------|---------|

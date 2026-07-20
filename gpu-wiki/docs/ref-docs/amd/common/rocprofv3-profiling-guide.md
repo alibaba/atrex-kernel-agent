@@ -392,7 +392,9 @@ rocprofv3 --list-avail
 | Time window | `-P delay:duration:repeat` | `--profile-from-start` + `cu(da)ProfilerStart/Stop` |
 | Process attach | `--attach PID` | `--mode attach` |
 | Visualization | Perfetto UI | ncu-ui |
-| Instruction-level analysis | ATT (see architecture-specific profiling_guide) | Source page (`--page source`) |## Related Documents
+| Instruction-level analysis | ATT (see architecture-specific profiling_guide) | Source page (`--page source`) |
+
+## Related Documents
 
 - **NVIDIA counterpart**: [NCU Profiling Guide](../../nvidia/common/ncu-profiling-guide.md) — Full usage of NVIDIA Nsight Compute
 - **CDNA3 Instruction-level Analysis**: [rocprofv3 ATT Detailed Guide](../gluon/gfx942/profiling_guide.md) — ATT Thread Trace usage

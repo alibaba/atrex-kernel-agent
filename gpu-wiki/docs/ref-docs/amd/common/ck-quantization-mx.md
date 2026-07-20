@@ -106,7 +106,9 @@ B matrix dequantization timing is controlled via `CastPolicy`:
 | CastPolicy | Description | Applicable Scenario |
 |------------|------|---------|
 | `AfterLDSRead` | Dequantize in registers after LDS read | gfx950 + FP4 (hardware supports load-with-transpose) |
-| `BeforeLDSWrite` | Dequantize after VMEM read, before LDS write | Non-gfx950 FP4 (requires manual register transpose) |## MX (Microscaling) GEMM
+| `BeforeLDSWrite` | Dequantize after VMEM read, before LDS write | Non-gfx950 FP4 (requires manual register transpose) |
+
+## MX (Microscaling) GEMM
 
 The MX format implementation is located at `include/ck_tile/ops/gemm_mx/`, based on `UniversalGemmKernel` extensions.
 
@@ -208,7 +210,9 @@ This fused kernel is critical in LLM inference, combining the transformer block'
 | Per-channel (col) | [1, N] | `RowColQuant` (BQ) | Static weight quant |
 | Per-group (K) | [M, K/g] or [K/g, N] | `AQuantGrouped` / `BQuantGrouped` | GPTQ/AWQ style |
 | Block-wise | [M/bm, K/bk] | `ABQuantGrouped` | FP8 W8A8 block quant |
-| MX block-scale | Defined by GranularityMN/K | MXGemmKernel | OCP MX standard |## Supported Data Types
+| MX block-scale | Defined by GranularityMN/K | MXGemmKernel | OCP MX standard |
+
+## Supported Data Types
 
 | A dtype | B dtype | Scale dtype | Acc dtype | Description |
 |---------|---------|------------|-----------|------|

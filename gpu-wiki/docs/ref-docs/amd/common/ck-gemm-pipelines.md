@@ -340,7 +340,9 @@ The three letters represent the register file used by **C (accumulator) - A (inp
 | `vvv` | Most flexible, all operands in VGPR | High VGPR pressure | When VGPR is sufficient |
 | `avv` | Place C accumulator in AGPR to free up VGPR | Reading C back requires `v_accvgpr_read` | Large output tiles |
 | `vaa` | Place A/B in AGPR to free up VGPR | Loading inputs requires extra moves | Extremely tight VGPR budget |
-| `vav` | A in AGPR, B remains in VGPR | Asymmetric | When B needs frequent reuse |### 7.3 AGPR Features
+| `vav` | A in AGPR, B remains in VGPR | Asymmetric | When B needs frequent reuse |
+
+### 7.3 AGPR Features
 
 - AGPR and VGPR are the same size (512 32-bit per CU)
 - MFMA instructions can directly read/write AGPR as accumulators (no extra latency)

@@ -218,7 +218,9 @@ from kernels.mixed_moe_gemm_2stage import mixed_moe_gemm_2stage
 | `buffer_copy_gmem16_dwordx4(...)` | 16-byte global buffer load |
 | `lds_store_16b_xor16(...)` | LDS 16B store with XOR16 swizzle |
 | `lds_load_pack_k32(...)` | Load A pack from LDS (K32 micro-step) |
-| `swizzle_xor16(...)` | XOR swizzle to avoid LDS bank conflicts |## 7. MFMA Instruction Reference
+| `swizzle_xor16(...)` | XOR swizzle to avoid LDS bank conflicts |
+
+## 7. MFMA Instruction Reference
 
 | Instruction | Data Type | M×N×K | Architecture |
 |-------------|-----------|-------|--------------|

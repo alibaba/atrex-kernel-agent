@@ -54,7 +54,9 @@ AMD's official AI inference operator library [aiter](https://github.com/ROCm/ait
 | [gemm_a16w8_blockscale.py](gemm/basic/gemm_a16w8_blockscale.py) | A16W8 Block-Scale GEMM |
 | [gemm_a16wfp4.py](gemm/basic/gemm_a16wfp4.py) | A16 x WFP4 GEMM |
 | [gemm_a8wfp4.py](gemm/basic/gemm_a8wfp4.py) | A8 x WFP4 GEMM |
-| [gemm_afp4wfp4.py](gemm/basic/gemm_afp4wfp4.py) | MXFP4 x MXFP4 GEMM (gfx950 tl.dot_scaled) |### Batched
+| [gemm_afp4wfp4.py](gemm/basic/gemm_afp4wfp4.py) | MXFP4 x MXFP4 GEMM (gfx950 tl.dot_scaled) |
+
+### Batched
 
 | File | Description |
 |------|------|
@@ -110,7 +112,9 @@ AMD's official AI inference operator library [aiter](https://github.com/ROCm/ait
 |------|------|
 | [rmsnorm.py](normalization/rmsnorm.py) | RMSNorm (including fused add, dynamic quantization, backward, 8 kernels) |
 | [norm.py](normalization/norm.py) | General Normalization |
-| [fused_add_rmsnorm_pad.py](normalization/fused_add_rmsnorm_pad.py) | Fused Add + RMSNorm + Padding |## Quantization
+| [fused_add_rmsnorm_pad.py](normalization/fused_add_rmsnorm_pad.py) | Fused Add + RMSNorm + Padding |
+
+## Quantization
 
 | File | Description |
 |------|-------------|

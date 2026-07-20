@@ -20,7 +20,9 @@ from pathlib import Path
 ARCH_ALIASES = {
     "ampere": {"ampere", "sm80", "a100"},
     "hopper": {"hopper", "sm90", "h100", "h20", "h200"},
-    "blackwell": {"blackwell", "sm100", "sm103", "b200", "b300"},
+    "blackwell": {"blackwell", "sm100", "sm_100"},
+    "b200": {"b200", "gb200"},
+    "blackwell-ultra": {"blackwell-ultra", "sm103", "sm_103", "b300", "gb300"},
     "blackwell-geforce": {
         "blackwell-geforce",
         "pro-5000",
@@ -31,7 +33,9 @@ ARCH_ALIASES = {
         "sm120",
         "sm_120",
     },
-    "cdna3": {"cdna3", "gfx942", "mi300x", "mi308x"},
+    "cdna3": {"cdna3", "gfx942"},
+    "mi300x": {"mi300x", "mi-300x"},
+    "mi308x": {"mi308x", "mi-308x"},
     "cdna4": {"cdna4", "gfx950", "mi355x"},
     "rdna4": {"rdna4", "gfx1250"},
 }
@@ -40,10 +44,44 @@ ARCH_INPUT_ALIASES = {
     for canonical, aliases in ARCH_ALIASES.items()
     for alias in aliases
 }
+ARCH_VENDORS = {
+    "ampere": "nvidia",
+    "hopper": "nvidia",
+    "blackwell": "nvidia",
+    "b200": "nvidia",
+    "blackwell-ultra": "nvidia",
+    "blackwell-geforce": "nvidia",
+    "cdna3": "amd",
+    "mi300x": "amd",
+    "mi308x": "amd",
+    "cdna4": "amd",
+    "rdna4": "amd",
+}
+# Product scopes inherit architecture-general pages, but product-specific pages
+# do not enter a sibling product scope. gfx942 is a deliberate family query and
+# therefore includes both MI300X and MI308X product pages.
+ARCH_PARENTS = {
+    "b200": "blackwell",
+    "blackwell-ultra": "blackwell",
+    "mi300x": "cdna3",
+    "mi308x": "cdna3",
+}
+ARCH_PARENT_CHILDREN = {
+    "blackwell": {"b200"},
+    "cdna3": {"mi300x", "mi308x"},
+}
+ARCH_PRODUCT_SCOPES = set(ARCH_PARENTS)
 # Legacy role-first directories whose README assigns an architecture even though
 # the architecture is not encoded in every child filename.
 ARCH_PATH_PREFIXES = {
     "kernel-opt/nvidia/common/hands-on/": "blackwell",
+    # These legacy filenames predate architecture-scoped retrieval, but every
+    # page is explicitly SM120-only. Keep their stable links while preventing
+    # them from leaking into A100/Hopper results.
+    "pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md": "blackwell-geforce",
+    "pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md": "blackwell-geforce",
+    "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md": "blackwell-geforce",
+    "pitfalls/nvidia/cutedsl/nvfp4-gemm-pitfalls.md": "blackwell-geforce",
 }
 VENDOR_ALIASES = {"nvidia": {"nvidia"}, "amd": {"amd"}}
 DSL_ALIASES = {
@@ -60,13 +98,22 @@ DSL_ALIASES = {
 }
 SECTIONS = {"converter", "hardware-specs", "kernel-opt", "pitfalls", "ref-docs"}
 SYMPTOMS = {
-    "compute-bound",
-    "low-sm-utilization",
-    "memory-bound",
-    "moe-load-imbalance",
-    "pipeline-stalls",
-    "register-pressure",
-    "tail-effect",
+    "compute-bound": {"compute bound", "compute-bound", "tensor core throughput"},
+    "low-sm-utilization": {
+        "low sm utilization", "low-sm-utilization", "persistent kernel", "occupancy tuning",
+    },
+    "memory-bound": {
+        "memory bound", "memory-bound", "memory bandwidth", "coalesced access",
+    },
+    "moe-load-imbalance": {"moe load imbalance", "moe-load-imbalance", "expert load imbalance"},
+    "pipeline-stalls": {
+        "pipeline stalls", "pipeline-stalls", "software pipeline", "software pipelining",
+        "pipeline depth",
+    },
+    "register-pressure": {
+        "register pressure", "register-pressure", "register spill", "vgpr spill",
+    },
+    "tail-effect": {"tail effect", "tail-effect", "wave quantization"},
 }
 KERNEL_TYPES = {
     "attention": {"attention", "flash attention", "flash-attention", "flashmla", "mla"},
@@ -182,6 +229,19 @@ def matches_dimension(page: Page, aliases: dict[str, set[str]], requested: set[s
     if not requested:
         return True
     present = dimension_values(page, aliases)
+    if aliases is ARCH_ALIASES and present:
+        page_products = present & ARCH_PRODUCT_SCOPES
+        requested_products = requested & ARCH_PRODUCT_SCOPES
+        if page_products:
+            if requested_products:
+                return bool(page_products & requested_products)
+            return any(
+                parent in requested and bool(page_products & children)
+                for parent, children in ARCH_PARENT_CHILDREN.items()
+            )
+        if requested_products:
+            inherited_parents = {ARCH_PARENTS[product] for product in requested_products}
+            return bool(present & inherited_parents)
     return not present or bool(present & requested)
 
 
@@ -256,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         dsls = _resolve_many(args.dsl, {}, set(DSL_ALIASES), "dsl")
         sections = _resolve_many(args.section, {}, SECTIONS, "section")
         excluded = _resolve_many(args.exclude_section, {}, SECTIONS, "section")
-        symptoms = _resolve_many(args.symptom, {}, SYMPTOMS, "symptom")
+        symptoms = _resolve_many(args.symptom, {}, set(SYMPTOMS), "symptom")
         kernel_types = _resolve_many(
             args.kernel_type, KERNEL_TYPE_INPUT_ALIASES, set(KERNEL_TYPES), "kernel-type"
         )
@@ -265,11 +325,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR {error}", file=sys.stderr)
         return 1
 
+    # Architecture-neutral means neutral within a vendor, not across vendors.
+    # Infer the architecture vendor when callers omit --vendor so A100/H20 do
+    # not retain AMD common pages and MI300X/MI355X do not retain NVIDIA pages.
+    if arches and not vendors:
+        vendors = {ARCH_VENDORS[architecture] for architecture in arches}
+
     pages = load_pages(docs_dir)
     scoped = []
     for page in pages:
         section = page.segments[0]
-        stem = Path(page.rel_path).stem.lower()
         if not matches_dimension(page, ARCH_ALIASES, arches):
             continue
         if not matches_dimension(page, VENDOR_ALIASES, vendors):
@@ -280,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if excluded and section in excluded:
             continue
-        if symptoms and stem not in symptoms:
+        if symptoms and not (classify_stable(page, SYMPTOMS) & symptoms):
             continue
         if kernel_types and not (classify_stable(page, KERNEL_TYPES) & kernel_types):
             continue

@@ -330,7 +330,9 @@ CK Tile provides the following examples (`example/ck_tile/` directory):
 | `20_grouped_convolution/` | Grouped convolution |
 | `04_img2col/` | Image to Column |
 | `05_reduce/` | 2D Reduction |
-| `36_pooling/` | Pooling |## Related Documentation
+| `36_pooling/` | Pooling |
+
+## Related Documentation
 
 - [CK Quantization GEMM and MX Format](ck-quantization-mx.md) -- Detailed implementation of SmoothQuant and Quantized GEMM
 - [CK Dispatcher and Kernel Selection](ck-dispatcher-kernel-selection.md) -- Automatic kernel selection mechanism for operators

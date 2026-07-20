@@ -51,7 +51,7 @@ For GPU-kernel work, follow the layered retrieval strategy below. **Do not load 
 
 | Priority | Tier | When to Retrieve | Relevant Directories |
 |--------|------|----------|----------|
-| **P0** | Hardware Specs | **First — after determining the target GPU** — get peak TFLOPS, bandwidth, ridge point, architecture parameters | `docs/hardware-specs/hardware_specs_{mi300x,mi308x,mi355x,hopper,blackwell}.md` |
+| **P0** | Hardware Specs | **First — after determining the target GPU** — get peak TFLOPS, bandwidth, ridge point, architecture parameters | `docs/hardware-specs/hardware_specs_{ampere,hopper,b200,b300,sm120,mi300x,mi308x,mi355x}.md` |
 | **P1** | Vendor-General | **After determining the target vendor** — general optimizations for AMD or NVIDIA | AMD: `docs/kernel-opt/amd/common/`; NVIDIA: `docs/kernel-opt/nvidia/common/` |
 | **P2** | Architecture-Specific | **After determining the target chip** — optimization points for specific models | NVIDIA Blackwell: `docs/kernel-opt/nvidia/common/blackwell/`; Gluon series: `docs/kernel-opt/{amd,nvidia}/gluon/{gfx942,gfx950,sm90}/`; General architecture: `docs/kernel-opt/amd/common/{gfx942,gfx950}/` |
 | **P3** | DSL-Specific | **After determining the target DSL** — framework-specific knowledge | CuTeDSL: `docs/kernel-opt/nvidia/cutedsl/`, `reference-kernels/`; FlyDSL: `docs/kernel-opt/amd/flydsl/`, `reference-kernels/` |
@@ -121,12 +121,13 @@ Centralized hardware specification tables for all target GPUs, providing peak TF
 
 | File | GPU | Key Specs |
 |------|-----|-----------|
+| [`hardware_specs_ampere.md`](docs/hardware-specs/hardware_specs_ampere.md) | NVIDIA A100 SXM 80 GB (Ampere, sm_80) | 312T BF16 dense, 2.039 TB/s, ridge ~153 |
 | [`hardware_specs_mi300x.md`](docs/hardware-specs/hardware_specs_mi300x.md) | AMD MI300X (CDNA3, gfx942) | 304 CU, 1307T BF16, 5.3 TB/s, ridge ~247 |
 | [`hardware_specs_mi308x.md`](docs/hardware-specs/hardware_specs_mi308x.md) | AMD MI308X (CDNA3, gfx942) | 80 CU, 206T BF16, 5.3 TB/s, ridge ~39 |
 | [`hardware_specs_mi355x.md`](docs/hardware-specs/hardware_specs_mi355x.md) | AMD MI355X (CDNA4, gfx950) | 256 CU, 160KB LDS, ridge ~629 |
 | [`hardware_specs_hopper.md`](docs/hardware-specs/hardware_specs_hopper.md) | NVIDIA H100/H20/H200 (sm_90) | 989T BF16 (H100), 228KB smem, ridge ~295/37 |
-| [`hardware_specs_b200.md`](docs/hardware-specs/hardware_specs_b200.md) | NVIDIA B200 (GB200 / Blackwell / sm_100) | 160 SM, 2250T BF16, 8.0 TB/s, ridge ~281 |
-| [`hardware_specs_b300.md`](docs/hardware-specs/hardware_specs_b300.md) | NVIDIA B300 (GB300 / Blackwell Ultra / sm_103) | 160 SM, 2250T BF16, 8.0 TB/s, 288GB HBM3e, ridge ~281 |
+| [`hardware_specs_b200.md`](docs/hardware-specs/hardware_specs_b200.md) | NVIDIA B200 (GB200 / Blackwell / sm_100) | 148 SM, 2250T BF16, 180 GB HBM3e, 8.0 TB/s, ridge ~281 |
+| [`hardware_specs_b300.md`](docs/hardware-specs/hardware_specs_b300.md) | NVIDIA B300 (GB300 / Blackwell Ultra / sm_103) | 160 SM, 2250T BF16, 288 GB HBM3e, 8.0 TB/s, ridge ~281 |
 | [`hardware_specs_sm120.md`](docs/hardware-specs/hardware_specs_sm120.md) | NVIDIA RTX PRO 6000/5000 (sm_120) | Blackwell GeForce / RTX PRO |
 | [`hardware-comparison-cdna3-cdna4.md`](docs/hardware-specs/hardware-comparison-cdna3-cdna4.md) | Cross-architecture | CDNA3 vs CDNA4 vs RDNA4 parameter comparison |
 

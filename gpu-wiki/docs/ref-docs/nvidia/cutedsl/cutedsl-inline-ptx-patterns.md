@@ -261,7 +261,9 @@ If you get it wrong:
 | [`quantize.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/quantize.py) | `lop3.b32 + sub.f16x2` quantized decode, `prmt.b32` + `mul.bf16x2` FP4→BF16 twiddling |
 | [`reduce.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/reduce.py) | `bar.sync $0, $1` (multiple barrier ids), warp shuffle patterns |
 | [`warp.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/warp.py) | `activemask.b32` single instruction |
-| [`grid_sync.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/grid_sync.py) | Multi-line PTX + `.reg`/`.pred` soft sync protocol |## 12. Relationship with SM120 NVFP4 Inline PTX
+| [`grid_sync.py`](../../../../reference-kernels/nvidia/hopper/cutedsl/tilelang/grid_sync.py) | Multi-line PTX + `.reg`/`.pred` soft sync protocol |
+
+## 12. Relationship with SM120 NVFP4 Inline PTX
 
 [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-inline-ptx-gemm.md`](sm120/sm120-nvfp4-inline-ptx-gemm.md) uses the same `llvm.inline_asm` approach described in this article to issue `mma.sync.aligned.kind::mxf4nvf4...` operations. The template strings, constraint rules, `StructType` output decomposition, and `u32` packing of FP4 registers are all identical, with the only differences being:
 

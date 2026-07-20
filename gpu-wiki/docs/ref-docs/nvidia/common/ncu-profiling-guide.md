@@ -410,7 +410,9 @@ ncu --warp-sampling-interval 10 ./app # sampling = 2^(5+value) cycles
 | `--page` | Report page type | details |
 | `--print-summary` | Summary mode (per-kernel/per-gpu) | none |
 | `--print-source` | Source type (sass/ptx/cuda) | sass |
-| `--open-in-ui` | Open in ncu-ui | — |### Environment and Control
+| `--open-in-ui` | Open in ncu-ui | — |
+
+### Environment and Control
 
 | Option | Purpose | Default |
 |------|------|--------|

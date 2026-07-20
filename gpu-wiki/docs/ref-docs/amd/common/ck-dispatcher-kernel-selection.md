@@ -97,7 +97,9 @@ The `GemmUniversalFeatureEngine` in `feature_engine.py` extracts 72 features (th
 | `total_output_tiles` | Total number of output tiles |
 | `tile_eff_m, _n, _k` | Tile efficiency per dimension (effective ratio of trailing tiles) |
 | `overall_tile_efficiency` | Product of three-dimensional tile efficiencies |
-| `cu_utilization` | CU utilization = total_output_tiles / num_cus |#### Problem-to-Tile Ratio Features (17)
+| `cu_utilization` | CU utilization = total_output_tiles / num_cus |
+
+#### Problem-to-Tile Ratio Features (17)
 
 This is the key feature group for performance prediction:
 
@@ -211,7 +213,9 @@ Appends 200 new trees on top of an existing model; feature schema must match exa
 |------|-----|
 | Mean Efficiency | 99.36% |
 | P10 Efficiency | 98.05% |
-| Min Efficiency | 95.45% |### By Pipeline
+| Min Efficiency | 95.45% |
+
+### By Pipeline
 
 | Pipeline | Mean Eff | P10 Eff |
 |----------|----------|---------|

@@ -193,7 +193,9 @@ Plus the V0 standalone kernel itself + V1/V2 archived experiments are candidates
 | wiki drafts staged (2 of 5) | `6c43013` | sm120-ncu-l1 + sm120-tma-warp-spec |
 | V3 vendor archive (b-patch hard cap) | `4fa44ed` | flash_attn.cute vs cutlass 4.4.2 trap |
 | V3 hybrid (archived discovery) | `0412f33` | 1.07× — vllm sm_120 no fast path is the actual ceiling |
-| **Stage 3 FINAL: V0 = V_final declared** | **`acf6e79`** | team-lead choice (ii); V0 ships as standalone V_final, hybrid demoted to archived discovery |## §11 Stage 3 verdict
+| **Stage 3 FINAL: V0 = V_final declared** | **`acf6e79`** | team-lead choice (ii); V0 ships as standalone V_final, hybrid demoted to archived discovery |
+
+## §11 Stage 3 verdict
 
 **V_final = V0 standalone fused-quant** (commit `6f7f213`, 88 us cuda.Event / 103.58 us ncu / 91.9% memcpy ceiling on M=6144 K=4096). Officially declared in commit `acf6e79`; hybrid path archived as discovery.
 

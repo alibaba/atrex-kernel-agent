@@ -30,7 +30,7 @@ NVIDIA's AI-accelerating GPUs have achieved a claimed 40-million-fold performanc
 | GPC Count | 7 | 8 | 8 |
 | FP32 CUDA Cores/SM | 64 | 128 | 128 |
 | Tensor Cores (Gen) | 432 (3rd) | 528 (4th) | 576 (5th) |
-| Memory | 80 GB HBM2e | 80 GB HBM3 | 192 GB HBM3e |
+| Memory | 80 GB HBM2e | 80 GB HBM3 | 180 GB HBM3e |
 | Memory BW | 2,039 GB/s | 3,350 GB/s | 8,000 GB/s |
 | L2 Cache | 40 MB | 50 MB | ~192 MB |
 | SMEM/SM | 192 KB (max 164 shared) | 256 KB (max 228) | 256 KB (max 228) |

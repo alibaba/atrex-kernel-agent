@@ -251,7 +251,9 @@ tcgen05.dealloc %tmem_addr, %num_columns;
 | `i8` | s8, u8 | s32 | Integer MMA |
 | `mxf8` | MX FP8 | f32 | Block-scaled |
 | `mxf4` | MX FP4 | f32 | Block-scaled |
-| `mxf4nvf4` | MX FP4 NV | f32 | NV custom format |### CTA Group
+| `mxf4nvf4` | MX FP4 NV | f32 | NV custom format |
+
+### CTA Group
 
 ```
 // 1 CTA

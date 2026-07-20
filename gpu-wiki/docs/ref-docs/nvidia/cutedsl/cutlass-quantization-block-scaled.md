@@ -94,7 +94,9 @@ Pass data + scale factor pairs via `ElementPairA` / `ElementPairB`:
 | NVFP4 | `float_e2m1_t` | `float_e4m3_t` | 16 | NVIDIA proprietary FP4 |
 | MXFP4 | `float_e2m1_t` | `float_e8m0_t` | 32 | OCP MX FP4 |
 | MXFP6 | `float_e2m3_t` / `float_e3m2_t` | `float_e8m0_t` | 32 | OCP MX FP6 |
-| MXFP8 | `float_e4m3_t` / `float_e5m2_t` | `float_e8m0_t` | 32 | OCP MX FP8 |### 2.2 Separation of Data and Scale Factors
+| MXFP8 | `float_e4m3_t` / `float_e5m2_t` | `float_e8m0_t` | 32 | OCP MX FP8 |
+
+### 2.2 Separation of Data and Scale Factors
 
 ```cpp
 using ElementPairA = ElementPairA_;  // cute::tuple<ElementA, ElementSF>

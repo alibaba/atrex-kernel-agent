@@ -113,7 +113,9 @@ ncu --import profile_output.ncu-rep --metrics \
 |------|------|---------|
 | `sm__throughput.avg.pct_of_peak_sustained_elapsed` | SM throughput (% of peak) | Overall compute efficiency |
 | `sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_elapsed` | Tensor Core activity rate | wgmma utilization |
-| `smsp__inst_executed.sum` | Total executed instructions | Instruction throughput |#### Memory Throughput
+| `smsp__inst_executed.sum` | Total executed instructions | Instruction throughput |
+
+#### Memory Throughput
 
 | Metric | Meaning | Used for Diagnosis |
 |------|------|---------|

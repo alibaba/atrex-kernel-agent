@@ -13,7 +13,9 @@ Distinct from `reference-kernels/amd/cdna/flydsl/FlyDSL/`: those are **CDNA-gene
 | [moe_fp8_ptpc_mi308x_atrex_v2/](moe_fp8_ptpc_mi308x_atrex_v2/) | MI308X (gfx942) | atrex-open integrated FP8 PTPC Fused MoE v2 full-pipeline archive: same task16 shape and tokens as task66, with AITER routing trace parity and same-machine atrex-open performance parity | [cdna3-fused-moe-fp8-ptpc-atrex-v2.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md) |
 | [attn_bwd_dkdv_mi308x.py](attn_bwd_dkdv_mi308x.py) | MI308X | Attention backward dK+dV (bf16, arbitrary mask). V15: dO B-operand from LDS (6.52ms). lds_qt→lds_dot merge + strided dO reads. | [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md) |
 | [attn_bwd_dq_mi308x.py](attn_bwd_dq_mi308x.py) | MI308X | Attention backward dQ (bf16, arbitrary mask). V14: lds_kt eliminated via strided scalar reads (2.93ms, occupancy 7). | [cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md) |
-| [flash_attn_bwd_flydsl_mi308x.py](flash_attn_bwd_flydsl_mi308x.py) | MI308X | Attention backward **API wrapper** (bf16, arbitrary mask). Bit-packed u32 mask + OOB guards + precomputed loop bounds. 11.7ms end-to-end, 3.0× vs PyTorch, 2.3× vs aiter CK-tile. | [cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md) |## Chunk-GDN Standalone Test
+| [flash_attn_bwd_flydsl_mi308x.py](flash_attn_bwd_flydsl_mi308x.py) | MI308X | Attention backward **API wrapper** (bf16, arbitrary mask). Bit-packed u32 mask + OOB guards + precomputed loop bounds. 11.7ms end-to-end, 3.0× vs PyTorch, 2.3× vs aiter CK-tile. | [cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md](../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md) |
+
+## Chunk-GDN Standalone Test
 
 ```bash
 cd reference-kernels/amd/cdna3/flydsl/FlyDSL

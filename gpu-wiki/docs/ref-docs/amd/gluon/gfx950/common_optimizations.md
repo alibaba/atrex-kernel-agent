@@ -112,7 +112,9 @@ grep -o "ds_write_[a-z0-9_]*" $ASM | sort | uniq -c
 |------|---------|
 | **Narrow tile (BV≤16) via smem.store()** | ⭐ Use `gl.convert_layout(data, dot_op)` instead of the smem path |
 | Improper SwizzledSharedLayout parameters | Adjust `vec`, `perPhase`, `maxPhase` parameters |
-| Data arrangement causing multiple threads to access the same bank simultaneously | Modify swizzle parameters to eliminate conflicts |### ⭐ Narrow Tile ds_write_b16 Fix (Measured +6-13%)
+| Data arrangement causing multiple threads to access the same bank simultaneously | Modify swizzle parameters to eliminate conflicts |
+
+### ⭐ Narrow Tile ds_write_b16 Fix (Measured +6-13%)
 
 When the tile width is ≤ 16 (e.g., a [64,16] bf16 tile with BV=16), ``smem.index(0).store(data)`` cannot form 128-bit vector writesarman, and degrades to element-wise 16-bit writes.
 

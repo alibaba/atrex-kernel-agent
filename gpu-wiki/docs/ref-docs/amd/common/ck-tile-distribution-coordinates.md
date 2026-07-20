@@ -133,7 +133,9 @@ CK-Tile's transform primitives operate on logical coordinate spaces and **do not
 | **OffsetTransform** | 1D -> 1D (shifted) | Coordinate translation | Tile window sliding |
 | **XorTransform** | 2D -> 2D | XOR coordinate mapping | Avoiding LDS bank conflicts |
 | **SliceTransform** | 1D -> 1D (sub) | Extracts a sub-range | Tensor slicing |
-| **ModuloTransform** | 1D -> 1D (cyclic) | Modulo cyclic mapping | Circular buffers |### Detailed Explanation of Key Transformations
+| **ModuloTransform** | 1D -> 1D (cyclic) | Modulo cyclic mapping | Circular buffers |
+
+### Detailed Explanation of Key Transformations
 
 #### MergeTransform: Multi-Dimensional Merging
 

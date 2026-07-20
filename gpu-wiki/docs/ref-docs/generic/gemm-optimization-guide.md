@@ -316,7 +316,9 @@ Tensor Cores are dedicated matrix multiply units. A single operation can complet
 | Architecture | FP32 CUDA Core | TF32 Tensor Core | FP16 Tensor Core |
 |------|----------------|-------------------|-------------------|
 | A100 | 19.5 TFLOPS | 156 TFLOPS | 312 TFLOPS |
-| H100 | 67 TFLOPS | 495 TFLOPS | 989 TFLOPS |### 7.2 Using the WMMA API
+| H100 | 67 TFLOPS | 495 TFLOPS | 989 TFLOPS |
+
+### 7.2 Using the WMMA API
 
 WMMA (Warp Matrix Multiply-Accumulate) is the simplest Tensor Core programming interface:
 

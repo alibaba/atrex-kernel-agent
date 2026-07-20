@@ -74,7 +74,9 @@ pitfalls: [24-31, 38-40]
 | 31 | Pointer arithmetic vs offset accumulation | Incorporate batch/head offset into base pointer, only compute block-level offset inside the loop | Appendix E |
 | 38 | start_m-only Zigzag — effective for large S, ineffective for small S | Zigzag only on the start_m dimension, completely ineffective when M-blocks ≤ NUM_SES | Appendix G |
 | 39 | start_m × batch-head Zigzag — effective for all S | Incorporate the batch-head dimension into the permutation, total blocks far exceeds SEs. +65% improvement at S=2048 | Appendix G |
-| 40 | Non-Causal must maintain bh-first ordering | Non-causal uses bh-first to maintain L2 cache locality. start_m-first ordering causes a 3-4% performance regression | Appendix G |## Stopping Conditions
+| 40 | Non-Causal must maintain bh-first ordering | Non-causal uses bh-first to maintain L2 cache locality. start_m-first ordering causes a 3-4% performance regression | Appendix G |
+
+## Stopping Conditions
 
 Use the general stopping conditions from optimization-guide.md §1.8:
 

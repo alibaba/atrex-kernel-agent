@@ -177,7 +177,9 @@ CUTLASS 3.x uses tag-based dispatch in place of named types. Each mainloop dispa
 | `KernelPtrArrayTmaWarpSpecializedPingpong` | Grouped/Ptr-Array GEMM pingpong |
 | `KernelTmaWarpSpecializedCooperativeFP8Blockwise` | FP8 block-scaled cooperative |
 | `KernelTmaWarpSpecializedPingpongFP8Blockwise` | FP8 block-scaled pingpong |
-| `KernelTmaWarpSpecializedMixedInput` | Mixed-precision input |#### SM100 (Blackwell) Schedule Tags
+| `KernelTmaWarpSpecializedMixedInput` | Mixed-precision input |
+
+#### SM100 (Blackwell) Schedule Tags
 
 SM100 introduces 1SM/2SM MMA atom differentiation and CLC (Cluster Launch Control) scheduling:
 

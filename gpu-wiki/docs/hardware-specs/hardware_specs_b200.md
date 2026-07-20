@@ -32,8 +32,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 | Parameter | Value |
 |------|------|
-| VRAM | 192 GB HBM3e |
-| Memory Interface | 4096-bit |
+| VRAM | 180 GB HBM3e (DGX B200: 1,440 GB total / 8 GPUs) |
 | Memory Bandwidth | 8.0 TB/s |
 | L2 Cache | 126 MB |
 | TDP | 1,000 W (max 1,200 W) |
@@ -102,7 +101,7 @@ These parameters influence optimization decisions:
 | Shared Memory | 128 KB L1/SMEM physical pool | High throughput | Bank conflicts impact performance |
 | L1/TEX Cache | Shares physical SRAM with Shared Memory | Medium | Automatic caching of global loads |
 | L2 Cache | 126 MB | Medium | Very large L2 benefits working set locality |
-| HBM3e | 192 GB | 8.0 TB/s | Extremely high bandwidth; still a bottleneck for pure streaming kernels |
+| HBM3e | 180 GB | 8.0 TB/s | Extremely high bandwidth; still a bottleneck for pure streaming kernels |
 
 ### Tensor Core / MMA Programming Tips
 
@@ -166,4 +165,5 @@ otherwise:
 - **Cross-Vendor Reference**: [MI300X Hardware Specs](hardware_specs_mi300x.md) | [MI308X Hardware Specs](hardware_specs_mi308x.md) | [MI355X Hardware Specs](hardware_specs_mi355x.md)
 - **Blackwell Tuning Guide**: [NVIDIA CUDA Blackwell Tuning Guide](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
 - **Official Product Page**: [NVIDIA DGX B200](https://www.nvidia.com/en-us/data-center/dgx-b200/)
+- **Official System Guide**: [DGX B200 introduction](https://docs.nvidia.com/dgx/dgxb200-user-guide/introduction-to-dgxb200.html) — 8 GPUs provide 1,440 GB total GPU memory
 - **⚠️ Architecture Note**: B200 (SM100) uses the `tcgen05` / TMEM / UMMA path which is NOT available on SM120 client Blackwell GPUs. Kernel code designed for B200's UMMA path must be adapted when targeting RTX PRO / GeForce Blackwell.

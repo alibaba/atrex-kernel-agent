@@ -139,7 +139,9 @@ Hopper's shared memory and L1 cache share 256 KB per SM:
 |------|---------------|----------|
 | Default | 48 KB | 208 KB |
 | Medium | 100 KB | 156 KB |
-| Maximum | **228 KB** | 28 KB |Configuration is required via `cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, size)`.
+| Maximum | **228 KB** | 28 KB |
+
+Configuration is required via `cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, size)`.
 
 > **Key Point**: Hopper's smem capacity (228 KB) is much larger than AMD CDNA3 (64 KB), making double/multi-buffered pipelines easier to implement.
 

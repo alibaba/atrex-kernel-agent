@@ -97,7 +97,9 @@ Kernel configurations are driven by CSV files that auto-generate C++ header file
 | `ps` | Whether to use persistent scheduling |
 | `tg_num_perCU` | Number of thread groups per CU |
 | `smf` | Smooth quantization fusion mode (0=none, 1=full smooth fuse, 2=fc2 only) |
-| `vskip` | Whether to enable empty block skipping (padding blocks from MoE sorting) |### 3.2 Three-Level Heuristic Selection Algorithm
+| `vskip` | Whether to enable empty block skipping (padding blocks from MoE sorting) |
+
+### 3.2 Three-Level Heuristic Selection Algorithm
 
 **Step 1: Filtering** — architecture match + vskip/smf consistency + inter_dim divisible by tile
 
