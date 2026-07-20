@@ -28,7 +28,7 @@ kernel itself (deferred to Phase 2 — see §7).
 
 ## §1 Target hardware & shape
 
-- **GPU**: NVIDIA RTX PRO 5000 / 4000 Blackwell-GeForce (`sm_120`, 110 SMs, 72 GB)
+- **GPU**: NVIDIA RTX PRO 5000 72GB Blackwell (`sm_120`, 110 SMs, 72 GB GDDR7 ECC)
 - **Stack**: PyTorch 2.11 + CUDA 13.0, Triton 3.x bundled with torch
 - **Workload**: `attn.py::_deltanet_post`'s RMSNormGated + SiLU(z) gating block
   (consumed by `scaled_fp4_quant` + `cutlass_scaled_fp4_mm` downstream — those
@@ -218,4 +218,3 @@ When implementing similar fused-norm-gating-elementwise kernels on sm_120:
 - **sm_120 cp.async / cache mode (CuTeDSL specific)**:
   [`sm120-gdn-decode-cpasync-cache-mode.md`](../../../../kernel-opt/nvidia/cutedsl/sm120/sm120-gdn-decode-cpasync-cache-mode.md)
 - **NVIDIA `ncu` profiling**: [`ncu-profiling-guide.md`](../../common/ncu-profiling-guide.md)
-

@@ -21,7 +21,16 @@ ARCH_ALIASES = {
     "ampere": {"ampere", "sm80", "a100"},
     "hopper": {"hopper", "sm90", "h100", "h20", "h200"},
     "blackwell": {"blackwell", "sm100", "sm103", "b200", "b300"},
-    "blackwell-geforce": {"blackwell-geforce", "sm120"},
+    "blackwell-geforce": {
+        "blackwell-geforce",
+        "pro-5000",
+        "pro5000",
+        "rtx-pro-5000",
+        "rtxpro5000",
+        "sm-120",
+        "sm120",
+        "sm_120",
+    },
     "cdna3": {"cdna3", "gfx942", "mi300x", "mi308x"},
     "cdna4": {"cdna4", "gfx950", "mi355x"},
     "rdna4": {"rdna4", "gfx1250"},
@@ -203,7 +212,7 @@ def score(page: Page, terms: list[str], match_any: bool) -> int:
 def _resolve_many(values: list[str], aliases: dict[str, str], valid: set[str], kind: str) -> set[str]:
     resolved: set[str] = set()
     for raw in values:
-        value = raw.lower().replace("_", "-")
+        value = re.sub(r"[\s_]+", "-", raw.lower().strip())
         canonical = value if value in valid else aliases.get(value)
         if canonical is None:
             raise ValueError(f"unknown-{kind} {raw}")

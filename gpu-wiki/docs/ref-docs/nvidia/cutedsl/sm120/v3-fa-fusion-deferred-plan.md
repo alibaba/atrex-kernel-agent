@@ -4,7 +4,7 @@
 
 **Target shape**: Path-1, M=6144 (varlen single seq), Q (6144, 16, 256) bf16, K/V (6144, 2, 256) bf16, GQA ratio 8, gate (6144, 4096) bf16, causal=True, output NVFP4 (e2m1 packed + e4m3 SF, group_size=16, swizzled-128x4 layout).
 
-**Hardware**: NVIDIA RTX PRO 5000 Blackwell-Geforce, sm_120, 110 SMs, 99 KB SMEM/CTA, GDDR7 384-bit @ 28 Gbps (memcpy ceiling 1099 GB/s @ ≥115 MB).
+**Hardware**: NVIDIA RTX PRO 5000 Blackwell-GeForce, sm_120, 110 SMs, 99 KB SMEM/CTA, GDDR7 512-bit, 1,344 GB/s official bandwidth (measured memcpy ceiling 1099 GB/s @ ≥115 MB).
 
 **Projected wall-clock**: ~130 us for the fused kernel (77 MB traffic at memcpy ceiling), end-to-end **~14× over SDPA+V0** (1825 us → ~130 us). ~9× even if upstream FA on sm_120 stays slow because we eliminate the 50 MB attn_out DRAM round-trip.
 

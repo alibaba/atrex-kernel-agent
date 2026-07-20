@@ -34,7 +34,7 @@ You will receive the following parameters when invoked:
 | `workspace_path` | Workspace absolute path (kernel_opt_<name>/) |
 | `version` | Current iteration version `V<N>` |
 | `platform` | Target platform: nvidia / amd |
-| `architecture` | Target GPU architecture/SKU, for example `sm90`, `b200`, `sm120`, `gfx942`, or `mi355x` |
+| `architecture` | Target GPU architecture/SKU, for example `sm90`, `b200`, `sm120`/`pro5000`, `gfx942`, or `mi355x` |
 | `framework` | DSL/framework: triton / cutedsl / flydsl / gluon |
 | `kernel_type` | Kernel type (gemm, attention, moe, norm, etc.) |
 | `profiles_dir` | `profiles/v<N>/` path containing current profiling artifacts |

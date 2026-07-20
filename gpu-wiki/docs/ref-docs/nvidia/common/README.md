@@ -14,7 +14,6 @@ General optimization reference articles for NVIDIA hardware, covering PTX, NCU p
 | [flash-attention-1-to-4-gpu-evolution.md](flash-attention-1-to-4-gpu-evolution.md) | FlashAttention 1–4: GPU Generational Evolution |
 | [flashinfer-efficient-attention-engine.md](flashinfer-efficient-attention-engine.md) | FlashInfer: Efficient and Customizable Attention Engine for LLM Inference |
 | [flashinfer-tensorrt-llm-cubin-integration.md](flashinfer-tensorrt-llm-cubin-integration.md) | FlashInfer Integration of TensorRT-LLM Cubin Kernels |
-| [gdn-decode-kernel-no-tensor-core.md](gdn-decode-kernel-no-tensor-core.md) | GDN Kernel Optimization: Why Decode Cannot Use Tensor Core |
 | [gpu-architecture-deep-dive.md](gpu-architecture-deep-dive.md) | GPU Architecture Deep Dive |
 | [h100-to-b200-gpgpu-scaling-analysis.md](h100-to-b200-gpgpu-scaling-analysis.md) | From H100 to B200: GPGPU and LLM Scaling Deep Analysis |
 | [hierarchical-reduction-memory-bound.md](hierarchical-reduction-memory-bound.md) | Memory-Bound Kernel Optimization: Hierarchical Reduction |
@@ -36,7 +35,6 @@ General optimization reference articles for NVIDIA hardware, covering PTX, NCU p
 | [ptx-sass-programming.md](ptx-sass-programming.md) | PTX/SASS Low-Level Programming Practices |
 | [python-operator-dsl-overview.md](python-operator-dsl-overview.md) | Emerging Python Operator DSLs: Triton, CuTeDSL, Mojo Overview |
 | [pytorch-performance-profiling-tuning.md](pytorch-performance-profiling-tuning.md) | PyTorch Performance Profiling, Tuning, and Scaling |
-| [qwen3.5-gdn-prefill-kernel-optimization.md](qwen3.5-gdn-prefill-kernel-optimization.md) | Qwen3.5 GDN Prefill Kernel Optimization |
 | [qwen3.5-gdn-principle-code-analysis.md](qwen3.5-gdn-principle-code-analysis.md) | Qwen3.5 GDN (Gated Delta Networks): Principle and Code Analysis |
 | [register-pressure-warp-occupancy.md](register-pressure-warp-occupancy.md) | Register Pressure and Warp Occupancy |
 | [sglang-hopper-blackwell-backend-selection.md](sglang-hopper-blackwell-backend-selection.md) | Systematic Performance Bottleneck Analysis for LLM Inference Frameworks |

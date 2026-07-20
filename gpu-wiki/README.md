@@ -39,7 +39,9 @@ python3 gpu-wiki/scripts/query.py "flash attention" --arch gfx942 \
 Useful filters are `--arch`, `--vendor`, `--dsl`, `--section`, `--symptom`,
 `--kernel-type`, and `--operator`. Run `--list-arch` or `--list-operators` for
 accepted values. Unknown filter values fail closed instead of silently widening
-the search. Open the returned pages and follow their local README/link hierarchy.
+the search. Product aliases such as `pro5000` / `RTX PRO 5000` resolve to the
+same scope as `sm120`. Open the returned pages and follow their local
+README/link hierarchy.
 
 ## Search Priority Guidelines
 

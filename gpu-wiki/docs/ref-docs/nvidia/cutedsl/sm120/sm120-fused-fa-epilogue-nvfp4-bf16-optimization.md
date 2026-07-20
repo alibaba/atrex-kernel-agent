@@ -1,7 +1,7 @@
 # Stage 3 Closeout — Path-1 fused sigmoid·gate + NVFP4 quant on sm_120
 
 **Date**: 2026-04-28
-**Hardware**: NVIDIA RTX PRO 5000 Blackwell-Geforce, sm_120, 110 SMs, GDDR7 384-bit
+**Hardware**: NVIDIA RTX PRO 5000 Blackwell-GeForce, sm_120, 110 SMs, GDDR7 512-bit, 1,344 GB/s official bandwidth
 **Software**: cute-DSL 4.4.2 (cluster), torch 2.7.0+cu128 / 2.10.0+cu128, vllm dev206
 **Workload**: Path-1 = `flash_attn(Q,K,V) → x = attn_out * sigmoid(gate) → scaled_fp4_quant(x)`
 **Shape**: SEQ_LEN=6144, Q (6144, 16, 256) bf16, K/V (6144, 2, 256) bf16 (GQA ratio 8), gate (6144, 4096) bf16, causal=True, output NVFP4 (e2m1 packed + e4m3 SF, group_size=16, swizzled-128x4 layout)

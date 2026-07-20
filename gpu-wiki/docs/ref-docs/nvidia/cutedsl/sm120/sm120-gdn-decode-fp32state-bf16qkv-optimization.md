@@ -8,13 +8,13 @@ to wall-clock parity (1.00×) on NVIDIA RTX PRO 5000 Blackwell. 18 versions iter
 
 | Item | Value |
 |---|---|
-| GPU | NVIDIA RTX PRO 5000 Blackwell (also RTX PRO 4000 Blackwell, RTX 50xx GeForce) |
+| GPU | NVIDIA RTX PRO 5000 Blackwell |
 | Compute Capability | sm_120 (CC 12.0) |
 | SMs | 110 |
-| HBM | 48 GB (GDDR7, 384-bit, ~28 Gbps) |
+| GPU memory | 48 GB GDDR7 ECC, 512-bit, 1,344 GB/s official bandwidth |
 | Driver / CUDA | 580.105 / 13.0 |
 | D2D memcpy ceiling (≥256MB tile, measured) | **1032 GB/s** |
-| ncu Max Bandwidth ceiling (vendor spec) | ~1186 GB/s |
+| ncu-reported max bandwidth at the profiled clock state | ~1186 GB/s |
 | OS | Ubuntu 22.04 root container |
 
 **Architectural constraint** (don't overlook): sm_120 is *client* Blackwell. It has

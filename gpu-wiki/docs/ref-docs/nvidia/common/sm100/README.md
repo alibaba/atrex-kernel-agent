@@ -18,5 +18,7 @@ General reference documents about the NVIDIA Blackwell architecture (SM100).
 | [flash-attention-4-source-code-analysis-part1.md](flash-attention-4-source-code-analysis-part1.md) | FlashAttention-4 Source Code Analysis — Part 1: Architecture Overview |
 | [flash-attention-4-warp-specialization-2cta.md](flash-attention-4-warp-specialization-2cta.md) | SVDQuant W4A4 on Blackwell: Warp Specialization, TMEM, and 2-CTA Persistent Kernel Using the FA4 Skeleton |
 | [gpt-oss-blackwell-performance-optimization.md](gpt-oss-blackwell-performance-optimization.md) | GPT-OSS Blackwell Performance Optimization: Pushing the Pareto Frontier |
+| [gdn-decode-kernel-no-tensor-core.md](gdn-decode-kernel-no-tensor-core.md) | B200 GDN Kernel Optimization: Why Decode Cannot Use Tensor Core |
 | [nvidia-cuda-toolkit-blackwell-support.md](nvidia-cuda-toolkit-blackwell-support.md) | NVIDIA CUDA Toolkit Now Supports Blackwell Architecture |
 | [orin-profiling-decode-gemm-b200.md](orin-profiling-decode-gemm-b200.md) | When Operators Approach Hardware Limits: Profiling-Driven Analysis of Real-Time Inference on Orin |
+| [qwen3.5-gdn-prefill-kernel-optimization.md](qwen3.5-gdn-prefill-kernel-optimization.md) | Qwen3.5 GDN Prefill Kernel Optimization on SM100 |

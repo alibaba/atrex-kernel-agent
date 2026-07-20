@@ -249,6 +249,8 @@ otherwise:
 
 ## Related Documents
 
+- **Official RTX PRO 5000 Product Page**: [NVIDIA RTX PRO 5000 Blackwell](https://www.nvidia.com/en-us/products/workstations/professional-desktop-gpus/rtx-pro-5000/)
+- **Official RTX PRO 5000 Datasheet**: [NVIDIA RTX PRO 5000 Blackwell Datasheet](https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/professional-desktop-gpus/rtx-pro-5000-blackwell/workstation-datasheet-blackwell-rtx-pro-5000-gtc25-spring-nvidia-3658700.pdf)
 - **PDF Conversion Draft**: `NVIDIA RTX Blackwell PRO GPU Architecture v1.0`
 - **Cross-Architecture Reference**: [Hopper Hardware Specs](hardware_specs_hopper.md) | [CDNA3 Hardware Specs](hardware_specs_mi300x.md)
 - **SM120 CuTeDSL Index**: [SM120 CuTeDSL](../ref-docs/nvidia/cutedsl/sm120/README.md)

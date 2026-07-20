@@ -1,4 +1,4 @@
-# Qwen3.5 GDN Prefill Kernel Optimization
+# Qwen3.5 GDN Prefill Kernel Optimization on SM100
 
 Practical optimization of Qwen3.5 GDN prefill kernels using Gluon on Blackwell, covering TMA pipelining, async scatter, bitmask causal masking, and zero-copy transpose.
 

@@ -1,4 +1,4 @@
-# GDN Kernel Optimization: Why Decode Cannot Use Tensor Core
+# B200 GDN Kernel Optimization: Why Decode Cannot Use Tensor Core
 
 A deep analysis of why Gated Delta Networks decode kernels are fundamentally memory-bound and cannot leverage Tensor Cores, contrasting with the compute-bound prefill phase.
 
