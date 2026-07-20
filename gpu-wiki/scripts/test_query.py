@@ -154,6 +154,50 @@ class QueryTests(unittest.TestCase):
         self.assertIn("hardware_specs_mi300x.md", output)
         self.assertIn("hardware_specs_mi308x.md", output)
 
+    def test_amd_product_specific_pitfalls_do_not_leak_to_sibling_products(self):
+        pages = {
+            "pitfalls/amd/flydsl/flash-attn-pitfalls.md":
+                "# FlyDSL Flash Attention on MI308X\n",
+            "pitfalls/amd/flydsl/chunk-gdn-pitfalls.md":
+                "# FlyDSL Chunk GDN on MI355X\n",
+        }
+        for relative, content in pages.items():
+            path = self.root / "docs" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        _, mi300x = self.run_query("--arch", "mi300x", "--section", "pitfalls")
+        self.assertNotIn("flash-attn-pitfalls.md", mi300x)
+        self.assertNotIn("chunk-gdn-pitfalls.md", mi300x)
+
+        _, mi308x = self.run_query("--arch", "mi308x", "--section", "pitfalls")
+        self.assertIn("flash-attn-pitfalls.md", mi308x)
+        self.assertNotIn("chunk-gdn-pitfalls.md", mi308x)
+
+        _, mi355x = self.run_query("--arch", "mi355x", "--section", "pitfalls")
+        self.assertIn("chunk-gdn-pitfalls.md", mi355x)
+        self.assertNotIn("flash-attn-pitfalls.md", mi355x)
+
+    def test_hopper_only_cluster_card_does_not_enter_a100_scope(self):
+        path = self.root / "docs/kernel-opt/nvidia/common/thread-block-cluster.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Thread Block Cluster\n", encoding="utf-8")
+
+        _, a100 = self.run_query("cluster", "--arch", "a100")
+        self.assertNotIn("thread-block-cluster.md", a100)
+        _, h20 = self.run_query("cluster", "--arch", "h20")
+        self.assertIn("thread-block-cluster.md", h20)
+
+    def test_b200_experiment_pages_do_not_enter_b300_scope(self):
+        path = self.root / "docs/pitfalls/nvidia/triton/sm100-sparse-decode-split-k-pitfalls.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# B200 sparse decode pitfalls\n", encoding="utf-8")
+
+        _, b200 = self.run_query("sparse", "--arch", "b200")
+        self.assertIn("sm100-sparse-decode-split-k-pitfalls.md", b200)
+        _, b300 = self.run_query("sparse", "--arch", "b300")
+        self.assertNotIn("sm100-sparse-decode-split-k-pitfalls.md", b300)
+
     def test_operator_dsl_and_section_filters_compose(self):
         code, output = self.run_query(
             "--arch", "sm120", "--vendor", "nvidia", "--dsl", "cutedsl",
@@ -222,6 +266,29 @@ class Pro5000KnowledgeTests(unittest.TestCase):
             "ref-docs/nvidia/common/sm100/gdn-decode-kernel-no-tensor-core.md",
             scoped,
         )
+
+
+class HardwareKnowledgeTests(unittest.TestCase):
+    def test_b200_shared_memory_matches_official_tuning_guide(self):
+        path = REPO_ROOT / "gpu-wiki/docs/hardware-specs/hardware_specs_b200.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("256 KB per SM", text)
+        self.assertIn("Up to 228 KB per SM", text)
+        self.assertIn("227 KB addressable per block", text)
+        self.assertNotIn("128 KB physical pool", text)
+
+    def test_b200_examples_use_one_explicit_target_configuration(self):
+        relative_paths = (
+            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/hardware/clc.md",
+            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/patterns/tail-effect.md",
+            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/techniques/tile-scheduling.md",
+        )
+        text = "\n".join(
+            (REPO_ROOT / relative).read_text(encoding="utf-8")
+            for relative in relative_paths
+        )
+        self.assertIn("148-SM B200", text)
+        self.assertNotRegex(text, r"B200[^\n]*(?:132|142) SM")
 
 
 if __name__ == "__main__":

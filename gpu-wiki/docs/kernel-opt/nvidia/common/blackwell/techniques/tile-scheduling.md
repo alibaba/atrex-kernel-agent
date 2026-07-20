@@ -148,20 +148,20 @@ The choice of scheduling strategy directly impacts L2 cache hit rates. On B200 w
 # L2 cache reuse analysis for different schedulers
 # Problem: M=8192, N=8192, K=4096, BF16
 # Tile: 128x256, giving 64x32 = 2048 tiles
-# B200: 142 SMs, 126 MB L2
+# B200 example target: 148 SMs, 126 MB L2
 
 tile_bytes_A = 128 * 4096 * 2  # 1 MB per tile row of A
 tile_bytes_B = 4096 * 256 * 2  # 2 MB per tile column of B
 
-# Linear raster: first wave loads 142 tiles across 142/32 = 4.4 column groups
+# Linear raster: first wave loads 148 tiles across 148/32 = 4.6 column groups
 # B data for 5 different column groups = 5 * 2 MB = 10 MB (fits in L2)
-# But A data for 142/32 = 4.4 row groups * 4.4 col groups = ~20 distinct A rows
-# 20 * 1 MB = 20 MB -> some L2 eviction
+# But A data spans about 4.6 row groups × 4.6 column groups = ~22 distinct A rows
+# 22 * 1 MB = 22 MB -> some L2 eviction
 
-# Swizzled raster (swizzle=4): first wave covers 142 tiles in ~36 groups of 4
+# Swizzled raster (swizzle=4): first wave covers 148 tiles in ~37 groups of 4
 # Each group uses 1 A row + 4 B columns = 1 + 8 = 9 MB per group
-# But groups share A rows: total unique A = ~36 rows * 1 MB = 36 MB
-# L2 pressure: 36 MB + 8 MB = 44 MB (fits in B200's 126 MB L2)
+# But groups share A rows: total unique A = ~37 rows * 1 MB = 37 MB
+# L2 pressure: 37 MB + 8 MB = 45 MB (fits in B200's 126 MB L2)
 
 # Conclusion: swizzled raster reduces L2 misses by ~2x vs linear for large problems
 ```
@@ -177,15 +177,15 @@ The "tail effect" occurs when the last wave of tiles does not fully occupy all S
 | CLC dynamic | Automatic | Fast CTAs steal from slow ones |
 | Stream-K | K-splitting | Near 100% (splits partial tiles across SMs) |
 
-For a problem with 150 tiles on 142 SMs:
-- Static: last wave has 8 tiles on 8 SMs, 134 SMs idle (5.6% utilization)
+For a problem with 156 tiles on 148 SMs:
+- Static: last wave has 8 tiles on 8 SMs, 140 SMs idle (5.4% utilization)
 - CLC: fast-finishing CTAs from wave 1 absorb the 8 extra tiles
-- Stream-K: the 8 remaining tiles are split across all 142 SMs
+- Stream-K: the 8 remaining tiles are split across all 148 SMs
 
 ## When to Use
 
-- **Swizzled raster**: Default choice for large GEMMs. Always better than linear for L2 locality.
-- **CLC dynamic**: Recommended on Blackwell for all persistent kernels. Combines dynamic load balancing with swizzled ordering.
+- **Swizzled raster**: Candidate for large GEMMs when profiling shows L2-locality benefit; skinny or already-cache-resident shapes can regress.
+- **CLC dynamic**: Use when tail effects or variable tile cost justify its scheduling overhead; benchmark against static persistent scheduling.
 - **Stream-K**: Best for small-to-medium problems where the tail effect dominates. Adds complexity for K-dimension synchronization.
 - **Grouped scheduler**: Essential for MoE and batched GEMM where problem sizes vary across groups.
 

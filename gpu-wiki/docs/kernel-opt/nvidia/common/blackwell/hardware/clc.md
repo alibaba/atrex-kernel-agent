@@ -224,7 +224,7 @@ N = 8192   # hidden dim
 K = 8192   # hidden dim
 
 # Tile = 128x256 -> tiles_m = 1, tiles_n = 32 -> only 32 tiles total
-# On B200 (132 SMs): 100 SMs idle with static scheduling
+# On the 148-SM B200 target: 116 SMs idle with static scheduling
 # CLC: 32 persistent CTAs handle all 32 tiles efficiently
 ```
 

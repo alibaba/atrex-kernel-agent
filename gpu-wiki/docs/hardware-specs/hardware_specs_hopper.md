@@ -52,6 +52,8 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 > Note: H20 is a lower-compute, higher-bandwidth variant of the H100, designed for the Chinese market.
 
+> **Evidence status**: the H20 figures are approximate repository reference values; this page does not currently link a public NVIDIA H20 product datasheet. Verify clocks, enabled SM count, memory bandwidth, and precision peaks on the deployed card before using them as hard utilization ceilings.
+
 | Precision | Peak TFLOPS | Notes |
 |------|-------------|------|
 | **FP16 / BF16 (Tensor Core)** | ~148 | 78 SMs |
@@ -168,12 +170,12 @@ AI = FLOPs / Bytes_transferred
 ### Identify Bottleneck
 
 ```
-if AI < (peak TFLOPS / peakbandwidth TB/s):
- -> Memory Bound (bottleneck)
- -> optimization: decrease, high cache , increasedata
+if AI < (peak_TFLOPS / peak_bandwidth_TBps):
+ -> Memory Bound
+ -> optimize memory traffic, coalescing, reuse, and overlap
 otherwise:
- -> Compute Bound (computebottleneck)
- -> optimization: high, stall, increase wgmma
+ -> Compute Bound
+ -> optimize Tensor Core utilization, instruction issue, and stalls
 ```
 
 **Roofline Ridge Points for Each GPU**:
@@ -200,7 +202,7 @@ otherwise:
 2. **Determine data precision**: Which data type is used?
    - BF16 wgmma → FP16/BF16 Tensor Core = 989.4 TFLOPS (H100) / 148 TFLOPS (H20)
    - FP32 element-wise → FP32 CUDA Core = 67.0 TFLOPS (H100) / ~39.6 TFLOPS (H20)
-3. **Mixed computation**: If the kernel has both wgmma and element-wise operations, evaluate using wgmma compute (wgmma is typically the performance-determining factor)
+3. **Mixed computation**: Evaluate the WGMMA mainloop and element-wise epilogue separately; neither is guaranteed to dominate for every shape.
 
 ## Related Documents
 

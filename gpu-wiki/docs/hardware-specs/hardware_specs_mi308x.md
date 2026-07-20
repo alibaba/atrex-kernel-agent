@@ -18,13 +18,15 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 > MI308X is a 4-XCD variant of the MI300 series with 80 CUs. Same ISA (gfx942) as MI300X but fewer compute units.
 
+> **Evidence status**: this repository does not currently link a public AMD MI308X product specification. The product-level values below are repository reference values and must be verified against the deployed board (`rocminfo`, profiler/device properties, and measured bandwidth) before they are used as hard limits.
+
 | Precision | Peak TFLOPS | Notes |
 |------|-------------|------|
 | **FP64 (Vector)** | 21.5 | 80 CUs × 64 lanes × 2100 MHz |
 | **FP64 (Matrix)** | 43.0 | 2× FP64 vector |
 | **FP32 (Vector)** | 43.0 | General-purpose computation |
 | **TF32 (Matrix)** | 172.0 | Low-precision matmul training |
-| **FP16 / BF16 (Matrix)** | 206 | Official MI308X peak; primary optimization target |
+| **FP16 / BF16 (Matrix)** | 206 | Repository reference peak; verify on deployed MI308X |
 | **FP8 / INT8 (Matrix)** | 412 | 2× BF16 ratio per CDNA3 architecture |
 
 ### Memory Specifications
@@ -155,7 +157,7 @@ else:
 2. **Determine the data precision**: Which data type is used?
    - BF16 MFMA → 206 TFLOPS
    - FP32 element-wise → 43.0 TFLOPS
-3. **Mixed computation**: If a kernel has both MFMA and element-wise operations, evaluate using the MFMA compute power (MFMA is usually the performance-determining factor)
+3. **Mixed computation**: Evaluate the MFMA mainloop and element-wise/epilogue phases separately; use profiling to determine which phase limits the shape.
 
 ---
 

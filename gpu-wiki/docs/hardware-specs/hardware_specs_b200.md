@@ -14,6 +14,8 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 > This document covers the NVIDIA B200 data center GPU based on the Blackwell architecture (GB200) with `sm_100` (Compute Capability 10.0). Specifications are compiled from NVIDIA official product pages, DGX B200 datasheets, and the Blackwell architecture whitepaper.
 
+> **Evidence status**: DGX memory capacity/bandwidth and Tensor throughput are product-level published values; shared-memory limits come from NVIDIA's CUDA Blackwell Tuning Guide. Exact enabled SM/core counts, clocks, and cache totals are architecture-analysis values and must be checked against `cudaDeviceProp` / profiler output on the deployed GPU before hard-coding launch geometry.
+
 ---
 
 ## NVIDIA B200 Data Center GPU (GB200 / sm_100)
@@ -56,9 +58,10 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Tensor Cores per SM | 4 (5th gen) |
 | RT Cores per SM | 1 |
 | Register File per SM | 256 KB |
-| L1 Data Cache / Shared Memory per SM | 128 KB physical pool |
+| Unified L1 / Texture / Shared Memory Pool | 256 KB per SM |
+| Shared Memory Capacity | Up to 228 KB per SM; 227 KB addressable per block |
 | Total Register File | 37,888 KB |
-| Total L1 Data Cache / Shared Memory | 18,944 KB |
+| Total Unified L1 / Texture / Shared Memory Pool | 37,888 KB (148 × 256 KB) |
 
 ---
 
@@ -77,7 +80,8 @@ These parameters influence optimization decisions:
 | RT Cores per SM | 1 (4th gen) | Ray tracing acceleration |
 | Register File per SM | 256 KB | Core constraint for register pressure and occupancy |
 | Max Registers per Thread | 255 | Register spill threshold |
-| L1 / Shared Memory per SM | 128 KB physical pool | L1 and shared memory share physical SRAM |
+| Unified L1 / Texture / Shared Memory Pool | 256 KB per SM | Same maximum combined capacity as Hopper |
+| Shared Memory Capacity | Up to 228 KB per SM | A block can address up to 227 KB after CUDA's 1 KB reservation |
 | Warp Schedulers per SM | 4 | Supports concurrent warp execution |
 
 ### Key Differences from SM120 Client Blackwell
@@ -98,7 +102,7 @@ These parameters influence optimization decisions:
 | Level | Size | Bandwidth/Latency | Notes |
 |------|------|----------|------|
 | Registers | 256 KB / SM, up to 255 regs/thread | Fastest | High register pressure rapidly reduces occupancy |
-| Shared Memory | 128 KB L1/SMEM physical pool | High throughput | Bank conflicts impact performance |
+| Shared Memory | Up to 228 KB per SM (256 KB combined pool) | High throughput | Bank conflicts impact performance |
 | L1/TEX Cache | Shares physical SRAM with Shared Memory | Medium | Automatic caching of global loads |
 | L2 Cache | 126 MB | Medium | Very large L2 benefits working set locality |
 | HBM3e | 180 GB | 8.0 TB/s | Extremely high bandwidth; still a bottleneck for pure streaming kernels |
@@ -144,7 +148,7 @@ otherwise:
 | B200 | FP32 CUDA | 37.5 / 8.0 ≈ **4.7** |
 | B200 | TF32 Tensor | 1,100 / 8.0 ≈ **138** |
 
-> **Optimization Implication**: With 8.0 TB/s HBM3e bandwidth, the B200 has an exceptionally high memory ceiling. Most GEMM/attention kernels will be compute-bound; however, pure streaming / element-wise / quantization epilogue kernels can still hit the memory wall. The very low FP32 CUDA ridge point (4.7) means even simple element-wise kernels with modest reuse quickly become compute-bound.
+> **Optimization Implication**: Classify each workload from measured traffic and the precision-specific ridge point. Large, well-reused GEMMs may be compute-bound, while small/skinny GEMMs, attention phases, and streaming epilogues can remain bandwidth-bound. FP32 work is compute-bound only when its arithmetic intensity exceeds about 4.7 FLOPs/Byte.
 
 ---
 

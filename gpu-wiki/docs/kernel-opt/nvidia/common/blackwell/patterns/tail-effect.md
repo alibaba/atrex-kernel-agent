@@ -21,10 +21,10 @@ Performance drops for problem sizes where total_tiles % num_SMs != 0. The last w
 ## Example
 
 ```
-// B200: 142 SMs
-// Problem: 150 tiles
-// Without CLC: 2 waves (142 + 8), last wave uses only 8 SMs (5.6%)
-// With CLC: single persistent wave, all 142 SMs stay busy
+// B200 example target: 148 SMs
+// Problem: 156 tiles
+// Without CLC: 2 waves (148 + 8), last wave uses only 8 SMs (5.4%)
+// With CLC: single persistent wave, all 148 SMs stay busy
 //
 // Impact: 86% → 98% of cuBLAS (tcgen05 tutorial data)
 ```

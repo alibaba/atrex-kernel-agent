@@ -50,11 +50,11 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 ## AMD Instinct MI308X (gfx942 / CDNA3)
 
-> Note: The MI308X is a variant of the MI300 series. The values below are official/measured reference values.
+> Note: The MI308X is a variant of the MI300 series. These are repository reference values; no public AMD MI308X specification is linked here, so verify them against the deployed board.
 
 | Precision | Peak TFLOPS | Notes |
 |------|-------------|------|
-| **FP16 / BF16 (Matrix)** | 206 | MI308X official peak compute power |
+| **FP16 / BF16 (Matrix)** | 206 | Repository reference peak; verify on deployed MI308X |
 | **FP8 / INT8 (Matrix)** | 412 | Based on CDNA3 architecture 2× BF16 ratio |
 
 ### Memory Specifications
@@ -114,12 +114,12 @@ AI = FLOPs / Bytes_transferred
 ### Identifying Bottlenecks
 
 ```
-if AI < (peak TFLOPS / peakbandwidth TB/s):
- -> Memory Bound (bottleneck)
- -> optimization: decrease, high cache , increasedata
+if AI < (peak_TFLOPS / peak_bandwidth_TBps):
+ -> Memory Bound
+ -> optimize memory traffic, coalescing, reuse, and overlap
 otherwise:
- -> Compute Bound (computebottleneck)
- -> optimization: high, stall, increase MFMA
+ -> Compute Bound
+ -> optimize MFMA utilization, instruction issue, and stalls
 ```
 
 **Roofline knee points for MI300X**:
@@ -127,7 +127,7 @@ otherwise:
 - FP32: 163.4 / 5.3 ≈ **30.8 FLOPs/Byte**
 - FP64: 81.7 / 5.3 ≈ **15.4 FLOPs/Byte**
 
-Most MFMA kernels have AI > 247, placing them in the Compute Bound region. The optimization focus should be on improving compute instruction utilization efficiency.
+An MFMA kernel is compute-bound only when its measured arithmetic intensity exceeds the relevant ridge point. Small, skinny, or weakly reused matrix problems can remain memory-bound.
 
 ---
 
@@ -139,7 +139,7 @@ Most MFMA kernels have AI > 247, placing them in the Compute Bound region. The o
 2. **Determine the data precision**: Which data type is used?
    - BF16 MFMA → FP16/BF16 Matrix = 1,307.4 TFLOPS (MI300X)
    - FP32 element-wise → FP32 Vector = 163.4 TFLOPS (MI300X)
-3. **Mixed computation**: If a kernel has both MFMA and element-wise operations, evaluate using the MFMA compute power (MFMA is usually the performance-determining factor)
+3. **Mixed computation**: Evaluate the MFMA mainloop and element-wise/epilogue phases separately; use profiling to determine which phase limits the shape.
 
 ## Related Documents
 

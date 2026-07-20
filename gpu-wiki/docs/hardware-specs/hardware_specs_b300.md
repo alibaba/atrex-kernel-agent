@@ -14,6 +14,8 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 
 > This document covers the NVIDIA B300 data center GPU based on the Blackwell Ultra architecture (GB300) with `sm_103` (Compute Capability 10.3). The B300 is an inference-optimized variant with significantly enhanced FP4 throughput and expanded memory capacity. Specifications are compiled from NVIDIA official product pages, DGX B300 datasheets, and architecture analysis sources.
 
+> **Evidence status**: compute capability, system memory, and system FP4/FP8 throughput are NVIDIA-published values; per-GPU throughput below is derived by dividing the eight-GPU DGX totals. Exact SM/core counts, clocks, L2, FP32/FP64, and per-SM resources are not all published on the cited product page. Treat those architecture-analysis fields as provisional and prefer runtime device attributes/profiler output.
+
 ---
 
 ## NVIDIA B300 Data Center GPU (GB300 / sm_103)
@@ -56,9 +58,8 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Tensor Cores per SM | 4 (5th gen) |
 | RT Cores per SM | 1 |
 | Register File per SM | 256 KB |
-| L1 Data Cache / Shared Memory per SM | 128 KB physical pool |
+| L1 / Shared Memory per SM | Not published on the cited DGX B300 product page; query the CUDA device attribute at runtime instead of reusing SM120's 128 KB value |
 | Total Register File | 40,960 KB |
-| Total L1 Data Cache / Shared Memory | 20,480 KB |
 
 ---
 
@@ -97,7 +98,7 @@ These parameters influence optimization decisions:
 | RT Cores per SM | 1 (4th gen) | Ray tracing acceleration |
 | Register File per SM | 256 KB | Core constraint for register pressure and occupancy |
 | Max Registers per Thread | 255 | Register spill threshold |
-| L1 / Shared Memory per SM | 128 KB physical pool | L1 and shared memory share physical SRAM |
+| L1 / Shared Memory per SM | Verify with the CUDA device attributes for the deployed B300 | The cited SM100 and SM120 limits must not be silently reused for SM103 |
 | Warp Schedulers per SM | 4 | Supports concurrent warp execution |
 
 ### Key Differences from SM100 (B200)
@@ -120,7 +121,7 @@ These parameters influence optimization decisions:
 | Level | Size | Bandwidth/Latency | Notes |
 |------|------|----------|------|
 | Registers | 256 KB / SM, up to 255 regs/thread | Fastest | High register pressure rapidly reduces occupancy |
-| Shared Memory | 128 KB L1/SMEM physical pool | High throughput | Bank conflicts impact performance |
+| Shared Memory | Runtime-reported SM103 value | High throughput | Query capacity before selecting pipeline depth |
 | L1/TEX Cache | Shares physical SRAM with Shared Memory | Medium | Automatic caching of global loads |
 | L2 Cache | 126 MB | Medium | Very large L2 benefits working set locality |
 | HBM3e | 288 GB (8 stacks, 12-high) | 8.0 TB/s | 50% more capacity than B200; same bandwidth |
@@ -188,6 +189,7 @@ otherwise:
 - **Cross-Vendor Reference**: [MI300X Hardware Specs](hardware_specs_mi300x.md) | [MI308X Hardware Specs](hardware_specs_mi308x.md) | [MI355X Hardware Specs](hardware_specs_mi355x.md)
 - **Blackwell Tuning Guide**: [NVIDIA CUDA Blackwell Tuning Guide](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
 - **Official Product Page**: [NVIDIA DGX B300](https://www.nvidia.com/en-us/data-center/dgx-b300/)
+- **Official Compute Capability Table**: [CUDA GPUs](https://developer.nvidia.com/cuda-gpus) — B300 / GB300 are compute capability 10.3
 - **Official system derivation**: DGX B300 lists 8 GPUs and 144 sparse / 108 dense FP4 PFLOPS; the single-GPU figures above divide those totals by 8.
 - **Architecture Analysis**: [Glenn Lockwood B300 Analysis](https://www.glennklockwood.com/garden/processors/b300)
 - **⚠️ Architecture Note**: B300 (SM103) is inference-optimized with minimal FP64 capability. Do not deploy FP64-heavy HPC workloads on B300; use B200 or H100 instead.

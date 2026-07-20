@@ -211,12 +211,12 @@ AI = FLOPs / Bytes_transferred
 ### Identifying Bottlenecks
 
 ```
-if AI < (peak TFLOPS / peakbandwidth TB/s):
- -> Memory Bound (bottleneck)
- -> optimization: decrease, high L2 , increasedata, kernel
+if AI < (peak_TFLOPS / peak_bandwidth_TBps):
+ -> Memory Bound
+ -> optimize memory traffic, coalescing, reuse, and overlap
 otherwise:
- -> Compute Bound (computebottleneck)
- -> optimization: high Tensor Core / CUDA Core , low stall, occupancy
+ -> Compute Bound
+ -> optimize Tensor Core or CUDA Core utilization, stalls, and occupancy
 ```
 
 **Typical Ridge Points**:
@@ -232,7 +232,7 @@ otherwise:
 | RTX PRO 5000 | FP4 Tensor | 1032.0 / 1.344 ≈ **768** |
 | RTX PRO 5000 | FP32 CUDA | 65.0 / 1.344 ≈ **48** |
 
-> **Optimization Implication**: `sm_120` The GDDR7 bandwidth is significantly lower than datacenter HBM GPUs. Most streaming / epilogue / quantization kernels will quickly hit the memory wall; GEMM/attention kernels, on the other hand, need to verify whether the FP4/FP8 Tensor Core path genuinely follows the SM120 fast path.
+> **Optimization Implication**: SM120's GDDR7 bandwidth is lower than datacenter HBM bandwidth. Streaming, epilogue, and quantization kernels often become bandwidth-bound; GEMM and attention still require shape-specific roofline and instruction-path verification.
 
 ---
 

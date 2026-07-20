@@ -73,15 +73,57 @@ ARCH_PARENT_CHILDREN = {
 ARCH_PRODUCT_SCOPES = set(ARCH_PARENTS)
 # Legacy role-first directories whose README assigns an architecture even though
 # the architecture is not encoded in every child filename.
-ARCH_PATH_PREFIXES = {
-    "kernel-opt/nvidia/common/hands-on/": "blackwell",
+ARCH_PATH_SCOPES = {
+    "kernel-opt/nvidia/common/hands-on/": {"blackwell"},
+    "kernel-opt/nvidia/common/thread-block-cluster.md": {
+        "hopper", "blackwell", "blackwell-geforce",
+    },
+    "ref-docs/nvidia/common/tca-51-mfu-8-hidden-performance-loss.md": {"b200"},
+    "ref-docs/nvidia/common/triton-to-sass-tma-multicast-warp-specialize.md": {"blackwell"},
+    "ref-docs/nvidia/common/cutlass-python-blackwell-gemm-peak-performance.md": {"b200"},
+    "ref-docs/nvidia/common/sm100/flash-attention-4-blackwell-hardware-imbalance.md": {"b200"},
+    "ref-docs/nvidia/common/sm100/gdn-decode-kernel-no-tensor-core.md": {"b200"},
+    "ref-docs/nvidia/common/sm100/gpt-oss-blackwell-performance-optimization.md": {"b200"},
+    "ref-docs/nvidia/cutedsl/sm100/colfax-": {"b200"},
+    "ref-docs/nvidia/gluon/gluon-07-persistent-kernel-pipeline.md": {
+        "hopper", "blackwell",
+    },
+    "ref-docs/nvidia/cutedsl/cutlass-fmha-mla.md": {"hopper", "blackwell"},
+    "ref-docs/nvidia/cutedsl/cutlass-quantization-block-scaled.md": {
+        "hopper", "blackwell", "blackwell-geforce",
+    },
+    "ref-docs/nvidia/cutedsl/cutlass-tile-scheduling.md": {
+        "hopper", "blackwell", "blackwell-geforce",
+    },
+    "ref-docs/nvidia/cutedsl/quack-architecture-overview.md": {
+        "hopper", "blackwell", "blackwell-geforce",
+    },
+    "ref-docs/nvidia/cutedsl/quack-gemm-epilogue.md": {
+        "hopper", "blackwell", "blackwell-geforce",
+    },
+    "ref-docs/nvidia/triton/triton-tile-ir-beyond-simt.md": {
+        "blackwell", "blackwell-geforce",
+    },
     # These legacy filenames predate architecture-scoped retrieval, but every
     # page is explicitly SM120-only. Keep their stable links while preventing
     # them from leaking into A100/Hopper results.
-    "pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md": "blackwell-geforce",
-    "pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md": "blackwell-geforce",
-    "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md": "blackwell-geforce",
-    "pitfalls/nvidia/cutedsl/nvfp4-gemm-pitfalls.md": "blackwell-geforce",
+    "pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md": {"blackwell-geforce"},
+    "pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md": {"blackwell-geforce"},
+    "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md": {"blackwell-geforce"},
+    "pitfalls/nvidia/cutedsl/nvfp4-gemm-pitfalls.md": {"blackwell-geforce"},
+    "pitfalls/nvidia/gluon/sm100-blackwell-primitives-pitfalls.md": {"b200"},
+    "pitfalls/nvidia/triton/sm100-sparse-decode-split-k-pitfalls.md": {"b200"},
+    "kernel-opt/nvidia/common/blackwell/kernels/nvfp4-gemv.md": {"b200"},
+    # AMD FlyDSL pitfall pages were created before product scopes existed. The
+    # experiments are explicitly tied to one product even though the stable
+    # filenames only identify the operator.
+    "pitfalls/amd/flydsl/attention-backward-dkdv-pitfalls.md": {"mi308x"},
+    "pitfalls/amd/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md": {"mi308x"},
+    "pitfalls/amd/flydsl/flash-attn-bwd-mask-integration-pitfalls.md": {"mi308x"},
+    "pitfalls/amd/flydsl/flash-attn-pitfalls.md": {"mi308x"},
+    "pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md": {"mi308x"},
+    "pitfalls/amd/flydsl/chunk-gdn-pitfalls.md": {"cdna4"},
+    "pitfalls/amd/flydsl/flash-attn-d256-pitfalls.md": {"cdna4"},
 }
 VENDOR_ALIASES = {"nvidia": {"nvidia"}, "amd": {"amd"}}
 DSL_ALIASES = {
@@ -212,11 +254,9 @@ def dimension_values(page: Page, aliases: dict[str, set[str]]) -> set[str]:
     values: set[str] = set()
     filename = Path(page.rel_path).name.lower()
     if aliases is ARCH_ALIASES:
-        values.update(
-            architecture
-            for prefix, architecture in ARCH_PATH_PREFIXES.items()
-            if page.rel_path.startswith(prefix)
-        )
+        for prefix, architectures in ARCH_PATH_SCOPES.items():
+            if page.rel_path.startswith(prefix):
+                values.update(architectures)
     for canonical, tokens in aliases.items():
         # Scope comes from the taxonomy, never prose. In particular, an SM120
         # page may say "Blackwell" in its title but must not enter the B200 scope.
