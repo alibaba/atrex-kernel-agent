@@ -47,9 +47,9 @@ sm_90 variant with bf16 state. **It does not transfer to sm_120**:
 ## Related docs (read together)
 
 - **Optimization journey** — what each of 18 iterations changed and why:
-  [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md`](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md)
+  [`docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md`](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md)
 - **Pitfalls** — 9+ traps with trap → symptom → why → lesson:
-  [`docs/pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md`](../../../../../docs/pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md)
+  [`docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md`](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md)
 
 ## Verification
 

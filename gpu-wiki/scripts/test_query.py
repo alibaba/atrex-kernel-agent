@@ -19,33 +19,33 @@ class QueryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         pages = {
-            "kernel-opt/nvidia/common/blackwell/patterns/pipeline-stalls.md":
+            "nvidia/blackwell/kernel-opt/patterns/pipeline-stalls.md":
                 "# Pipeline Stalls\n\nTMA and tcgen05 pipeline diagnosis.\n",
-            "kernel-opt/nvidia/common/sm90/hands-on/wgmma.md":
+            "nvidia/hopper/kernel-opt/hands-on/wgmma.md":
                 "# Hopper WGMMA GEMM\n\nA Hopper implementation.\n",
-            "kernel-opt/nvidia/common/sm90/hands-on/software-pipeline.md":
+            "nvidia/hopper/kernel-opt/hands-on/software-pipeline.md":
                 "# Hopper Software Pipeline\n\nPipeline staging on SM90.\n",
-            "ref-docs/nvidia/common/sm80/a100-gemm.md":
+            "nvidia/ampere/ref-docs/a100-gemm.md":
                 "# A100 GEMM\n\nAn Ampere implementation.\n",
-            "kernel-opt/nvidia/common/hands-on/tcgen05.md":
-                "# TCGEN05 and TMEM\n\nThis directory is scoped to SM100 by its README.\n",
-            "ref-docs/nvidia/cutedsl/sm120/gdn.md":
+            "nvidia/blackwell/kernel-opt/hands-on/tcgen05.md":
+                "# TCGEN05 and TMEM\n\nThis directory is physically scoped to SM100.\n",
+            "nvidia/blackwell-geforce/ref-docs/cutedsl/gdn.md":
                 "# SM120 Blackwell GDN CuTeDSL\n\nA gated delta net kernel.\n",
-            "ref-docs/amd/flydsl/gfx942/flash-attention.md":
+            "amd/cdna3/ref-docs/flydsl/flash-attention.md":
                 "# CDNA3 Flash Attention FlyDSL\n\nAn AMD attention kernel.\n",
-            "ref-docs/amd/gluon/gfx950/matmul.md":
+            "amd/cdna4/ref-docs/gluon/matmul.md":
                 "# CDNA4 Gluon Matmul\n\nAn MI355X implementation.\n",
-            "hardware-specs/hardware_specs_mi300x.md":
+            "amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md":
                 "# MI300X Hardware Specifications\n",
-            "hardware-specs/hardware_specs_mi308x.md":
+            "amd/cdna3/mi308x/hardware-specs/hardware_specs_mi308x.md":
                 "# MI308X Hardware Specifications\n",
-            "hardware-specs/hardware_specs_b200.md":
+            "nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md":
                 "# B200 Hardware Specifications\n",
-            "hardware-specs/hardware_specs_b300.md":
+            "nvidia/blackwell-ultra/hardware-specs/hardware_specs_b300.md":
                 "# B300 Hardware Specifications\n",
-            "kernel-opt/amd/common/gfx942/flash-attention-tilelang.md":
+            "amd/cdna3/kernel-opt/flash-attention-tilelang.md":
                 "# CDNA3 Flash Attention TileLang\n\nA different DSL.\n",
-            "ref-docs/generic/gemm-optimization.md":
+            "generic/ref-docs/gemm-optimization.md":
                 "# GEMM Optimization\n\nArchitecture-neutral tiling.\n",
         }
         for relative, content in pages.items():
@@ -65,7 +65,7 @@ class QueryTests(unittest.TestCase):
     def test_architecture_scope_excludes_other_architectures_but_keeps_generic(self):
         code, output = self.run_query("gemm", "--arch", "b200", "--vendor", "nvidia")
         self.assertEqual(code, 0)
-        self.assertIn("generic/gemm-optimization.md", output)
+        self.assertIn("generic/ref-docs/gemm-optimization.md", output)
         self.assertNotIn("sm90/hands-on/wgmma.md", output)
         self.assertNotIn("sm120/gdn.md", output)
         self.assertNotIn("gfx942/flash-attention.md", output)
@@ -79,46 +79,46 @@ class QueryTests(unittest.TestCase):
     def test_symptom_uses_stable_keywords_outside_blackwell_cards(self):
         code, output = self.run_query("--arch", "h20", "--symptom", "pipeline-stalls")
         self.assertEqual(code, 0)
-        self.assertIn("sm90/hands-on/software-pipeline.md", output)
-        self.assertNotIn("blackwell/patterns/pipeline-stalls.md", output)
+        self.assertIn("hopper/kernel-opt/hands-on/software-pipeline.md", output)
+        self.assertNotIn("blackwell/kernel-opt/patterns/pipeline-stalls.md", output)
 
     def test_directory_level_architecture_scope_is_enforced(self):
         _, blackwell = self.run_query("--arch", "b200", "--vendor", "nvidia")
         _, hopper = self.run_query("--arch", "sm90", "--vendor", "nvidia")
-        self.assertIn("common/hands-on/tcgen05.md", blackwell)
-        self.assertNotIn("common/hands-on/tcgen05.md", hopper)
+        self.assertIn("blackwell/kernel-opt/hands-on/tcgen05.md", blackwell)
+        self.assertNotIn("blackwell/kernel-opt/hands-on/tcgen05.md", hopper)
 
     def test_h20_a100_and_amd_aliases_route_to_their_families(self):
         _, h20 = self.run_query("--arch", "h20", "--vendor", "nvidia")
-        self.assertIn("sm90/hands-on/wgmma.md", h20)
-        self.assertNotIn("sm80/a100-gemm.md", h20)
-        self.assertNotIn("sm120/gdn.md", h20)
+        self.assertIn("hopper/kernel-opt/hands-on/wgmma.md", h20)
+        self.assertNotIn("ampere/ref-docs/a100-gemm.md", h20)
+        self.assertNotIn("blackwell-geforce/ref-docs/cutedsl/gdn.md", h20)
 
         _, a100 = self.run_query("--arch", "a100", "--vendor", "nvidia")
-        self.assertIn("sm80/a100-gemm.md", a100)
-        self.assertNotIn("sm90/hands-on/wgmma.md", a100)
-        self.assertNotIn("common/hands-on/tcgen05.md", a100)
+        self.assertIn("ampere/ref-docs/a100-gemm.md", a100)
+        self.assertNotIn("hopper/kernel-opt/hands-on/wgmma.md", a100)
+        self.assertNotIn("blackwell/kernel-opt/hands-on/tcgen05.md", a100)
 
         _, mi300x = self.run_query("--arch", "mi300x", "--vendor", "amd")
-        self.assertIn("gfx942/flash-attention.md", mi300x)
-        self.assertNotIn("gfx950/matmul.md", mi300x)
+        self.assertIn("cdna3/ref-docs/flydsl/flash-attention.md", mi300x)
+        self.assertNotIn("cdna4/ref-docs/gluon/matmul.md", mi300x)
 
         _, mi355x = self.run_query("--arch", "mi355x", "--vendor", "amd")
-        self.assertIn("gfx950/matmul.md", mi355x)
-        self.assertNotIn("gfx942/flash-attention.md", mi355x)
+        self.assertIn("cdna4/ref-docs/gluon/matmul.md", mi355x)
+        self.assertNotIn("cdna3/ref-docs/flydsl/flash-attention.md", mi355x)
 
     def test_architecture_implies_vendor_when_vendor_is_omitted(self):
         _, a100 = self.run_query("--arch", "a100")
         self.assertIn("vendor=nvidia", a100)
-        self.assertNotIn("ref-docs/amd/", a100)
+        self.assertNotIn("docs/amd/", a100)
 
         _, mi355x = self.run_query("--arch", "mi355x")
         self.assertIn("vendor=amd", mi355x)
-        self.assertNotIn("ref-docs/nvidia/", mi355x)
+        self.assertNotIn("docs/nvidia/", mi355x)
 
     def test_sm120_only_legacy_pitfalls_do_not_leak_to_hopper(self):
         pages = {
-            "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md":
+            "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md":
                 "# CuTeDSL GDN Decode on sm_120 — Pitfalls\n",
         }
         for relative, content in pages.items():
@@ -156,9 +156,9 @@ class QueryTests(unittest.TestCase):
 
     def test_amd_product_specific_pitfalls_do_not_leak_to_sibling_products(self):
         pages = {
-            "pitfalls/amd/flydsl/flash-attn-pitfalls.md":
+            "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md":
                 "# FlyDSL Flash Attention on MI308X\n",
-            "pitfalls/amd/flydsl/chunk-gdn-pitfalls.md":
+            "amd/cdna4/pitfalls/flydsl/chunk-gdn-pitfalls.md":
                 "# FlyDSL Chunk GDN on MI355X\n",
         }
         for relative, content in pages.items():
@@ -179,7 +179,7 @@ class QueryTests(unittest.TestCase):
         self.assertNotIn("flash-attn-pitfalls.md", mi355x)
 
     def test_hopper_only_cluster_card_does_not_enter_a100_scope(self):
-        path = self.root / "docs/kernel-opt/nvidia/common/thread-block-cluster.md"
+        path = self.root / "docs/nvidia/common/kernel-opt/thread-block-cluster.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# Thread Block Cluster\n", encoding="utf-8")
 
@@ -189,7 +189,7 @@ class QueryTests(unittest.TestCase):
         self.assertIn("thread-block-cluster.md", h20)
 
     def test_b200_experiment_pages_do_not_enter_b300_scope(self):
-        path = self.root / "docs/pitfalls/nvidia/triton/sm100-sparse-decode-split-k-pitfalls.md"
+        path = self.root / "docs/nvidia/blackwell/b200/pitfalls/triton/sm100-sparse-decode-split-k-pitfalls.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# B200 sparse decode pitfalls\n", encoding="utf-8")
 
@@ -204,15 +204,15 @@ class QueryTests(unittest.TestCase):
             "--section", "ref-docs", "--operator", "gdn",
         )
         self.assertEqual(code, 0)
-        self.assertIn("cutedsl/sm120/gdn.md", output)
-        self.assertNotIn("generic/gemm-optimization.md", output)
+        self.assertIn("blackwell-geforce/ref-docs/cutedsl/gdn.md", output)
+        self.assertNotIn("generic/ref-docs/gemm-optimization.md", output)
 
     def test_dsl_scope_excludes_competing_dsl_filename(self):
         code, output = self.run_query(
             "attention", "--arch", "gfx942", "--vendor", "amd", "--dsl", "flydsl"
         )
         self.assertEqual(code, 0)
-        self.assertIn("flydsl/gfx942/flash-attention.md", output)
+        self.assertIn("cdna3/ref-docs/flydsl/flash-attention.md", output)
         self.assertNotIn("flash-attention-tilelang.md", output)
 
     def test_unknown_arch_fails_closed(self):
@@ -227,14 +227,83 @@ class QueryTests(unittest.TestCase):
             code, output = self.run_query("--arch", alias, "--vendor", "nvidia")
             self.assertEqual(code, 0, alias)
             self.assertIn("arch=blackwell-geforce", output, alias)
-            self.assertIn("sm120/gdn.md", output, alias)
+            self.assertIn("blackwell-geforce/ref-docs/cutedsl/gdn.md", output, alias)
             outputs.append(output)
         self.assertTrue(all(output == outputs[0] for output in outputs[1:]))
 
 
+class ArchitectureFirstLayoutTests(unittest.TestCase):
+    @property
+    def docs(self):
+        return REPO_ROOT / "gpu-wiki/docs"
+
+    def scoped_paths(self, architecture, vendor):
+        return {
+            page.rel_path
+            for page in query.load_pages(self.docs)
+            if query.matches_dimension(page, query.ARCH_ALIASES, {architecture})
+            and query.matches_dimension(page, query.VENDOR_ALIASES, {vendor})
+        }
+
+    def test_every_searchable_document_has_architecture_first_scope_and_role(self):
+        self.assertEqual(
+            {"amd", "generic", "nvidia"},
+            {path.name for path in self.docs.iterdir() if path.is_dir()},
+        )
+        content_files = {
+            path.relative_to(self.docs).as_posix()
+            for path in self.docs.rglob("*.md")
+            if path.name != "README.md" and path.parent != self.docs
+        }
+        pages = query.load_pages(self.docs)
+        self.assertEqual(content_files, {page.rel_path for page in pages})
+        self.assertEqual(344, len(pages))
+        for page in pages:
+            self.assertIn(page.segments[0], {"amd", "generic", "nvidia"})
+            self.assertIsNotNone(query.section_value(page), page.rel_path)
+
+    def test_live_hardware_aliases_route_to_exact_physical_scope(self):
+        expected = {
+            "a100": "nvidia/ampere/hardware-specs/hardware_specs_ampere.md",
+            "h20": "nvidia/hopper/hardware-specs/hardware_specs_hopper.md",
+            "b200": "nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md",
+            "b300": "nvidia/blackwell-ultra/hardware-specs/hardware_specs_b300.md",
+            "pro5000": "nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md",
+            "sm120": "nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md",
+            "mi300x": "amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md",
+            "mi308x": "amd/cdna3/mi308x/hardware-specs/hardware_specs_mi308x.md",
+            "mi355x": "amd/cdna4/hardware-specs/hardware_specs_mi355x.md",
+        }
+        for alias, path in expected.items():
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                code = query.main([
+                    "--root", str(REPO_ROOT / "gpu-wiki"),
+                    "--arch", alias,
+                    "--section", "hardware-specs",
+                ])
+            self.assertEqual(0, code, alias)
+            self.assertIn(f"docs/{path}", output.getvalue(), alias)
+
+    def test_live_product_scopes_inherit_parent_but_exclude_siblings(self):
+        b200 = self.scoped_paths("b200", "nvidia")
+        b300 = self.scoped_paths("blackwell-ultra", "nvidia")
+        pro5000 = self.scoped_paths("blackwell-geforce", "nvidia")
+        mi300x = self.scoped_paths("mi300x", "amd")
+        mi308x = self.scoped_paths("mi308x", "amd")
+
+        self.assertTrue(any(path.startswith("nvidia/blackwell/kernel-opt/") for path in b200))
+        self.assertTrue(any(path.startswith("nvidia/blackwell/b200/") for path in b200))
+        self.assertTrue(any(path.startswith("nvidia/blackwell/kernel-opt/") for path in b300))
+        self.assertFalse(any(path.startswith("nvidia/blackwell/b200/") for path in b300))
+        self.assertFalse(any(path.startswith("nvidia/blackwell/") for path in pro5000))
+        self.assertFalse(any("/mi308x/" in path for path in mi300x))
+        self.assertFalse(any("/mi300x/" in path for path in mi308x))
+
+
 class Pro5000KnowledgeTests(unittest.TestCase):
     def test_official_pro5000_facts_and_sources_are_consistent(self):
-        hardware = REPO_ROOT / "gpu-wiki/docs/hardware-specs/hardware_specs_sm120.md"
+        hardware = REPO_ROOT / "gpu-wiki/docs/nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md"
         text = hardware.read_text(encoding="utf-8")
         self.assertIn("professional-desktop-gpus/rtx-pro-5000/", text)
         self.assertIn("workstation-datasheet-blackwell-rtx-pro-5000", text)
@@ -257,20 +326,20 @@ class Pro5000KnowledgeTests(unittest.TestCase):
             if query.matches_dimension(page, query.ARCH_ALIASES, {"blackwell-geforce"})
             and query.matches_dimension(page, query.VENDOR_ALIASES, {"nvidia"})
         }
-        self.assertFalse(any("/sm100/" in path for path in scoped))
+        self.assertFalse(any(path.startswith("nvidia/blackwell/") for path in scoped))
         self.assertNotIn(
-            "ref-docs/nvidia/common/sm100/qwen3.5-gdn-prefill-kernel-optimization.md",
+            "nvidia/blackwell/ref-docs/qwen3.5-gdn-prefill-kernel-optimization.md",
             scoped,
         )
         self.assertNotIn(
-            "ref-docs/nvidia/common/sm100/gdn-decode-kernel-no-tensor-core.md",
+            "nvidia/blackwell/b200/ref-docs/gdn-decode-kernel-no-tensor-core.md",
             scoped,
         )
 
 
 class HardwareKnowledgeTests(unittest.TestCase):
     def test_b200_shared_memory_matches_official_tuning_guide(self):
-        path = REPO_ROOT / "gpu-wiki/docs/hardware-specs/hardware_specs_b200.md"
+        path = REPO_ROOT / "gpu-wiki/docs/nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn("256 KB per SM", text)
         self.assertIn("Up to 228 KB per SM", text)
@@ -279,9 +348,9 @@ class HardwareKnowledgeTests(unittest.TestCase):
 
     def test_b200_examples_use_one_explicit_target_configuration(self):
         relative_paths = (
-            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/hardware/clc.md",
-            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/patterns/tail-effect.md",
-            "gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/techniques/tile-scheduling.md",
+            "gpu-wiki/docs/nvidia/blackwell/kernel-opt/hardware/clc.md",
+            "gpu-wiki/docs/nvidia/blackwell/kernel-opt/patterns/tail-effect.md",
+            "gpu-wiki/docs/nvidia/blackwell/kernel-opt/techniques/tile-scheduling.md",
         )
         text = "\n".join(
             (REPO_ROOT / relative).read_text(encoding="utf-8")

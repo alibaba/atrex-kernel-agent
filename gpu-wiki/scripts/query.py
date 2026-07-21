@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-"""Architecture-scoped search for the role-first gpu-wiki knowledge tree.
+"""Architecture-scoped search for the gpu-wiki knowledge tree.
 
-The main branch organizes documents by knowledge role first (``kernel-opt``,
-``ref-docs``, ``pitfalls``, ...), then vendor/DSL/architecture.  This tool
-filters that live tree before ranking text matches so research for one GPU does
-not silently consume advice for another architecture.
+Documents are physically organized by vendor and architecture first, with the
+knowledge role (``kernel-opt``, ``ref-docs``, ``pitfalls``, ...) below that
+scope.  This tool applies product inheritance and filters the tree before text
+ranking so research for one GPU cannot silently consume sibling-product advice.
 """
 
 from __future__ import annotations
@@ -71,59 +71,43 @@ ARCH_PARENT_CHILDREN = {
     "cdna3": {"mi300x", "mi308x"},
 }
 ARCH_PRODUCT_SCOPES = set(ARCH_PARENTS)
-# Legacy role-first directories whose README assigns an architecture even though
-# the architecture is not encoded in every child filename.
+# Truly cross-architecture articles live in a vendor ``common`` directory.  A
+# short explicit registry keeps those pages available to the architectures they
+# compare without widening them to every architecture from the same vendor.
 ARCH_PATH_SCOPES = {
-    "kernel-opt/nvidia/common/hands-on/": {"blackwell"},
-    "kernel-opt/nvidia/common/thread-block-cluster.md": {
+    "nvidia/common/kernel-opt/thread-block-cluster.md": {
         "hopper", "blackwell", "blackwell-geforce",
     },
-    "ref-docs/nvidia/common/tca-51-mfu-8-hidden-performance-loss.md": {"b200"},
-    "ref-docs/nvidia/common/triton-to-sass-tma-multicast-warp-specialize.md": {"blackwell"},
-    "ref-docs/nvidia/common/cutlass-python-blackwell-gemm-peak-performance.md": {"b200"},
-    "ref-docs/nvidia/common/sm100/flash-attention-4-blackwell-hardware-imbalance.md": {"b200"},
-    "ref-docs/nvidia/common/sm100/gdn-decode-kernel-no-tensor-core.md": {"b200"},
-    "ref-docs/nvidia/common/sm100/gpt-oss-blackwell-performance-optimization.md": {"b200"},
-    "ref-docs/nvidia/cutedsl/sm100/colfax-": {"b200"},
-    "ref-docs/nvidia/gluon/gluon-07-persistent-kernel-pipeline.md": {
+    "nvidia/common/ref-docs/h100-to-b200-gpgpu-scaling-analysis.md": {
+        "hopper", "b200",
+    },
+    "nvidia/common/ref-docs/ptx-instruction-evolution-a100-h100-b200.md": {
+        "ampere", "hopper", "b200",
+    },
+    "nvidia/common/ref-docs/sglang-hopper-blackwell-backend-selection.md": {
         "hopper", "blackwell",
     },
-    "ref-docs/nvidia/cutedsl/cutlass-fmha-mla.md": {"hopper", "blackwell"},
-    "ref-docs/nvidia/cutedsl/cutlass-quantization-block-scaled.md": {
+    "nvidia/common/ref-docs/cutedsl/cutlass-fmha-mla.md": {
+        "hopper", "blackwell",
+    },
+    "nvidia/common/ref-docs/cutedsl/cutlass-quantization-block-scaled.md": {
         "hopper", "blackwell", "blackwell-geforce",
     },
-    "ref-docs/nvidia/cutedsl/cutlass-tile-scheduling.md": {
+    "nvidia/common/ref-docs/cutedsl/cutlass-tile-scheduling.md": {
         "hopper", "blackwell", "blackwell-geforce",
     },
-    "ref-docs/nvidia/cutedsl/quack-architecture-overview.md": {
+    "nvidia/common/ref-docs/cutedsl/quack-architecture-overview.md": {
         "hopper", "blackwell", "blackwell-geforce",
     },
-    "ref-docs/nvidia/cutedsl/quack-gemm-epilogue.md": {
+    "nvidia/common/ref-docs/cutedsl/quack-gemm-epilogue.md": {
         "hopper", "blackwell", "blackwell-geforce",
     },
-    "ref-docs/nvidia/triton/triton-tile-ir-beyond-simt.md": {
+    "nvidia/common/ref-docs/gluon/gluon-07-persistent-kernel-pipeline.md": {
+        "hopper", "blackwell",
+    },
+    "nvidia/common/ref-docs/triton/triton-tile-ir-beyond-simt.md": {
         "blackwell", "blackwell-geforce",
     },
-    # These legacy filenames predate architecture-scoped retrieval, but every
-    # page is explicitly SM120-only. Keep their stable links while preventing
-    # them from leaking into A100/Hopper results.
-    "pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md": {"blackwell-geforce"},
-    "pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md": {"blackwell-geforce"},
-    "pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md": {"blackwell-geforce"},
-    "pitfalls/nvidia/cutedsl/nvfp4-gemm-pitfalls.md": {"blackwell-geforce"},
-    "pitfalls/nvidia/gluon/sm100-blackwell-primitives-pitfalls.md": {"b200"},
-    "pitfalls/nvidia/triton/sm100-sparse-decode-split-k-pitfalls.md": {"b200"},
-    "kernel-opt/nvidia/common/blackwell/kernels/nvfp4-gemv.md": {"b200"},
-    # AMD FlyDSL pitfall pages were created before product scopes existed. The
-    # experiments are explicitly tied to one product even though the stable
-    # filenames only identify the operator.
-    "pitfalls/amd/flydsl/attention-backward-dkdv-pitfalls.md": {"mi308x"},
-    "pitfalls/amd/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md": {"mi308x"},
-    "pitfalls/amd/flydsl/flash-attn-bwd-mask-integration-pitfalls.md": {"mi308x"},
-    "pitfalls/amd/flydsl/flash-attn-pitfalls.md": {"mi308x"},
-    "pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md": {"mi308x"},
-    "pitfalls/amd/flydsl/chunk-gdn-pitfalls.md": {"cdna4"},
-    "pitfalls/amd/flydsl/flash-attn-d256-pitfalls.md": {"cdna4"},
 }
 VENDOR_ALIASES = {"nvidia": {"nvidia"}, "amd": {"amd"}}
 DSL_ALIASES = {
@@ -236,6 +220,10 @@ def load_pages(docs_dir: Path) -> list[Page]:
         if path.name == "README.md":
             continue
         rel_path = path.relative_to(docs_dir).as_posix()
+        # Root-level files such as RELATIONS.md are navigation documents, not
+        # architecture-scoped search results.
+        if "/" not in rel_path or not any(part in SECTIONS for part in Path(rel_path).parts):
+            continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         title, summary = _title_and_summary(text, path.stem)
         segments = tuple(part.lower() for part in rel_path.split("/"))
@@ -263,6 +251,11 @@ def dimension_values(page: Page, aliases: dict[str, set[str]]) -> set[str]:
         if any(token in page.segments or token in filename for token in tokens):
             values.add(canonical)
     return values
+
+
+def section_value(page: Page) -> str | None:
+    """Return the role component from an architecture-first path."""
+    return next((segment for segment in page.segments if segment in SECTIONS), None)
 
 
 def matches_dimension(page: Page, aliases: dict[str, set[str]], requested: set[str]) -> bool:
@@ -374,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     pages = load_pages(docs_dir)
     scoped = []
     for page in pages:
-        section = page.segments[0]
+        section = section_value(page)
         if not matches_dimension(page, ARCH_ALIASES, arches):
             continue
         if not matches_dimension(page, VENDOR_ALIASES, vendors):

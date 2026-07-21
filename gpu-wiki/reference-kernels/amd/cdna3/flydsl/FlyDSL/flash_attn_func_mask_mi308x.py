@@ -15,10 +15,10 @@
    `reference-kernels/amd/cdna/flydsl/FlyDSL/flash_attn_func.py`.
 
 Documents:
-- Optimization journey (V0-V7): `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md`
-- Optimization journey (V8-V10, this version): `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-lse-optimization.md`
-- Optimization journey (causal+GQA): `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-gqa-optimization.md`
-- Pitfalls: `docs/pitfalls/amd/flydsl/flash-attn-pitfalls.md` (traps 15-17: mask-specific; 29-32: bit-packed mask; 46-51: mask+LSE V8-V10)
+- Optimization journey (V0-V7): `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-mask-optimization.md`
+- Optimization journey (V8-V10, this version): `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-mask-lse-optimization.md`
+- Optimization journey (causal+GQA): `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-gqa-optimization.md`
+- Pitfalls: `docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md` (traps 15-17: mask-specific; 29-32: bit-packed mask; 46-51: mask+LSE V8-V10)
 
 V8-V10 optimizations (beyond V7):
 - **SHARE_KV_LDS**: K and V share the same LDS region (never overlap in time).

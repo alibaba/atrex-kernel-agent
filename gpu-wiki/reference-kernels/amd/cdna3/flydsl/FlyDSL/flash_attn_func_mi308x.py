@@ -25,8 +25,8 @@ vs generic (architecture-agnostic) baseline (`amd/cdna/flydsl/FlyDSL/flash_attn_
   - LLVM flags: enable-post-misched, amdgpu-early-inline-all, lsr-drop-solution
   - waves_per_eu=3, ds_swizzle has_side_effects=False latency hiding
 
-Optimization report: docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-gqa-optimization.md
-Pitfalls:           docs/pitfalls/amd/flydsl/flash-attn-pitfalls.md
+Optimization report: docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-gqa-optimization.md
+Pitfalls:           docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md
 
 Architecture:
 - True MFMA32 remap: `mfma_f32_32x32x16bf16` / `mfma_f32_32x32x16f16` for both GEMM stages.

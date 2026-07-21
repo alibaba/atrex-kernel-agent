@@ -33,9 +33,9 @@ Take a **different** approach this time; do not repeat a recorded dead-end.
 ### Step 1 — Read the conversion sheet
 
 Read the single conversion sheet for the **real arch** (do not read the others):
-- `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `gpu-wiki/docs/converter/nvidia/blackwell.md`
-- `sm_90` (Hopper) → `gpu-wiki/docs/converter/nvidia/hopper.md`
-- `gfx94*` (CDNA3) → `gpu-wiki/docs/converter/amd/cdna3.md`; `gfx95*` (CDNA4) → `gpu-wiki/docs/converter/amd/cdna4.md`
+- `sm_100` / `sm_103` (Blackwell data-center, B200/B300) → `gpu-wiki/docs/nvidia/blackwell/converter/blackwell.md`
+- `sm_90` (Hopper) → `gpu-wiki/docs/nvidia/hopper/converter/hopper.md`
+- `gfx94*` (CDNA3) → `gpu-wiki/docs/amd/cdna3/converter/cdna3.md`; `gfx95*` (CDNA4) → `gpu-wiki/docs/amd/cdna4/converter/cdna4.md`
 
 The sheet gives the Triton→Gluon API map, the critical pitfalls, and pointers to the exact
 `reference-projects/triton` source. Open that source **only** for the construct you are converting

@@ -89,7 +89,7 @@ Determine the search mode from `stall_count`:
 
 | Layer | Scope | Sources | Search Method |
 |-------|-------|---------|---------------|
-| **L1** (gpu-wiki) | Local curated knowledge | `gpu-wiki/docs/` (kernel-opt, ref-docs, pitfalls, hardware-specs, converter), `gpu-wiki/reference-kernels/`, then `gpu-wiki/3rdparty/` (P5) | Architecture-scoped query first; then README hierarchy and targeted reading |
+| **L1** (gpu-wiki) | Local curated knowledge | `gpu-wiki/docs/<vendor>/<architecture>/<role>/`, `gpu-wiki/reference-kernels/`, then `gpu-wiki/3rdparty/` (P5) | Architecture-scoped query first; then README hierarchy and targeted reading |
 | **L2** (reference-projects) | Local code repositories | `reference-projects/` — upstream frameworks and implementations (cutlass, flash-attention, flashinfer, DeepGEMM, triton, etc.) | Search source code for implementation patterns; read specific modules by kernel type |
 | **L3** (public net) | Internet resources | Papers, blog posts, vendor official docs, GitHub issues, community forums | Web search by targeted query; findings provide optimization ideas only; hardware specs still require gpu-wiki or explicit confirmation |
 
@@ -111,9 +111,9 @@ Determine the search mode from `stall_count`:
 
 #### Architecture-scoped L1 query
 
-`main` keeps a role-first knowledge tree: `docs/kernel-opt/` contains concise
-patterns, `docs/ref-docs/` contains deep reports, `docs/pitfalls/` contains
-negative evidence, and `docs/hardware-specs/` contains hardware facts. Use the
+`main` keeps an architecture-first knowledge tree:
+`docs/<vendor>/<architecture>/<role>/`. Product-only evidence is isolated in
+overlays such as `nvidia/blackwell/b200/` and `amd/cdna3/mi308x/`. Use the
 live-tree query tool before raw grep:
 
 ```bash

@@ -12,7 +12,7 @@
      cache mode via sm__inst_executed_pipe_tma vs smsp__inst_executed_op_global_ld
 
 This kernel is V_final from the optimization journey
-docs/ref-docs/nvidia/cutedsl/sm120/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md.
+docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md.
 
 Path-1 epilogue: x = attn_out * sigmoid(gate) -> NVFP4 (e2m1 packed + e4m3
 swizzled SF, group_size=16, swizzled-128x4 layout). Replaces (gate-mul +
@@ -24,7 +24,7 @@ at canonical shape. See README.md for multi-shape matrix.
 
 V0 = V1 = V2 within 1.4% (LDG / cp.async / TMA all hit memory wall). True V3
 fusion (FA fwd + sigmoid+gate + nvfp4 in single kernel) is in
-docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md, blocked on
+docs/nvidia/blackwell-geforce/ref-docs/cutedsl/v3-fa-fusion-deferred-plan.md, blocked on
 cluster cutlass-DSL >= 4.5.
 """
 

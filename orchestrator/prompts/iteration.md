@@ -78,7 +78,7 @@ Execution steps:
 1. **Mandatory reads**: workspace `README.md`, `gpu-wiki/README.md`, all unmasked `memory/v*.json`, historical `plans/v*_plan.md`.
 2. **Parse historical Search Logs** from prior plans to build a used-knowledge set (deduplication reference).
 3. **Determine stall count**: Count the number of consecutive most-recent reverted versions (no improvement) from the memory summary. Record as `STALL_COUNT`.
-4. **Architecture-scoped L1 retrieval**: Read the target architecture from workspace `README.md`, then query main's role-first wiki before broad grep. Use narrow symptom, operator, and mechanism queries; open the returned pages and follow their local links:
+4. **Architecture-scoped L1 retrieval**: Read the target architecture from workspace `README.md`, then query main's architecture-first wiki before broad grep. Use narrow symptom, operator, and mechanism queries; open the returned pages and follow their local links:
    ```bash
    python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
      --section kernel-opt --symptom <controlled-symptom>

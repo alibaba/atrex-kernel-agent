@@ -56,15 +56,15 @@ Diff vs naive [BLOCK_M=8] config — reasoning recorded for posterity:
 
 Related docs:
   Optimization journey (V1 → V2 → V3, with measurements + decision log):
-    docs/ref-docs/nvidia/triton/sm120/sm120-fused-rmsnorm-gated-bf16-optimization.md
+    docs/nvidia/blackwell-geforce/ref-docs/triton/sm120-fused-rmsnorm-gated-bf16-optimization.md
   Pitfalls discovered along the way:
-    docs/pitfalls/nvidia/triton/sm120-fused-rmsnorm-gated-pitfalls.md
+    docs/nvidia/blackwell-geforce/pitfalls/triton/sm120-fused-rmsnorm-gated-pitfalls.md
 
 Cross-architecture relatives (for the *real* fusion, not done here):
   CuTeDSL real-fusion attempt (blocked on cluster cutlass 4.4.2):
-    docs/ref-docs/nvidia/cutedsl/sm120/v3-fa-fusion-deferred-plan.md
+    docs/nvidia/blackwell-geforce/ref-docs/cutedsl/v3-fa-fusion-deferred-plan.md
   CuTeDSL standalone fused-quant epilogue (3 architectures all hit memcpy wall):
-    docs/ref-docs/nvidia/cutedsl/sm120/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md
+    docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md
 """
 
 import torch

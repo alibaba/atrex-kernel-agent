@@ -28,8 +28,8 @@ Blackwell-GeForce (`sm_120`).
 ## Related docs
 
 - Optimization report:
-  [docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md](../../../../../docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md)
+  [docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md)
 - Consolidated production lessons:
-  [docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-decode-gemm-production-lessons.md](../../../../../docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-decode-gemm-production-lessons.md)
+  [docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md)
 - Pitfalls:
-  [docs/pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md](../../../../../docs/pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md)
+  [docs/nvidia/blackwell-geforce/pitfalls/cuda/nvfp4-split-k-gemv-pitfalls.md](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cuda/nvfp4-split-k-gemv-pitfalls.md)

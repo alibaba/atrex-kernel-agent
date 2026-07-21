@@ -92,7 +92,7 @@ already ship. Use them as the default carving; adjust to the actual module.
 | 5 | **o_proj + residual** | Fuse | `SOL-ExecBench/examples/cute_dsl/jamba_attn_proj/`; `reference-projects/cutlass/include/cutlass/epilogue/thread/linear_combination_residual_block.h:58` |
 | 6 | **add + post-attn RMSNorm** | Fuse | `SOL-ExecBench/examples/triton/olmo3_post_norm/`; `atrex-bench/data/fused_add_rms_norm/` |
 | 7 | **MLP gate+up (gated GEMM) + SwiGLU** | Fuse | `SOL-ExecBench/examples/pytorch/gemma3_swiglu/`; `atrex-bench/data/silu_and_mul/`; `reference-projects/quack/quack/gemm_act.py:211` (`GemmGatedMixin`); `reference-projects/aiter/aiter/ops/triton/gemm/basic/gemm_a16w16_gated.py` |
-| 8 | **down_proj + residual** | Fuse (split from 7) | cutlass residual epilogue (as #5); `gpu-wiki/docs/kernel-opt/amd/common/hands-on/moe-2stage-fusion.md` |
+| 8 | **down_proj + residual** | Fuse (split from 7) | cutlass residual epilogue (as #5); `gpu-wiki/docs/amd/common/kernel-opt/hands-on/moe-2stage-fusion.md` |
 
 ### MoE variant (authors split into ~6 boundaries)
 

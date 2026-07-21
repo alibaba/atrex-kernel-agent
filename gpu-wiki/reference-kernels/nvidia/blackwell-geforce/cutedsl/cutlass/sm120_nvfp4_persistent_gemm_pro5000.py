@@ -21,9 +21,9 @@ Tuning vs the atom demo:
 
 Required cross-references:
   * Optimization journey + perf table + ncu signatures:
-      docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-persistent-gemm-pro5000-optimization.md
+      docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-persistent-gemm-pro5000-optimization.md
   * Pitfalls (recast hoisting, pack bloat, cute-DSL bulk+pipeline broken):
-      docs/pitfalls/nvidia/cutedsl/nvfp4-gemm-pitfalls.md
+      docs/nvidia/blackwell-geforce/pitfalls/cutedsl/nvfp4-gemm-pitfalls.md
   * Atom-level inline-PTX demo (`mma.sync.aligned.kind::mxf4nvf4...`) + register packing:
       reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py
 """

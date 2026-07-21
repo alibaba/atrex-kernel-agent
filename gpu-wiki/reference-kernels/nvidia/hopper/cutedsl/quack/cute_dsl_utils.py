@@ -28,7 +28,7 @@ load_cubin_module_data_og = cutlass.base_dsl.runtime.cuda.load_cubin_module_data
 cute_compile_og = cute.compile
 
 
-# Patch TVM-FFI converter to handle Constexpr type annotations as compile-time constants.
+# Patch TVM-FFI docs/ to handle Constexpr type annotations as compile-time constants.
 # Fields annotated with cutlass.Constexpr[T] are emitted as ConstNone (not runtime args).
 # At call time, pass None for these fields; the compile-time value is baked in.
 import cutlass.cute._tvm_ffi_args_spec_converter as _converter_module  # noqa
@@ -40,7 +40,7 @@ def _patched_convert_single_arg(arg, arg_name, arg_type, ctx):
     if arg_type is not None and get_origin(arg_type) is cutlass.Constexpr:
         return spec.ConstNone(arg_name)
     # If arg is a NamedTuple but arg_type doesn't have _fields (e.g. annotated as tuple),
-    # redirect so the converter uses the NamedTuple's own type hints.
+    # redirect so the docs/ uses the NamedTuple's own type hints.
     if (
         isinstance(arg, tuple)
         and hasattr(type(arg), "_fields")
@@ -132,7 +132,7 @@ def _namedtuple_new_from_mlir_values(self, values):
     consume the correct number of values via ``cutlass.new_from_mlir_values``.
 
     Constexpr fields (annotated ``cutlass.Constexpr[T]``) are baked into the compiled kernel via
-    a converter patch (see above). At call time, pass None for these fields.
+    a docs/ patch (see above). At call time, pass None for these fields.
     """
     from cutlass.base_dsl.typing import get_mlir_types
 

@@ -15,6 +15,7 @@ The gate runs:
 
 - `python3 gpu-wiki/scripts/check-self-contained.py --root gpu-wiki`
 - `python3 -m unittest gpu-wiki/scripts/test_check_self_contained.py -v`
+- `python3 -m unittest gpu-wiki/scripts/test_query.py -v`
 - `git diff --check`
 - `openspec validate wikify-gpu-wiki-knowledge --strict`, when `openspec` is available
 

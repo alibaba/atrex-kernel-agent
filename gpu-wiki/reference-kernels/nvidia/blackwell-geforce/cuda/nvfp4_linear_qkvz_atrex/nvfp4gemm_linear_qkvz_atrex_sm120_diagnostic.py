@@ -7,7 +7,7 @@ acceptance gate, so keep this as structural-ceiling evidence, not a production
 route.
 
 Related docs:
-  docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-decode-gemm-production-lessons.md
+  docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md
 """
 
 import os

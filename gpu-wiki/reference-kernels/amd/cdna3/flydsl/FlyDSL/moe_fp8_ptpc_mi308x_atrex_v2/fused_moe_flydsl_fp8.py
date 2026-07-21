@@ -14,9 +14,9 @@ TUNED FOR: AMD MI308X (CDNA3 / gfx942), task16
 ``M=1/16/32/64/128/256/512``.
 
 Related docs:
-- docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md
-- docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
-- docs/pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md
+- docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-atrex-v2.md
+- docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
+- docs/amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md
 """
 
 import os

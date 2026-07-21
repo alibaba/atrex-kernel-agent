@@ -5,8 +5,8 @@
 // encoding split as a third TMA dimension for B. Use it as a scoped reference,
 // not as a generic NVFP4 GEMM baseline.
 // Related docs:
-//   docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-decode-gemm-production-lessons.md
-//   docs/pitfalls/nvidia/cuda/sm120-nvfp4-decode-gemm-production-pitfalls.md
+//   docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md
+//   docs/nvidia/blackwell-geforce/pitfalls/cuda/sm120-nvfp4-decode-gemm-production-pitfalls.md
 //
 // task_38 candidate: fused intra-CTA split-K NVFP4 GEMM with direct A loads
 // and shared-memory B swizzle.

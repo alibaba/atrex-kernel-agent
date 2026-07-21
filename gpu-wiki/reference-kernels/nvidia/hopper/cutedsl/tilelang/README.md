@@ -5,7 +5,7 @@ Source: `tilelang/tilelang/contrib/cutedsl/` (TileLang's CuTeDSL backend).
 This is a utility library built on top of `cutlass.cute` and extensively using inline PTX via `cutlass._mlir.dialects.llvm.inline_asm`. It covers multiple generations of architectures — SM80 / SM90 / SM100 — and implements the CuTeDSL equivalent of the CUDA template (`tl_templates/cuda/*.h`).
 
 For a complete summary of inline PTX patterns, see:
-[`docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md`](../../../../../docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md)
+[`docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md`](../../../../../docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md)
 
 ## File Inventory
 

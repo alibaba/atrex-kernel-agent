@@ -11,8 +11,8 @@
 # - SF_B is expected to already be in CUTLASS-swizzled layout.
 #
 # Related docs:
-# - docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md
-# - docs/pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md
+# - docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md
+# - docs/nvidia/blackwell-geforce/pitfalls/cuda/nvfp4-split-k-gemv-pitfalls.md
 #
 # Split-K dispatch for the current vLLM CUTLASS NVFP4 backend.
 # C1 / large-N shapes remain on CUTLASS; C2 decode shapes route to split-K.

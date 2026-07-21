@@ -1,298 +1,108 @@
-# Document Relationship Diagram
+# Architecture and Knowledge Relationships
 
-This document describes the relationships between files in gpu-wiki: reading order, complementary relationships, conflicts and differences.
+This page records the relationships that matter when navigating or transferring
+GPU optimization knowledge. The physical directory is the authoritative scope;
+similar product names do not imply compatible hardware behavior.
 
----
+## Reading order
 
-## 1. Reading Path Diagram
-
-### General Fundamentals (required reading, prerequisite for all architectures)
-
-```
-Tier 0 — Core Concepts (Read First)
-  gpu-memory-hierarchy.md ─── Registers、shared memory、coalescing、bank conflict
-  gpu-execution-model.md ─── Thread hierarchy、warp、CTA、SM、grid
-
-Tier 1 — General Optimization (Read Next)
-  gpu-instruction-optimization.md ── fast math、roofline、vectorization
-  gpu-application-optimization.md ── Amdahl's Law、host-device transfer、operator fusion
-```
-
-### Architecture-Specific (read after selecting target architecture)
-
-```
-Tier 2 — Architecture Specs
-  ┌─ NVIDIA:  nvidia-compute-capabilities.md (includes CC spec tables for each generation)
-  └─ AMD:     amd-gpu-kernel-tuning.md (includes hardware spec tables)
-
-Tier 3 — Deep Dive
-  ├─ NVIDIA CuTeDSL Chain (nvidia/cutedsl/): cutlass-cute-fundamentals.md → cutlass-gemm-optimization.md
-  │                     → kernel-opt/nvidia/cutedsl/ (production optimization: sm120 GDN chunk-fwd V113)
-  ├─ NVIDIA PTX Chain (nvidia/common/):  ptx-programming-model.md → ptx-instruction-set.md
-  │                     → kernel-opt/nvidia/ptx/ (production optimization: NVFP4 Split-K GEMV)
-  ├─ AMD Framework (amd/common/): amd-kernel-optimization-frameworks.md + amd-mfma-matrix-cores.md
-  │                     → kernel-opt/amd/flydsl/ (production optimization: Flash Attention, Chunk-GDN)
-  └─ AMD FlyDSL Chain (amd/flydsl/): flydsl-programming-guide.md → flydsl-layout-algebra.md
-                    → kernel-opt/amd/flydsl/gfx942/ (CDNA3 production optimization: Chunk-GDN megakernel)
-                    → kernel-opt/amd/flydsl/gfx950/ (CDNA4 production optimization: chunk-GDN fwd_h)
-
-Tier 4 — Gluon DSL Architecture-Specific Optimization (Reading chains within each architecture)
-  AMD FlyDSL (gfx942/gfx950): conversion-guide.md → layouts.md → api_mapping.md
-  NVIDIA CuTeDSL (sm90): cutedsl-programming-model.md → cutedsl-pipeline-patterns.md
-          → [GEMM Chain] pattern_overview → optimization_strategy → warp_pipeline_stage
-          → [Attention Chain] optimization_results + se_level_zigzag
+```text
+generic fundamentals
+        ↓
+vendor/common
+        ↓
+architecture-general knowledge
+        ↓
+product overlay (when present)
+        ↓
+kernel-opt → ref-docs + pitfalls → reference-kernels
 ```
 
-### Converter Tool Reading Chain
+Start from [the documentation router](README.md), or use the scoped query:
 
-```
-Stage 1: PyTorch → Triton (Vendor-Agnostic)
-  → porting_rules.md (Conversion principles)
-  → api_mapping.md (API mapping table)
-
-Stage 2: Triton → Gluon (Select Target Architecture)
-  General rules (read first): amd/common/porting_rules.md + learning_guide.md + verification_guide.md
-  Architecture-specific (read later): conversion-guide.md → layouts.md → api_mapping.md
+```bash
+python3 gpu-wiki/scripts/query.py <keywords> --arch <target>
 ```
 
----
+## NVIDIA families
 
-## 2. Cross-Architecture Comparison Table
+| Scope | Products / aliases | Relationship |
+|---|---|---|
+| [Ampere](nvidia/ampere/) | A100, SM80 | Independent architecture scope |
+| [Hopper](nvidia/hopper/) | H20, H100, H200, SM90 | Independent architecture scope |
+| [Blackwell](nvidia/blackwell/) | SM100 general | Parent of the B200 overlay |
+| [B200](nvidia/blackwell/b200/) | B200, GB200 | Inherits Blackwell general knowledge; product evidence stays here |
+| [Blackwell Ultra](nvidia/blackwell-ultra/) | B300, GB300, SM103 | May inherit applicable Blackwell concepts, but excludes B200-only evidence |
+| [Blackwell GeForce/workstation](nvidia/blackwell-geforce/) | RTX PRO 5000, Pro5000, SM120 | Separate from SM100 and SM103 despite the shared Blackwell brand |
 
-### Kernel Optimization Document Comparison
+Important transfer boundaries:
 
-| Topic | CDNA3 (MI308X) | CDNA4 (MI355X) | Hopper (H100/H20) |
-|------|---------------|----------------|-------------------|
-| Hardware Specs | `hardware-specs/hardware_specs_mi300x.md` | `hardware-specs/hardware_specs_mi355x.md` | `hardware-specs/hardware_specs_hopper.md` |
-| General Optimization Checklist | `cdna3-..--common_optimizations.md` | `cdna4-..--common_optimizations.md` | `hopper-..--common_optimizations.md` |
-| Profiling | `cdna3-..--profiling_guide.md` (rocprofv3) | `cdna4-..--profiling_guide.md` (rocprofv3) | `hopper-..--profiling_guide.md` (ncu) |
-| ISA Instruction Reference | `cdna3-..--isa_patterns.md` | *No standalone file* | `hopper-..--isa_patterns.md` |
-| GEMM Optimization | `pattern_overview` + `optimization_strategy` + `warp_pipeline_stage` + `final_config_template` + `key_conclusions` (5 files) | `cdna4-..--matmul.md` (1 file) | `hopper-..--matmul.md` (1 file) |
-| Attention Optimization | `optimization_results` + `se_level_zigzag` (2 files) + `cdna3-flash-attention-bf16-nomask-isa-scheduling.md` (FlyDSL BF16 no-mask ATT scheduling) | `cdna4-..--fused_attention.md` | `hopper-..--fused_attention.md` (skeleton) |
-| Linear Attention / GDN Megakernel | `cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md` | `cdna4-chunk-gdn.md` | FlashQLA/Hopper warp-specialization as migration source |
-| Softmax/Reduction | *embedded in common_optimizations* | `cdna4-..--softmax_reduce.md` | `hopper-..--softmax_reduce.md` |
-| Pitfalls & Lessons Learned | *scattered across multiple files* | `cdna4-..--pitfalls.md` (10 items) | `hopper-..--pitfalls.md` (11 items) |
-| MLA Decode | *none* | `cdna4-..--mla_decode.md` | *none* |
-| Linear Attention | *none* | *none* | `hopper-..--linear_attention.md` |
-| CuTeDSL Reference | *none (AMD)* | *none (AMD)* | `hopper-cutedsl-sm90.md` |
-| CK GEMM Reference | `ck_gemm_optimization_reference.md` | *none* | *none (NVIDIA)* |
-| Gluon API Reference | `gluon-amd-gfx942-optimization.md` | *no standalone file* | *no standalone file* |
-| FP8 GEMM Hands-on | *none* | `cdna4-fp8-gemm-optimization.md` | *none* |
+- WGMMA and Hopper pipeline examples do not automatically apply to SM100,
+  SM103, or SM120.
+- SM100 tcgen05/TMEM examples do not establish availability or identical
+  behavior on SM120.
+- B200 benchmark results and resource assumptions must not be used as B300
+  facts unless a document explicitly compares both products.
+- RTX PRO 5000 hardware facts come from the SM120 hardware page and official
+  workstation sources, not B200/B300 data-center specifications.
 
-SM120 CuTeDSL GDN chunk-forward is the NVIDIA Blackwell GeForce counterpart for this row: optimization report at
-`ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`,
-final V113 is no-cache directional final-state `0.531-0.533ms = 1.51× same-process FLA`,
-complementary optimization axes with AMD FlyDSL chunk-GDN.
+## AMD families
 
-### Converter Documentation Cross-Reference
+| Scope | Products / aliases | Relationship |
+|---|---|---|
+| [CDNA3](amd/cdna3/) | gfx942 general | Parent of MI300X and MI308X overlays |
+| [MI300X](amd/cdna3/mi300x/) | MI300X | Inherits CDNA3 general knowledge; excludes MI308X-only experiments |
+| [MI308X](amd/cdna3/mi308x/) | MI308X | Inherits CDNA3 general knowledge; excludes MI300X-only facts |
+| [CDNA4](amd/cdna4/) | MI355X, gfx950 | Independent architecture scope |
+| [RDNA4](amd/rdna4/) | gfx1250 | Independent architecture scope |
 
-Each Triton→Gluon transition is one per-arch sheet (API map + pitfalls + source pointers); the
-PyTorch→Triton transition is its own sheet. See the router in [converter/README.md](converter/README.md).
+MI300X and MI308X share gfx942/CDNA3 programming concepts, but their compute
+resources and product measurements differ. Use the exact product overlay for
+hardware facts and measured optimization evidence.
 
-| Transition | Sheet |
-|-----------|-------|
-| PyTorch → Triton | [pytorch-to-triton.md](converter/pytorch-to-triton.md) |
-| Triton → Gluon (Blackwell sm_100) | [nvidia/blackwell.md](converter/nvidia/blackwell.md) |
-| Triton → Gluon (Hopper sm_90) | [nvidia/hopper.md](converter/nvidia/hopper.md) |
-| Triton → Gluon (CDNA3 gfx942) | [amd/cdna3.md](converter/amd/cdna3.md) |
-| Triton → Gluon (CDNA4 gfx950) | [amd/cdna4.md](converter/amd/cdna4.md) |
+## Cross-vendor concept mapping
 
-### Converter → Kernel-Opt Relationships
+| Concept | NVIDIA terminology | AMD terminology | Transfer rule |
+|---|---|---|---|
+| Matrix instructions | MMA, WGMMA, tcgen05 | MFMA, WMMA | Transfer the tiling idea, then re-derive instruction shapes and resource use |
+| On-chip shared storage | Shared memory / SMEM | LDS | Re-check bank count, banking pattern, capacity, and synchronization |
+| Execution group | Warp | Wavefront | Re-check group width and layout mapping |
+| Profiling | Nsight Compute / NCU | rocprofv3 | Metrics are not directly interchangeable |
+| Async movement | cp.async, TMA | architecture/framework-specific mechanisms | Re-derive supported copies and pipeline semantics |
 
-| Converter Document | Produced/Consumed Kernel-Opt Documents |
-|---------------|---------------------------|
-| Pipeline notes | → warp pipeline stage notes (optimized pipeline output code) |
-| Matrix multiply notes | → AMD MFMA matrix-core reference (MFMA instruction details) |
-| Matrix multiply notes | → NVIDIA PTX MMA instruction reference (MMA instruction evolution) |
-| Layout notes | → hardware specification pages (hardware constraints determine legal layouts) |
-| Conversion pitfalls | ↔ runtime performance pitfall notes |
-| API mapping notes | → ISA pattern references (underlying instruction reference for API mapping) |
+## Role relationships
 
----
+- `hardware-specs/` supplies factual inputs for roofline and resource analysis.
+- `kernel-opt/` provides a concise decision or optimization pattern.
+- `ref-docs/` supplies the detailed evidence and implementation journey.
+- `pitfalls/` records failed or unsafe approaches and should be read before
+  porting a technique across architectures.
+- `converter/` maps code structure and APIs; it does not override hardware
+  constraints.
+- `reference-kernels/` provides implementation examples, not automatic runtime
+  dependencies.
 
-## 3. Conflicts and Differences
+## High-value companion groups
 
-### 🔴 Direct Conflicts (contradictory advice on the same issue)
+### SM120 / RTX PRO 5000
 
-#### Conflict 1: Value of Warp Pipeline Stage
+- [SM120 hardware facts](nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md)
+- [SM120 CuTeDSL references](nvidia/blackwell-geforce/ref-docs/cutedsl/)
+- [SM120 CuTeDSL pitfalls](nvidia/blackwell-geforce/pitfalls/cutedsl/)
+- [SM120 reference kernels](../reference-kernels/nvidia/blackwell-geforce/)
 
-| Document | Conclusion |
-|------|------|
-| `cdna3-..--warp_pipeline_stage.md` | WPS is a key optimization for large-tile GEMM, **+27% performance** |
-| `cdna4-..--pitfalls.md` (#7) | WPS is **counter-productive** for attention (cross-iteration dependency in online softmax) |
-| Hopper Docs | Does not use the WPS concept; uses `fence` + `commit_group` + `wait_group` instead |
+### B200
 
-**Interpretation**: WPS is applicable to pure GEMM (no cross-iteration dependencies), but not to fused attention. The +27% conclusion in CDNA3 docs applies only to GEMM scenarios.
+- [B200 hardware facts](nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md)
+- [Blackwell general optimization cards](nvidia/blackwell/kernel-opt/)
+- [B200-only reports and pitfalls](nvidia/blackwell/b200/)
 
-#### Conflict 2: Benefit of Manual ISA Optimization
+### MI308X FlyDSL
 
-| Document | Conclusion |
-|------|------|
-| `cdna3-..--common_optimizations.md` | Manual ISA optimization is effective: removing `other=0.0` +1%, `tl.assume` +2%, loop-invariant hoisting +4% |
-| `hopper-..--pitfalls.md` (#1) | Manual code restructuring (hoisting loop invariants, adjusting prefetch) is **almost always counter-productive**, since the compiler's global optimization for CSE and scheduling is coupled |
+- [CDNA3 FlyDSL references](amd/cdna3/mi308x/ref-docs/flydsl/)
+- [MI308X-only reports and pitfalls](amd/cdna3/mi308x/)
+- [MI308X reference kernels](../reference-kernels/amd/cdna3/flydsl/FlyDSL/)
 
-**Interpretation**: AMD compiler (Gluon for gfx942) responds well to manual ISA tuning. NVIDIA compiler (sm_90) has more aggressive global optimization where manual intervention tends to disrupt compiler strategies. CDNA4 falls somewhere in between.
-
-#### Conflict 3: NVIDIA Bias in Generic Documentation
-
-| Document | Issue |
-|------|------|
-| `gpu-memory-hierarchy.md` | Claims shared memory has **32 banks** (generic), but CDNA4 actually has **64 banks** |
-| `gpu-memory-hierarchy.md` | Overview table uses NVIDIA-specific values: 255 regs/thread, 64-228 KB/SM, without noting AMD equivalents |
-| `gpu-execution-model.md` | Correctly mentions NVIDIA 32-thread warp vs AMD 64-thread wavefront |
-
-**Interpretation**: `gpu-memory-hierarchy.md` conclusion of 32 banks does not apply to CDNA4. When reading AMD-related documentation, be aware of generic documents' NVIDIA defaults.
-
-### 🟡 Significant Architectural Differences (Not Conflicts, But Must Be Noted When Migrating Across Architectures)
-
-#### Difference 1: Massive Ridge Point Differences
-
-| Architecture | BF16 Ridge Point | State at Same Tile AI=237 |
-|------|-----------------|----------------------|
-| CDNA3 (MI308X) | ~247 | Near ridge point (boundary) |
-| CDNA4 (MI355X) | ~629 | **memory-bound** (far below ridge) |
-| H100 | ~295 | memory-bound |
-| H20 | ~37 | **compute-bound** (far above ridge) |
-
-**Impact**: The same kernel may require completely opposite optimization directions on different architectures.
-
-#### Difference 2: FP8 Format Incompatibility
-
-| Architecture | FP8 Format | Notes |
-|------|---------|------|
-| CDNA3 | E4M3**FNUZ** (bias=8), E5M2**FNUZ** (bias=16) | AMD non-standard format |
-| CDNA4 | E4M3**FN** (OCP, bias=7), E5M2 (OCP, bias=15) | OCP standard |
-| NVIDIA | `.e4m3`, `.e5m2` (OCP) | OCP standard |
-
-**Impact**: CDNA3 FP8 data is not binary-compatible with CDNA4/NVIDIA; cross-platform migration requires format conversion.
-
-#### Difference 3: Completely Different Pipeline Mechanisms
-
-| Architecture | Method | Core API |
-|------|------|---------|
-| CDNA3 | Pure software: `buffer_load` → registers → `smem.store` | Manual buffer management |
-| CDNA4 | Hardware DMA: `async_copy.buffer_load_to_shared`, bypasses registers | `async_copy` series |
-| Hopper | CP_ASYNC DMA: `async_copy_global_to_shared`, bypasses registers | `async_copy` series |
-
-**Impact**: CDNA3 pipeline code cannot be ported to CDNA4 or Hopper, and vice versa.
-
-#### Difference 4: Matrix Multiply Instructions
-
-| Architecture | Instruction | Operand Source | Warp/Wave Size |
-|------|------|-----------|---------------|
-| CDNA3 | `v_mfma` | Registers | 64 threads |
-| CDNA4 | `v_mfma` / `v_mfma_scale` | Registers | 64 threads |
-| Hopper | `wgmma` (warpgroup MMA) | **Shared memory** direct read | 128 threads (4 warps) |
-
-#### Difference 5: LDS/Shared Memory Capacity
-
-| Architecture | LDS/SMEM per CU/SM | Impact |
-|------|-------------------|------|
-| CDNA3 | 64 KB | Tile size is limited |
-| CDNA4 | **160 KB** | Can use larger tiles and deeper pipelines |
-| Hopper | **228 KB** | Maximum capacity |
-
-#### Difference 6: BF16 vs FP16 Performance
-
-| Architecture | Behavior |
-|------|------|
-| AMD (MI308X) | BF16 matrix core execution is **significantly faster** than FP16 |
-| NVIDIA | BF16 and FP16 Tensor Core throughput is identical |
-
-#### Difference 7: Block Size Recommendations
-
-| Source | Recommendation |
-|------|------|
-| `gpu-execution-model.md` (generic) | 128 or 256 threads/block |
-| Hopper (CC 9.0) | Must be a multiple of 128 (wgmma warp group requirement) |
-| AMD | Recommend 1024/2048/4096 (64-thread wavefront, needs more threads to fill a CU) |
-
-#### Difference 8: V RHS Staging in GDN Chunk-Forward
-
-| Architecture / Implementation | Conclusion |
-|-------------|------|
-| SM120 CuTeDSL GDN chunk fwd V113 | Retain cp.async staging, use LDSM/R2S + scaled-vnew + reuse-B LDSM; `0.531-0.533ms = 1.51× same-process FLA` |
-| SM120 CuTeDSL GDN chunk fwd V31 | Retain cp.async staging, use LDSM/R2S + scaled-vnew; `0.615ms = 1.42× FLA varlen` |
-| SM120 CuTeDSL V30 direct global V RHS | Correct but slower, repeat-100 is `0.7200ms` vs V29 `0.6861ms`; scalar `LDG.E.U16` falls on RHS critical path |
-| AMD FlyDSL chunk-GDN fwd_h | Focus is on O=3 patch, col-major k-LDS, barrier removal, and SmemPtr double buffering; do not reverse-apply SM120's direct-global-V conclusion to AMD |
-
-**Interpretation**: FlashInfer/FlashQLA-style "fusion" is not simply about reducing shared staging. In SM120 CuTeDSL's GDN chunk-forward, reading V RHS directly via global scalar load moves the bottleneck to the RHS load critical path; V31's effective fusion point is pushing `exp_decay[t]` to the `v_new[t,v]` side, removing the K-decay scratch, and using a transposed LDSM atom to absorb the transposed `sK` view. V113's newly effective point is local B-fragment reuse, not preprocess cache or full TMA fusion.
-
-### 🟢 Content Duplication (Not a Conflict, but Redundant)
-
-| Duplicated Content | Files Involved | Suggestion |
-|---------|---------|------|
-| Host-device Transfer | `gpu-memory-hierarchy.md` + `gpu-application-optimization.md` | `gpu-application-optimization.md` is more comprehensive |
-| Warp Divergence Concept | `gpu-execution-model.md` + `gpu-instruction-optimization.md` | The former defines the concept, the latter provides optimization tips — acceptable |
-| Profiling Principles | `gpu-instruction-optimization.md` + `ncu-profiling-guide.md` + `amd-gpu-kernel-tuning.md` | Layering is reasonable: generic → vendor-specific |
-
----
-
-## 4. Complementary Relationship Map
-
-### AMD vs NVIDIA Comparison for the Same Concepts
-
-| Concept | AMD Documentation | NVIDIA Documentation |
-|------|---------|------------|
-| Matrix Core Programming | `amd-mfma-matrix-cores.md` | `nvidia-ptx-mma-instructions.md` |
-| Optimization Frameworks | `amd-kernel-optimization-frameworks.md` (FlyDSL/CK/TileLang) | `cutlass-cute-fundamentals.md` + `cutlass-gemm-optimization.md` (CUTLASS/CuTe) |
-| DSL Programming | `amd/flydsl/flydsl-programming-guide.md` (FlyDSL) | `nvidia/cutedsl/cutedsl-programming-model.md` + `cutedsl-pipeline-patterns.md` (CuTeDSL) |
-| Profiling Tools | `amd/common/rocprofv3-profiling-guide.md` (Generic) + `amd/gluon/gfx942|gfx950-..--profiling_guide.md` (ATT Instruction-Level) | `nvidia/common/ncu-profiling-guide.md` + `nvidia/gluon/sm90/hopper-..--profiling_guide.md` (Nsight Compute) |
-| Hardware Specifications | `hardware-specs/hardware_specs_mi300x.md` + `hardware-specs/hardware_specs_mi355x.md` | `nvidia/common/nvidia-compute-capabilities.md` + `hardware-specs/hardware_specs_hopper.md` |
-
-### Document Groups That Should Be Read Together
-
-**Group 1: Memory Optimization Panorama**
-- `gpu-memory-hierarchy.md` (General Principles)
-- `nvidia-arch-specific-optimization.md` (NVIDIA-specific: L2 persistence, TMA)
-- `amd-gpu-kernel-tuning.md` (AMD-specific: LDS bank conflict, XOR swizzle)
-
-**Group 2: GEMM Optimization Panorama**
-- `cutlass-gemm-optimization.md` (NVIDIA tiling strategy)
-- `ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (CUDA Split-K: fixing K-dimension parallelism for small `M*N` tiles)
-- `cdna3-..--warp_pipeline_stage.md` (AMD WPS technology)
-- Architecture-specific `matmul.md` (Roofline + architecture-specific configurations)
-
-**Group 3: Profiling Toolchain**
-- `gpu-instruction-optimization.md` (Roofline principles)
-- `ncu-profiling-guide.md` (NVIDIA tools)
-- `ncu-measurement-discipline.md` (NVIDIA: trusting the numbers — Duration≠latency, noise floor, graph-capture pitfalls)
-- `ncu-rule-est-speedup-meta-rules.md` (NVIDIA: `Est. Speedup %` is a ceiling, not a wall-time delta)
-- `cdna3/cdna4-..--profiling_guide.md` (AMD tools)
-- Architecture-specific `hardware-specs/hardware_specs_*.md` (peak TFLOPS for compute utilization calculation)
-
-**Group 4: Conversion + Optimization Closed Loop**
-- `converter/<arch>.md` (Conversion produces the Gluon/Triton kernel)
-- `kernel-opt/*--common_optimizations.md` (Optimizing the ISA of that code)
-- `kernel-opt/*--profiling_guide.md` (Verifying optimization results)
-
-**Group 5: FlyDSL Chunk-GDN Optimization Trilogy**
-- `ref-docs/amd/flydsl/gfx950/cdna4-chunk-gdn.md` (Full pipeline optimization: V0→V8, 2.64x→0.78x Triton, including detailed fwd_h optimization journey)
-- `pitfalls/amd/flydsl/chunk-gdn-pitfalls.md` (11 pitfalls: SmemPtr large memref, scf.IfOp syntax, O=3 patch, pre-load+barrier coordination, iter_args VGPR regression, ds_read_tr regression, IR explosion, nested scf.for_, hardcoded grid, grid dimension order, TP compile-time constants)
-- `reference-kernels/amd/cdna4/flydsl/FlyDSL/chunk_gdn_*.py` (5 kernels + pipeline final implementation code)
-- Prerequisites: `ref-docs/amd/flydsl/flydsl-programming-guide.md` + `pitfalls/amd/flydsl/flash-attn-pitfalls.md`
-
-**Group 6: FlyDSL FP8 PTPC Fused MoE Archive**
-- `ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md` (proj007 task66 isolated stage checkpoint, bandwidth `target_us` method, and continuation boundaries)
-- `ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md` (atrex-open integrated v2 full-pipeline archive with same-machine parity against atrex-open)
-- `reference-kernels/amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x/` (task66 checkpoint source and bandwidth harness)
-- `reference-kernels/amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x_atrex_v2/` (atrex-open v2 standalone full-pipeline package)
-- `pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md` (shared task66 and atrex-open v2 traps; do not mix isolated target_us and full-pipeline parity gates)
-
-**Group 6: CUDA NVFP4 Split-K GEMV Trilogy**
-- `ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md` (C1 CUTLASS + C2 Split-K journey, E2E evidence, dispatch recipe)
-- `pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md` (7 pitfalls: full shape substitution, cold standalone, K/S alignment, SF layout, workspace, custom-op graph boundaries, Stream-K confusion)
-- `reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/` (CUDA kernel + vLLM CUTLASS dispatch example)
-- Complementary background: `ref-docs/nvidia/cutedsl/cutlass-tile-scheduling.md` (Stream-K / split-K scheduler concepts)**Group 7: SM120 CuTeDSL GDN chunk-forward three-piece set**
-- `ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md` (V0→V113 journey, ncu/nsys evidence, V30 direct V rejection, V31 scaled-vnew, V113 reuse-B LDSM, V122 NCU bandwidth)
-- `pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md` (26 pitfalls: cp.async layout, TMA deadlock/regression, direct V regression, K-decay scratch algebra removal, transposed LDSM atom, no-cache acceptance, NCU duration interpretation)
-- `reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/` (V113 production kernel + V31 0.615ms backup + pre-V31 1.18ms backup)
-- Complementary comparison: `ref-docs/amd/flydsl/gfx950/cdna4-chunk-gdn.md` (AMD FlyDSL chunk-GDN fwd_h different optimization axes)
-
----
-
-## 5. Known Issues
-
-### Inconsistent CDNA3 documentation structure
-
-CDNA3's GEMM optimization is spread across 5 files (pattern_overview, optimization_strategy, warp_pipeline_stage, final_config_template, key_conclusions), whereas CDNA4 and Hopper each use only 1 `matmul.md`. This is because the CDNA3 docs were accumulated incrementally, while CDNA4/Hopper were consolidated later in a unified manner.
+For any cross-architecture transfer, keep the algorithmic idea but re-check
+instruction availability, memory hierarchy, occupancy limits, synchronization,
+and measurements inside the destination scope.

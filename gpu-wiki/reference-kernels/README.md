@@ -167,7 +167,7 @@ reference-kernels/
 
 ### CuTeDSL inline PTX (reference for `llvm.inline_asm` patterns)
 
-CuTeDSL does not have `tl.inline_asm`; you need to embed PTX via `cutlass._mlir.dialects.llvm.inline_asm`. The following files are ready-to-use references for various inline PTX patterns. **Pattern overview**: [`docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md`](../docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md).
+CuTeDSL does not have `tl.inline_asm`; you need to embed PTX via `cutlass._mlir.dialects.llvm.inline_asm`. The following files are ready-to-use references for various inline PTX patterns. **Pattern overview**: [`docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md`](../docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md).
 
 | What you want to do | Reference file |
 |---------|---------|
@@ -184,16 +184,16 @@ CuTeDSL does not have `tl.inline_asm`; you need to embed PTX via `cutlass._mlir.
 | **bar.sync $0,$1 (multiple barrier ids)** | [`nvidia/hopper/cutedsl/tilelang/reduce.py`](nvidia/hopper/cutedsl/tilelang/reduce.py) (`bar_sync_ptx`) || **activemask** | [`nvidia/hopper/cutedsl/tilelang/warp.py`](nvidia/hopper/cutedsl/tilelang/warp.py)（`activemask.b32`） |
 | **Multi-line PTX + .reg/.pred/labels + global variables** | [`nvidia/hopper/cutedsl/tilelang/grid_sync.py`](nvidia/hopper/cutedsl/tilelang/grid_sync.py)（grid soft sync: `atom.add.release.gpu.s32` + spinning + `st.release.gpu.global.s32`） |
 | **fence.sc.gpu + ld.relaxed.gpu (seq_cst load/store)** | [`nvidia/hopper/cutedsl/tilelang/atomic.py`](nvidia/hopper/cutedsl/tilelang/atomic.py)（`AtomicLoad`/`AtomicStore`） |
-| **SM120 NVFP4 mma.sync.aligned.kind::mxf4nvf4 end-to-end demo** | [`nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py`](nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py) + [test](nvidia/blackwell-geforce/cutedsl/cutlass/test_sm120_nvfp4_inline_ptx_gemm.py)（pitfall summary at [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-inline-ptx-gemm.md`](../docs/ref-docs/nvidia/cutedsl/sm120/sm120-nvfp4-inline-ptx-gemm.md)） |
+| **SM120 NVFP4 mma.sync.aligned.kind::mxf4nvf4 end-to-end demo** | [`nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py`](nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py) + [test](nvidia/blackwell-geforce/cutedsl/cutlass/test_sm120_nvfp4_inline_ptx_gemm.py)（pitfall summary at [`docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-inline-ptx-gemm.md`](../docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-inline-ptx-gemm.md)） |
 
 Recommended workflow for LLMs taking on inline PTX tasks:
-1. First read [`docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md`](../docs/ref-docs/nvidia/cutedsl/cutedsl-inline-ptx-patterns.md) for pattern overview (constraint strings, StructType, bitcast, `@dsl_user_op`, `has_side_effects` and 12 sections in total).
+1. First read [`docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md`](../docs/nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md) for pattern overview (constraint strings, StructType, bitcast, `@dsl_user_op`, `has_side_effects` and 12 sections in total).
 2. Then pick the closest reference file from the table above as a code style template.
 3. For mma.sync-type instructions, refer directly to the `ptx_mma.py` factory; for other PTX, first check whether `cutlass._mlir.dialects.nvvm` already provides an op, and only write inline asm if none exists.
 
 ### FlyDSL inline_asm（`llvm.InlineAsmOp` / `llvm.inline_asm` usage reference）
 
-Most FlyDSL instructions have already been wrapped by `flydsl._mlir.dialects.rocdl` and `flydsl.expr.buffer_ops`; only a few hardware control instructions require `llvm.InlineAsmOp` inline assembly. **Usage overview**: [`docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md`](../docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md).
+Most FlyDSL instructions have already been wrapped by `flydsl._mlir.dialects.rocdl` and `flydsl.expr.buffer_ops`; only a few hardware control instructions require `llvm.InlineAsmOp` inline assembly. **Usage overview**: [`docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md`](../docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md).
 
 | What you want to do | Reference file |
 |---------|---------|
@@ -205,7 +205,7 @@ Most FlyDSL instructions have already been wrapped by `flydsl._mlir.dialects.roc
 | **Cross-GPU signal protocol（cache control + uncached load/store + L2 writeback full combination）** | [`amd/cdna/flydsl/FlyDSL/custom_all_reduce_kernel.py`](amd/cdna/flydsl/FlyDSL/custom_all_reduce_kernel.py)（multi-GPU AllReduce 1-stage / 2-stage） |
 
 Recommended workflow for LLMs taking on FlyDSL inline_asm tasks:
-1. First read [`docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md`](../docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md) for pattern overview (10 sections: API forms, AMDGPU constraint strings, eight usage categories, `has_side_effects` selection, comparison with CuTeDSL, pitfalls).
+1. First read [`docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md`](../docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md) for pattern overview (10 sections: API forms, AMDGPU constraint strings, eight usage categories, `has_side_effects` selection, comparison with CuTeDSL, pitfalls).
 2. Before writing, verify whether `flydsl._mlir.dialects.rocdl`（such as `s_waitcnt` / `sched_barrier` / `wave_id`）and `flydsl.expr.buffer_ops`（buffer load/store with `cache_modifier`）already have existing ops, and use inline_asm only if none exist.
 3. For AMDGPU constraint strings, only use `v`（VGPR）/ `s`（SGPR）；addresses should also go through `v`（do not write NVPTX-style `l`）.
 4. `has_side_effects=True` is essentially the default; all inline_asm in FlyDSL projects use `True`.

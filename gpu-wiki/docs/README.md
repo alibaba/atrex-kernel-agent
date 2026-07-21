@@ -1,14 +1,56 @@
 # GPU Wiki Documentation
 
-Document root for the GPU kernel programming and optimization knowledge base, covering two major areas: optimization knowledge and code conversion.
+The knowledge base is organized **architecture first**. Choose the vendor and
+architecture before choosing a knowledge role or DSL. This prevents advice for
+one GPU family or product from silently entering another GPU's search scope.
 
----
+```text
+docs/
+├── generic/                         # vendor-independent knowledge
+├── nvidia/
+│   ├── common/                      # vendor-general / explicit cross-arch
+│   ├── ampere/                      # SM80 / A100
+│   ├── hopper/                      # SM90 / H20, H100, H200
+│   ├── blackwell/                   # SM100 general
+│   │   └── b200/                    # B200/GB200 product overlay
+│   ├── blackwell-ultra/             # SM103 / B300, GB300
+│   └── blackwell-geforce/           # SM120 / RTX PRO 5000
+└── amd/
+    ├── common/                      # vendor-general / explicit cross-arch
+    ├── cdna3/                       # gfx942 general
+    │   ├── mi300x/                  # MI300X product overlay
+    │   └── mi308x/                  # MI308X product overlay
+    ├── cdna4/                       # gfx950 / MI355X
+    └── rdna4/                       # gfx1250
+```
 
-| Directory | Description |
-|-----------|-------------|
-| [hardware-specs/](hardware-specs/) | Hardware compute specification tables for all target GPUs (AMD CDNA3/CDNA4, NVIDIA Hopper/Blackwell) |
-| [kernel-opt/](kernel-opt/) | GPU optimization knowledge: general theory, AMD and NVIDIA architecture-specific optimization |
-| [ref-docs/](ref-docs/) | Framework/architecture reference materials and per-kernel optimization journeys |
-| [pitfalls/](pitfalls/) | Non-obvious pitfalls encountered during implementation/porting: trap → symptom → root cause → lesson |
-| [converter/](converter/) | Code conversion knowledge: PyTorch→Triton, Triton→Gluon cross-platform conversion rules |
-| [RELATIONS.md](RELATIONS.md) | Document relationship diagram: reading paths, cross-architecture comparisons, conflict and discrepancy lists |
+Within each scope, the second dimension is the knowledge role:
+
+- `hardware-specs/`: verified hardware facts and roofline inputs.
+- `kernel-opt/`: concise optimization cards and hands-on patterns.
+- `ref-docs/`: full reports, API notes, and implementation journeys.
+- `pitfalls/`: negative evidence and architecture-specific traps.
+- `converter/`: code and DSL conversion guidance.
+
+Product queries inherit their architecture's general knowledge while remaining
+isolated from sibling products. For example, B200 includes `nvidia/blackwell/`
+and `nvidia/blackwell/b200/`, whereas B300 excludes B200-only evidence.
+
+## Entry points
+
+- [Generic knowledge](generic/)
+- [NVIDIA knowledge](nvidia/)
+- [AMD knowledge](amd/)
+- [Cross-architecture relationships](RELATIONS.md)
+
+Use the scoped query instead of searching the entire tree when a target GPU is
+known:
+
+```bash
+python3 gpu-wiki/scripts/query.py --arch h20 --section docs/
+python3 gpu-wiki/scripts/query.py "gdn" --arch pro5000 --dsl cutedsl
+python3 gpu-wiki/scripts/query.py "flash attention" --arch mi308x --dsl flydsl
+```
+
+`--section`, `--symptom`, `--kernel-type`, and `--operator` are optional
+narrowing filters; `--arch` is the important isolation boundary.

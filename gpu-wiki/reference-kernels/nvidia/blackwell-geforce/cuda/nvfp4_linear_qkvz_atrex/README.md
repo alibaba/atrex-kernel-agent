@@ -21,5 +21,5 @@ deliverable.
 
 ## Related Docs
 
-- [SM120 NVFP4 Decode GEMM Production Lessons](../../../../../docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-decode-gemm-production-lessons.md)
-- [SM120 NVFP4 Decode GEMM Production Pitfalls](../../../../../docs/pitfalls/nvidia/cuda/sm120-nvfp4-decode-gemm-production-pitfalls.md)
+- [SM120 NVFP4 Decode GEMM Production Lessons](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md)
+- [SM120 NVFP4 Decode GEMM Production Pitfalls](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cuda/sm120-nvfp4-decode-gemm-production-pitfalls.md)

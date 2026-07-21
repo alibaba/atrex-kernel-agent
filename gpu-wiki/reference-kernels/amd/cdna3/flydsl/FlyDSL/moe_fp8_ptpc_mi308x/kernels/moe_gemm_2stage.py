@@ -16,8 +16,8 @@ boundary. The checkpoint is not full-gate complete: stage1 token512 is the only
 row passing the 5 percent gate at task66.
 
 Related docs:
-- docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
-- docs/pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md
+- docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
+- docs/amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md
 
 This module intentionally contains the **kernel builder code** for:
 - `moe_gemm1` (stage1)

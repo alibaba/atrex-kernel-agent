@@ -398,7 +398,7 @@ SM90_ASYNC_INSTRUCTIONS = [
 ]
 
 # SM100 (Blackwell) expected instructions
-# (ref: gpu-wiki/docs/kernel-opt/nvidia/common/blackwell/languages/ptx-sm100.md)
+# (ref: gpu-wiki/docs/nvidia/blackwell/kernel-opt/languages/ptx-sm100.md)
 SM100_TENSOR_INSTRUCTIONS = [
     "TCGEN05",  # tcgen05.mma / tcgen05.ld / tcgen05.st / tcgen05.cp
     "GMMA",     # Blackwell GMMA
