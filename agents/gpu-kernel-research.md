@@ -119,24 +119,40 @@ live-tree query tool before raw grep:
 ```bash
 # Fast pattern/diagnosis search.
 python3 <gpu-wiki>/scripts/query.py --arch b200 --vendor nvidia \
-  --section kernel-opt --symptom pipeline-stalls
+  --area docs --section kernel-opt --symptom pipeline-stalls
 
 # Operator cases and negative evidence for the exact architecture/DSL.
 python3 <gpu-wiki>/scripts/query.py --arch sm120 --vendor nvidia --dsl cutedsl \
-  --operator gdn --section ref-docs --section pitfalls
+  --area docs --operator gdn --section ref-docs --section pitfalls
+
+# Concrete implementations; optionally add --source, --status, or --kind.
+python3 <gpu-wiki>/scripts/query.py gdn --arch sm120 --vendor nvidia \
+  --dsl cutedsl --area reference-kernels --kind kernel
 
 # Architecture-neutral and gfx942-specific implementation knowledge.
 python3 <gpu-wiki>/scripts/query.py "flash attention" --arch gfx942 \
   --vendor amd --dsl flydsl
 
+# Retry an uncertain operator spelling without relaxing hardware/DSL scope.
+python3 <gpu-wiki>/scripts/query.py rms_nrom --arch h20 --vendor nvidia --fuzzy
+
+# Copied filenames and paths are separator-normalized without --fuzzy.
+python3 <gpu-wiki>/scripts/query.py dense_blockscaled_gemm_sm103.py \
+  --arch sm103 --area reference-kernels
+
 python3 <gpu-wiki>/scripts/query.py --list-arch
 python3 <gpu-wiki>/scripts/query.py --list-operators
 ```
 
-Filters fail closed for unknown values. Architecture-neutral pages remain in
-scope, while pages tagged for a different architecture/vendor/DSL are removed.
-Use several narrow queries: symptom, operator/kernel type, then implementation
-mechanism. Open returned pages and follow their local links before escalating.
+Omitting `--area` searches curated docs, indexed reference sources, and
+manifest-selected substantive guides together. Use `--area docs` for diagnosis
+cards and reports; use `--area reference-kernels` with `--source`, `--status`,
+or `--kind` for concrete implementations. Test/build/package files are omitted
+unless `--include-auxiliary` is explicit. Filters fail closed for unknown
+values. Architecture-neutral pages remain in scope, while pages tagged for a
+different architecture/vendor/DSL are removed. Use several narrow queries:
+symptom, operator/kernel type, then implementation mechanism. Open returned
+pages and follow their local links before escalating.
 
 ### 3rdparty Knowledge Base Usage Guide
 

@@ -323,8 +323,12 @@ Translate Stage 1 profiler symptoms into gpu-wiki search keywords using the
 NVIDIA and AMD use different vocabularies and sub-trees, and that vendor-split
 mapping is maintained there, not in this skill. Start with
 `python3 <gpu-wiki>/scripts/query.py` using `--arch`, `--vendor`, and, when
-applicable, `--dsl`, `--symptom`, `--operator`, and `--section`; then apply the
-Search Priority below.
+applicable, `--dsl`, `--symptom`, `--operator`, and `--section`. Use
+`--area docs` for diagnosis cards/reports and `--area reference-kernels` for
+concrete implementations; narrow implementations with `--source`, `--status`,
+or `--kind`. Omit `--area` when both areas are useful. Retry uncertain spellings
+with `--fuzzy` without relaxing architecture/vendor/DSL scope. Copied filenames
+and relative paths work without fuzzy mode. Then apply the Search Priority below.
 
 ### Search Priority
 

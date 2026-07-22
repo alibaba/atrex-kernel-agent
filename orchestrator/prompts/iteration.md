@@ -81,11 +81,19 @@ Execution steps:
 4. **Architecture-scoped L1 retrieval**: Read the target architecture from workspace `README.md`, then query main's architecture-first wiki before broad grep. Use narrow symptom, operator, and mechanism queries; open the returned pages and follow their local links:
    ```bash
    python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
-     --section kernel-opt --symptom <controlled-symptom>
+     --area docs --section kernel-opt --symptom <controlled-symptom>
    python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
-     --dsl <dsl> --operator <operator> --section ref-docs --section pitfalls
+     --area docs --dsl <dsl> --operator <operator> \
+     --section ref-docs --section pitfalls
+   python3 gpu-wiki/scripts/query.py <operator-or-mechanism> --arch <arch> \
+     --vendor <nvidia|amd> --dsl <dsl> --area reference-kernels --kind kernel
    ```
-   Unknown filters must fail closed. Do not remove `--arch` to make an empty result look successful.
+   Omit `--area` only when combined docs/reference results are useful. Narrow
+   reference results with `--source`, `--status`, or `--kind`; test/build/package
+   files require `--include-auxiliary`. Retry uncertain spellings with `--fuzzy`
+   while keeping the same architecture/vendor/DSL filters. Copied filenames and
+   paths work directly without fuzzy mode. Unknown filters must fail closed. Do
+   not remove `--arch` to make an empty result look successful.
 5. **Research strategy** (adaptive based on stall count):
    - **Normal mode** (`STALL_COUNT < 3`): No novelty requirement. Reusing known directions from `open_directions`, prior search findings, or profile evidence is not prohibited.
    - **Forced expansion mode** (`STALL_COUNT >= 3`): The previous directions have failed repeatedly — you MUST expand the search space. Do not limit searches to the current kernel's DSL/language; look at optimization techniques from **other languages or DSLs targeting the same or similar hardware architectures** (e.g., CUDA C++ tricks applicable to Triton, or CuteDSL patterns that inspire Gluon rewrites) and adapt the ideas. Execute the full three-layer progressive search (strict order):

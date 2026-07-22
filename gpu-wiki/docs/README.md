@@ -47,10 +47,12 @@ Use the scoped query instead of searching the entire tree when a target GPU is
 known:
 
 ```bash
-python3 gpu-wiki/scripts/query.py --arch h20 --section docs/
+python3 gpu-wiki/scripts/query.py --arch h20 --area docs --section hardware-specs
 python3 gpu-wiki/scripts/query.py "gdn" --arch pro5000 --dsl cutedsl
 python3 gpu-wiki/scripts/query.py "flash attention" --arch mi308x --dsl flydsl
 ```
 
-`--section`, `--symptom`, `--kernel-type`, and `--operator` are optional
-narrowing filters; `--arch` is the important isolation boundary.
+`--area docs` excludes reference implementations. Omit `--area` to search
+curated documents, indexed reference sources, and selected substantive guides
+together. `--section`, `--symptom`, `--kernel-type`, and `--operator` are
+optional narrowing filters; `--arch` is the important isolation boundary.

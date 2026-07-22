@@ -40,6 +40,7 @@ gpu-wiki/
 │       ├── cdna4/
 │       └── rdna4/
 ├── reference-kernels/
+├── manifest.json
 ├── reference-projects/
 ├── scripts/
 └── 3rdparty/
@@ -87,6 +88,9 @@ Current content inventory, excluding README indexes and `RELATIONS.md`:
 | Converter | 5 |
 | **Searchable total** | **344** |
 
+The reference index adds 499 source files plus 23 manifest-selected substantive
+guides. Navigation-only README files are not indexed unless explicitly selected.
+
 ## 4. Product overlays and inheritance
 
 An architecture directory holds reusable family knowledge. A product overlay is
@@ -116,23 +120,34 @@ SM100/B200 or SM103/B300 knowledge merely because all products use the
 
 ## 5. Scoped query behavior
 
-`gpu-wiki/scripts/query.py` derives vendor, architecture, DSL, and role from the
-architecture-first path before ranking keyword matches.
+`gpu-wiki/scripts/query.py` loads explicit scope and classification metadata
+from the top-level `manifest.json`, with architecture-first path inference as a
+fallback for undeclared files. It applies hard scope filters before ranking
+keyword matches.
 
 ```bash
 python3 gpu-wiki/scripts/query.py "gemm" --arch h20
 python3 gpu-wiki/scripts/query.py "gdn" --arch pro5000 --dsl cutedsl
 python3 gpu-wiki/scripts/query.py --arch b200 \
-  --section kernel-opt --symptom pipeline-stalls
+  --area docs --section kernel-opt --symptom pipeline-stalls
+python3 gpu-wiki/scripts/query.py gemm --arch b300 \
+  --area reference-kernels --source cutlass --kind kernel
+python3 gpu-wiki/scripts/query.py rms_nrom --arch h20 --fuzzy
 ```
 
-Only `--arch` is needed to establish hardware isolation. `--section`,
-`--symptom`, `--kernel-type`, `--operator`, and `--dsl` are optional narrowing
-filters. An architecture implies its vendor when `--vendor` is omitted.
+Only `--arch` is needed to establish hardware isolation, and it implies its
+vendor when `--vendor` is omitted. A keyword search covers docs, indexed
+reference sources, and manifest-selected substantive guides by default.
+`--area`, `--section`, `--symptom`, `--kernel-type`, `--operator`, `--dsl`,
+`--source`, `--status`, and `--kind` are optional narrowing filters. Unknown
+filter values fail closed; test/build/package references are excluded unless
+`--include-auxiliary` is explicit.
 
-Most pages need no metadata registry because their scope is encoded in the
-path. A small explicit registry is allowed only for genuinely
-cross-architecture articles stored in `vendor/common/`.
+Normal query terms normalize filename/path separators. `--fuzzy` adds
+`SequenceMatcher` and trigram similarity for uncertain spelling after hard
+scope isolation. `manifest.json` is authoritative for explicit entries and
+prefix defaults; path inference remains the fallback rather than a competing
+metadata source.
 
 ## 6. Placement rules
 
@@ -148,7 +163,7 @@ When adding or moving a document:
 6. Add or update a query isolation test when introducing a product scope.
 
 Do not infer applicability from a brand name in prose. Physical scope and the
-small cross-architecture registry are authoritative.
+top-level manifest are authoritative.
 
 ## 7. Navigation and evidence
 
@@ -172,6 +187,7 @@ A structural change is complete only when all of the following hold:
 - no role-first root directories remain below `gpu-wiki/docs/`;
 - every searchable document has a valid physical scope and role;
 - all relative Markdown links stay inside the self-contained wiki and resolve;
+- `manifest.json` is valid and covers every indexed reference source/guide;
 - query unit tests cover aliases, inheritance, and sibling-product exclusion;
 - representative A100, H20, B200, B300, Pro5000/SM120, MI300X, MI308X, and
   MI355X searches return the intended scope;

@@ -28,9 +28,9 @@ Examples:
 
 ```bash
 # Hardware facts: section is optional but useful for narrowing.
-python3 gpu-wiki/scripts/query.py --arch a100 --section docs/
-python3 gpu-wiki/scripts/query.py --arch h20 --section docs/
-python3 gpu-wiki/scripts/query.py --arch pro5000 --section docs/
+python3 gpu-wiki/scripts/query.py --arch a100 --area docs --section hardware-specs
+python3 gpu-wiki/scripts/query.py --arch h20 --area docs --section hardware-specs
+python3 gpu-wiki/scripts/query.py --arch pro5000 --area docs --section hardware-specs
 
 # Search an operator within an isolated architecture/DSL scope.
 python3 gpu-wiki/scripts/query.py "gdn" --arch sm120 --dsl cutedsl
@@ -55,6 +55,10 @@ python3 gpu-wiki/scripts/query.py gemm --arch sm120 \
 # Restrict by upstream source or source role. Test/build/package files are
 # omitted by default; add --include-auxiliary when they are specifically needed.
 python3 gpu-wiki/scripts/query.py gemm --arch b300 --source cutlass --kind kernel
+
+# A copied source filename or relative path works without fuzzy mode.
+python3 gpu-wiki/scripts/query.py dense_blockscaled_gemm_sm103.py \
+  --arch sm103 --area reference-kernels
 ```
 
 `--section`, `--symptom`, `--kernel-type`, and `--operator` are optional. They
@@ -63,11 +67,13 @@ search. `--status` selects reference kernels with an explicit usability status
 including the honest `unclassified` fallback. `--source` and `--kind` narrow by
 upstream project and source role. Unknown filter values fail closed.
 
-`--fuzzy` applies `SequenceMatcher` plus trigram similarity to normalized
-titles, paths, and summaries. Architecture, vendor, DSL, and section filters
-remain hard boundaries and are applied first. Adjust false-positive tolerance
-with `--fuzzy-threshold` (default `0.78`). Fuzzy matching handles spelling and
-separator variation; it does not make architecture-specific advice portable.
+Normal keyword queries treat whitespace and filename/path separators (`_`,
+`-`, `.`, `/`) as equivalent term boundaries. `--fuzzy` applies
+`SequenceMatcher` plus trigram similarity to normalized titles, paths, and
+summaries for actual spelling uncertainty. Architecture, vendor, DSL, and
+section filters remain hard boundaries and are applied first. Adjust
+false-positive tolerance with `--fuzzy-threshold` (default `0.78`). Fuzzy
+matching does not make architecture-specific advice portable.
 
 By default, keyword searches cover curated `docs/` pages, source files under
 `reference-kernels/`, and a small manifest-selected set of substantive
