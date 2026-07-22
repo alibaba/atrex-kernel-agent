@@ -8,6 +8,6 @@ NVIDIA RTX PRO 5000 / 4000 (`sm_120`) Triton kernels.
 
 ## Related docs
 
-- Optimisation report: [`docs/ref-docs/nvidia/triton/sm120/`](../../../../docs/ref-docs/nvidia/triton/sm120/)
-- Pitfalls: [`docs/pitfalls/nvidia/triton/`](../../../../docs/pitfalls/nvidia/triton/)
+- Optimisation report: [`docs/nvidia/blackwell-geforce/ref-docs/triton/`](../../../../docs/nvidia/blackwell-geforce/ref-docs/triton/)
+- Pitfalls: [`docs/nvidia/`](../../../../docs/nvidia/)
 - Sibling DSL on same hardware: [`../cutedsl/`](../cutedsl/)

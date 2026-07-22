@@ -23,9 +23,9 @@ Differences vs hopper / sm_90 GDN reference (e.g. flashinfer/gdn_decode_*.py):
 
 References:
   - Optimization journey:
-    docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-decode-fp32state-bf16qkv-optimization.md
+    docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md
   - Pitfalls (18 versions iterated, 9+ traps documented):
-    docs/pitfalls/nvidia/cutedsl/gdn-decode-pitfalls.md
+    docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md
   - Oracle: fla.ops.gated_delta_rule.fused_recurrent_gated_delta_rule (PyTorch reference in reference.py)
   - Hopper bf16-state variant (different chip + dtype):
     reference-kernels/nvidia/hopper/cutedsl/flashinfer/gdn_decode_*.py

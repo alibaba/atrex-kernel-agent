@@ -38,4 +38,3 @@ CUTLASS framework reference kernel implementations using CuTeDSL on the Blackwel
 | [programmatic_dependent_launch.py](programmatic_dependent_launch.py) | Programmatic Dependent Launch (PDL) |
 | [reduce.py](reduce.py) | Reduction kernel |
 | [rmsnorm.py](rmsnorm.py) | RMSNorm kernel |
-| [sm103_dense_blockscaled_gemm_persistent.py](sm103_dense_blockscaled_gemm_persistent.py) | SM103 Dense Block-Scaled GEMM Persistent |

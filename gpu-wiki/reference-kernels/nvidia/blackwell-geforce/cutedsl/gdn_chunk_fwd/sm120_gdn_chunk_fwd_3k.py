@@ -37,8 +37,8 @@
 #     K1 269.78 GB/s DRAM and 2.87 TB/s L2.
 #
 # Related docs:
-#   - Optimization journey: docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md
-#   - Pitfalls: docs/pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md
+#   - Optimization journey: docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md
+#   - Pitfalls: docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md
 #   - V31 backup: reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/sm120_gdn_chunk_fwd_3k.v31-0p615ms.bak
 # ============================================================================
 """

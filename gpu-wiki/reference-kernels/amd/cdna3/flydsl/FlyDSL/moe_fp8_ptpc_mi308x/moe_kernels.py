@@ -13,8 +13,8 @@ Scope:
 This archive is a paused optimization checkpoint from omoExplore proj007 task66,
 not an all-gates-passed final kernel. The full-scope 5 percent gate is 1/14 at
 the checkpoint. See:
-- docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
-- docs/pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md
+- docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md
+- docs/amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md
 """
 
 import functools

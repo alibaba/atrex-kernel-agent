@@ -16,9 +16,9 @@
 
 Documents:
 - Optimization journey:
-  `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-fp16-nomask-ck-isa-optimization.md`
+  `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-fp16-nomask-ck-isa-optimization.md`
 - Pitfalls:
-  `docs/pitfalls/amd/flydsl/flash-attn-pitfalls.md`
+  `docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md`
 
 Key differences vs the generic / earlier MI308X variants:
 - **No-mask hot path**: `HAS_MASK=False`; all arbitrary-mask and bit-pack logic is

@@ -157,6 +157,6 @@ pipeline regressions from small-row event jitter.
 
 ## Related Docs
 
-- [atrex-open v2 full-pipeline report](../../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-atrex-v2.md)
-- [task66 pause checkpoint](../../../../../../docs/ref-docs/amd/flydsl/gfx942/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md)
-- [FP8 PTPC Fused MoE pitfalls](../../../../../../docs/pitfalls/amd/flydsl/fused-moe-fp8-ptpc-pitfalls.md)
+- [atrex-open v2 full-pipeline report](../../../../../../docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-atrex-v2.md)
+- [task66 pause checkpoint](../../../../../../docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md)
+- [FP8 PTPC Fused MoE pitfalls](../../../../../../docs/amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md)

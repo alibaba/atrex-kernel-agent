@@ -27,5 +27,5 @@ component timing, and row-ready wait-cache remained operator-negative.
 
 ## Related Docs
 
-- [SM120 RMSNorm-MLP NVFP4 Fusion and PDL Handoff Report](../../../../../docs/ref-docs/nvidia/cuda/sm120/sm120-rmsnorm-mlp-pdl-fusion-report.md)
-- [SM120 RMSNorm-MLP PDL Pitfalls](../../../../../docs/pitfalls/nvidia/cuda/sm120-rmsnorm-mlp-pdl-pitfalls.md)
+- [SM120 RMSNorm-MLP NVFP4 Fusion and PDL Handoff Report](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-rmsnorm-mlp-pdl-fusion-report.md)
+- [SM120 RMSNorm-MLP PDL Pitfalls](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cuda/sm120-rmsnorm-mlp-pdl-pitfalls.md)

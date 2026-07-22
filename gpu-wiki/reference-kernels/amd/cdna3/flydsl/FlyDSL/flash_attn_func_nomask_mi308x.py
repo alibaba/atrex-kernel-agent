@@ -15,11 +15,11 @@ MI308X no-mask reference implementation and intentionally coexists with:
 
 Documents:
 - No-mask ISA scheduling journey:
-  `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-nomask-isa-scheduling.md`
+  `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-nomask-isa-scheduling.md`
 - Related mask journey:
-  `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-mask-optimization.md`
+  `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-mask-optimization.md`
 - Pitfalls:
-  `docs/pitfalls/amd/flydsl/flash-attn-pitfalls.md`
+  `docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md`
 
 Scope and dtype:
 - Forward FlashAttention, no attention mask, non-causal path (`HAS_MASK = False`).

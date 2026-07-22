@@ -28,8 +28,8 @@ Tuning vs generic CDNA version (reference-kernels/amd/cdna/flydsl/FlyDSL/):
 
 Hardware: Tuned for AMD MI308X (CDNA3, gfx942).
 
-Optimization report: docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md
-Pitfalls: docs/pitfalls/amd/flydsl/flash-attn-bwd-mask-integration-pitfalls.md
+Optimization report: docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md
+Pitfalls: docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md
 """
 import functools
 import math

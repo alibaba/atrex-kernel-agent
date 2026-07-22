@@ -2,7 +2,7 @@
 
 Reference implementations of GPU kernels using FlyDSL on AMD CDNA architectures (gfx942 / MI300X / MI308X), covering operators such as GEMM, Attention, Normalization, MoE, and Custom AllReduce.
 
-> **inline_asm usage**: see [`docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md`](../../../../../docs/ref-docs/amd/flydsl/flydsl-inline-asm-patterns.md).
+> **inline_asm usage**: see [`docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md`](../../../../../docs/amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md).
 
 ---
 

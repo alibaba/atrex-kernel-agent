@@ -55,9 +55,9 @@ MMA-based chunk computations, fundamentally different algorithm and memory acces
 ## Related docs
 
 - **Optimization journey** — baseline to V113 final, including null results:
-  [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md)
+  [`docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md`](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md)
 - **Pitfalls** — 26 traps with trap -> symptom -> why -> lesson:
-  [`docs/pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md`](../../../../../docs/pitfalls/nvidia/cutedsl/gdn-chunk-fwd-pitfalls.md)
+  [`docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md`](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md)
 
 ## Verification
 

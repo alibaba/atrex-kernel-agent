@@ -19,7 +19,7 @@ sessions a correct Gluon starting point (Gluon exposes lower-level levers they w
 | `workspace` | Workspace path (cwd), a git repo; HEAD = best Triton kernel |
 | `version` | `v<N>` to record |
 | `arch` | Real runtime GPU arch (e.g. `sm_100`) — authoritative, may differ from device name |
-| `sheet` | The single conversion sheet to read (e.g. `<gpu-wiki>/docs/converter/nvidia/blackwell.md`) |
+| `sheet` | The single conversion sheet to read (e.g. `<gpu-wiki>/docs/nvidia/blackwell/converter/blackwell.md`) |
 
 # Workflow
 

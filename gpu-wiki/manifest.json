@@ -1,0 +1,953 @@
+{
+  "version": 1,
+  "docs": {
+    "defaults": [
+      {
+        "prefix": "nvidia/ampere/",
+        "architectures": [
+          "ampere"
+        ],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "nvidia/hopper/",
+        "architectures": [
+          "hopper"
+        ],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell/",
+        "architectures": [
+          "blackwell"
+        ],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell/b200/",
+        "architectures": [
+          "b200"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-ultra/",
+        "architectures": [
+          "blackwell-ultra"
+        ],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/",
+        "architectures": [
+          "blackwell-geforce"
+        ],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "nvidia/common/",
+        "architectures": [],
+        "vendors": [
+          "nvidia"
+        ]
+      },
+      {
+        "prefix": "amd/cdna3/",
+        "architectures": [
+          "cdna3"
+        ],
+        "vendors": [
+          "amd"
+        ]
+      },
+      {
+        "prefix": "amd/cdna3/mi300x/",
+        "architectures": [
+          "mi300x"
+        ]
+      },
+      {
+        "prefix": "amd/cdna3/mi308x/",
+        "architectures": [
+          "mi308x"
+        ]
+      },
+      {
+        "prefix": "amd/cdna4/",
+        "architectures": [
+          "cdna4"
+        ],
+        "vendors": [
+          "amd"
+        ]
+      },
+      {
+        "prefix": "amd/rdna4/",
+        "architectures": [
+          "rdna4"
+        ],
+        "vendors": [
+          "amd"
+        ]
+      },
+      {
+        "prefix": "amd/common/",
+        "architectures": [],
+        "vendors": [
+          "amd"
+        ]
+      },
+      {
+        "prefix": "generic/",
+        "architectures": [],
+        "vendors": []
+      }
+    ],
+    "entries": {
+      "nvidia/common/kernel-opt/thread-block-cluster.md": {
+        "architectures": [
+          "hopper",
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      },
+      "nvidia/common/ref-docs/h100-to-b200-gpgpu-scaling-analysis.md": {
+        "architectures": [
+          "hopper",
+          "b200"
+        ]
+      },
+      "nvidia/common/ref-docs/ptx-instruction-evolution-a100-h100-b200.md": {
+        "architectures": [
+          "ampere",
+          "hopper",
+          "b200"
+        ]
+      },
+      "nvidia/common/ref-docs/sglang-hopper-blackwell-backend-selection.md": {
+        "architectures": [
+          "hopper",
+          "blackwell"
+        ]
+      },
+      "nvidia/common/ref-docs/cutedsl/cutlass-fmha-mla.md": {
+        "architectures": [
+          "hopper",
+          "blackwell"
+        ]
+      },
+      "nvidia/common/ref-docs/cutedsl/cutlass-quantization-block-scaled.md": {
+        "architectures": [
+          "hopper",
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      },
+      "nvidia/common/ref-docs/cutedsl/cutlass-tile-scheduling.md": {
+        "architectures": [
+          "hopper",
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      },
+      "nvidia/common/ref-docs/cutedsl/quack-architecture-overview.md": {
+        "architectures": [
+          "hopper",
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      },
+      "nvidia/common/ref-docs/cutedsl/quack-gemm-epilogue.md": {
+        "architectures": [
+          "hopper",
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      },
+      "nvidia/common/ref-docs/gluon/gluon-07-persistent-kernel-pipeline.md": {
+        "architectures": [
+          "hopper",
+          "blackwell"
+        ]
+      },
+      "nvidia/common/ref-docs/triton/triton-tile-ir-beyond-simt.md": {
+        "architectures": [
+          "blackwell",
+          "blackwell-geforce"
+        ]
+      }
+    }
+  },
+  "reference-kernels": {
+    "defaults": [
+      {
+        "prefix": "nvidia/ampere/",
+        "architectures": [
+          "ampere"
+        ],
+        "vendors": [
+          "nvidia"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "nvidia/ampere/cutedsl/",
+        "dsls": [
+          "cutedsl"
+        ]
+      },
+      {
+        "prefix": "nvidia/ampere/cutedsl/cutlass/",
+        "source": "cutlass"
+      },
+      {
+        "prefix": "nvidia/ampere/cutedsl/flash-attention/",
+        "source": "flash-attention"
+      },
+      {
+        "prefix": "nvidia/ampere/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "triton"
+      },
+      {
+        "prefix": "nvidia/ampere/triton/",
+        "dsls": [
+          "triton"
+        ]
+      },
+      {
+        "prefix": "nvidia/ampere/triton/DeepGEMM/",
+        "source": "DeepGEMM"
+      },
+      {
+        "prefix": "nvidia/hopper/",
+        "architectures": [
+          "hopper"
+        ],
+        "vendors": [
+          "nvidia"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/",
+        "dsls": [
+          "cutedsl"
+        ]
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/cutlass/",
+        "source": "cutlass"
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/flash-attention/",
+        "source": "flash-attention"
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/flashinfer/",
+        "source": "flashinfer"
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/quack/",
+        "source": "quack"
+      },
+      {
+        "prefix": "nvidia/hopper/cutedsl/tilelang/",
+        "source": "tilelang"
+      },
+      {
+        "prefix": "nvidia/hopper/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "triton"
+      },
+      {
+        "prefix": "nvidia/blackwell/",
+        "architectures": [
+          "blackwell"
+        ],
+        "vendors": [
+          "nvidia"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/",
+        "dsls": [
+          "cutedsl"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/cuLA/",
+        "source": "cuLA"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/cutex/",
+        "source": "cutex"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/cutlass/",
+        "source": "cutlass"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/flash-attention/",
+        "source": "flash-attention"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/flashinfer/",
+        "source": "flashinfer"
+      },
+      {
+        "prefix": "nvidia/blackwell/cutedsl/quack/",
+        "source": "quack"
+      },
+      {
+        "prefix": "nvidia/blackwell/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "triton"
+      },
+      {
+        "prefix": "nvidia/blackwell/triton/",
+        "dsls": [
+          "triton"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell/triton/cuLA/",
+        "source": "cuLA"
+      },
+      {
+        "prefix": "nvidia/blackwell-ultra/",
+        "architectures": [
+          "blackwell-ultra"
+        ],
+        "products": [
+          "b300",
+          "gb300"
+        ],
+        "vendors": [
+          "nvidia"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "nvidia/blackwell-ultra/cutedsl/",
+        "dsls": [
+          "cutedsl"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-ultra/cutedsl/cutlass/",
+        "operators": [
+          "gemm"
+        ],
+        "source": "cutlass"
+      },
+      {
+        "prefix": "nvidia/blackwell-ultra/cutedsl/flashinfer/",
+        "operators": [
+          "gemm"
+        ],
+        "source": "flashinfer"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/",
+        "architectures": [
+          "blackwell-geforce"
+        ],
+        "vendors": [
+          "nvidia"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cuda/",
+        "dsls": [
+          "cuda"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cuda/nvfp4_linear_qkvz_atrex/",
+        "operators": [
+          "gemm"
+        ],
+        "status": "diagnostic-archive",
+        "source": "ATREX"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cuda/nvfp4_prefill_gemm/",
+        "operators": [
+          "gemm"
+        ],
+        "status": "diagnostic-archive",
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/",
+        "operators": [
+          "gemm",
+          "gemv"
+        ],
+        "status": "requires-external-checkout",
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cuda/rmsnorm_mlp_nvfp4_pdl/",
+        "operators": [
+          "gemm",
+          "norm"
+        ],
+        "status": "diagnostic-archive",
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/",
+        "dsls": [
+          "cutedsl"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/cutlass/",
+        "status": "requires-external-checkout",
+        "source": "cutlass"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/flash-attention/",
+        "source": "flash-attention"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/flashinfer/",
+        "status": "diagnostic-archive",
+        "source": "flashinfer"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/fused_fa_epilogue_nvfp4/",
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/",
+        "operators": [
+          "gdn"
+        ],
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/gdn_decode/",
+        "operators": [
+          "gdn"
+        ],
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/moe_data_prep/",
+        "operators": [
+          "moe"
+        ],
+        "source": "gpu-wiki"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/cutedsl/quack/",
+        "source": "quack"
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/triton/",
+        "dsls": [
+          "triton"
+        ]
+      },
+      {
+        "prefix": "nvidia/blackwell-geforce/triton/gdn_post/",
+        "operators": [
+          "gdn",
+          "norm"
+        ],
+        "source": "vLLM"
+      },
+      {
+        "prefix": "amd/cdna/",
+        "architectures": [
+          "cdna3",
+          "cdna4"
+        ],
+        "vendors": [
+          "amd"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "amd/cdna/flydsl/",
+        "dsls": [
+          "flydsl"
+        ]
+      },
+      {
+        "prefix": "amd/cdna/flydsl/FlyDSL/",
+        "source": "FlyDSL"
+      },
+      {
+        "prefix": "amd/cdna/triton/",
+        "dsls": [
+          "triton"
+        ]
+      },
+      {
+        "prefix": "amd/cdna/triton/aiter/",
+        "dsls": [
+          "triton",
+          "aiter"
+        ],
+        "source": "aiter"
+      },
+      {
+        "prefix": "amd/cdna/triton/chunk_gdn/",
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "gdn"
+        ],
+        "source": "RTP"
+      },
+      {
+        "prefix": "amd/cdna3/",
+        "architectures": [
+          "cdna3"
+        ],
+        "vendors": [
+          "amd"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "amd/cdna3/flydsl/",
+        "dsls": [
+          "flydsl"
+        ]
+      },
+      {
+        "prefix": "amd/cdna3/flydsl/FlyDSL/",
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "source": "FlyDSL"
+      },
+      {
+        "prefix": "amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x/",
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "moe"
+        ]
+      },
+      {
+        "prefix": "amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x_atrex_v2/",
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "moe"
+        ],
+        "source": "ATREX"
+      },
+      {
+        "prefix": "amd/cdna4/",
+        "architectures": [
+          "cdna4"
+        ],
+        "vendors": [
+          "amd"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "amd/cdna4/flydsl/",
+        "dsls": [
+          "flydsl"
+        ]
+      },
+      {
+        "prefix": "amd/cdna4/flydsl/FlyDSL/",
+        "source": "FlyDSL"
+      },
+      {
+        "prefix": "amd/cdna4/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "aiter"
+      },
+      {
+        "prefix": "amd/rdna4/",
+        "architectures": [
+          "rdna4"
+        ],
+        "vendors": [
+          "amd"
+        ],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "amd/rdna4/flydsl/",
+        "dsls": [
+          "flydsl"
+        ]
+      },
+      {
+        "prefix": "amd/rdna4/flydsl/FlyDSL/",
+        "source": "FlyDSL"
+      },
+      {
+        "prefix": "amd/rdna4/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "triton"
+      },
+      {
+        "prefix": "generic/",
+        "architectures": [],
+        "vendors": [],
+        "status": "unclassified"
+      },
+      {
+        "prefix": "generic/gluon/",
+        "dsls": [
+          "gluon"
+        ],
+        "source": "triton"
+      },
+      {
+        "prefix": "generic/triton/",
+        "dsls": [
+          "triton"
+        ]
+      },
+      {
+        "prefix": "generic/triton/LeetCUDA/",
+        "source": "LeetCUDA"
+      },
+      {
+        "prefix": "generic/triton/flash-attention/",
+        "source": "flash-attention"
+      },
+      {
+        "prefix": "generic/triton/flashinfer/",
+        "source": "flashinfer"
+      },
+      {
+        "prefix": "generic/triton/triton-kernels/",
+        "source": "triton-kernels"
+      },
+      {
+        "prefix": "generic/triton/triton-tutorials/",
+        "source": "triton"
+      }
+    ],
+    "entries": {
+      "README.md": {
+        "architectures": [],
+        "vendors": [],
+        "dsls": [],
+        "operators": [
+          "allreduce",
+          "flash-attention",
+          "gdn",
+          "gemm",
+          "gemv",
+          "mamba",
+          "mla",
+          "moe",
+          "norm",
+          "paged-attention",
+          "quantization",
+          "softmax"
+        ],
+        "status": "unclassified",
+        "source": "gpu-wiki",
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cuda/nvfp4_linear_qkvz_atrex/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cuda/nvfp4_prefill_gemm/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/omoexplore-kernel-notes.md": {
+        "operators": [
+          "gemm",
+          "gemv"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cuda/rmsnorm_mlp_nvfp4_pdl/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/cutlass/README.md": {
+        "operators": [
+          "gemm"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/flashinfer/README.md": {
+        "operators": [
+          "gemm"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/fused_fa_epilogue_nvfp4/README.md": {
+        "operators": [
+          "flash-attention",
+          "quantization"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/gdn_decode/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/cutedsl/moe_data_prep/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell-geforce/triton/gdn_post/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/blackwell/cutedsl/cutlass/README.md": {
+        "operators": [
+          "flash-attention",
+          "gemm",
+          "norm"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/hopper/cutedsl/quack/README.md": {
+        "operators": [
+          "cross-entropy",
+          "gemm",
+          "norm",
+          "softmax",
+          "topk"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "nvidia/hopper/cutedsl/tilelang/README.md": {
+        "operators": [
+          "uncategorized"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna/flydsl/FlyDSL/README.md": {
+        "operators": [
+          "allreduce",
+          "flash-attention",
+          "gemm",
+          "moe",
+          "norm",
+          "paged-attention",
+          "softmax"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna/triton/aiter/README.md": {
+        "operators": [
+          "flash-attention",
+          "gemm",
+          "mla",
+          "moe",
+          "norm",
+          "paged-attention",
+          "quantization"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna/triton/chunk_gdn/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna3/flydsl/FlyDSL/README.md": {
+        "operators": [
+          "flash-attention",
+          "gdn",
+          "moe"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x_atrex_v2/README.md": {
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna4/gluon/README.md": {
+        "operators": [
+          "gemm",
+          "paged-attention"
+        ],
+        "kind": "guide",
+        "searchable": true
+      },
+      "amd/cdna3/flydsl/FlyDSL/attn_bwd_dkdv_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/attn_bwd_dq_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/flash_attn_bwd_flydsl_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/flash_attn_func_fp16_nomask_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/flash_attn_func_mask_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/flash_attn_func_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/flash_attn_func_nomask_mi308x.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "flash-attention"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/fused_fwd_mi308x_v2.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "gdn"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/fused_fwd_mi308x_v2_bdv32_fast.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "gdn"
+        ]
+      },
+      "amd/cdna3/flydsl/FlyDSL/fused_fwd_mi308x_v2_fast.py": {
+        "architectures": [
+          "mi308x"
+        ],
+        "products": [
+          "mi308x"
+        ],
+        "operators": [
+          "gdn"
+        ]
+      }
+    }
+  }
+}

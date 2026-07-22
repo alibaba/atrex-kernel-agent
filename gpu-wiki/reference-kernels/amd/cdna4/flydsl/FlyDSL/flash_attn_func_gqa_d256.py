@@ -10,8 +10,8 @@
    and may not be optimal on MI300X / MI325X / MI355X.
 
 Documents:
-- Optimization journey: `docs/ref-docs/amd/flydsl/gfx942/cdna3-flash-attention-bf16-gqa-optimization.md`
-- Pitfalls: `docs/pitfalls/amd/flydsl/flash-attn-pitfalls.md`
+- Optimization journey: `docs/amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-gqa-optimization.md`
+- Pitfalls: `docs/amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md`
 
 MI308X-specific tunings vs the generic CDNA variant:
 - K_PAD = 4 (132-element row stride, 33 dwords, gcd(33,32)=1 → conflict-free K read)

@@ -90,7 +90,7 @@ wall time by 24-41% due to multi-bottleneck rebalancing. See pitfalls doc.
 
 ## See also
 
-- Optimization journey: [`docs/ref-docs/nvidia/cutedsl/sm120/sm120-moe-data-prep-optimization.md`](../../../../../docs/ref-docs/nvidia/cutedsl/sm120/sm120-moe-data-prep-optimization.md)
-- Pitfalls: [`docs/pitfalls/nvidia/cutedsl/sm120-moe-data-prep-pitfalls.md`](../../../../../docs/pitfalls/nvidia/cutedsl/sm120-moe-data-prep-pitfalls.md)
-- Quick reference: [`docs/kernel-opt/nvidia/cutedsl/sm120/sm120-moe-data-prep.md`](../../../../../docs/kernel-opt/nvidia/cutedsl/sm120/sm120-moe-data-prep.md)
-- Cross-arch lesson (NCU rebalancing): [`docs/ref-docs/nvidia/common/ncu-rule-est-speedup-meta-rules.md`](../../../../../docs/ref-docs/nvidia/common/ncu-rule-est-speedup-meta-rules.md)
+- Optimization journey: [`docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-moe-data-prep-optimization.md`](../../../../../docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-moe-data-prep-optimization.md)
+- Pitfalls: [`docs/nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md`](../../../../../docs/nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md)
+- Quick reference: [`docs/nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-moe-data-prep.md`](../../../../../docs/nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-moe-data-prep.md)
+- Cross-arch lesson (NCU rebalancing): [`docs/nvidia/common/ref-docs/ncu-rule-est-speedup-meta-rules.md`](../../../../../docs/nvidia/common/ref-docs/ncu-rule-est-speedup-meta-rules.md)

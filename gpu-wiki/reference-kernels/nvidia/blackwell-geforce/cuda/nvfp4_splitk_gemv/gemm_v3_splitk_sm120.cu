@@ -11,8 +11,8 @@
 // - Consumes CUTLASS-swizzled SF_B layout used by the archived vLLM dispatch.
 //
 // Related docs:
-// - docs/ref-docs/nvidia/cuda/sm120/sm120-nvfp4-split-k-gemv-bf16-optimization.md
-// - docs/pitfalls/nvidia/cuda/nvfp4-split-k-gemv-pitfalls.md
+// - docs/nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md
+// - docs/nvidia/blackwell-geforce/pitfalls/cuda/nvfp4-split-k-gemv-pitfalls.md
 //
 // Split-K version of v3 decode-optimized NVFP4 GEMV kernel for SM120a.
 //
