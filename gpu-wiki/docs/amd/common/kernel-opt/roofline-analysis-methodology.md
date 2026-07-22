@@ -49,9 +49,15 @@ Ridge Point = peak (FLOPS) / peakbandwidth (Bytes/s) (unit: FLOPs/Byte)
 | MI300X | FP16/BF16 | 1,307.4 | 5.3 | **247** |
 | MI300X | FP32 | 163.4 | 5.3 | **30.8** |
 | MI300X | FP64 | 81.7 | 5.3 | **15.4** |
-| MI308X | FP16/BF16 | ~232 | ~5.3* | **~43.8** |
-| MI355X | FP16/BF16 | — | — | **~629** |
-> The Ridge Point of MI355X is much higher than that of MI300X; the same tile configuration is more likely to be memory-bound on MI355X. See [Hardware Specification Comparison](../hardware-specs/hardware-comparison-cdna3-cdna4.md) for details.
+| MI308X | FP16/BF16 | ~206<sup>†</sup> | ~5.3<sup>†</sup> | **~38.9**<sup>†</sup> |
+| MI355X | FP16/BF16 dense | 2,500 | 8.0 | **312.5** |
+> MI355X's dense BF16 ridge point is about 312.5 FLOPs/Byte. The sparse peak
+> gives a separate theoretical ridge point of about 625 and must not be used for
+> dense kernels. See [Hardware Specification Comparison](../hardware-specs/hardware-comparison-cdna3-cdna4.md) for details.
+
+> <sup>†</sup> MI308X has no linked public AMD product specification. The 206 TFLOPS and
+> 5.3 TB/s values are repository references and must be checked on the deployed
+> board before being used as hard limits.
 
 ### Determining the Bottleneck
 
@@ -143,7 +149,7 @@ Compute Utilization (%) = Actual Compute (TFLOPS) / Peak Compute (TFLOPS) × 100
 | MI300X | FP16/BF16 | 1,307.4 TFLOPS |
 | MI300X | FP8/INT8 | 2,614.9 TFLOPS |
 | MI300X | FP32 | 163.4 TFLOPS |
-| MI308X | FP16/BF16 | ~232 TFLOPS |
+| MI308X | FP16/BF16 | ~206 TFLOPS (repository reference; verify on device) |
 
 ### Memory Bound → Bandwidth Utilization
 

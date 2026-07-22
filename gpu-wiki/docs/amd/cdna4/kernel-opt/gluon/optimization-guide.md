@@ -128,11 +128,14 @@ Ridge Point = Peak Compute (FLOPS) / Peak Bandwidth (Bytes/s)   (unit: FLOPs/Byt
 
 | GPU | Precision | Peak Compute (TFLOPS) | Peak Bandwidth (TB/s) | Ridge Point (FLOPs/Byte) |
 |-----|------|-------------------|-----------------|--------------------------|
-| MI355X | FP16/BF16 | ~1,300* | ~5.3* | **~245** |
-| MI355X | FP8/INT8 | ~2,600* | ~5.3* | **~490** |
-| MI355X | FP32 | ~160* | ~5.3* | **~30** |
+| MI355X | FP16/BF16 dense Matrix | 2,500 | 8.0 | **312.5** |
+| MI355X | FP8 dense Matrix | 5,000 | 8.0 | **625** |
+| MI355X | FP32 | 157.3 | 8.0 | **19.7** |
 
-> *MI355X specifications are estimated reference values. Please verify against actual hardware. For detailed specifications, see `docs/amd/cdna4/hardware-specs/hardware_specs_mi355x.md`.
+> These are the dense peaks and bandwidth published on AMD's official MI355X
+> product page. Structured-sparsity peaks are separate ceilings and must not be
+> used to classify a dense kernel. See
+> `docs/amd/cdna4/hardware-specs/hardware_specs_mi355x.md`.
 
 #### Determining the Bottleneck
 

@@ -37,7 +37,7 @@ Tile_Bytes = (BM × BN) × element_size × 2 (read + write)
 Tile_AI    = 1 / (2 × element_size) ≈ 0.25 FLOPs/Byte (bf16)
 ```
 
-MI355X Ridge Point ≈ 245. **Tile AI << Ridge Point → Memory Bound**.
+MI355X dense BF16 Ridge Point ≈ 312.5. **Tile AI << Ridge Point → Memory Bound**.
 
 **Conclusion**: Operators of this type are almost always Memory Boundaker. Optimization should focus on maximizing bandwidth utilization.
 

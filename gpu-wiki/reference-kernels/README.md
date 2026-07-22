@@ -8,10 +8,41 @@ Reference kernels are indexed with one of these statuses:
 
 | Status | Meaning |
 |--------|---------|
+| `unclassified` | Indexed, but not yet audited for standalone usability. |
 | `runnable` | Expected to run with documented dependencies and environment variables. |
 | `requires-external-checkout` | Requires an external repository root such as `$AITER_BASE`, `$CUTLASS_DIR`, or `$ATREX_OPEN_ROOT`. |
 | `diagnostic-archive` | Preserved for a specific investigation, benchmark shape, or production diagnosis; read as evidence before adapting. |
 | `historical-snapshot` | Preserved for source comparison or provenance; not expected to run unchanged. |
+
+## Explicit Search Metadata
+
+The `reference-kernels` section of the top-level
+[`manifest.json`](../manifest.json) records machine-readable architecture,
+vendor, DSL, upstream source, operator, product, source kind, and usability-status metadata.
+Prefix defaults cover normal directory inheritance; `entries` provide
+exact-file metadata such as operator classification. Paths in that section are
+relative to this directory.
+
+The query index resolves each field in this order:
+
+1. exact-file entry in the top-level manifest;
+2. the most-specific matching prefix default;
+3. path and filename inference for files not yet declared.
+
+This keeps newly added files searchable while preventing known product
+exceptions from leaking into sibling GPU scopes. The query loader validates
+manifest paths, controlled values, and vendor/architecture consistency on every
+reference-kernel search. An invalid manifest fails closed with
+`invalid-reference-manifest` instead of silently applying questionable scope.
+
+### Searchable Guides
+
+The index also includes 23 manifest-selected Markdown guides. These are
+substantive README or notes files containing workload contracts, performance
+results, reuse boundaries, dependency instructions, or optimization journeys.
+Pure directory-navigation README files remain excluded. A guide must be opted
+in explicitly with `"searchable": true` and `"kind": "guide"`; filename or
+line count alone never makes a Markdown file searchable.
 
 ## Directory Structure
 
@@ -29,9 +60,11 @@ reference-kernels/
 │   │   ├── cutedsl/            # cutlass + cutex + cuLA + flash-attention + flashinfer (GEMM/MLA/MoE/quant) + quack (SM100 GEMM)
 │   │   ├── gluon/              # tcgen05, CLC, multi-CTA, attention, convolution
 │   │   └── triton/             # cuLA chunk_intra attention
+│   ├── blackwell-ultra/        # SM103 (B300/GB300)
+│   │   └── cutedsl/            # CUTLASS + FlashInfer block-scaled GEMM
 │   └── blackwell-geforce/      # SM120
 │       ├── cuda/               # CUDA C++ / inline PTX NVFP4 Split-K, prefill, RMSNorm-MLP PDL diagnostics
-│       ├── cutedsl/            # cutlass + flash-attention + flashinfer + task39 b12x diagnostic fork + GDN chunk fwd + quack (SM120 GEMM)
+│       ├── cutedsl/            # cutlass + flash-attention + task39 b12x diagnostic fork + GDN chunk fwd + quack (SM120 GEMM)
 │       └── triton/             # vLLM GDN post-processing fused norm+gate
 ├── amd/
 │   ├── cdna/                   # CDNA3 (gfx942) + CDNA4 (gfx950) generic
@@ -51,20 +84,24 @@ reference-kernels/
 └── README.md
 ```
 
-## Statistics
+## Indexed Source Statistics
 
-| Architecture | File Count | DSL |
+Only source suffixes accepted by `scripts/query.py` are counted here. The 23
+searchable guides are tracked separately and are not included in this table.
+
+| Architecture | Indexed Sources | DSL |
 |------|--------|-----|
-| nvidia/ampere | 32 | CuTeDSL, Gluon, Triton |
-| nvidia/hopper | 98 | CuTeDSL, Gluon |
-| nvidia/blackwell | 135 | CuTeDSL, Gluon, Triton |
-| nvidia/blackwell-geforce | 57 | CuTeDSL, Triton, CUDA |
-| amd/cdna | 119 | FlyDSL, Triton (aiter) |
-| amd/cdna3 | 15 | FlyDSL |
-| amd/cdna4 | 26 | Gluon (triton + aiter) |
-| amd/rdna4 | 21 | FlyDSL, Gluon |
-| generic | 61 | Triton, Gluon |
-| **Total** | **567** | |
+| nvidia/ampere | 25 | CuTeDSL, Gluon, Triton |
+| nvidia/hopper | 90 | CuTeDSL, Gluon |
+| nvidia/blackwell | 115 | CuTeDSL, Gluon, Triton |
+| nvidia/blackwell-ultra | 2 | CuTeDSL |
+| nvidia/blackwell-geforce | 38 | CuTeDSL, Triton, CUDA |
+| amd/cdna | 113 | FlyDSL, Triton (aiter) |
+| amd/cdna3 | 28 | FlyDSL |
+| amd/cdna4 | 24 | Gluon (triton + aiter) |
+| amd/rdna4 | 17 | FlyDSL, Gluon |
+| generic | 47 | Triton, Gluon |
+| **Total** | **499** | |
 
 ## Source Repositories
 
@@ -98,6 +135,8 @@ reference-kernels/
 - `nvidia/blackwell/cutedsl/cutlass/dense_gemm*.py` — Blackwell GEMM from basics to persistent
 - `nvidia/blackwell/cutedsl/cutlass/tutorial_gemm/` — Blackwell GEMM tutorial series
 - `nvidia/blackwell/cutedsl/flashinfer/dense_blockscaled_gemm_sm100.py` — Blackwell block-scaled GEMM
+- `nvidia/blackwell-ultra/cutedsl/cutlass/sm103_dense_blockscaled_gemm_persistent.py` — Blackwell Ultra CUTLASS block-scaled GEMM
+- `nvidia/blackwell-ultra/cutedsl/flashinfer/dense_blockscaled_gemm_sm103.py` — Blackwell Ultra FlashInfer-integrated block-scaled GEMM
 - `nvidia/blackwell/cutedsl/flashinfer/grouped_gemm_masked_blackwell.py` — Blackwell grouped GEMM
 - `nvidia/hopper/cutedsl/cutlass/dense_gemm*.py` — Hopper GEMM
 - `nvidia/ampere/cutedsl/cutlass/sgemm.py`, `tensorop_gemm.py` — Ampere GEMM
@@ -181,7 +220,8 @@ CuTeDSL does not have `tl.inline_asm`; you need to embed PTX via `cutlass._mlir.
 | **mma.sync factory (generating multiple dtype/shape/layout combos)** | [`nvidia/hopper/cutedsl/tilelang/ptx_mma.py`](nvidia/hopper/cutedsl/tilelang/ptx_mma.py) (dense + sparse, FP16/BF16/INT8/INT4/TF32/FP64/FP8) |
 | **lop3 + sub.f16x2 quantized decode** | [`nvidia/hopper/cutedsl/tilelang/quantize.py`](nvidia/hopper/cutedsl/tilelang/quantize.py) (INT4→FP16) |
 | **prmt + mul.bf16x2 quantized decode** | [`nvidia/hopper/cutedsl/tilelang/quantize.py`](nvidia/hopper/cutedsl/tilelang/quantize.py) (FP4→BF16 twiddling) |
-| **bar.sync $0,$1 (multiple barrier ids)** | [`nvidia/hopper/cutedsl/tilelang/reduce.py`](nvidia/hopper/cutedsl/tilelang/reduce.py) (`bar_sync_ptx`) || **activemask** | [`nvidia/hopper/cutedsl/tilelang/warp.py`](nvidia/hopper/cutedsl/tilelang/warp.py)（`activemask.b32`） |
+| **bar.sync $0,$1 (multiple barrier ids)** | [`nvidia/hopper/cutedsl/tilelang/reduce.py`](nvidia/hopper/cutedsl/tilelang/reduce.py) (`bar_sync_ptx`) |
+| **activemask** | [`nvidia/hopper/cutedsl/tilelang/warp.py`](nvidia/hopper/cutedsl/tilelang/warp.py) (`activemask.b32`) |
 | **Multi-line PTX + .reg/.pred/labels + global variables** | [`nvidia/hopper/cutedsl/tilelang/grid_sync.py`](nvidia/hopper/cutedsl/tilelang/grid_sync.py)（grid soft sync: `atom.add.release.gpu.s32` + spinning + `st.release.gpu.global.s32`） |
 | **fence.sc.gpu + ld.relaxed.gpu (seq_cst load/store)** | [`nvidia/hopper/cutedsl/tilelang/atomic.py`](nvidia/hopper/cutedsl/tilelang/atomic.py)（`AtomicLoad`/`AtomicStore`） |
 | **SM120 NVFP4 mma.sync.aligned.kind::mxf4nvf4 end-to-end demo** | [`nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py`](nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py) + [test](nvidia/blackwell-geforce/cutedsl/cutlass/test_sm120_nvfp4_inline_ptx_gemm.py)（pitfall summary at [`docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-inline-ptx-gemm.md`](../docs/nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-inline-ptx-gemm.md)） |

@@ -39,11 +39,53 @@ python3 gpu-wiki/scripts/query.py "flash attention" --arch mi308x --dsl flydsl
 # Optional diagnostic filters.
 python3 gpu-wiki/scripts/query.py --arch b200 \
   --section kernel-opt --symptom pipeline-stalls
+
+# Typo-tolerant lookup after architecture/DSL scope isolation.
+python3 gpu-wiki/scripts/query.py rms_nrom --arch h20 --fuzzy
+python3 gpu-wiki/scripts/query.py flash_attenion --arch mi308x --dsl flydsl --fuzzy
+
+# Search only concrete source implementations (docs + reference kernels are
+# searched together by default when --area is omitted).
+python3 gpu-wiki/scripts/query.py gemm --arch h20 --area reference-kernels
+
+# Restrict references to an explicitly classified usability status.
+python3 gpu-wiki/scripts/query.py gemm --arch sm120 \
+  --area reference-kernels --status diagnostic-archive
+
+# Restrict by upstream source or source role. Test/build/package files are
+# omitted by default; add --include-auxiliary when they are specifically needed.
+python3 gpu-wiki/scripts/query.py gemm --arch b300 --source cutlass --kind kernel
 ```
 
 `--section`, `--symptom`, `--kernel-type`, and `--operator` are optional. They
 reduce results; they are not required for normal keyword or architecture
-search. Unknown filter values fail closed.
+search. `--status` selects reference kernels with an explicit usability status
+including the honest `unclassified` fallback. `--source` and `--kind` narrow by
+upstream project and source role. Unknown filter values fail closed.
+
+`--fuzzy` applies `SequenceMatcher` plus trigram similarity to normalized
+titles, paths, and summaries. Architecture, vendor, DSL, and section filters
+remain hard boundaries and are applied first. Adjust false-positive tolerance
+with `--fuzzy-threshold` (default `0.78`). Fuzzy matching handles spelling and
+separator variation; it does not make architecture-specific advice portable.
+
+By default, keyword searches cover curated `docs/` pages, source files under
+`reference-kernels/`, and a small manifest-selected set of substantive
+reference guides. Use `--area docs` or
+`--area reference-kernels` to isolate one area. A documentation-role filter
+such as `--section kernel-opt` selects `docs/` pages because reference kernels
+do not have a documentation role; omit `--section` or query the reference area
+separately when concrete implementations are needed.
+
+Reference-kernel scope comes from
+[`manifest.json`](manifest.json) first,
+with path inference retained as a fallback for files not yet declared. Search
+results show an explicit status when one is available.
+
+The same manifest also provides the architecture/vendor scope for `docs/`,
+including exact cross-architecture overrides for selected common pages.
+`--arch blackwell` is a family query covering B200 and B300; use `--arch sm100`
+for the exact SM100/B200 scope and `--arch sm103` for B300.
 
 Accepted card aliases include:
 
@@ -73,6 +115,8 @@ Accepted card aliases include:
 - [`docs/`](docs/): curated architecture-scoped knowledge.
 - [`reference-kernels/`](reference-kernels/): runnable or illustrative kernels,
   already organized by hardware architecture and framework.
+- [`manifest.json`](manifest.json): explicit search metadata and exact-file
+  overrides for indexed repository areas.
 - `reference-projects/`: optional local upstream source snapshots.
 - `3rdparty/`: supplementary external knowledge, used after local scoped search.
 - `scripts/`: query, consistency, and maintenance checks.

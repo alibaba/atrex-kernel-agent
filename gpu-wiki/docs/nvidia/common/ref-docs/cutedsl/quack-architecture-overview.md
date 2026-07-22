@@ -1,6 +1,6 @@
 # QuACK Architecture Overview
 
-QuACK ("Quirky Assortment of CuTe Kernels") is a high-performance CUDA kernel library developed by Dao-AILab (Tri Dao), written entirely in CuTeDSL (Python), targeting SM90 (H100), SM100 (B200/B300), and SM120 (GeForce) architectures. The library provides two major kernel categories: **reduction kernels** (RMSNorm, Softmax, Cross Entropy, LayerNorm, TopK) and **GEMM kernels** (with various epilogue fusion variants), all deeply integrated with PyTorch via `torch.library.custom_op`.
+QuACK ("Quirky Assortment of CuTe Kernels") is a high-performance CUDA kernel library developed by Dao-AILab (Tri Dao), written entirely in CuTeDSL (Python), targeting SM90 (H100), SM100 (B200), SM103 (B300), and SM120 (GeForce/workstation) architectures. The library provides two major kernel categories: **reduction kernels** (RMSNorm, Softmax, Cross Entropy, LayerNorm, TopK) and **GEMM kernels** (with various epilogue fusion variants), all deeply integrated with PyTorch via `torch.library.custom_op`.
 
 ## Project Structure and Kernel Types
 

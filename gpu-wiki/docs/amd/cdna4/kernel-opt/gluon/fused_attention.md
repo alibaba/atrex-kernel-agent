@@ -37,7 +37,7 @@ Tile_AI ≈ (2×BM×BN×BK + 2×BM×BN×BK) / (BM×BK + BN×BK + BM×BN + BN×BK
         ≈ 4×BM×BN×BK / ((BM+2×BN+2×BK) × element_size)
 ```
 
-For a typical configuration (BM=64, BN=64, BK=64, bf16), Tile AI ≈ 20-30 FLOPs/Byte << Ridge Point 245.
+For a typical configuration (BM=64, BN=64, BK=64, bf16), Tile AI ≈ 20-30 FLOPs/Byte << dense BF16 Ridge Point 312.5.
 
 ---
 

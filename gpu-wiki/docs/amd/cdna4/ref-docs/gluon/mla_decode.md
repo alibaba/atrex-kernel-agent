@@ -56,7 +56,7 @@ Tile_Bytes = 83 KB
 Tile_AI    = 1.18M / 83KB ≈ 14 FLOPs/Byte
 ```
 
-MI355X Ridge Point ≈ 245 BF16. **Tile AI << Ridge Point → Memory Bound**.
+MI355X dense BF16 Ridge Point ≈ 312.5. **Tile AI << Ridge Point → Memory Bound**.
 
 ---
 

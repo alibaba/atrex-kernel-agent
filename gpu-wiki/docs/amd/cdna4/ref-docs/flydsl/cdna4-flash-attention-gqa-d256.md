@@ -3,7 +3,7 @@
 Applicability: backend: flydsl; hardware: amd; topic: reference
 
 **Last updated**: 2026-04-28
-**Platform**: MI355X (gfx950, CDNA4), 256 CUs, 8 XCDs, 160KB LDS/CU, 8 TB/s HBM, 5033 TFLOPS BF16
+**Platform**: MI355X (gfx950, CDNA4), 256 CUs, 8 XCDs, 160KB LDS/CU, 8 TB/s HBM, 2.5 PFLOPS dense BF16 Matrix
 **Framework**: FlyDSL
 **Baseline**: aiter CK `flash_attn_varlen_func` (BlockFmhaPipelineQRKSVS)
 

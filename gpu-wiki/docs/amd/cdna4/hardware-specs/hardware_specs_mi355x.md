@@ -1,6 +1,6 @@
 # AMD GPU Hardware Compute Specification Table (CDNA4)
 
-**Last Updated**: 2026-03-28
+**Last Updated**: 2026-07-21
 
 ---
 
@@ -14,17 +14,20 @@
 | **Stream Processors** | 16,384 (64 per CU) |
 | **Matrix Cores** | 1,024 (4 per CU) |
 | **Peak Frequency** | 2.4 GHz |
-| **Peak Compute (BF16/FP16)** | 5,033.2 TFLOPS (Matrix), 2,516.6 TFLOPS (VFMA) |
-| **Peak Compute (FP8/INT8)** | 10,066.4 TFLOPS (Matrix), 5,033.2 TFLOPS (VFMA) |
-| **Peak Compute (FP6)** | 20,132.6 TFLOPS (Matrix), 10,066.3 TFLOPS (VFMA) |
-| **Peak Compute (FP4)** | 20,132.6 TFLOPS (Matrix), 10,066.3 TFLOPS (VFMA) |
+| **Peak Compute (BF16/FP16 Matrix)** | 2.5 PFLOPS dense; 5 PFLOPS with structured sparsity |
+| **Peak Compute (OCP FP8 Matrix)** | 5 PFLOPS dense; 10.1 PFLOPS with structured sparsity |
+| **Peak Compute (INT8 Matrix)** | 5 POPS dense; 10.1 POPS with structured sparsity |
+| **Peak Compute (MXFP8)** | 5 PFLOPS |
+| **Peak Compute (MXFP6)** | 10.1 PFLOPS |
+| **Peak Compute (MXFP4)** | 10.1 PFLOPS |
+| **Peak Compute (FP16 non-Matrix)** | 157.3 TFLOPS |
 | **Peak Compute (FP32)** | 157.3 TFLOPS |
 | **Peak Compute (FP64)** | 78.6 TFLOPS |
 | **HBM Capacity** | 288 GB HBM3e |
 | **HBM Bandwidth** | 8 TB/s |
 | **LDS Capacity/CU** | 160 KB |
 | **Warp Size** | 64 threads |
-| **Ridge Point (BF16)** | ~629 FLOPs/Byte (Matrix: 5033/8) |
+| **Ridge Point (BF16)** | ~312.5 FLOPs/Byte dense; ~625 with structured sparsity |
 | **Matrix Instruction** | MFMA scaled (v_mfma_scale_bf16, FP4/FP6 support) |
 | **Supported Formats** | FP64, FP32, FP16, BF16, FP8 (E4M3/E5M2), FP6, FP4 (E2M1) |
 | **Async Copy** | ✅ buffer_load_to_shared (DMA global→shared) |
@@ -33,7 +36,7 @@
 | **Structured Sparsity** | 2:4 |
 | **Power Consumption** | 1400W max |
 
-**Data Sources**: Glenn Lockwood's Digital Garden, AMD MI355X GPU Brochure, ISSCC 2026
+**Primary Source**: [AMD Instinct MI355X official product specifications](https://www.amd.com/en/products/accelerators/instinct/mi350/mi355x.html). Values marked as sparse are not interchangeable with dense roofline inputs.
 
 ---
 
@@ -67,9 +70,9 @@ acc = gl.amd.cdna4.mfma(a_dot, b_dot, acc)
 
 Ridge Point = Peak Compute / Peak Bandwidth (unit: FLOPs/Byte)
 
-| GPU | BF16/FP16 (Matrix) | FP8 (Matrix) | FP32 |
-|-----|-------------------|-------------|------|
-| MI355X | 629 | 1,258 | 19.7 |
+| GPU | BF16/FP16 Dense Matrix | BF16/FP16 Sparse Matrix | FP8 Dense Matrix | FP32 |
+|-----|--------------------------|--------------------------|------------------|------|
+| MI355X | 312.5 | 625 | 625 | 19.7 |
 
 **Identifying Bottlenecks**:
 - Arithmetic Intensity ≥ Ridge Point → Compute Bound

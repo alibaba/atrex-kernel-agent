@@ -1,6 +1,6 @@
 # NVIDIA B200 GPU Hardware Compute Specification Table
 
-**Last Updated**: 2026-06
+**Last Updated**: 2026-07-21
 
 ---
 
@@ -23,7 +23,7 @@ utilization = actual TFLOPS / peak TFLOPS × 100%
 | Precision | Peak TFLOPS / TOPS | With 2:4 Sparsity | Use Case |
 |------|-------------------|---------|---------|
 | **FP64 (CUDA Core)** | 37.0 | — | Scientific computing, double-precision HPC |
-| **FP32 (CUDA Core)** | 37.5 | — | General-purpose compute, element-wise, reduction |
+| **FP32 (CUDA Core)** | 75.0 | — | Official HGX B200 total (600 TFLOPS / 8 GPUs) |
 | **TF32 (Tensor Core)** | 1,100.0 | 2,200.0 | Training / inference matrix multiply |
 | **FP16 / BF16 (Tensor Core)** | 2,250.0 | 4,500.0 | Training / inference |
 | **FP8 (Tensor Core, FP32 Accumulate)** | 4,500.0 | 9,000.0 | Inference / low-precision training |
@@ -145,10 +145,10 @@ otherwise:
 | B200 | FP16/BF16 Tensor | 2,250 / 8.0 ≈ **281** |
 | B200 | FP8 Tensor | 4,500 / 8.0 ≈ **563** |
 | B200 | FP4 Tensor | 9,000 / 8.0 ≈ **1,125** |
-| B200 | FP32 CUDA | 37.5 / 8.0 ≈ **4.7** |
+| B200 | FP32 CUDA | 75.0 / 8.0 ≈ **9.4** |
 | B200 | TF32 Tensor | 1,100 / 8.0 ≈ **138** |
 
-> **Optimization Implication**: Classify each workload from measured traffic and the precision-specific ridge point. Large, well-reused GEMMs may be compute-bound, while small/skinny GEMMs, attention phases, and streaming epilogues can remain bandwidth-bound. FP32 work is compute-bound only when its arithmetic intensity exceeds about 4.7 FLOPs/Byte.
+> **Optimization Implication**: Classify each workload from measured traffic and the precision-specific ridge point. Large, well-reused GEMMs may be compute-bound, while small/skinny GEMMs, attention phases, and streaming epilogues can remain bandwidth-bound. FP32 work is compute-bound only when its arithmetic intensity exceeds about 9.4 FLOPs/Byte.
 
 ---
 
@@ -159,7 +159,7 @@ otherwise:
    - Element-wise / reduction intensive → use FP32 CUDA Core TFLOPS
    - Memory-bound transport / quant epilogue intensive → prioritize bandwidth roofline, not Tensor Core peak
 2. **Identify the target GPU**:
-   - B200 → use 37.5 FP32, 2,250 BF16, 4,500 FP8, 9,000 FP4, 8.0 TB/s
+   - B200 → use 75.0 FP32, 37.0 FP64, 2,250 BF16, 4,500 FP8, 9,000 FP4, 8.0 TB/s
 3. **Mixed compute**: If the kernel has both Tensor Core computation and element-wise epilogue, compute separate rooflines for the mainloop and epilogue; do not use a single peak to mask bottlenecks.
 4. **Source priority**: Official NVIDIA DGX B200 specifications and Blackwell architecture whitepaper.
 
@@ -169,5 +169,6 @@ otherwise:
 - **Cross-Vendor Reference**: [MI300X Hardware Specs](../../../../amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md) | [MI308X Hardware Specs](../../../../amd/cdna3/mi308x/hardware-specs/hardware_specs_mi308x.md) | [MI355X Hardware Specs](../../../../amd/cdna4/hardware-specs/hardware_specs_mi355x.md)
 - **Blackwell Tuning Guide**: [NVIDIA CUDA Blackwell Tuning Guide](https://docs.nvidia.com/cuda/blackwell-tuning-guide/index.html)
 - **Official Product Page**: [NVIDIA DGX B200](https://www.nvidia.com/en-us/data-center/dgx-b200/)
+- **Official HGX Table**: [NVIDIA HGX specifications](https://www.nvidia.com/en-us/data-center/hgx/) — 8× B200 provides 600 FP32 and 296 FP64 TFLOPS in aggregate
 - **Official System Guide**: [DGX B200 introduction](https://docs.nvidia.com/dgx/dgxb200-user-guide/introduction-to-dgxb200.html) — 8 GPUs provide 1,440 GB total GPU memory
 - **⚠️ Architecture Note**: B200 (SM100) uses the `tcgen05` / TMEM / UMMA path which is NOT available on SM120 client Blackwell GPUs. Kernel code designed for B200's UMMA path must be adapted when targeting RTX PRO / GeForce Blackwell.

@@ -145,4 +145,4 @@ An MFMA kernel is compute-bound only when its measured arithmetic intensity exce
 
 - **Cross-Architecture Comparison**: [CDNA4 Hardware Specs](../../../cdna4/hardware-specs/hardware_specs_mi355x.md) | [Hopper Hardware Specs](../../../../nvidia/hopper/hardware-specs/hardware_specs_hopper.md)
 - **Downstream Consumers**: [ISA Optimization Checklist](../../ref-docs/gluon/common_optimizations.md) — Roofline calculations require the peak TFLOPS from this document
-- **⚠️ Difference Note**: Ridge point ~247 (BF16), significantly different from CDNA4 (~629) and H20 (~37). The optimization direction for the same kernel may be entirely different
+- **⚠️ Difference Note**: Ridge point ~247 (BF16), different from MI355X dense BF16 (~312.5) and H20 (~37). The optimization direction for the same kernel may be entirely different

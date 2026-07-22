@@ -120,7 +120,7 @@ AI = FLOPs / Bytes_transferred
 | FP8 | 412 | 5.3 TB/s | 412 / 5.3 ≈ **77.7** |
 | FP32 | 43.0 | 5.3 TB/s | 43.0 / 5.3 ≈ **8.1** |
 
-> **Key Difference vs MI300X**: MI308X has the same memory bandwidth (5.3 TB/s) but lower compute (206T vs 1307T BF16), resulting in a much lower ridge point (~39 vs ~247). This means most MFMA kernels on MI308X are **compute-bound**, similar to H20's characteristics.
+> **Repository-reference comparison vs MI300X**: using the unverified 206 TFLOPS and 5.3 TB/s MI308X reference values gives a ridge point of ~39 versus MI300X's ~247. This suggests more MFMA kernels may be compute-bound on MI308X, but the conclusion must be re-evaluated with deployed-board properties and measurements.
 
 ### Identifying Bottlenecks
 

@@ -169,7 +169,7 @@ These parameters influence optimization decisions:
 
 ### Key Differences from SM100 Data Center Blackwell
 
-| Feature | SM100 / SM100a (B200/B300) | SM120 / SM120a (RTX PRO 5000) | Optimization Implication |
+| Feature | SM100 / SM103 (B200 / B300) | SM120 / SM120a (RTX PRO 5000) | Optimization Implication |
 |------|------|------|------|
 | Tensor Core Instruction Route | `tcgen05.mma` / UMMA | `mma.sync` / warp-level MMA | Do not copy SM100 UMMA kernels directly |
 | TMEM | Supported | Not supported | Accumulators stay in registers |
@@ -257,4 +257,4 @@ otherwise:
 - **Cross-Architecture Reference**: [Hopper Hardware Specs](../../hopper/hardware-specs/hardware_specs_hopper.md) | [CDNA3 Hardware Specs](../../../amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md)
 - **SM120 CuTeDSL Index**: [SM120 CuTeDSL](../ref-docs/cutedsl/README.md)
 - **Downstream Experience**: [SM120 GDN Decode Optimization Record](../ref-docs/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md) | [SM120 NVFP4 FA Epilogue Optimization Record](../ref-docs/cutedsl/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md)
-- **⚠️ Difference Note**: SM120 is a client Blackwell and does not have SM100's `tcgen05` / TMEM path; the same CUTLASS/CuTeDSL kernel on SM100 and SM120 must be designed using the mainloop appropriate discovers each architecture's Tensor Core instruction path.
+- **⚠️ Difference Note**: SM120 is a client Blackwell and does not have SM100's `tcgen05` / TMEM path; the same CUTLASS/CuTeDSL kernel on SM100 and SM120 must use a mainloop appropriate for each architecture's Tensor Core instruction path.

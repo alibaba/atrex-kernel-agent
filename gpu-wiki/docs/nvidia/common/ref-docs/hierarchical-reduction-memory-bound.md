@@ -1,6 +1,6 @@
 # Memory-Bound Kernel Optimization: Hierarchical Reduction
 
-The performance bottleneck for memory-bound kernels (such as RMSNorm, Softmax, Cross Entropy, and elementwise operations) is HBM bandwidth rather than compute capacity. This article explains how to leverage the GPU's 4-level memory hierarchypei for hierarchical reduction to achieve throughput near the theoretical peak (Speed-of-Light, SOL).
+The performance bottleneck for memory-bound kernels (such as RMSNorm, Softmax, Cross Entropy, and elementwise operations) is HBM bandwidth rather than compute capacity. This article explains how to leverage the GPU's 4-level memory hierarchy for hierarchical reduction to achieve throughput near the theoretical peak (Speed-of-Light, SOL).
 
 > This article is DSL-agnostic general GPU optimization knowledge. For CuTeDSL-specific implementation, see [QuACK Reduction Kernels](cutedsl/quack-reduction-kernels.md)
 

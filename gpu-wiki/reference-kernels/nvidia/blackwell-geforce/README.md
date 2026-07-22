@@ -1,6 +1,6 @@
 # Blackwell GeForce Reference Kernels
 
-A collection of GPU reference kernels for the NVIDIA Blackwell GeForce (SM120/SM103) architecture, organized by DSL framework.
+A collection of GPU reference kernels for the NVIDIA Blackwell GeForce/workstation SM120 architecture, organized by DSL framework.
 
 ---
 

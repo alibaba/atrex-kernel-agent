@@ -1,6 +1,6 @@
 # CUTLASS Convolution and Implicit GEMM Implementation Analysis
 
-CUTLASS maps convolution operations to GEMM (implicit GEMM algorithm), eliminating the need Kov explicit im2col matrix construction and instead dynamically computing indices when loading data from global memory to shared memory. This document, based on CUTLASS source code and official documentation, analyzes the core design of convolution implementations across generations from Turing to Blackwell.
+CUTLASS maps convolution operations to GEMM (implicit GEMM algorithm), eliminating the need for explicit im2col matrix construction and instead dynamically computing indices when loading data from global memory to shared memory. This document, based on CUTLASS source code and official documentation, analyzes the core design of convolution implementations across generations from Turing to Blackwell.
 
 ## Table of Contents
 

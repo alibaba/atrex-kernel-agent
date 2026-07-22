@@ -19,8 +19,12 @@
 | MFMA Max K | 32 (BF16) | 32 (BF16) | 128 (FP8) | 16 (FP16, WMMA) |
 | FP8 Format | FNUZ (non-standard) | FNUZ (non-standard) | OCP (standard) | OCP (standard) |
 | Async DMA | No | No | Yes | TDM |
-| BF16 Ridge Point | ~247 | ~247 | ~629 | N/A |
+| BF16 Ridge Point | ~247 | ~39<sup>†</sup> | ~312.5 dense / ~625 sparse | N/A |
 | BF16 vs FP16 Performance | BF16 is faster | BF16 is faster | BF16 is faster | Same |
+
+> <sup>†</sup> MI308X values are repository reference values because no public AMD product
+> specification is currently linked. Verify peak compute and bandwidth on the
+> deployed board before using ~39 as a hard roofline threshold.
 
 ---
 

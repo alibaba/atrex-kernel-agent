@@ -42,9 +42,9 @@ Tile_AI    = Tile_FLOPs / Tile_Bytes
 
 **Impact of different tile sizes on bottleneck type** (K=4096, bf16=2B):
 
-| BM | BN | Tile_FLOPs | Tile_Bytes | Tile AI | MI355X (Ridge≈245) |
+| BM | BN | Tile_FLOPs | Tile_Bytes | Tile AI | MI355X dense BF16 (Ridge≈312.5) |
 |----|-----|-----------|-----------|---------|-------------------|
-| 256 | 256 | 537M | 2.26MB | **237** | ≈ Ridge Point (boundary) |
+| 256 | 256 | 537M | 2.26MB | **237** | Memory Bound |
 | 128 | 128 | 134M | 1.16MB | **115** | Memory Bound |
 | 64 | 64 | 33.6M | 0.58MB | **57** | Memory Bound |
 

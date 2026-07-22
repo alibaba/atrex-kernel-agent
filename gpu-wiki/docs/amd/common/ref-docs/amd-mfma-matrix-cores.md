@@ -2,7 +2,7 @@
 
 ## MFMA Instruction Overview
 
-MFMA (Matrix Fused Multiply-Add) is the matrix multiply-accumulate instruction for AMD's CDNA architectureNDA architecture, where 64 lanes collaborate to execute a single instruction that completes `D = A * B + C`.
+MFMA (Matrix Fused Multiply-Add) is the matrix multiply-accumulate instruction for AMD's CDNA architecture, where 64 lanes collaborate to execute a single instruction that completes `D = A * B + C`.
 
 ### Instruction Naming Convention
 
