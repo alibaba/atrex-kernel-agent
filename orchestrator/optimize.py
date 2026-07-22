@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -59,6 +60,7 @@ CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) bare
                               # (set below a genuine-but-incomplete attempt, e.g. ~336K; the launch-and-
                               # exit bail we saw was ~85K — only that class should trip the give-up)
 CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continue triton-only
+MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
 
 
 def is_sol_op(op_dir: Path) -> bool:
@@ -276,6 +278,67 @@ def read_memory(workspace: Path, n: int) -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def mask_half_memory(workspace: Path, iteration: int) -> list[str]:
+    """Randomly mask half of active optimization memory every 100 iterations.
+
+    The baseline and the latest record stay visible so the next iteration retains its
+    correctness anchor and can read v<PREV>. The latest recorded committed win is also
+    preserved when it can be identified from git.
+    """
+    if iteration <= 0 or iteration % MEMORY_MASK_INTERVAL != 0:
+        return []
+
+    active: list[tuple[int, Path, dict]] = []
+    for n in range(1, latest_version(workspace) + 1):
+        data = read_memory(workspace, n)
+        if data is not None and not data.get("masked", False):
+            active.append((n, workspace / "memory" / f"v{n}.json", data))
+    if not active:
+        return []
+
+    latest_n, latest_path, latest_data = active[-1]
+    pitfalls = latest_data.get("pitfalls_and_fixes")
+    if isinstance(pitfalls, list) and any(
+        item.get("error_type") == "periodic_memory_mask" and item.get("iteration") == iteration
+        for item in pitfalls if isinstance(item, dict)
+    ):
+        return []
+
+    protected = {latest_n}
+    committed_wins = [
+        n for n, _, data in active
+        if commit_changed_kernel(workspace, data.get("git_commit_hash"))
+    ]
+    if committed_wins:
+        protected.add(committed_wins[-1])
+
+    eligible = [(n, path, data) for n, path, data in active if n not in protected]
+    mask_count = min(len(active) // 2, len(eligible))
+    selected = random.sample(eligible, mask_count)
+    masked_versions = [f"v{n}" for n, _, _ in selected]
+    for _, path, data in selected:
+        data["masked"] = True
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    if not isinstance(pitfalls, list):
+        pitfalls = []
+        latest_data["pitfalls_and_fixes"] = pitfalls
+    pitfalls.append({
+        "error_type": "periodic_memory_mask",
+        "iteration": iteration,
+        "error_message": f"periodic memory refresh masked {', '.join(masked_versions)}",
+        "lesson": "Use the remaining history as hints and reconsider previously discarded directions.",
+    })
+    latest_path.write_text(
+        json.dumps(latest_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(
+        f"[orchestrator] iteration {iteration}: randomly masked {mask_count}/{len(active)} "
+        f"active memory records (kept v0, v{latest_n}, and latest committed win)",
+        flush=True,
+    )
+    return masked_versions
 
 
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────
@@ -622,6 +685,7 @@ class Campaign:
         infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
         convert_bails = 0  # consecutive convert sessions that bailed early (low tokens, no gluon)
         n = latest_version(self.workspace)  # 0 after baseline
+        mask_half_memory(self.workspace, n)  # also covers resuming an unmasked v100/v200/...
         while True:
             if n >= self.max_iters:
                 return self._finish("budget: max-iters")
@@ -687,6 +751,7 @@ class Campaign:
             mem = read_memory(self.workspace, n)
             won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
             if won and peak_util(mem) >= self.target_util:
+                mask_half_memory(self.workspace, n)
                 return self._finish(f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%")
 
             if do_convert:
@@ -707,6 +772,7 @@ class Campaign:
                     stall = 0            # converted (correctness + <=5% perf parity) -> fresh Gluon phase
                     write_stall(self.workspace, stall)
                     print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
+                    mask_half_memory(self.workspace, n)
                     continue
                 # rejected: if a bad gluon kernel got committed as HEAD, revert to the triton incumbent
                 # (pre_head — the HEAD before this convert session, which is always the best triton kernel)
@@ -742,6 +808,7 @@ class Campaign:
                 # re-fires only after another `convert_after` stalled rounds.
                 stall = 0
                 write_stall(self.workspace, stall)
+                mask_half_memory(self.workspace, n)
                 continue
 
             if won:                        # reuse the git-native win computed above
@@ -751,7 +818,9 @@ class Campaign:
                 stall += 1
                 write_stall(self.workspace, stall)
                 if self.max_stall > 0 and stall >= self.max_stall:
+                    mask_half_memory(self.workspace, n)
                     return self._finish(f"stall: {stall} iterations with no commit")
+            mask_half_memory(self.workspace, n)
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
@@ -1072,6 +1141,9 @@ class LayerCampaign:
     # ── phase 3: shared-budget scheduler ──────────────────────────────────────
     def schedule(self, boundaries: list[dict]) -> Optional[str]:
         while True:
+            for b in boundaries:
+                ws = self._boundary_ws(b["name"])
+                mask_half_memory(ws, latest_version(ws))
             spent = self._total_versions(boundaries)
             if spent >= self.max_iters:
                 return "budget: max-iters (Σ versions)"
@@ -1114,6 +1186,7 @@ class LayerCampaign:
                 (mem_dir / f"v{n}.json").write_text(json.dumps(failed, indent=2), encoding="utf-8")
                 print(f"[layer] WARNING: {target['name']} v{n} session produced no memory — "
                       f"wrote failed record to advance budget", flush=True)
+            mask_half_memory(ws, n)
 
     # ── phase 2b: SOL-score weights (only if a real production baseline exists) ────
     def setup_anchor_weights(self) -> None:
