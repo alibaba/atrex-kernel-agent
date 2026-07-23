@@ -2,9 +2,16 @@
 
 AKA is an end-to-end Agent project for GPU kernel implementation, analysis, profiling, and iterative optimization. It helps an Agent turn PyTorch logic or an existing kernel into a high-performance GPU kernel through a structured, profile-driven workflow.
 
-![Atrex architecture](atrex-architecture.png)
+![Atrex architecture](assets/atrex-architecture.png)
 
-![Atrex optimization loop](atrex-optimization-loop.png)
+![Atrex optimization loop](assets/atrex-optimization-loop.png)
+
+## News
+
+- [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
+- [2026-07] We released **Atrex Kernel Agent v0.2.0** with a dual-route optimization system, an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
+- [2026-07] We released **the Atrex paper**: [Are LLM-Generated GPU Kernels Production-Ready? A Trace-Driven Benchmark and Optimization Agent](https://arxiv.org/abs/2607.14541).
+- [2026-06] We released **Atrex Kernel Agent v0.1.0** as the initial open-source version, with the interactive `gpu-kernel-optimizer` Skill route, GPU Wiki knowledge base, profile-driven optimization workflow, profiling tools, and reference templates. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.1.0)]
 
 ## What It Does
 
@@ -17,9 +24,11 @@ AKA is an end-to-end Agent project for GPU kernel implementation, analysis, prof
 
 For the full architecture and workflow design, see [`docs/design.md`](docs/design.md).
 
-## Optimization Routes
+## Quick Start
 
-AKA ships two independent ways to run the same profile-driven workflow. Pick the one that matches how you want the loop to be driven:
+See the [Quick Start guide](docs/quickstart.md) for prerequisites, installation, and complete runnable paths for both the interactive Skill route and the orchestrated loop route.
+
+## Optimization Routes
 
 | Route | Driver | Termination | Best for |
 |-------|--------|-------------|----------|
@@ -28,56 +37,19 @@ AKA ships two independent ways to run the same profile-driven workflow. Pick the
 
 Both routes share the same knowledge base (`gpu-wiki/`), reference projects, tools (`tools/`), and structured memory format (`memory/v<N>.json`).
 
-## Requirements
+## Route Details
 
-Shared requirements:
-
-- `bash`
-- `git`
-- A compatible coding runtime installed
-
-Running optimization tasks also requires platform-specific profiling tools:
-
-- NVIDIA: `ncu`, wrapped by `tools/profile_nvidia.sh`
-- AMD: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
-
-Route-specific requirements are listed in each route's section below.
-
----
-
-## Route 1: Interactive Skill (`SKILL.md`)
+### Route 1: Interactive Skill (`SKILL.md`)
 
 This route installs the `gpu-kernel-optimizer` Skill and workflow hooks into your coding runtime. You then drive the optimization interactively from a coding session, and the hooks keep the workflow on track (memory reads, plan reads, correctness gates, stop-condition checks).
 
 The optimization workspace `kernel_opt_<name>/` is created **in the current working directory** where you run the session, so all artifacts stay next to where you are working.
 
-### Additional Requirements
-
-- `jq` (required by `install.sh`)
-
-### Installation
-
-#### 1. Internal Development Environment Setup (internal users only — optional)
-
-Internal users should configure git `insteadOf` URL redirect rules so that submodules and dependencies resolve against the internal network before running `git submodule update` below. **External users can skip this step entirely.**
-
-#### 2. Pull reference-projects Submodule
-
-```bash
-git submodule update --init
-```
-
-Downloads all reference projects managed under `reference-projects/`.
-
-#### 3. Run the Installer
-
-```bash
-bash install.sh --prefix [install-path]
-```
+Internal users should configure git `insteadOf` URL redirect rules so that submodules and dependencies resolve against the internal network before running `git submodule update`. **External users can skip this step entirely.**
 
 The install path is optional; defaults to `~/aka_kernel_opt`.
 
-Common options:
+Common installer options:
 
 ```bash
 bash install.sh --prefix ~/my_path    # Install to a custom directory
@@ -88,52 +60,13 @@ bash install.sh --uninstall           # Remove hooks installed by this script
 
 The installer detects supported runtime home directories and prepares local hooks when available. It ships **only** the Skill route; the orchestrator route (Route 2) runs from the source repo and is pruned from the installed skill directory.
 
-After installation, restart the coding runtime or open a new session so the hooks are loaded.
+### Route 2: Orchestrated Loop (`orchestrator/optimize.py`)
 
-### Quick Start
-
-Change into the directory where you want the optimization workspace to be created, then ask the Agent to optimize a kernel with at least:
-
-- `platform`: target hardware platform, such as `H20` or `MI308X`.
-- `framework`: target implementation framework, such as `CuteDSL` or `FlyDSL`.
-- `kernel_demo`: path to the initial PyTorch logic or kernel implementation file.
-
-Example:
-
-```text
-/gpu-kernel-optimizer Optimize /path/to/kernel_demo.py on MI308X with FlyDSL, dtype bf16, rel_err < 0.01.
-```
-
-The Agent initializes a `kernel_opt_<name>/` workspace in the current working directory, sources hardware specs from `gpu-wiki`, writes the workspace configuration, builds a baseline, profiles the kernel, and iterates until the configured Stop Conditions are met.
-
----
-
-## Route 2: Orchestrated Loop (`orchestrator/optimize.py`)
-
-![route2 optimization loop](optimize_workflow.png)
+![route2 optimization loop](assets/optimize_workflow.png)
 
 This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean session for each iteration over the same git workspace. State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel.
 
 Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
-
-### Additional Requirements
-
-- Python 3
-- The `claude` CLI available on `PATH` (each iteration is a fresh `claude --print` session)
-- `torch` (used to auto-detect the real runtime GPU architecture)
-
-The orchestrator initializes the git submodules it needs on first run (`gpu-wiki/3rdparty`, `3rdparty/ncu-report-skill`, `3rdparty/humanize`). No `install.sh` step is required.
-
-### Quick Start
-
-Run a single-operator campaign directly against a SOL-ExecBench op directory (a dir containing `definition.json`, `reference.py`, and `workload.jsonl`):
-
-```bash
-python orchestrator/optimize.py \
-    --op-dir /path/to/sol-execbench/op \
-    --platform H20 --framework CuteDSL \
-    --max-iters 20 --token-budget 8000000 --target-util 90
-```
 
 Everything op-specific (workspace name, the reference to optimize, the full workload/shape set, per-workload tolerances) is read from the SOL-ExecBench `--op-dir`; the ground-truth files (`definition.json`, `reference.py`, `workload.jsonl`) are used verbatim and never edited. Only `--platform` and `--framework` cannot be deduced and must be provided. A version that passes `test_kernel.py` in the workspace is directly submittable to SOL-ExecBench.
 
@@ -148,10 +81,6 @@ Key options:
 --convert-after N    # Triton only: after N stalled iters, run one Triton->Gluon convert session
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
-
-The workspace `kernel_opt_<name>/` is created under `--workspace` (or the current directory by default).
-
----
 
 ## Main Files
 
