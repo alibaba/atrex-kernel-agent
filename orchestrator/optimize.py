@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import random
+import re
 import signal
 import subprocess
 import sys
@@ -360,15 +361,40 @@ def git_head(workspace: Path) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def commit_changed_kernel(workspace: Path, ref: str) -> bool:
+def _normalize_commit_hash(ref: object) -> str:
+    """Return a safe git commit hash from an LLM-authored memory value.
+
+    A short SHA containing only decimal digits can be serialized as a JSON
+    number (for example ``7847485``).  Preserve that valid value by converting
+    integers back to strings, while rejecting booleans, floats, and arbitrary
+    git revisions/options.  Memory records are expected to contain commit
+    hashes, not general revision expressions.
+    """
+    if isinstance(ref, bool):
+        return ""
+    if isinstance(ref, int):
+        ref = str(ref)
+    if not isinstance(ref, str):
+        return ""
+    ref = ref.strip()
+    return ref if re.fullmatch(r"[0-9a-fA-F]{4,64}", ref) else ""
+
+
+def commit_changed_kernel(workspace: Path, ref: object) -> bool:
     """True iff commit `ref` changed kernel.py vs its parent (i.e. a real win, not a dead-end
-    record commit). The one git primitive the win/stall/incumbent logic all share."""
-    if not ref:
+    record commit). The one git primitive the win/stall/incumbent logic all share.
+
+    ``git_commit_hash`` is written by agents, so normalize it before passing it
+    to subprocess.  In particular, all-decimal short SHAs may round-trip
+    through JSON as integers.
+    """
+    commit_hash = _normalize_commit_hash(ref)
+    if not commit_hash:
         return False
     try:
-        r = subprocess.run(["git", "show", "--numstat", "--format=", ref, "--", "kernel.py"],
+        r = subprocess.run(["git", "show", "--numstat", "--format=", commit_hash, "--", "kernel.py"],
                            cwd=str(workspace), capture_output=True, text=True)
-    except OSError:
+    except (OSError, TypeError):
         return False
     return r.returncode == 0 and bool(r.stdout.strip())
 
