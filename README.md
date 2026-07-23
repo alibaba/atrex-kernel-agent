@@ -199,6 +199,8 @@ Knowledge base and tooling (`gpu-wiki/3rdparty/`, `3rdparty/`):
 - [modern-gpu-programming-for-mlsys](https://github.com/mlc-ai/modern-gpu-programming-for-mlsys) — Modern GPU programming for MLSys
 - [ncu-report-skill](https://github.com/mit-han-lab/ncu-report-skill) — Nsight Compute report parsing skill
 - [humanize](https://github.com/PolyArch/humanize) — Plan generation plugin
+- [AKO4ALL](https://github.com/TongmingLAIC/AKO4ALL) — AKO4ALL
+- [KDA](https://github.com/mit-han-lab/kernel-design-agents) — Kernel Design Agents
 
 ## Citation
 
