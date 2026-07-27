@@ -336,9 +336,6 @@ def _validate_dev_request(payload: Any) -> dict[str, Any]:
     targets = spec.get("target_hardware") if isinstance(spec, dict) else None
     if not isinstance(targets, list) or not targets or not all(isinstance(v, str) for v in targets):
         raise ValueError("spec.target_hardware must be a non-empty string array")
-    if "local" not in targets:
-        raise ValueError("localhost scheduler only accepts target_hardware=['local']")
-
     command = payload.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ValueError("command must be a non-empty string")
@@ -593,6 +590,7 @@ class LocalGateway:
         *,
         workers: int = 1,
         max_output_bytes: int = DEFAULT_OUTPUT_LIMIT,
+        gpu_aliases: tuple[str, ...] = (),
     ) -> None:
         self.state_dir = state_dir
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -605,6 +603,7 @@ class LocalGateway:
             self._state_lock.close()
             raise RuntimeError(f"state directory is already in use: {self.state_dir}") from exc
         self.store = JobStore(self.state_dir / "jobs.db")
+        self.gpu_aliases = frozenset(("local", *gpu_aliases))
         self.scheduler = LocalScheduler(
             self.store,
             self.state_dir / "jobs",
@@ -625,6 +624,12 @@ class LocalGateway:
 
     def submit_dev(self, payload: Any, trace_id: str) -> tuple[dict[str, Any], bool]:
         request = _validate_dev_request(payload)
+        targets = request["spec"]["target_hardware"]
+        if not any(target in self.gpu_aliases for target in targets):
+            accepted = ", ".join(sorted(self.gpu_aliases))
+            raise ValueError(
+                f"localhost scheduler accepts target_hardware aliases: {accepted}"
+            )
         job, created = self.store.create(SUPPORTED_KIND, request, trace_id)
         if created:
             self.scheduler.notify()
@@ -640,7 +645,9 @@ class LocalGateway:
         with self._env_lock:
             if self._env_cache is None or force:
                 self._env_cache = _probe_environment()
-            return dict(self._env_cache)
+            result = dict(self._env_cache)
+            result["aliases"] = sorted(self.gpu_aliases)
+            return result
 
 
 def _probe_environment() -> dict[str, Any]:
@@ -928,6 +935,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="concurrent local commands (default: 1, FIFO serialization)",
     )
+    serve.add_argument(
+        "--gpu-alias",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="additional hardware token accepted as the local GPU (repeatable)",
+    )
     serve.add_argument("--max-request-mb", type=int, default=32)
     serve.add_argument("--max-output-mb", type=int, default=32)
     serve.add_argument(
@@ -949,6 +963,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--workers must be in 1..64")
     if args.max_request_mb <= 0 or args.max_output_mb <= 0:
         parser.error("request/output limits must be positive")
+    if any(not alias or len(alias) > 128 for alias in args.gpu_alias):
+        parser.error("--gpu-alias values must be non-empty and at most 128 characters")
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not args.allow_remote:
         parser.error("non-loopback --host requires --allow-remote")
 
@@ -957,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
             args.state_dir.resolve(),
             workers=args.workers,
             max_output_bytes=args.max_output_mb * 1024 * 1024,
+            gpu_aliases=tuple(args.gpu_alias),
         )
     except RuntimeError as exc:
         print(f"local-gateway: {exc}", file=sys.stderr)

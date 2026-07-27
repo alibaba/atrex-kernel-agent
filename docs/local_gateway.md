@@ -15,6 +15,13 @@ python tools/local_gateway.py serve \
   --state-dir .atrex-local-gateway
 ```
 
+If an existing workflow uses a hardware token instead of `local`, register it as an alias without changing
+the optimizer arguments:
+
+```bash
+python tools/local_gateway.py serve --gpu-alias YOUR_GPU_TOKEN
+```
+
 The default `--workers 1` serializes commands for one local GPU. A larger value enables parallel command
 execution and should only be used when the machine and workloads can safely share the device.
 
