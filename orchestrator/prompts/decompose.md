@@ -20,6 +20,7 @@ Inputs:
 - additional_notes: `{{NOTES}}`
 
 {{HARDWARE}}
+{{SANDBOX}}
 
 Do exactly this, then STOP:
 

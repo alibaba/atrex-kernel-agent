@@ -17,6 +17,7 @@ launches work and exits early produces no v{{N}} and wastes the whole attempt.)
 - `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are symlinked in.
 
 {{HARDWARE}}
+{{SANDBOX}}
 
 ## Workflow
 
@@ -44,7 +45,8 @@ The sheet gives the Triton→Gluon API map, the critical pitfalls, and pointers 
 ### Step 2 — Extract TTGIR FIRST (before writing any Gluon)
 
 ```bash
-python tools/extract_ttgir.py <driver>.py -o v{{N}}.ttgir
+python tools/sandbox.py --sync v{{N}}.ttgir -- \
+  python tools/extract_ttgir.py <driver>.py -o v{{N}}.ttgir
 ```
 (The driver must launch the kernel; the kernel's `__main__` profiling block works.)
 Confirm the target matches `arch` (e.g. `cuda:100`). The Gluon kernel's layouts **must be the
@@ -65,9 +67,12 @@ accumulator-residency pattern, and reproduce the original `num_stages` (nothing 
 ### Step 4 — Validate (iterate on fixes until pass or give up)
 
 ```bash
-python -c "import kernel"    # must compile
-timeout 1800 python test_kernel.py --version v{{N}}    # real evaluator, every workload
+python tools/sandbox.py --no-sync -- python -c "import kernel"   # must compile remotely
+python tools/sandbox.py --no-sync -- \
+  python test_kernel.py --version v{{N}} --no-memory             # real evaluator, every workload
 ```
+
+Parse `RESULT_JSON` from the test and update `memory/v{{N}}.json` locally. Do not use remote memory.
 
 If RUNTIME_ERROR or correctness FAIL: **iterate on fixes** (up to 3-4 attempts). Common issues:
 - Wrong tensor shape/layout → re-check TTGIR layouts vs Gluon code

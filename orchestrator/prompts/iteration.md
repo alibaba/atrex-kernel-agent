@@ -20,6 +20,7 @@ Hard rules for this session:
 - `/humanize:gen-plan` — plan generation plugin (Stage 2, loaded via `--plugin-dir`).
 
 {{HARDWARE}}
+{{SANDBOX}}
 
 This prompt is **self-contained** — it defines all stages (1–4), commit/revert rules, and record format.
 Evidence format throughout: `evidence -> inference -> action`. Do Stages 1–4 once, then commit/revert/record and exit.
@@ -51,21 +52,40 @@ Execute each stage (1–4) directly in this session. All rules are defined inlin
 
 **Goal**: Profile the current kernel, place outputs in `profiles/v{{N}}/`, and extract concrete bottleneck evidence.
 
-**Execution**: Follow `.claude/skills/ncu-report-skill/SKILL.md` to complete profiling. Adapt its workflow to this iteration context:
+**Execution**: First create `profiles/v{{N}}/harness/profile_driver.py` locally. It must import the current
+`kernel.py` plus immutable `input.py`, select a representative workload from `shapes.json`, allocate inputs,
+warm up, and invoke `Model` repeatedly so the profiler captures real GPU kernels. The driver is profile-only;
+it must not update memory. Collection and analysis then finish inside one sandbox job so a fresh pod is safe
+and raw profiler binaries never become optimizer state. Run exactly one platform-specific command.
 
-1. **Run directory**: Use `profiles/v{{N}}/` as the run directory (replaces the skill's `profile/<run_name>/` convention). Create subdirs `harness/`, `reports/`, `analysis/` under it.
-2. **Harness**: Build a standalone harness (with `-lineinfo`) that invokes `kernel.py`'s entry point with representative workload shapes from `workload.jsonl`. Compile into `profiles/v{{N}}/harness/`.
-3. **Collection (initial)**: Run **one** ncu profile with `--set full` (overview metrics + PM sampling), outputs to `profiles/v{{N}}/reports/`. Do NOT collect `--set source` in this initial pass.
-4. **Analysis**: Parse with the skill's Python helpers (`.claude/skills/ncu-report-skill/helpers/`), work through the six analysis dimensions, and match to the diagnosis playbook. Write analysis artifacts to `profiles/v{{N}}/analysis/`.
-5. **Report**: Write the final report to `profiles/v{{N}}/REPORT.md` per the skill's template — evidence-backed, ranked by expected impact.
+**NVIDIA**:
+```bash
+python tools/sandbox.py --sync profiles/v{{N}} -- \
+  bash tools/profile_nvidia.sh profiles/v{{N}}/harness/profile_driver.py \
+    --output-dir profiles/v{{N}} --source
+```
 
-   **AMD** — run the AMD profiling path instead:
-   ```bash
-   bash tools/profile_kernel.sh kernel.py --output-dir profiles/v{{N}}
-   ```
-   Collects ATT, PMC, and ASM artifacts.
+For a named DSL kernel (especially a Triton `@triton.jit` function), append
+`--kernel-name <exact_base_function_name>` to both NCU collections through this
+wrapper. Use the exact name reported by NCU (for example
+`--kernel-name _attn_fwd_kernel`), not a substring or a `regex:.*...*` guess.
+Without a filter, NCU's default first-launch capture often selects a
+`torch.randn`/input-generation elementwise kernel instead of the candidate.
+After collection, verify that the `Kernel:` line in `summary.txt` names the
+intended candidate kernel; a mismatched or empty capture is invalid and must be
+rerun before writing `REPORT.md`.
 
-**Localization rule (mandatory)**: The initial collection is `--set full` only — no source-level counters. Escalate to a **second** collection with `--set source --section SourceCounters` only when the REPORT.md identifies a localization-worthy symptom **and** Stage 3 is about to choose a concrete code change based on that symptom. Then pin the change to the specific source line / SASS address the per-line stall analysis identifies.
+**AMD**:
+```bash
+python tools/sandbox.py --sync profiles/v{{N}} -- \
+  bash tools/profile_kernel.sh profiles/v{{N}}/harness/profile_driver.py \
+    --output-dir profiles/v{{N}}
+```
+
+The wrapper synchronizes the small profile analysis and summary artifacts back locally. Raw
+`.ncu-rep`/ATT binaries stay remote by default. Follow `.claude/skills/ncu-report-skill/SKILL.md` only for
+interpreting the returned evidence, then write `profiles/v{{N}}/REPORT.md` locally. Pin any source-targeted
+change to the line/SASS evidence produced by the NVIDIA `--source` run.
 
 **Output**: `profiles/v{{N}}/REPORT.md` with bottleneck evidence, diagnosis, and ranked recommendations — this feeds Stage 2.
 
@@ -130,9 +150,10 @@ Execution steps:
    - Do not mix unrelated refactors, formatting, or cleanup.
 4. **Correctness validation** — immediately after editing:
    ```bash
-   python test_kernel.py
+   python tools/sandbox.py --no-sync -- python test_kernel.py --version v{{N}} --no-memory
    ```
-   If validation fails, iteratively fix until it passes. Do not proceed to Stage 4 with broken correctness.
+   Parse the emitted `RESULT_JSON`, then update local `memory/v{{N}}.json`. If validation fails, iteratively
+   fix until it passes. Do not proceed to Stage 4 with broken correctness.
 
    **Multi-seed robustness (MANDATORY before commit)**: A single-seed PASS is NOT sufficient.
    The production evaluator uses **freshly randomized inputs every call**, and a kernel that
@@ -141,14 +162,15 @@ Execution steps:
 
    ```bash
    # Run 5 additional seeds (1..5). Reports PASS only if ALL seeds pass.
-   python test_kernel.py --version v{{N}} --multi-seed 5
+   python tools/sandbox.py --no-sync -- \
+     python test_kernel.py --version v{{N}} --multi-seed 5 --no-memory
    ```
 
    Or, if you want explicit per-seed traces, run them one at a time:
    ```bash
-   python test_kernel.py --version v{{N}}_seed1 --seed 1 --no-memory
-   python test_kernel.py --version v{{N}}_seed2 --seed 2 --no-memory
-   python test_kernel.py --version v{{N}}_seed3 --seed 3 --no-memory
+   python tools/sandbox.py --no-sync -- python test_kernel.py --seed 1 --no-memory
+   python tools/sandbox.py --no-sync -- python test_kernel.py --seed 2 --no-memory
+   python tools/sandbox.py --no-sync -- python test_kernel.py --seed 3 --no-memory
    ```
 
    **ALL seeds must PASS.** If ANY seed fails correctness, the kernel is BROKEN — revert
@@ -181,17 +203,20 @@ Execution steps:
 
 1. **Run the benchmark harness** with timeout guard:
    ```bash
-   timeout 1800 python test_kernel.py --version v{{N}}
+   python tools/sandbox.py --no-sync -- python test_kernel.py --version v{{N}} --no-memory
    ```
    This runs the real `sol-execbench` evaluator over **every workload in `workload.jsonl`** with each workload's own tolerance. Do NOT edit `test_kernel.py` or hand-roll a separate test.
+   Parse `RESULT_JSON` and write the metrics into local `memory/v{{N}}.json`; remote memory is never used.
 
-2. **Metrics recorded** (by the harness into `memory/v{{N}}.json`):
+2. **Metrics recorded** (locally from the sandbox `RESULT_JSON`):
    - `performance.latency_us` = **geomean** of per-workload kernel latency (primary objective: minimize)
    - `performance.latency_us_by_shape` — per-workload latency keyed by workload `uuid`
    - `performance.speedup_vs_ref_geomean` — geomean speedup vs reference
    - `correctness.status` / `quality_gate.result` — PASS iff ALL workloads pass
 
-3. **Measurement reliability guard**: Before accepting a large delta (especially regressions >30%), verify GPU is not occupied by other processes. Switch to a free GPU via `CUDA_VISIBLE_DEVICES` if needed and re-measure.
+3. **Measurement reliability guard**: Before accepting a large delta (especially regressions >30%), re-run
+   through the same sandbox hardware and compare; GPU selection belongs to the gateway, not local
+   `CUDA_VISIBLE_DEVICES`.
 
 4. **Quality gate**: PASS requires correctness PASS + geomean latency drop vs HEAD beyond measurement noise. A flat-within-noise result is NOT an improvement.
 

@@ -222,6 +222,18 @@ The subagent must:
 
 Each optimization iteration follows the profile optimizer Skill.
 
+For the orchestrated route, all GPU execution crosses `tools/sandbox.py`: `--sandbox-hardware` selects the
+agate worker, tests run with `--no-memory`, and profiler analysis artifacts are synchronized from the worker.
+`memory/`, plans, source edits, and Git remain local; the local session records metrics from the test's
+structured `RESULT_JSON` output.
+
+The execution endpoint is independent of the workflow. Remote gateways can be selected through agate
+configuration or `--sandbox-profile`; `--sandbox-url http://127.0.0.1:8000` together with
+`--sandbox-hardware local` targets `atrex-gateway serve --local`. Both modes use the same packaging,
+result parsing, artifact synchronization, and execution-boundary rules.
+Local mode is transport-compatible but not an isolation boundary: the server executes submitted commands
+as its current user and therefore must only accept trusted code.
+
 Important rules:
 
 - Official profile evidence is required before code changes.

@@ -283,6 +283,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"abs_err={ss['max_abs_err']:.2e}, rel_err={ss['max_rel_err']:.2e} -> {tag}")
             if not ss["all_pass"]:
                 all_seeds_pass = False
+                s["failures"].append(
+                    f"seed{seed_i}: " + ("; ".join(ss["failures"]) or "correctness failure")
+                )
             worst_abs_all = max(worst_abs_all, ss["max_abs_err"])
             worst_rel_all = max(worst_rel_all, ss["max_rel_err"])
             try:
@@ -292,9 +295,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ────────────────────────────────────────────────────────────────")
         print(f"  MULTI-SEED RESULT        : {'PASS' if all_seeds_pass else 'FAIL'}")
         print(f"  worst abs / rel (all)    : {worst_abs_all:.2e} / {worst_rel_all:.2e}")
+        s["max_abs_err"] = worst_abs_all
+        s["max_rel_err"] = worst_rel_all
         if not all_seeds_pass:
             print(f"  *** KERNEL NOT ROBUST — fails on some seeds ***")
             s["all_pass"] = False
+
+    # The gateway sandbox intentionally does not receive or return memory/.
+    # Emit the full structured result so the local optimization session can
+    # update memory/v<N>.json after a remote --no-memory run.
+    print("[test_kernel] RESULT_JSON=" + json.dumps(s, ensure_ascii=False, sort_keys=True))
 
     if not args.no_memory:
         version = args.version or _infer_version(workspace)

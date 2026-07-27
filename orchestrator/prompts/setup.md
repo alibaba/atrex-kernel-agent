@@ -14,6 +14,7 @@ Environment (resolve all paths against your cwd = the workspace):
 - `.claude/skills/KernelWiki/` — kernel optimization knowledge base.
 
 {{HARDWARE}}
+{{SANDBOX}}
 Do the following, in order, but only through baseline:
 
 1. **Step 0 — Hardware specs + Roofline.** Source
@@ -24,6 +25,14 @@ Do the following, in order, but only through baseline:
 3. **Stage 1 — Baseline.** Launch the `gpu-kernel-baseline` subagent (by name). You may spawn it in the background, but **you MUST wait for it to complete before you exit**: implement `kernel.py` + `test_kernel.py`,
    validate correctness and baseline performance, write `baseline_report.md`, write `memory/v0.json` (via
    `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
+   Include the mandatory sandbox block above verbatim in the subagent task: it must run `test_kernel.py
+   --no-memory` remotely, parse the result, and write `memory/v0.json` locally. Reject any local-GPU
+   measurement or remotely written memory.
+   Before the first run, make the immutable harness print one single-line structured result in this format:
+   `[test_kernel] RESULT_JSON=<json>`, including `all_pass`, `failures`, `latency_us_geomean`,
+   `latency_us_arith_mean`, `latency_us_by_shape`, `speedup_vs_ref_geomean`, `max_abs_err`, and
+   `max_rel_err`. This output is the transport from the remote test to local memory; do not edit the
+   benchmark methodology after V0.
    **`test_kernel.py` MUST bench every shape in the workspace `shapes.json`** (the full ground-truth set, keyed
    by integer sid) — not a hand-picked subset. This shape set + harness is the immutable per-campaign benchmark
    methodology (see `reference/CLAUDE.md` "Benchmark Harness Integrity"); later iterations reuse it unchanged.

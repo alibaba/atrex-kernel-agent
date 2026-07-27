@@ -187,6 +187,26 @@ if ! command -v nvidia-smi &>/dev/null; then
     exit 1
 fi
 
+# Nsight Compute ships its Python report API beside the GUI/CLI installation,
+# not in the active Python environment's site-packages.  Remote pods often set
+# this path for us; a localhost gateway intentionally inherits the host Python
+# environment and therefore needs explicit discovery.
+if ! python3 -c 'import ncu_report' &>/dev/null; then
+    shopt -s nullglob
+    NCU_PYTHON_CANDIDATES=(
+        /opt/nvidia/nsight-compute/*/extras/python
+        /usr/local/cuda/nsight-compute-*/extras/python
+        /usr/local/cuda-*/nsight-compute-*/extras/python
+    )
+    shopt -u nullglob
+    for candidate in "${NCU_PYTHON_CANDIDATES[@]}"; do
+        if [[ -f "$candidate/ncu_report.py" ]]; then
+            export PYTHONPATH="$candidate${PYTHONPATH:+:$PYTHONPATH}"
+            break
+        fi
+    done
+fi
+
 # Detect ncu report helpers path (bundled copy ships in tools/ncu_helpers/)
 if [[ -z "$NCU_HELPERS" ]]; then
     SEARCH_PATHS=(
@@ -225,6 +245,7 @@ echo "  Step 1: Collect ncu full report"
 echo "=========================================="
 
 ncu --set full \
+    --force-overwrite \
     --launch-skip "$LAUNCH_SKIP" \
     --launch-count "$LAUNCH_COUNT" \
     --kill yes \
@@ -245,6 +266,7 @@ if [[ "$COLLECT_SOURCE" == true ]]; then
     echo "=========================================="
 
     ncu --set source \
+        --force-overwrite \
         --section SourceCounters \
         --launch-skip "$LAUNCH_SKIP" \
         --launch-count "$LAUNCH_COUNT" \

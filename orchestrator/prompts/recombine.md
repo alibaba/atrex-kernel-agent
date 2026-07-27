@@ -10,6 +10,7 @@ Inputs:
   boundary's optimized workspace (its HEAD `kernel.py` is the best kernel).
 
 {{HARDWARE}}
+{{SANDBOX}}
 
 Do exactly this, then STOP:
 

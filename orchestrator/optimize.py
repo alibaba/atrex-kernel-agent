@@ -4,10 +4,10 @@
 Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
-Each iteration is a **fresh `claude` session** (`--print`, new `--session-id`) over the
-*same* git workspace. State crosses the session boundary only through disk — exactly the
-artifacts atrex already maintains: `memory/v<N>.json`, `plans/`, `profiles/`, and git.
-HEAD is always the best kernel (a regressing iteration reverts and is never committed).
+Each iteration is a **fresh coding-agent session** (`claude` by default, or `qodercli` via
+`--agent-cli`) over the *same* git workspace. State crosses the session boundary only through
+disk — exactly the artifacts atrex already maintains: `memory/v<N>.json`, `plans/`, `profiles/`,
+and git. HEAD is always the best kernel (a regressing iteration reverts and is never committed).
 
 Termination policy
 ------------------
@@ -25,7 +25,8 @@ Usage
     # single operator (default, unchanged):
     python orchestrator/optimize.py \
         --name mla_decode --kernel-demo /path/to/demo.py \
-        --platform H20 --framework CuteDSL \
+        --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
+        --agent-cli qodercli \
         --max-iters 20 --token-budget 8000000 --target-util 90
 
     # whole LLM layer (optional decomposition overlay):
@@ -43,11 +44,14 @@ import json
 import os
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
+SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
 HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
 CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
 CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) barely ran -> "bailed"
@@ -62,6 +67,8 @@ CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) bare
                               # exit bail we saw was ~85K — only that class should trip the give-up)
 CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continue triton-only
 MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
+TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
+AGENT_CLI_CHOICES = ("claude", "qodercli")
 
 
 def is_sol_op(op_dir: Path) -> bool:
@@ -122,11 +129,16 @@ def _tokens_from_stream(stdout: str) -> int:
         if not isinstance(u, dict):
             return 0
         return int(
-            (u.get("input_tokens") or 0)
-            + (u.get("output_tokens") or 0)
-            + (u.get("cache_creation_input_tokens") or 0)
-            + (u.get("cache_read_input_tokens") or 0)
+            (u.get("input_tokens") or u.get("inputTokens") or 0)
+            + (u.get("output_tokens") or u.get("outputTokens") or 0)
+            + (u.get("cache_creation_input_tokens") or u.get("cacheCreationInputTokens") or 0)
+            + (u.get("cache_read_input_tokens") or u.get("cacheReadInputTokens") or 0)
         )
+
+    def _model_usage_tokens(model_usage: dict) -> int:
+        if not isinstance(model_usage, dict):
+            return 0
+        return sum(_usage_tokens(usage) for usage in model_usage.values())
 
     result_total = None
     summed = 0
@@ -140,14 +152,16 @@ def _tokens_from_stream(stdout: str) -> int:
             continue
         if not isinstance(evt, dict):
             continue
-        if evt.get("type") == "result" and isinstance(evt.get("usage"), dict):
-            result_total = _usage_tokens(evt["usage"])
+        if evt.get("type") == "result":
+            usage_total = _usage_tokens(evt.get("usage"))
+            model_total = _model_usage_tokens(evt.get("modelUsage"))
+            result_total = usage_total or model_total
         usage = evt.get("usage")
         if usage is None and isinstance(evt.get("message"), dict):
             usage = evt["message"].get("usage")
         if isinstance(usage, dict):
             summed += _usage_tokens(usage)
-    return result_total if result_total is not None else summed
+    return result_total if result_total else summed
 
 
 def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = None) -> tuple[str, str, int, bool]:
@@ -174,16 +188,61 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = 
     return stdout or "", stderr or "", proc.returncode, timed_out
 
 
-def _session_env() -> dict:
-    """Env for a nested `claude` session. When a Bearer auth token is available
-    (ANTHROPIC_AUTH_TOKEN — e.g. an Anthropic-compatible gateway), drop ANTHROPIC_API_KEY so the
-    CLI authenticates via the token instead of sending x-api-key, which such gateways reject
-    with 401. On a plain api-key setup (no auth token) nothing is removed.
+def _session_env(agent_cli: str) -> dict:
+    """Build the environment for a nested coding-agent session.
+
+    Claude-specific auth normalization is deliberately not applied to Qoder CLI. When a Bearer
+    auth token is available for Claude (ANTHROPIC_AUTH_TOKEN — e.g. an Anthropic-compatible
+    gateway), drop ANTHROPIC_API_KEY so Claude authenticates via the token instead of sending
+    x-api-key, which such gateways reject with 401.
     """
     env = os.environ.copy()
-    if env.get("ANTHROPIC_AUTH_TOKEN"):
+    if agent_cli == "claude" and env.get("ANTHROPIC_AUTH_TOKEN"):
         env.pop("ANTHROPIC_API_KEY", None)
     return env
+
+
+def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
+    """Return a non-interactive, fresh-session command for the selected coding CLI."""
+    if agent_cli == "claude":
+        cmd = [
+            "claude", "--print", "--verbose",
+            "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+            "--session-id", session_id,
+            "--effort", "max",
+        ]
+        provider_settings = "ATREX_CLAUDE_SESSION_SETTINGS"
+    elif agent_cli == "qodercli":
+        cmd = [
+            "qodercli", "--print",
+            "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+            "--session-id", session_id,
+            "--no-session-persistence",
+            "--reasoning-effort", "max",
+        ]
+        provider_settings = "ATREX_QODER_SESSION_SETTINGS"
+    else:
+        raise ValueError(f"unsupported agent CLI: {agent_cli!r}")
+
+    # Provider-specific settings win. ATREX_SESSION_SETTINGS remains the backward-compatible
+    # generic fallback and is interpreted by whichever CLI was selected.
+    session_settings = os.environ.get(provider_settings) or os.environ.get("ATREX_SESSION_SETTINGS")
+    if session_settings:
+        cmd += ["--settings", session_settings]
+    # Both supported CLIs accept Claude-compatible local plugins. humanize is loaded from the
+    # source submodule rather than installed into the user's global runtime.
+    if (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
+        cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
+    cmd.append(prompt)
+    return cmd
+
+
+def _agent_auth_hint(agent_cli: str) -> str:
+    if agent_cli == "qodercli":
+        return "run `qodercli status` and `qodercli --print \"test\"` to diagnose"
+    return "run `claude auth status` and `claude --print \"test\"` to diagnose"
 
 
 def ensure_submodules() -> None:
@@ -214,29 +273,30 @@ def ensure_submodules() -> None:
     print("[orchestrator] all submodules ready", flush=True)
 
 
-def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
-    """One clean `claude` session. Fresh session-id = no memory of prior sessions."""
+def run_session(
+    workspace: Path,
+    prompt: str,
+    timeout: int,
+    agent_cli: str = "claude",
+    sandbox_hardware: str = "",
+    sandbox_profile: str = "",
+    sandbox_url: str = "",
+    sandbox_timeout: int = 600,
+) -> SessionResult:
+    """Run one clean coding-agent session with no conversational memory from prior iterations."""
     session_id = str(uuid.uuid4())
-    cmd = [
-        "claude", "--print", "--verbose",
-        "--dangerously-skip-permissions",
-        "--output-format", "stream-json",
-        "--session-id", session_id,
-        "--effort", "max",
-    ]
-    # Route nested sessions to a specific settings profile (model/base-url/token) without touching
-    # the user's active ~/.claude/settings.json — e.g. run the experiment on a different backend
-    # than the monitoring session. Command-line --settings has higher precedence than user settings.
-    session_settings = os.environ.get("ATREX_SESSION_SETTINGS")
-    if session_settings:
-        cmd += ["--settings", session_settings]
-    # humanize is loaded via --plugin-dir pointing to the local 3rdparty submodule;
-    # it is NOT installed as a skill in .claude/skills/.
-    if (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
-        cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
-    cmd.append(prompt)
-    env = _session_env()
+    cmd = _session_command(agent_cli, prompt, session_id)
+    env = _session_env(agent_cli)
     env["IS_SANDBOX"] = "1"
+    if sandbox_hardware:
+        env["ATREX_SANDBOX_GPU"] = sandbox_hardware
+    if sandbox_url:
+        env["ATREX_SANDBOX_URL"] = sandbox_url
+        env.pop("ATREX_SANDBOX_PROFILE", None)
+    elif sandbox_profile:
+        env["ATREX_SANDBOX_PROFILE"] = sandbox_profile
+        env.pop("ATREX_SANDBOX_URL", None)
+    env["ATREX_SANDBOX_TIMEOUT"] = str(sandbox_timeout)
     stdout, stderr, exit_status, timed_out = _run_bounded(cmd, cwd=workspace, timeout=timeout, env=env)
     return SessionResult(
         exit_status=exit_status,
@@ -245,6 +305,114 @@ def run_session(workspace: Path, prompt: str, timeout: int) -> SessionResult:
         stdout_tail=stdout[-2000:],
         stderr_tail=stderr[-2000:],
     )
+
+
+def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
+    """Mandatory execution boundary injected into every optimization session."""
+    if url:
+        endpoint = f" using gateway URL `{url}`"
+    elif profile:
+        endpoint = f" using gateway profile `{profile}`"
+    else:
+        endpoint = " using agate's configured gateway"
+    return (
+        "## GPU sandbox execution (mandatory)\n\n"
+        f"- Target gateway hardware: **{hardware}**{endpoint}. All GPU execution must cross this "
+        "gateway boundary, including when the endpoint is localhost; source edits, optimizer state, and "
+        "Git operations remain in the workspace.\n"
+        "- Run every correctness or performance test through the gateway sandbox. Always pass `--no-memory`; "
+        "read the emitted `[test_kernel] RESULT_JSON=...` line, then update `memory/v<N>.json` locally.\n"
+        "  ```bash\n"
+        "  python tools/sandbox.py --no-sync -- python test_kernel.py --version v<N> --no-memory\n"
+        "  python tools/sandbox.py --no-sync -- python test_kernel.py --version v<N> --multi-seed 5 --no-memory\n"
+        "  ```\n"
+        "- Run NVIDIA/AMD profiling in the sandbox as one self-contained command; `profiles/` analysis "
+        "artifacts are synchronized back automatically:\n"
+        "  ```bash\n"
+        "  python tools/sandbox.py --sync profiles/v<N> -- bash tools/profile_nvidia.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N> --source\n"
+        "  python tools/sandbox.py --sync profiles/v<N> -- bash tools/profile_kernel.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N>\n"
+        "  ```\n"
+        "- Never run `test_kernel.py`, GPU timers, `ncu`, `rocprofv3`, or the profile wrappers outside "
+        "the gateway interface. Never upload or create optimizer `memory/` as worker state; memory updates, "
+        "plans, edits, and git operations stay local.\n"
+    )
+
+
+def _sandbox_command(
+    workspace: Path,
+    hardware: str,
+    profile: str,
+    url: str,
+    timeout: int,
+    command: list[str],
+    *,
+    sync: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    cmd = [
+        sys.executable, str(SANDBOX_TOOL),
+        "--hardware", hardware,
+        "--workspace", str(workspace),
+        "--timeout", str(timeout),
+    ]
+    if url:
+        cmd += ["--url", url]
+    elif profile:
+        cmd += ["--gateway-profile", profile]
+    if sync:
+        for path in sync:
+            cmd += ["--sync", path]
+    else:
+        cmd.append("--no-sync")
+    cmd += ["--", *command]
+    return subprocess.run(
+        cmd,
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+        timeout=timeout + 240,
+    )
+
+
+def _test_result_from_stdout(stdout: str) -> dict:
+    """Read the structured result emitted by reference/test_kernel.py."""
+    for line in reversed(stdout.splitlines()):
+        if line.startswith(TEST_RESULT_PREFIX):
+            result = json.loads(line[len(TEST_RESULT_PREFIX):])
+            if isinstance(result, dict):
+                return result
+    raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
+
+
+def _record_local_test_result(workspace: Path, version: str, result: dict) -> Path:
+    """Merge a remote --no-memory test result into local optimizer memory."""
+    mem_dir = workspace / "memory"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    path = mem_dir / f"{version}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data.setdefault("version", version)
+    data.setdefault("masked", False)
+    data["timestamp"] = datetime.now(timezone.utc).isoformat()
+    perf = data.setdefault("performance", {})
+    perf["latency_us"] = result.get("latency_us_geomean", 0.0)
+    perf["latency_us_geomean"] = result.get("latency_us_geomean", 0.0)
+    perf["latency_us_arith_mean"] = result.get("latency_us_arith_mean", 0.0)
+    perf["latency_us_by_shape"] = result.get("latency_us_by_shape", {})
+    perf["speedup_vs_ref_geomean"] = result.get("speedup_vs_ref_geomean", 0.0)
+    all_pass = bool(result.get("all_pass"))
+    corr = data.setdefault("correctness", {})
+    corr["status"] = "PASS" if all_pass else "FAIL"
+    corr["max_abs_err"] = result.get("max_abs_err", 0.0)
+    corr["max_rel_err"] = result.get("max_rel_err", 0.0)
+    gate = data.setdefault("quality_gate", {})
+    gate["result"] = "PASS" if all_pass else "FAIL"
+    failures = result.get("failures") or []
+    gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
 
 
 # ── workspace / memory readers ────────────────────────────────────────────────
@@ -481,12 +649,17 @@ def incumbent_latency(workspace: Path, upto_n: int) -> Optional[float]:
     return best
 
 
-def detect_arch() -> str:
+def detect_arch(
+    sandbox_hardware: str = "",
+    sandbox_profile: str = "",
+    sandbox_url: str = "",
+) -> str:
     """Return the real runtime GPU architecture token (vendor-neutral), or '' if undetectable.
 
     NVIDIA/CUDA -> 'sm_<cap>' (e.g. 'sm_103'); AMD/ROCm -> the gfx arch (e.g. 'gfx942').
     Uses torch (get_device_capability / gcnArchName) — the AUTHORITATIVE source, which stays
-    correct even when the GPU name / vendor SMI is DESENSITIZED (e.g. a B300 reporting as 'L20D').
+    correct even when the GPU name / vendor SMI is DESENSITIZED (e.g. a target GPU reporting a
+    generic compatibility alias).
     """
     code = (
         "import torch\n"
@@ -496,6 +669,29 @@ def detect_arch() -> str:
         "else:\n"
         "    c=torch.cuda.get_device_capability(0); print('sm_%d%d'%(c[0],c[1]))\n"
     )
+    if sandbox_hardware:
+        try:
+            with tempfile.TemporaryDirectory(prefix="atrex-arch-") as temp_dir:
+                result = _sandbox_command(
+                    Path(temp_dir), sandbox_hardware, sandbox_profile, sandbox_url, 120,
+                    ["python", "-c", code],
+                )
+            if result.returncode == 0:
+                for line in reversed(result.stdout.splitlines()):
+                    value = line.strip()
+                    if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", value):
+                        return value
+            print(
+                f"[orchestrator] WARNING: sandbox arch detection failed on {sandbox_hardware}: "
+                f"{result.stderr[-1000:]}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
+                  file=sys.stderr, flush=True)
+        return ""
+
     for py in ("python", "python3", sys.executable):
         try:
             out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=120)
@@ -539,39 +735,34 @@ def link_runtime(workspace: Path) -> None:
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
     so symlink them in (absolute targets, so the workspace can live anywhere). Idempotent.
 
-    Also installs agent definitions into ``.claude/`` so inner ``claude`` sessions can discover
-    subagents (gpu-kernel-baseline, gpu-kernel-profiler, etc.).
+    Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/`` so
+    either supported coding CLI can discover them.
 
     humanize is loaded via ``--plugin-dir`` (see ``run_session``); it is NOT installed as a
-    skill into ``.claude/skills/``.
+    workspace skill.
     """
     for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
-    # ── .claude/ skills ──
-    claude_dir = workspace / ".claude"
-    claude_skills_dir = claude_dir / "skills"
-    claude_agents_dir = claude_dir / "agents"
-    claude_skills_dir.mkdir(parents=True, exist_ok=True)
-    # Link 3rdparty/ncu-report-skill into .claude/skills/ so `claude` sessions can use it
+    # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
+    # so selecting a different --agent-cli does not change the available optimization knowledge.
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    ncu_dst = claude_skills_dir / "ncu-report-skill"
-    if ncu_src.exists() and not ncu_dst.exists():
-        os.symlink(ncu_src, ncu_dst)
-    # Link gpu-wiki/3rdparty/KernelWiki into .claude/skills/ for kernel knowledge access
     kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
-    kw_dst = claude_skills_dir / "KernelWiki"
-    if kw_src.exists() and not kw_dst.exists():
-        os.symlink(kw_src, kw_dst)
-    # ── .claude/ agents ──
-    # The prompts (setup.md, convert.md, gpu-kernel-profile-optimizer) reference agents by
-    # name (gpu-kernel-baseline, gpu-kernel-convert, gpu-kernel-profiler, gpu-kernel-research,
-    # kernel-optimize). Link the repo's agents/ into .claude/agents/ so inner claude sessions
-    # discover them as subagent types.
     agents_src = REPO_ROOT / "agents"
-    if agents_src.exists() and not claude_agents_dir.exists():
-        os.symlink(agents_src, claude_agents_dir)
+    for runtime_dir_name in (".claude", ".qoder"):
+        runtime_dir = workspace / runtime_dir_name
+        runtime_skills_dir = runtime_dir / "skills"
+        runtime_agents_dir = runtime_dir / "agents"
+        runtime_skills_dir.mkdir(parents=True, exist_ok=True)
+        for src, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
+            dst = runtime_skills_dir / name
+            if src.exists() and not dst.exists():
+                os.symlink(src, dst)
+        # The prompts reference these agent definitions by name (gpu-kernel-baseline,
+        # gpu-kernel-convert, gpu-kernel-profiler, gpu-kernel-research, kernel-optimize).
+        if agents_src.exists() and not runtime_agents_dir.exists():
+            os.symlink(agents_src, runtime_agents_dir)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
     add = ""
@@ -579,6 +770,8 @@ def link_runtime(workspace: Path) -> None:
         add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n"
     if "/.claude" not in existing:
         add += "/.claude\n"
+    if "/.qoder" not in existing:
+        add += "/.qoder\n"
     if "/" + STALL_STATE_FILE not in existing:
         add += ("\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
                 "/" + STALL_STATE_FILE + "\n")
@@ -606,6 +799,11 @@ class Campaign:
     setup_timeout: int = 7200      # 120 min for the baseline session
     max_stall: int = 0             # 0 = disabled (budget-only); >0 = stop after N no-commit iters
     convert_after: int = 5         # triton-only: after N stalled iters, run ONE triton->gluon convert session (0=off)
+    sandbox_hardware: str = ""     # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
+    sandbox_profile: str = ""      # pre/prod; empty preserves normal agate URL resolution
+    sandbox_url: str = ""          # explicit endpoint, e.g. http://127.0.0.1:8000
+    sandbox_timeout: int = 600      # agate dev hard limit
+    agent_cli: str = "claude"       # clean-session coding backend: claude or qodercli
     tokens_spent: int = field(default=0, init=False)
 
     @property
@@ -623,10 +821,15 @@ class Campaign:
     def _link_runtime(self) -> None:
         link_runtime(self.workspace)
 
+    def _sandbox_directive(self) -> str:
+        return sandbox_directive(
+            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
+        )
+
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
         # (no baseline session) — sol_seed.py copies the ground-truth files, writes
-        # the DPS wrapper kernel.py + solution.json, and benches V0 via test_kernel.py.
+        # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
         op_dir = Path(self.kernel_demo).resolve().parent
         if is_sol_op(op_dir):
             self._setup_baseline_sol(op_dir)
@@ -637,6 +840,14 @@ class Campaign:
         # so cwd must be the work_dir (or the process cwd when --workspace is absent).
         subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo],
                        cwd=str(self.workspace.parent), check=True)
+        # atrex-bench operators keep their immutable harness inputs beside
+        # reference.py.  workspace_init.sh only copies the reference itself;
+        # materialize the remaining ground truth before the baseline session.
+        for name in ("reference.py", "input.py", "shapes.json", "roofline.json",
+                     "metadata.json", "valid.py"):
+            source = op_dir / name
+            if source.is_file():
+                shutil.copy2(source, self.workspace / name)
         self._link_runtime()
         prompt = _render(
             PROMPTS_DIR / "setup.md",
@@ -644,14 +855,22 @@ class Campaign:
             FRAMEWORK=self.framework, KERNEL_DEMO=self.kernel_demo,
             NOTES=self.notes,
             HARDWARE=hardware_directive(self.platform, self.arch),
+            SANDBOX=self._sandbox_directive(),
         )
-        res = run_session(self.workspace, prompt, timeout=self.setup_timeout)
+        res = run_session(
+            self.workspace, prompt, timeout=self.setup_timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+        )
         self._account(res, "setup")
         if res.exit_status != 0 and res.tokens == 0:
             raise RuntimeError(
                 f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
                 "this is likely an API key / authentication issue. "
-                "Run `claude auth status` and `claude --print \"test\"` to diagnose."
+                f"{_agent_auth_hint(self.agent_cli)}."
             )
         if read_memory(self.workspace, 0) is None:
             raise RuntimeError("setup did not produce memory/v0.json (baseline failed)")
@@ -662,17 +881,42 @@ class Campaign:
         cmd = [sys.executable, str(SOL_SEED),
                "--op-dir", str(op_dir), "--name", self.name,
                "--workspace", str(self.workspace),
-               "--framework", self.framework, "--platform", self.platform]
-        # Set AKA_SKIP_BENCH_IF_V0=1 in the env if the operator pre-seeded
-        # memory/v0.json (e.g. via a synthetic seed script for ops whose torch
-        # reference is too slow to bench within a reasonable budget). When set,
-        # sol_seed.py skips the V0 bench step entirely.
-        if os.environ.get("AKA_SKIP_BENCH_IF_V0", "").lower() in ("1", "true", "yes"):
-            cmd.append("--skip-bench-if-v0-exists")
+               "--framework", self.framework, "--platform", self.platform,
+               # The local step only materializes sources and git state.  GPU
+               # correctness/performance is run below in the remote sandbox.
+               "--no-bench"]
         subprocess.run(cmd, check=True)
         self._link_runtime()
-        if read_memory(self.workspace, 0) is None:
-            raise RuntimeError("sol_seed did not produce memory/v0.json (V0 baseline failed)")
+        test = _sandbox_command(
+            self.workspace,
+            self.sandbox_hardware,
+            self.sandbox_profile,
+            self.sandbox_url,
+            self.sandbox_timeout,
+            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+        )
+        if test.stdout:
+            print(test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True)
+        if test.stderr:
+            print(test.stderr, end="" if test.stderr.endswith("\n") else "\n",
+                  file=sys.stderr, flush=True)
+        try:
+            result = _test_result_from_stdout(test.stdout)
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"sandbox V0 baseline produced no usable result: {exc}") from exc
+        memory_path = _record_local_test_result(self.workspace, "v0", result)
+        if test.returncode != 0 or not result.get("all_pass"):
+            raise RuntimeError("sandbox V0 baseline failed correctness/performance validation")
+
+        # sol_seed committed the source-only baseline. Fold the locally-owned
+        # memory record into that commit without ever sending memory to the pod.
+        mem = json.loads(memory_path.read_text(encoding="utf-8"))
+        mem["git_commit_hash"] = git_head(self.workspace)
+        mem.setdefault("optimization", {})["action_category"] = "baseline"
+        memory_path.write_text(json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        subprocess.run(["git", "add", "memory/v0.json"], cwd=str(self.workspace), check=True)
+        subprocess.run(["git", "commit", "--amend", "--no-edit"], cwd=str(self.workspace),
+                       check=True, stdout=subprocess.DEVNULL)
 
     def _record_failed_convert(self, n: int, reason: str) -> None:
         """Persist a failed/reverted triton->gluon conversion as memory/v<N>.json so the NEXT convert
@@ -735,14 +979,23 @@ class Campaign:
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, ARCH=self.arch or "the runtime GPU arch",
                                  NOTES=self.notes,
-                                 HARDWARE=hardware_directive(self.platform, self.arch))
+                                 HARDWARE=hardware_directive(self.platform, self.arch),
+                                 SANDBOX=self._sandbox_directive())
             else:
                 prompt = _render(PROMPTS_DIR / "iteration.md",
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, NOTES=self.notes,
-                                 HARDWARE=hardware_directive(self.platform, self.arch))
+                                 HARDWARE=hardware_directive(self.platform, self.arch),
+                                 SANDBOX=self._sandbox_directive())
             pre_head = git_head(self.workspace)  # win = a commit that changes kernel.py vs this
-            res = run_session(self.workspace, prompt, timeout=self.iter_timeout)
+            res = run_session(
+                self.workspace, prompt, timeout=self.iter_timeout,
+                agent_cli=self.agent_cli,
+                sandbox_hardware=self.sandbox_hardware,
+                sandbox_profile=self.sandbox_profile,
+                sandbox_url=self.sandbox_url,
+                sandbox_timeout=self.sandbox_timeout,
+            )
             self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
 
             # Robust infra-failure handling: distinguish crash vs timeout, retry up to 15
@@ -756,7 +1009,7 @@ class Campaign:
                 if infra_fails >= 15:
                     return self._finish(
                         f"infra: {infra_fails} consecutive sessions crashed (exit={res.exit_status}) "
-                        "(likely API key / auth issue — run `claude auth status`)"
+                        f"(likely API key / auth issue — {_agent_auth_hint(self.agent_cli)})"
                     )
                 # Back off before retrying to avoid hammering a rate-limited API
                 import time as _time
@@ -1018,6 +1271,11 @@ class LayerCampaign:
     setup_timeout: int = 7200
     decompose_timeout: int = 5400
     recombine_timeout: int = 5400
+    sandbox_hardware: str = ""
+    sandbox_profile: str = ""
+    sandbox_url: str = ""
+    sandbox_timeout: int = 600
+    agent_cli: str = "claude"
     tokens_spent: int = field(default=0, init=False)
 
     @property
@@ -1039,6 +1297,11 @@ class LayerCampaign:
     def budget_exhausted(self) -> bool:
         return self.token_budget > 0 and self.tokens_spent >= self.token_budget
 
+    def _sandbox_directive(self) -> str:
+        return sandbox_directive(
+            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
+        )
+
     def _manifest_path(self) -> Path:
         return self.layer_dir / "boundaries.json"
 
@@ -1055,8 +1318,16 @@ class LayerCampaign:
             OP_DIR=self.op_dir, NOTES=self.notes,
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
+            SANDBOX=self._sandbox_directive(),
         )
-        res = run_session(self.layer_dir, prompt, timeout=self.decompose_timeout)
+        res = run_session(
+            self.layer_dir, prompt, timeout=self.decompose_timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+        )
         self._account(res, "decompose")
         if not self._manifest_path().exists():
             raise RuntimeError("decompose did not produce boundaries.json")
@@ -1082,8 +1353,16 @@ class LayerCampaign:
                 WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
                 KERNEL_DEMO=str(demo), NOTES=self.notes,
                 HARDWARE=hardware_directive(self.platform, self.arch),
+                SANDBOX=self._sandbox_directive(),
             )
-            res = run_session(ws, prompt, timeout=self.setup_timeout)
+            res = run_session(
+                ws, prompt, timeout=self.setup_timeout,
+                agent_cli=self.agent_cli,
+                sandbox_hardware=self.sandbox_hardware,
+                sandbox_profile=self.sandbox_profile,
+                sandbox_url=self.sandbox_url,
+                sandbox_timeout=self.sandbox_timeout,
+            )
             self._account(res, f"baseline {b['name']}")
             if read_memory(ws, 0) is None:
                 raise RuntimeError(f"baseline failed for boundary {b['name']} (no memory/v0.json)")
@@ -1190,8 +1469,16 @@ class LayerCampaign:
             prompt = _render(PROMPTS_DIR / "iteration.md",
                              WORKSPACE=str(ws), N=n, PREV=n - 1,
                              PLATFORM=self.platform, NOTES=self.notes,
-                             HARDWARE=hardware_directive(self.platform, self.arch))
-            res = run_session(ws, prompt, timeout=self.iter_timeout)
+                             HARDWARE=hardware_directive(self.platform, self.arch),
+                             SANDBOX=self._sandbox_directive())
+            res = run_session(
+                ws, prompt, timeout=self.iter_timeout,
+                agent_cli=self.agent_cli,
+                sandbox_hardware=self.sandbox_hardware,
+                sandbox_profile=self.sandbox_profile,
+                sandbox_url=self.sandbox_url,
+                sandbox_timeout=self.sandbox_timeout,
+            )
             self._account(res, f"{target['name']} v{n}")
 
             # Guard: if the session exited without producing v<n>.json, write a
@@ -1236,8 +1523,16 @@ class LayerCampaign:
     def recombine(self) -> None:
         prompt = _render(PROMPTS_DIR / "recombine.md",
                          LAYER_DIR=str(self.layer_dir),
-                         HARDWARE=hardware_directive(self.platform, self.arch))
-        res = run_session(self.layer_dir, prompt, timeout=self.recombine_timeout)
+                         HARDWARE=hardware_directive(self.platform, self.arch),
+                         SANDBOX=self._sandbox_directive())
+        res = run_session(
+            self.layer_dir, prompt, timeout=self.recombine_timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+        )
         self._account(res, "recombine")
 
     def run(self) -> str:
@@ -1282,6 +1577,29 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "per-shape SOL, and the priority anchor (metadata.production_performance). Never hardcoded.")
     ap.add_argument("--platform", required=True, help="Target hardware, e.g. B200 / H20 / MI308X "
                                                       "(cannot be deduced from the op dir).")
+    ap.add_argument(
+        "--sandbox-hardware", default="",
+        help="agate GPU scheduler token used for all tests/profiles, e.g. REMOTE_GPU. "
+             "Default: --platform (set explicitly when logical platform and gateway alias differ).",
+    )
+    ap.add_argument(
+        "--sandbox-profile", choices=("pre", "prod"), default="",
+        help="Optional agate endpoint profile. Default: preserve AGATE_URL/config resolution.",
+    )
+    ap.add_argument(
+        "--sandbox-url", default="",
+        help="Explicit agate endpoint URL for all tests/profiles, e.g. "
+             "http://127.0.0.1:8000 for `atrex-gateway serve --local`. "
+             "Mutually exclusive with --sandbox-profile.",
+    )
+    ap.add_argument(
+        "--sandbox-timeout", type=int, default=600,
+        help="Per sandbox test/profile command timeout in seconds (1..600; gateway dev limit).",
+    )
+    ap.add_argument(
+        "--agent-cli", choices=AGENT_CLI_CHOICES, default="claude",
+        help="Coding CLI used for clean optimization sessions (default: claude; alternative: qodercli).",
+    )
     ap.add_argument("--framework", required=True, help="Target DSL, e.g. CuteDSL / FlyDSL "
                                                        "(cannot be deduced from the op dir).")
     ap.add_argument("--layer", action="store_true",
@@ -1310,15 +1628,35 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="Working directory for the optimization campaign. The workspace (kernel_opt_<name>/) "
                          "will be created under this directory. Default: current working directory.")
     args = ap.parse_args(argv)
+    if not 1 <= args.sandbox_timeout <= 600:
+        ap.error("--sandbox-timeout must be in the gateway-supported range 1..600")
+    if args.sandbox_url and args.sandbox_profile:
+        ap.error("--sandbox-url and --sandbox-profile are mutually exclusive")
+    if shutil.which(args.agent_cli) is None:
+        ap.error(f"--agent-cli executable not found on PATH: {args.agent_cli}")
+    if args.agent_cli == "qodercli" and args.token_budget > 0:
+        print(
+            "[orchestrator] WARNING: qodercli token-budget enforcement depends on token usage "
+            "reported in stream-json; some Qoder models report zero, so --max-iters remains "
+            "the authoritative hard bound in that configuration.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     # Create working directory if specified, so the campaign can write into it immediately.
     if args.workspace:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    arch = args.arch or detect_arch()
+    sandbox_hardware = args.sandbox_hardware or args.platform
+    arch = args.arch or detect_arch(
+        sandbox_hardware, args.sandbox_profile, args.sandbox_url
+    )
     op = _resolve_op(args.op_dir)
     ensure_submodules()
-    print(f"[orchestrator] op={op['name']} platform={args.platform} runtime_arch="
+    print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} platform={args.platform} "
+          f"sandbox_hardware={sandbox_hardware} "
+          f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
+          "runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
 
@@ -1326,6 +1664,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         layer = LayerCampaign(
             name=op["name"], layer_demo=op["reference"], platform=args.platform,
             framework=args.framework, notes=args.notes, arch=arch,
+            sandbox_hardware=sandbox_hardware, sandbox_profile=args.sandbox_profile,
+            sandbox_url=args.sandbox_url,
+            sandbox_timeout=args.sandbox_timeout,
+            agent_cli=args.agent_cli,
             work_dir=args.workspace,
             roofline_py=op["roofline_py"], op_dir=op["op_dir"],
             max_iters=args.max_iters, token_budget=args.token_budget,
@@ -1337,6 +1679,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     campaign = Campaign(
         name=op["name"], kernel_demo=op["reference"], platform=args.platform,
         framework=args.framework, notes=args.notes, arch=arch,
+        sandbox_hardware=sandbox_hardware, sandbox_profile=args.sandbox_profile,
+        sandbox_url=args.sandbox_url,
+        sandbox_timeout=args.sandbox_timeout,
+        agent_cli=args.agent_cli,
         work_dir=args.workspace,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,

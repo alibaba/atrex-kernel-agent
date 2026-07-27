@@ -64,7 +64,25 @@ The installer detects supported runtime home directories and prepares local hook
 
 ![route2 optimization loop](assets/optimize_workflow.png)
 
-This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean session for each iteration over the same git workspace. State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel.
+This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude or Qoder CLI session for each iteration over the same git workspace. Select the backend with `--agent-cli claude|qodercli` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel.
+
+Correctness/performance validation and profiling run on an atrex-gpu-gateway sandbox selected by
+`--sandbox-hardware`. The gateway worker receives code and test/profile inputs only: optimizer `memory/`, plans,
+edits, and Git state remain local. Structured test results and profile analysis artifacts are returned to the
+local session. The same transport can be used directly:
+
+```bash
+python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
+  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+
+# Same interface on a localhost GPU gateway (`atrex-gateway serve --local`)
+python tools/sandbox.py --hardware local --url http://127.0.0.1:8000 \
+  --no-sync -- python test_kernel.py --no-memory
+```
+
+Local gateway mode preserves the request/packaging/result interface but is not a security sandbox:
+submitted commands run directly as the server user. Use `atrex-gateway serve --local` only with trusted code.
 
 Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
 
@@ -75,12 +93,24 @@ Key options:
 ```bash
 --max-iters N        # Hard cap on optimization iterations
 --token-budget N     # Hard token cap across all sessions (0 = no cap)
+--agent-cli CLI      # Optimization session backend: claude (default) or qodercli
 --target-util PCT    # Peak-utilization %% short-circuit (default 90)
+--sandbox-hardware GPU # agate scheduler token for tests/profiles, e.g. REMOTE_GPU
+--sandbox-profile P  # Optional pre/prod endpoint; default uses agate config
+--sandbox-url URL    # Explicit endpoint; use http://127.0.0.1:8000 with hardware=local
+--sandbox-timeout S  # Remote command timeout, max 600 seconds
 --workspace DIR      # Working directory for the campaign (default: current directory)
 --max-stall N        # Stop after N consecutive no-commit iterations (0 = disabled)
 --convert-after N    # Triton only: after N stalled iters, run one Triton->Gluon convert session
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
+
+Both backends run non-interactively with a fresh session ID and the same workspace-local skills,
+agents, prompts, sandbox constraints, and quality gates. Authenticate the selected CLI first with
+`claude auth status` or `qodercli status`. Provider-specific settings can be supplied through
+`ATREX_CLAUDE_SESSION_SETTINGS` or `ATREX_QODER_SESSION_SETTINGS`; `ATREX_SESSION_SETTINGS` remains
+the generic fallback. Some Qoder models report zero token usage in stream JSON; in that case
+`--token-budget` cannot be enforced and `--max-iters` remains the hard campaign bound.
 
 ## Main Files
 
