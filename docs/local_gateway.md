@@ -1,0 +1,79 @@
+# Community Local Gateway
+
+`tools/local_gateway.py` is a small, standard-library-only scheduler for maintaining and testing the
+localhost optimization path without a deployed atrex-gateway server. It implements the public HTTP shapes
+used by `agate dev` and `tools/sandbox.py`, and queues local GPU commands FIFO.
+
+## Start the Server
+
+Run it from the repository root in the Python environment that contains the workload's GPU stack:
+
+```bash
+python tools/local_gateway.py serve \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --state-dir .atrex-local-gateway
+```
+
+The default `--workers 1` serializes commands for one local GPU. A larger value enables parallel command
+execution and should only be used when the machine and workloads can safely share the device.
+
+The state directory contains `jobs.db`, per-job uploaded files, stdout, and stderr. Queued jobs survive a
+restart. A job that was running when the server stopped is marked failed on the next start rather than being
+silently executed twice.
+
+## Use the Existing Clients
+
+The regular `agate` client needs no special adapter:
+
+```bash
+agate health --url http://127.0.0.1:8000
+agate list hw --url http://127.0.0.1:8000
+
+agate dev "python -c 'import torch; print(torch.cuda.get_device_capability())'" \
+  --url http://127.0.0.1:8000 --gpu local
+```
+
+Submission, queue inspection, long polling, and cancellation use the normal commands:
+
+```bash
+agate dev "sleep 30" --url http://127.0.0.1:8000 --gpu local --no-wait
+agate jobs --url http://127.0.0.1:8000
+agate get <job_id> --url http://127.0.0.1:8000 --wait
+agate cancel <job_id> --url http://127.0.0.1:8000
+```
+
+The optimizer continues to use `tools/sandbox.py`, so correctness, performance, and profiler commands have
+the same packaging and artifact-return behavior as a remote gateway:
+
+```bash
+python orchestrator/optimize.py \
+  --op-dir /path/to/operator \
+  --platform LOCAL_GPU --framework Triton \
+  --sandbox-hardware local \
+  --sandbox-url http://127.0.0.1:8000
+```
+
+## Compatibility Surface
+
+The community scheduler implements:
+
+- `GET /healthz`
+- `GET /v1/env` and `GET /v1/env/local`
+- `POST /v1/jobs/dev`, including uploaded text files, environment variables, timeouts, and idempotency keys
+- `GET /v1/jobs` with the standard kind/user/status/limit filters
+- `GET /v1/jobs/<job_id>`, including `wait=true&timeout=<seconds>` long polling
+- `POST /v1/jobs/<job_id>/cancel`
+- legacy `GET /v1/evals/<job_id>` polling compatibility
+
+Specialized `eval`, `profile`, and `disassemble` submissions return a structured HTTP 501
+`kind_not_supported` response. The repository does not depend on those routes: `tools/sandbox.py` submits
+self-contained correctness, performance, and profiler work as `dev` commands. Keeping unsupported routes
+explicit avoids pretending that the community scheduler reproduces server-side evaluator internals.
+
+## Security Boundary
+
+This server is not a container or privilege boundary. Uploaded files and commands execute as the account
+running the server, and job payloads and output remain in the state directory. The server rejects a
+non-loopback bind unless `--allow-remote` is supplied, but that flag does not add authentication or
+isolation. Use trusted inputs and keep the default loopback bind.

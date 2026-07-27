@@ -58,21 +58,23 @@ run through `tools/sandbox.py` on `--sandbox-hardware`; `memory/` and Git stay l
 submittable SOL-ExecBench output after a passing run. Omit `--agent-cli` to use Claude, or pass
 `--agent-cli qodercli` after authenticating with `qodercli status`.
 
-To use the same gateway interface on a local GPU, run the server in a Python 3.12+ environment:
+To use the same gateway interface on a local GPU, start the bundled community scheduler. It has no
+third-party Python dependencies:
 
 ```bash
-pip install atrex-gateway-server==0.1.0 \
-  --index-url "${PYPI_INDEX_URL}" \
-  --extra-index-url "${PYPI_EXTRA_INDEX_URL}" \
-  --trusted-host "${PYPI_HOST}"
-atrex-gateway serve --local
+python tools/local_gateway.py serve \
+  --host 127.0.0.1 --port 8000 \
+  --state-dir .atrex-local-gateway
 ```
 
-`--local` provides interface compatibility, not process isolation: submitted code runs directly as the
-server user. Bind it to localhost and submit trusted code only.
-The local worker also inherits the server process's Python/toolchain environment. Install `torch`, Triton,
-and any kernel DSL needed by the workload into that same Python 3.12+ environment; otherwise `agate run`
-will fail during candidate/reference import.
+The default single worker executes jobs FIFO, so concurrent optimizer requests queue instead of contending
+for the GPU. `agate dev`, `agate get/jobs/cancel`, long polling, environment discovery, and
+`tools/sandbox.py` use the same HTTP shapes as atrex-gateway. See [local_gateway.md](local_gateway.md) for
+the exact compatibility surface.
+
+This is interface compatibility, not process isolation: submitted code runs directly as the server user.
+Bind it to localhost and submit trusted code only. The worker inherits the server process's Python/toolchain
+environment, so install `torch`, Triton, and any kernel DSL needed by the workload into that environment.
 
 Then select the localhost endpoint and the server's `local` GPU alias:
 

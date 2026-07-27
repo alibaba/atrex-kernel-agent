@@ -229,8 +229,11 @@ structured `RESULT_JSON` output.
 
 The execution endpoint is independent of the workflow. Remote gateways can be selected through agate
 configuration or `--sandbox-profile`; `--sandbox-url http://127.0.0.1:8000` together with
-`--sandbox-hardware local` targets `atrex-gateway serve --local`. Both modes use the same packaging,
-result parsing, artifact synchronization, and execution-boundary rules.
+`--sandbox-hardware local` targets either atrex-gateway's localhost backend or the bundled
+`tools/local_gateway.py` community scheduler. Both modes use the same packaging, result parsing, artifact
+synchronization, and execution-boundary rules. The community scheduler persists the public job model in
+SQLite and consumes `dev` commands FIFO with one worker by default, preventing concurrent local campaigns
+from contending for the same GPU.
 Local mode is transport-compatible but not an isolation boundary: the server executes submitted commands
 as its current user and therefore must only accept trusted code.
 

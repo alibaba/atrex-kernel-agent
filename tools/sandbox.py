@@ -81,6 +81,7 @@ INPUT_SKIP_PATHS = {
     # are deliberately local-only.  Omitting these also leaves useful headroom
     # below the gateway worker's per-argument limit.
     "tools/sandbox.py",
+    "tools/local_gateway.py",
     "tools/memory_manager.py",
 }
 INPUT_SKIP_SUFFIXES = {

@@ -76,13 +76,16 @@ python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
 
-# Same interface on a localhost GPU gateway (`atrex-gateway serve --local`)
+# Same interface on the bundled localhost FIFO scheduler
+# Start it first with: python tools/local_gateway.py serve
 python tools/sandbox.py --hardware local --url http://127.0.0.1:8000 \
   --no-sync -- python test_kernel.py --no-memory
 ```
 
 Local gateway mode preserves the request/packaging/result interface but is not a security sandbox:
-submitted commands run directly as the server user. Use `atrex-gateway serve --local` only with trusted code.
+submitted commands run directly as the server user. The bundled scheduler serializes jobs by default,
+persists their status in SQLite, and speaks the same public `agate dev`/jobs API. See
+[docs/local_gateway.md](docs/local_gateway.md) for startup, queue, cancellation, and compatibility details.
 
 Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
 
