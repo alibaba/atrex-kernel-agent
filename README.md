@@ -89,7 +89,7 @@ persists their status in SQLite, and speaks the same public `agate dev`/jobs API
 
 Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
 
-Everything op-specific (workspace name, the reference to optimize, the full workload/shape set, per-workload tolerances) is read from the SOL-ExecBench `--op-dir`; the ground-truth files (`definition.json`, `reference.py`, `workload.jsonl`) are used verbatim and never edited. Only `--platform` and `--framework` cannot be deduced and must be provided. A version that passes `test_kernel.py` in the workspace is directly submittable to SOL-ExecBench.
+Everything op-specific (workspace name, the reference to optimize, the full workload/shape set, per-workload tolerances) is read from the SOL-ExecBench `--op-dir`; the ground-truth files (`definition.json`, `reference.py`, `workload.jsonl`) are used verbatim and never edited. `--platform` is required. In the default `leaderboard` mode, `--framework` may select one framework explicitly; when omitted, the orchestrator launches independent campaigns in parallel for Triton/CuteDSL/Cuda on NVIDIA, Triton/FlyDSL on AMD, or Triton on unknown hardware. A version that passes `test_kernel.py` in its workspace is directly submittable to SOL-ExecBench.
 
 Key options:
 
@@ -97,8 +97,10 @@ Key options:
 --max-iters N        # Hard cap on optimization iterations
 --token-budget N     # Hard token cap across all sessions (0 = no cap)
 --agent-cli CLI      # Optimization session backend: claude (default) or qodercli
+--optimization-mode MODE # leaderboard (default) or production
+--framework DSL      # One explicit DSL; omit to parallel-dispatch all supported DSLs
 --target-util PCT    # Peak-utilization %% short-circuit (default 90)
---sandbox-hardware GPU # agate scheduler token for tests/profiles, e.g. REMOTE_GPU
+--sandbox-hardware GPU # agate selector/alias; independent of the logical --platform name
 --sandbox-profile P  # Optional pre/prod endpoint; default uses agate config
 --sandbox-url URL    # Explicit endpoint; use http://127.0.0.1:8000 with hardware=local
 --sandbox-timeout S  # Remote command timeout, max 600 seconds
@@ -107,6 +109,32 @@ Key options:
 --convert-after N    # Triton only: after N stalled iters, run one Triton->Gluon convert session
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
+
+Auto-dispatched campaigns use flat framework/hardware suffixes; for example,
+`<workspace>/kernel_opt_<name>_triton_h20` and
+`<workspace>/kernel_opt_<name>_cutedsl_h20`. Each campaign receives its own full iteration and
+token budgets. Explicit `--framework` campaigns use the same naming convention.
+
+`--optimization-mode leaderboard` preserves the existing permissive `CLAUDE.md` workflow: sessions may
+use a different/mixed implementation or third-party kernel libraries when profiling evidence supports it.
+`--optimization-mode production` also supports omitted `--framework`: the orchestrator auto-dispatches the
+hardware-supported frameworks and binds every child campaign to its assigned framework. V0 may remain the
+PyTorch correctness baseline, but every accepted optimized candidate must be implemented directly and
+exclusively in that child's framework. Third-party kernel/operator imports, calls, and solution dependencies are forbidden. A mechanical
+post-session gate rejects and reverts non-compliant kernel commits, records a `production_policy_rejection`,
+and refuses to package a non-compliant final kernel. Triton-to-Gluon conversion is disabled in production
+mode because the selected framework is exact.
+
+```bash
+python orchestrator/optimize.py \
+  --op-dir /path/to/op --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
+  --optimization-mode production --framework Triton
+```
+
+`--platform` is a logical optimization target while `--sandbox-hardware` is the gateway selector. The
+orchestrator deliberately does not compare their names or reported GPU models because gateway inventory
+may be aliased or desensitized. Runtime architecture probing remains authoritative when an omitted
+`--framework` requires vendor-specific dispatch.
 
 Both backends run non-interactively with a fresh session ID and the same workspace-local skills,
 agents, prompts, sandbox constraints, and quality gates. Authenticate the selected CLI first with

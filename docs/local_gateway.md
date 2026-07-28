@@ -56,10 +56,18 @@ the same packaging and artifact-return behavior as a remote gateway:
 ```bash
 python orchestrator/optimize.py \
   --op-dir /path/to/operator \
-  --platform LOCAL_GPU --framework Triton \
+  --platform H20 --framework Triton \
   --sandbox-hardware local \
   --sandbox-url http://127.0.0.1:8000
 ```
+
+`--framework` can be omitted to start all frameworks supported by the runtime GPU architecture in
+parallel. Their sandbox requests still enter this scheduler's FIFO queue, and their local optimizer state
+uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`.
+
+`--sandbox-hardware local` selects the gateway backend independently of the logical `--platform` value.
+The optimizer does not compare platform and inventory names because a gateway may expose an alias or a
+desensitized GPU description. It uses the runtime architecture probe for automatic framework dispatch.
 
 ## Compatibility Surface
 

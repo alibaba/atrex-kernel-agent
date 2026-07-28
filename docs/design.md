@@ -148,7 +148,8 @@ The workflow parses required fields from user input:
 |------|----------|-------|
 | `platform` | Yes | Hardware target, e.g. `H20`, `H100`, `MI308X`, `MI355X`. |
 | `arch` | Derived | `H20/H100/H200 -> Hopper`, `MI300X/MI308X -> CDNA3`, `MI355X -> CDNA4`. |
-| `framework` | Yes | Target framework, e.g. `CuteDSL` or `FlyDSL`. |
+| `framework` | No | Target framework, e.g. `CuteDSL` or `FlyDSL`. If omitted, both modes dispatch all hardware-supported frameworks in parallel (NVIDIA: Triton/CuteDSL/Cuda; AMD: Triton/FlyDSL; fallback: Triton); every child receives one explicit framework. |
+| `optimization_mode` | Default: `leaderboard` | `leaderboard` keeps the permissive framework/third-party-library policy. `production` enforces a self-contained implementation in each explicit or auto-assigned child framework. |
 | `kernel_demo` | Yes | Initial kernel or PyTorch logic file. |
 | `gpu_wiki_path` | Default | `/tmp/gpu-wiki/`. |
 | `reference_project` | Default | `/tmp/reference-projects/`. |
@@ -247,6 +248,7 @@ Important rules:
 - Correctness must pass before performance conclusions or commits.
 - Performance records must include latency, TFLOPS, bandwidth, and peak-utilization ratios.
 - If a quality gate fails, the workflow reverts to the previous commit and records the failure.
+- In production mode, a second mechanical gate statically checks `kernel.py` and `solution.json` after every kernel-changing commit. Wrong-framework code, third-party kernel/operator dependencies, or PyTorch compute fallbacks are reverted and recorded as `production_policy_rejection`; a non-compliant final candidate is never packaged.
 
 ### 6. Stop or Continue
 

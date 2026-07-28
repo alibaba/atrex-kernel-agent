@@ -22,12 +22,24 @@ this file only does mechanism: spawn, time-bound, token-account, read state, dec
 
 Usage
 -----
-    # single operator (default, unchanged):
+    # single operator with an explicit framework:
     python orchestrator/optimize.py \
         --name mla_decode --kernel-demo /path/to/demo.py \
         --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
         --agent-cli qodercli \
         --max-iters 20 --token-budget 8000000 --target-util 90
+
+    # omit --framework to launch one independent campaign per supported framework:
+    #   NVIDIA -> Triton, CuteDSL, Cuda
+    #   AMD    -> Triton, FlyDSL
+    #   other  -> Triton
+    python orchestrator/optimize.py \
+        --op-dir /path/to/op --platform H20 --workspace /path/to/runs
+
+    # production: exact framework, no third-party kernel/operator dependencies:
+    python orchestrator/optimize.py \
+        --op-dir /path/to/op --platform H20 --framework Triton \
+        --optimization-mode production
 
     # whole LLM layer (optional decomposition overlay):
     #   decompose -> N per-boundary workspaces (each a standard single-op campaign) ->
@@ -55,6 +67,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+try:
+    from .optimization_policy import (
+        OPTIMIZATION_MODE_CHOICES,
+        install_workspace_policy,
+        optimization_mode_directive,
+        production_kernel_violations,
+        reject_production_commit,
+    )
+except ImportError:  # direct script execution: python orchestrator/optimize.py
+    from optimization_policy import (  # type: ignore[no-redef]
+        OPTIMIZATION_MODE_CHOICES,
+        install_workspace_policy,
+        optimization_mode_directive,
+        production_kernel_violations,
+        reject_production_commit,
+    )
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
@@ -69,6 +98,173 @@ CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continu
 MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = ("claude", "qodercli")
+NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda")
+AMD_FRAMEWORKS = ("Triton", "FlyDSL")
+DEFAULT_FRAMEWORKS = ("Triton",)
+
+
+def _hardware_token(value: object) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def hardware_vendor(platform: str, arch: str = "") -> str:
+    """Return ``nvidia``, ``amd``, or ``unknown`` for framework dispatch.
+
+    Runtime architecture is authoritative because gateway device names can be
+    desensitized. Platform-name matching is only a fallback for dry runs or an
+    unavailable runtime probe.
+    """
+    runtime_arch = arch.strip().lower()
+    if re.fullmatch(r"sm_?\d+", runtime_arch):
+        return "nvidia"
+    if re.fullmatch(r"gfx[0-9a-f]+", runtime_arch):
+        return "amd"
+
+    token = _hardware_token(platform)
+    if re.match(r"^(?:AMD|MI\d|RADEON|INSTINCT)", token):
+        return "amd"
+    if re.match(
+        r"^(?:NVIDIA|CUDA|GEFORCE|RTX|QUADRO|TESLA|DGX|GB\d|[BHALTVP]\d|PRO\d)",
+        token,
+    ):
+        return "nvidia"
+    return "unknown"
+
+
+def supported_frameworks(platform: str, arch: str = "") -> tuple[str, ...]:
+    """Framework campaigns to launch when ``--framework`` is omitted."""
+    vendor = hardware_vendor(platform, arch)
+    if vendor == "nvidia":
+        return NVIDIA_FRAMEWORKS
+    if vendor == "amd":
+        return AMD_FRAMEWORKS
+    return DEFAULT_FRAMEWORKS
+
+
+def _workspace_slug(value: str) -> str:
+    """Stable flat-workspace suffix component."""
+    slug = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    if not slug:
+        raise ValueError("workspace suffix value has no usable directory characters")
+    return slug
+
+
+def framework_workspace_suffix(framework: str, platform: str) -> str:
+    """Flat suffix for an auto-dispatched framework/hardware campaign."""
+    return f"{_workspace_slug(framework)}_{_workspace_slug(platform)}"
+
+
+def _without_cli_options(argv: list[str], option_names: tuple[str, ...]) -> list[str]:
+    """Remove value-taking options from argv before adding canonical child values."""
+    cleaned: list[str] = []
+    skip_value = False
+    for arg in argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in option_names:
+            skip_value = True
+            continue
+        if any(arg.startswith(name + "=") for name in option_names):
+            continue
+        cleaned.append(arg)
+    return cleaned
+
+
+def dispatch_framework_campaigns(
+    argv: list[str],
+    frameworks: tuple[str, ...],
+    workspace_base: Path,
+    arch: str,
+    platform: str,
+) -> int:
+    """Launch explicit-framework optimizer children concurrently and wait for all.
+
+    Each child receives a flat framework/hardware suffix, so its eventual
+    workspace is ``<workspace_base>/kernel_opt_<op>_<framework>_<platform>``
+    (or the equivalent layer paths). Budgets remain per campaign; a failed
+    framework does not cancel the other independent campaigns.
+    """
+    common_argv = _without_cli_options(
+        argv, ("--framework", "--workspace", "--arch", "--workspace-suffix")
+    )
+    children: list[tuple[str, str, subprocess.Popen[str]]] = []
+    workspace_base.mkdir(parents=True, exist_ok=True)
+    failed: list[tuple[str, int]] = []
+
+    def stop_children() -> None:
+        for _, _, proc in children:
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+        for _, _, proc in children:
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def interrupt_dispatch(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt_dispatch)
+    try:
+        for framework in frameworks:
+            workspace_suffix = framework_workspace_suffix(framework, platform)
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                *common_argv,
+                "--framework", framework,
+                "--workspace", str(workspace_base),
+                "--workspace-suffix", workspace_suffix,
+            ]
+            if arch:
+                cmd += ["--arch", arch]
+            proc = subprocess.Popen(cmd, start_new_session=True, text=True)
+            children.append((framework, workspace_suffix, proc))
+            print(
+                f"[orchestrator] dispatched framework={framework} pid={proc.pid} "
+                f"workspace_suffix={workspace_suffix} work_root={workspace_base}",
+                flush=True,
+            )
+
+        # All children have already been spawned, so sequential waits do not
+        # serialize their optimization work.
+        for framework, _, proc in children:
+            returncode = proc.wait()
+            print(
+                f"[orchestrator] framework={framework} finished exit={returncode}",
+                flush=True,
+            )
+            if returncode != 0:
+                failed.append((framework, returncode))
+    except KeyboardInterrupt:
+        print("[orchestrator] interrupt: stopping framework campaigns", file=sys.stderr, flush=True)
+        stop_children()
+        return 130
+    except BaseException:
+        stop_children()
+        raise
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+    if failed:
+        summary = ", ".join(f"{name}={code}" for name, code in failed)
+        print(f"[orchestrator] framework campaign failures: {summary}", file=sys.stderr, flush=True)
+        return 1
+    return 0
 
 
 def is_sol_op(op_dir: Path) -> bool:
@@ -113,8 +309,11 @@ class SessionResult:
 
 def _render(template_path: Path, **kw: str) -> str:
     text = template_path.read_text(encoding="utf-8")
+    mode_policy = kw.pop("MODE_POLICY", "")
     for key, val in kw.items():
         text = text.replace("{{" + key + "}}", str(val))
+    if mode_policy:
+        text = str(mode_policy).rstrip() + "\n\n" + text
     return text
 
 
@@ -185,6 +384,23 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = 
         except ProcessLookupError:
             pass
         stdout, stderr = proc.communicate()
+    except BaseException:
+        # The coding CLI owns a separate process group. If an explicit or
+        # auto-dispatched optimizer is interrupted, reap that entire group so
+        # Qoder/Claude and their tool subprocesses cannot become orphaned.
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+        raise
     return stdout or "", stderr or "", proc.returncode, timed_out
 
 
@@ -792,6 +1008,7 @@ class Campaign:
     notes: str = "none"
     arch: str = ""                 # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
     work_dir: str = ""             # explicit working directory; "" = Path.cwd() (backward compat)
+    workspace_suffix: str = ""     # internal auto-dispatch suffix, e.g. triton_h20
     max_iters: int = 20
     token_budget: int = 0          # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
@@ -804,12 +1021,18 @@ class Campaign:
     sandbox_url: str = ""          # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int = 600      # agate dev hard limit
     agent_cli: str = "claude"       # clean-session coding backend: claude or qodercli
+    optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     tokens_spent: int = field(default=0, init=False)
+
+    @property
+    def campaign_name(self) -> str:
+        suffix = f"_{self.workspace_suffix}" if self.workspace_suffix else ""
+        return f"{self.name}{suffix}"
 
     @property
     def workspace(self) -> Path:
         base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        return base / f"kernel_opt_{self.name}"
+        return base / f"kernel_opt_{self.campaign_name}"
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -820,11 +1043,15 @@ class Campaign:
 
     def _link_runtime(self) -> None:
         link_runtime(self.workspace)
+        install_workspace_policy(self.workspace, self.optimization_mode, self.framework)
 
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
             self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
         )
+
+    def _mode_directive(self) -> str:
+        return optimization_mode_directive(self.optimization_mode, self.framework)
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
@@ -838,7 +1065,7 @@ class Campaign:
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
         # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
         # so cwd must be the work_dir (or the process cwd when --workspace is absent).
-        subprocess.run(["bash", str(WORKSPACE_INIT), self.name, self.kernel_demo],
+        subprocess.run(["bash", str(WORKSPACE_INIT), self.campaign_name, self.kernel_demo],
                        cwd=str(self.workspace.parent), check=True)
         # atrex-bench operators keep their immutable harness inputs beside
         # reference.py.  workspace_init.sh only copies the reference itself;
@@ -856,6 +1083,7 @@ class Campaign:
             NOTES=self.notes,
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
+            MODE_POLICY=self._mode_directive(),
         )
         res = run_session(
             self.workspace, prompt, timeout=self.setup_timeout,
@@ -879,7 +1107,7 @@ class Campaign:
         if not SOL_SEED.exists():
             raise FileNotFoundError(f"missing {SOL_SEED}")
         cmd = [sys.executable, str(SOL_SEED),
-               "--op-dir", str(op_dir), "--name", self.name,
+               "--op-dir", str(op_dir), "--name", self.campaign_name,
                "--workspace", str(self.workspace),
                "--framework", self.framework, "--platform", self.platform,
                # The local step only materializes sources and git state.  GPU
@@ -914,7 +1142,8 @@ class Campaign:
         mem["git_commit_hash"] = git_head(self.workspace)
         mem.setdefault("optimization", {})["action_category"] = "baseline"
         memory_path.write_text(json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        subprocess.run(["git", "add", "memory/v0.json"], cwd=str(self.workspace), check=True)
+        subprocess.run(["git", "add", "memory/v0.json", "CLAUDE.md", ".gitignore"],
+                       cwd=str(self.workspace), check=True)
         subprocess.run(["git", "commit", "--amend", "--no-edit"], cwd=str(self.workspace),
                        check=True, stdout=subprocess.DEVNULL)
 
@@ -946,6 +1175,13 @@ class Campaign:
             print(f"[orchestrator] resuming: latest = v{latest_version(self.workspace)}", flush=True)
             self._link_runtime()  # ensure runtime symlinks exist for iteration sessions
 
+        if self.optimization_mode == "production" and latest_version(self.workspace) > 0:
+            violations = production_kernel_violations(self.workspace, self.framework)
+            if violations:
+                raise RuntimeError(
+                    "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
+                )
+
         stall = read_stall(self.workspace)   # persisted live counter (single source of truth)
         if stall is None:
             stall = reconstruct_stall(self.workspace)  # bootstrap from git when no state file yet
@@ -968,7 +1204,8 @@ class Campaign:
             # so the following sessions can go further. Re-fires after each `convert_after` stalled
             # rounds — the cooldown resets on every convert issued, win or lose (see below).
             do_convert = (
-                self.convert_after > 0
+                self.optimization_mode == "leaderboard"
+                and self.convert_after > 0
                 and _is_triton_family(self.framework)
                 and not kernel_is_gluon(self.workspace)
                 and stall >= self.convert_after
@@ -980,13 +1217,15 @@ class Campaign:
                                  PLATFORM=self.platform, ARCH=self.arch or "the runtime GPU arch",
                                  NOTES=self.notes,
                                  HARDWARE=hardware_directive(self.platform, self.arch),
-                                 SANDBOX=self._sandbox_directive())
+                                 SANDBOX=self._sandbox_directive(),
+                                 MODE_POLICY=self._mode_directive())
             else:
                 prompt = _render(PROMPTS_DIR / "iteration.md",
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, NOTES=self.notes,
                                  HARDWARE=hardware_directive(self.platform, self.arch),
-                                 SANDBOX=self._sandbox_directive())
+                                 SANDBOX=self._sandbox_directive(),
+                                 MODE_POLICY=self._mode_directive())
             pre_head = git_head(self.workspace)  # win = a commit that changes kernel.py vs this
             res = run_session(
                 self.workspace, prompt, timeout=self.iter_timeout,
@@ -1029,6 +1268,18 @@ class Campaign:
 
             mem = read_memory(self.workspace, n)
             won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
+            if won and self.optimization_mode == "production":
+                violations = production_kernel_violations(self.workspace, self.framework)
+                if violations:
+                    reject_production_commit(self.workspace, n, pre_head, violations)
+                    print(
+                        "[orchestrator] production policy rejected v"
+                        f"{n}: {'; '.join(violations)}; reverted to {pre_head[:8]}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    mem = read_memory(self.workspace, n)
+                    won = False
             if won and peak_util(mem) >= self.target_util:
                 mask_half_memory(self.workspace, n)
                 return self._finish(f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%")
@@ -1111,6 +1362,14 @@ class Campaign:
             )
         except OSError:
             pass
+        # Production output is fail-closed: do not package a PyTorch baseline,
+        # alternate DSL, or third-party-backed kernel as a production candidate.
+        if self.optimization_mode == "production":
+            violations = production_kernel_violations(self.workspace, self.framework)
+            if violations:
+                raise RuntimeError(
+                    "no production-compliant final kernel: " + "; ".join(violations)
+                )
         # SOL op: emit the self-contained, validated submission (SOL's output format).
         if (self.workspace / "definition.json").exists() and (self.workspace / "solution.json").exists():
             try:
@@ -1259,6 +1518,7 @@ class LayerCampaign:
     notes: str = "none"
     arch: str = ""
     work_dir: str = ""             # explicit working directory; "" = Path.cwd() (backward compat)
+    workspace_suffix: str = ""     # internal auto-dispatch suffix, e.g. triton_h20
     roofline_py: str = ""
     op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
                                    # metadata.json / input.py / reference.py) — the full shape
@@ -1276,16 +1536,25 @@ class LayerCampaign:
     sandbox_url: str = ""
     sandbox_timeout: int = 600
     agent_cli: str = "claude"
+    optimization_mode: str = "leaderboard"
     tokens_spent: int = field(default=0, init=False)
+
+    @property
+    def campaign_name(self) -> str:
+        suffix = f"_{self.workspace_suffix}" if self.workspace_suffix else ""
+        return f"{self.name}{suffix}"
 
     @property
     def layer_dir(self) -> Path:
         base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        return base / f"layer_{self.name}"
+        return base / f"layer_{self.campaign_name}"
 
     def _boundary_ws(self, bname: str) -> Path:
         base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        return base / f"kernel_opt_{self.name}__{bname}"
+        boundary_name = f"{self.name}__{bname}"
+        if self.workspace_suffix:
+            boundary_name += f"_{self.workspace_suffix}"
+        return base / f"kernel_opt_{boundary_name}"
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -1302,6 +1571,9 @@ class LayerCampaign:
             self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
         )
 
+    def _mode_directive(self) -> str:
+        return optimization_mode_directive(self.optimization_mode, self.framework)
+
     def _manifest_path(self) -> Path:
         return self.layer_dir / "boundaries.json"
 
@@ -1311,6 +1583,7 @@ class LayerCampaign:
     # ── phase 1: decompose ────────────────────────────────────────────────────
     def decompose(self) -> None:
         self.layer_dir.mkdir(parents=True, exist_ok=True)
+        install_workspace_policy(self.layer_dir, self.optimization_mode, self.framework)
         prompt = _render(
             PROMPTS_DIR / "decompose.md",
             LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
@@ -1319,6 +1592,7 @@ class LayerCampaign:
             DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
+            MODE_POLICY=self._mode_directive(),
         )
         res = run_session(
             self.layer_dir, prompt, timeout=self.decompose_timeout,
@@ -1342,11 +1616,16 @@ class LayerCampaign:
             ws = self._boundary_ws(b["name"])
             b["workspace"] = str(ws)
             if latest_version(ws) >= 0:
+                install_workspace_policy(ws, self.optimization_mode, self.framework)
                 continue  # already set up (resume)
             demo = self.layer_dir / b["kernel_demo"]
-            subprocess.run(["bash", str(WORKSPACE_INIT), f"{self.name}__{b['name']}", str(demo)],
+            boundary_name = f"{self.name}__{b['name']}"
+            if self.workspace_suffix:
+                boundary_name += f"_{self.workspace_suffix}"
+            subprocess.run(["bash", str(WORKSPACE_INIT), boundary_name, str(demo)],
                            cwd=str(ws.parent), check=True)
             link_runtime(ws)
+            install_workspace_policy(ws, self.optimization_mode, self.framework)
             self._write_shape_frame(ws, b)
             prompt = _render(
                 PROMPTS_DIR / "setup.md",
@@ -1354,6 +1633,7 @@ class LayerCampaign:
                 KERNEL_DEMO=str(demo), NOTES=self.notes,
                 HARDWARE=hardware_directive(self.platform, self.arch),
                 SANDBOX=self._sandbox_directive(),
+                MODE_POLICY=self._mode_directive(),
             )
             res = run_session(
                 ws, prompt, timeout=self.setup_timeout,
@@ -1470,7 +1750,9 @@ class LayerCampaign:
                              WORKSPACE=str(ws), N=n, PREV=n - 1,
                              PLATFORM=self.platform, NOTES=self.notes,
                              HARDWARE=hardware_directive(self.platform, self.arch),
-                             SANDBOX=self._sandbox_directive())
+                             SANDBOX=self._sandbox_directive(),
+                             MODE_POLICY=self._mode_directive())
+            pre_head = git_head(ws)
             res = run_session(
                 ws, prompt, timeout=self.iter_timeout,
                 agent_cli=self.agent_cli,
@@ -1480,6 +1762,20 @@ class LayerCampaign:
                 sandbox_timeout=self.sandbox_timeout,
             )
             self._account(res, f"{target['name']} v{n}")
+
+            if (
+                self.optimization_mode == "production"
+                and kernel_won(ws, pre_head)
+            ):
+                violations = production_kernel_violations(ws, self.framework)
+                if violations:
+                    reject_production_commit(ws, n, pre_head, violations)
+                    print(
+                        f"[layer] production policy rejected {target['name']} v{n}: "
+                        + "; ".join(violations),
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
             # Guard: if the session exited without producing v<n>.json, write a
             # minimal failed-iteration record so latest_version() advances.  Without
@@ -1521,10 +1817,12 @@ class LayerCampaign:
 
     # ── phase 4: recombine ────────────────────────────────────────────────────
     def recombine(self) -> None:
+        install_workspace_policy(self.layer_dir, self.optimization_mode, self.framework)
         prompt = _render(PROMPTS_DIR / "recombine.md",
                          LAYER_DIR=str(self.layer_dir),
                          HARDWARE=hardware_directive(self.platform, self.arch),
-                         SANDBOX=self._sandbox_directive())
+                         SANDBOX=self._sandbox_directive(),
+                         MODE_POLICY=self._mode_directive())
         res = run_session(
             self.layer_dir, prompt, timeout=self.recombine_timeout,
             agent_cli=self.agent_cli,
@@ -1534,6 +1832,12 @@ class LayerCampaign:
             sandbox_timeout=self.sandbox_timeout,
         )
         self._account(res, "recombine")
+        if self.optimization_mode == "production":
+            violations = production_kernel_violations(self.layer_dir, self.framework)
+            if violations:
+                raise RuntimeError(
+                    "recombined kernel violates production policy: " + "; ".join(violations)
+                )
 
     def run(self) -> str:
         if not self._manifest_path().exists():
@@ -1551,7 +1855,7 @@ class LayerCampaign:
 
 def _resolve_op(op_dir: str) -> dict:
     """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
-    --op-dir (+ the non-deducible --platform / --framework). Returns name / reference / roofline_py.
+    --op-dir (+ the non-deducible --platform). Returns name / reference / roofline_py.
     """
     d = Path(op_dir).resolve()
     if not d.is_dir():
@@ -1580,7 +1884,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--sandbox-hardware", default="",
         help="agate GPU scheduler token used for all tests/profiles, e.g. REMOTE_GPU. "
-             "Default: --platform (set explicitly when logical platform and gateway alias differ).",
+             "Default: --platform; set explicitly when the gateway uses a different alias.",
     )
     ap.add_argument(
         "--sandbox-profile", choices=("pre", "prod"), default="",
@@ -1600,8 +1904,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--agent-cli", choices=AGENT_CLI_CHOICES, default="claude",
         help="Coding CLI used for clean optimization sessions (default: claude; alternative: qodercli).",
     )
-    ap.add_argument("--framework", required=True, help="Target DSL, e.g. CuteDSL / FlyDSL "
-                                                       "(cannot be deduced from the op dir).")
+    ap.add_argument(
+        "--optimization-mode",
+        choices=OPTIMIZATION_MODE_CHOICES,
+        default="leaderboard",
+        help="leaderboard preserves the permissive current CLAUDE.md flow; production forbids "
+             "third-party kernel/operator dependencies and mechanically enforces each campaign's framework.",
+    )
+    ap.add_argument(
+        "--framework", default="",
+        help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL. When omitted, launch all "
+             "frameworks supported by the detected hardware in parallel: NVIDIA uses "
+             "Triton/CuteDSL/Cuda, AMD uses Triton/FlyDSL, and unknown hardware uses Triton. "
+             "Each auto-dispatched production child is bound to its assigned framework.",
+    )
     ap.add_argument("--layer", action="store_true",
                     help="Decomposition overlay: treat the op's reference as a composite of more than one fused "
                          "op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
@@ -1619,15 +1935,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--max-stall", type=int, default=0,
                     help="Optional: stop after N consecutive no-commit iterations (0 = disabled).")
     ap.add_argument("--convert-after", type=int, default=5,
-                    help="Triton only: after N consecutive stalled iterations, spend ONE session converting "
-                         "the kernel Triton->Gluon (no optimization), then optimize the Gluon kernel. 0 = disabled.")
+                    help="Leaderboard Triton only: after N consecutive stalled iterations, spend ONE session "
+                         "converting the kernel Triton->Gluon (no optimization), then optimize the Gluon "
+                         "kernel. Always disabled in production mode. 0 = disabled.")
     ap.add_argument("--arch", default="",
                     help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
                          "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
     ap.add_argument("--workspace", default="",
-                    help="Working directory for the optimization campaign. The workspace (kernel_opt_<name>/) "
-                         "will be created under this directory. Default: current working directory.")
-    args = ap.parse_args(argv)
+                    help="Working directory for the optimization campaign. A flat "
+                         "kernel_opt_<name>_<framework>_<platform>/ workspace is created under this "
+                         "directory. Default: current working directory.")
+    ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    args = ap.parse_args(raw_argv)
+    if args.workspace_suffix and args.workspace_suffix != _workspace_slug(args.workspace_suffix):
+        ap.error("--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix")
     if not 1 <= args.sandbox_timeout <= 600:
         ap.error("--sandbox-timeout must be in the gateway-supported range 1..600")
     if args.sandbox_url and args.sandbox_profile:
@@ -1642,23 +1964,40 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
             flush=True,
         )
+    if args.optimization_mode == "production" and args.convert_after > 0:
+        print(
+            "[orchestrator] production mode disables Triton->Gluon conversion so each campaign's "
+            "framework remains an exact implementation constraint",
+            file=sys.stderr,
+            flush=True,
+        )
 
-    # Create working directory if specified, so the campaign can write into it immediately.
+    sandbox_hardware = args.sandbox_hardware or args.platform
     if args.workspace:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    sandbox_hardware = args.sandbox_hardware or args.platform
     arch = args.arch or detect_arch(
         sandbox_hardware, args.sandbox_profile, args.sandbox_url
     )
     op = _resolve_op(args.op_dir)
     ensure_submodules()
-    print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} platform={args.platform} "
+    frameworks = (args.framework,) if args.framework else supported_frameworks(args.platform, arch)
+    print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
+          f"optimization_mode={args.optimization_mode} platform={args.platform} "
           f"sandbox_hardware={sandbox_hardware} "
           f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
+          f"frameworks={','.join(frameworks)} "
           "runtime_arch="
           f"{arch or 'UNKNOWN (detect failed)'} "
           f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
+
+    if not args.framework:
+        base = Path(args.workspace).resolve() if args.workspace else Path.cwd()
+        return dispatch_framework_campaigns(raw_argv, frameworks, base, arch, args.platform)
+
+    workspace_suffix = args.workspace_suffix or framework_workspace_suffix(
+        args.framework, args.platform
+    )
 
     if args.layer:
         layer = LayerCampaign(
@@ -1668,7 +2007,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             sandbox_url=args.sandbox_url,
             sandbox_timeout=args.sandbox_timeout,
             agent_cli=args.agent_cli,
+            optimization_mode=args.optimization_mode,
             work_dir=args.workspace,
+            workspace_suffix=workspace_suffix,
             roofline_py=op["roofline_py"], op_dir=op["op_dir"],
             max_iters=args.max_iters, token_budget=args.token_budget,
             iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
@@ -1683,10 +2024,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         sandbox_url=args.sandbox_url,
         sandbox_timeout=args.sandbox_timeout,
         agent_cli=args.agent_cli,
+        optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
+        workspace_suffix=workspace_suffix,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
-        convert_after=args.convert_after,
+        convert_after=(0 if args.optimization_mode == "production" else args.convert_after),
     )
     campaign.run()
     return 0
