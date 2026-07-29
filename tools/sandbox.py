@@ -66,6 +66,8 @@ INPUT_SKIP_DIRS = {
     # Runtime/knowledge symlinks are useful to the local agent but are not
     # required by correctness, performance, or profiler commands in the pod.
     ".claude",
+    ".qoder",
+    ".agents",
     "gpu-wiki",
     "reference-projects",
     "skills",

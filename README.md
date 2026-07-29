@@ -64,7 +64,7 @@ The installer detects supported runtime home directories and prepares local hook
 
 ![route2 optimization loop](assets/optimize_workflow.png)
 
-This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude or Qoder CLI session for each iteration over the same git workspace. Select the backend with `--agent-cli claude|qodercli` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel.
+This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude, Qoder, or Codex CLI session for each iteration over the same git workspace. Select the backend with `--agent-cli claude|qodercli|codex` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel. Codex runs use `codex exec --json --ephemeral`; repository-scoped skills are prepared under each campaign's `.agents/skills/` without modifying the user's global Codex installation.
 
 Correctness/performance validation and profiling run on an atrex-gpu-gateway sandbox selected by
 `--sandbox-hardware`. The gateway worker receives code and test/profile inputs only: optimizer `memory/`, plans,
@@ -96,7 +96,7 @@ Key options:
 ```bash
 --max-iters N        # Hard cap on optimization iterations
 --token-budget N     # Hard token cap across all sessions (0 = no cap)
---agent-cli CLI      # Optimization session backend: claude (default) or qodercli
+--agent-cli CLI      # Optimization session backend: claude (default), qodercli, or codex
 --optimization-mode MODE # leaderboard (default) or production
 --framework DSL      # One explicit DSL; omit to parallel-dispatch all supported DSLs
 --target-util PCT    # Peak-utilization %% short-circuit (default 90)
@@ -136,12 +136,21 @@ orchestrator deliberately does not compare their names or reported GPU models be
 may be aliased or desensitized. Runtime architecture probing remains authoritative when an omitted
 `--framework` requires vendor-specific dispatch.
 
-Both backends run non-interactively with a fresh session ID and the same workspace-local skills,
-agents, prompts, sandbox constraints, and quality gates. Authenticate the selected CLI first with
-`claude auth status` or `qodercli status`. Provider-specific settings can be supplied through
-`ATREX_CLAUDE_SESSION_SETTINGS` or `ATREX_QODER_SESSION_SETTINGS`; `ATREX_SESSION_SETTINGS` remains
-the generic fallback. Some Qoder models report zero token usage in stream JSON; in that case
-`--token-budget` cannot be enforced and `--max-iters` remains the hard campaign bound.
+All three backends run non-interactively with clean session state and the same workspace-local skills,
+prompts, sandbox constraints, and quality gates. Authenticate the selected CLI first with
+`claude auth status`, `qodercli status`, or `codex login status`. Provider-specific settings can be
+supplied through `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`, or
+`ATREX_CODEX_SESSION_SETTINGS`; `ATREX_SESSION_SETTINGS` remains the generic fallback. For Codex,
+the setting value must be either a JSON object or a JSON array of literal `key=value` strings and is
+translated to repeatable `codex exec -c` arguments, for example:
+
+```bash
+export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_effort":"xhigh"}'
+```
+
+Codex JSONL `turn.completed.usage` is included in token-budget accounting. Cache and reasoning
+sub-counters are not double-counted. Some Qoder models report zero token usage in stream JSON; in
+that case `--token-budget` cannot be enforced and `--max-iters` remains the hard campaign bound.
 
 ## Main Files
 

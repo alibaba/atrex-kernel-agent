@@ -4,10 +4,11 @@
 Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
-Each iteration is a **fresh coding-agent session** (`claude` by default, or `qodercli` via
-`--agent-cli`) over the *same* git workspace. State crosses the session boundary only through
-disk — exactly the artifacts atrex already maintains: `memory/v<N>.json`, `plans/`, `profiles/`,
-and git. HEAD is always the best kernel (a regressing iteration reverts and is never committed).
+Each iteration is a **fresh coding-agent session** (`claude` by default, or `qodercli` / `codex`
+via `--agent-cli`) over the *same* git workspace. State crosses the session boundary only
+through disk — exactly the artifacts atrex already maintains: `memory/v<N>.json`, `plans/`,
+`profiles/`, and git. HEAD is always the best kernel (a regressing iteration reverts and is
+never committed).
 
 Termination policy
 ------------------
@@ -53,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import re
@@ -97,7 +99,7 @@ CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) bare
 CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continue triton-only
 MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
-AGENT_CLI_CHOICES = ("claude", "qodercli")
+AGENT_CLI_CHOICES = ("claude", "qodercli", "codex")
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda")
 AMD_FRAMEWORKS = ("Triton", "FlyDSL")
 DEFAULT_FRAMEWORKS = ("Triton",)
@@ -318,11 +320,14 @@ def _render(template_path: Path, **kw: str) -> str:
 
 
 def _tokens_from_stream(stdout: str) -> int:
-    """Sum core token usage from a `--output-format stream-json` stdout.
+    """Sum core token usage from a coding CLI's JSONL stdout.
 
-    Prefer the terminal `{"type":"result", ...,"usage":{...}}` event (cumulative);
-    fall back to summing per-message usage. Counts input+output (+cache) tokens.
-    Never raises — budget accounting degrades to max-iters if the stream is unparseable.
+    Claude/Qoder emit a cumulative ``type=result`` event. Codex ``exec --json`` emits a
+    cumulative ``type=turn.completed`` event. Prefer either terminal event and fall back to
+    summing per-message usage. Codex's ``cached_input_tokens``,
+    ``cache_write_input_tokens``, and ``reasoning_output_tokens`` are diagnostic subsets of
+    input/output and therefore must not be added again. Never raises — budget accounting
+    degrades to max-iters if the stream is unparseable.
     """
     def _usage_tokens(u: dict) -> int:
         if not isinstance(u, dict):
@@ -351,7 +356,7 @@ def _tokens_from_stream(stdout: str) -> int:
             continue
         if not isinstance(evt, dict):
             continue
-        if evt.get("type") == "result":
+        if evt.get("type") in ("result", "turn.completed"):
             usage_total = _usage_tokens(evt.get("usage"))
             model_total = _model_usage_tokens(evt.get("modelUsage"))
             result_total = usage_total or model_total
@@ -368,6 +373,7 @@ def _run_bounded(cmd: list[str], cwd: Path, timeout: int, env: Optional[dict] = 
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -418,6 +424,67 @@ def _session_env(agent_cli: str) -> dict:
     return env
 
 
+def _toml_config_value(value: object) -> str:
+    """Encode the JSON-compatible subset accepted by ``codex exec -c key=value``."""
+    if value is None or isinstance(value, dict):
+        raise ValueError("Codex config values must be strings, numbers, booleans, or arrays")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Codex floating-point config values must be finite")
+    if isinstance(value, list):
+        if any(item is None or isinstance(item, (dict, list)) for item in value):
+            raise ValueError("Codex config arrays may contain only scalar values")
+        if any(isinstance(item, float) and not math.isfinite(item) for item in value):
+            raise ValueError("Codex floating-point config values must be finite")
+    if isinstance(value, (str, int, float, list)):
+        # JSON strings/scalars/scalar arrays are also valid TOML values.
+        return json.dumps(value, ensure_ascii=False)
+    raise ValueError(f"unsupported Codex config value type: {type(value).__name__}")
+
+
+def _codex_settings_args(raw: str) -> list[str]:
+    """Translate ATREX_CODEX_SESSION_SETTINGS into repeatable Codex ``-c`` flags.
+
+    Accepted forms are a JSON object (the convenient form) or a JSON array of literal
+    ``key=value`` strings (for values that need Codex-specific TOML syntax).
+    """
+    if not raw:
+        return []
+    try:
+        settings = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "ATREX_CODEX_SESSION_SETTINGS must be a JSON object or an array of key=value strings"
+        ) from exc
+
+    pairs: list[str] = []
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", key):
+                raise ValueError(f"invalid Codex config key: {key!r}")
+            pairs.append(f"{key}={_toml_config_value(value)}")
+    elif isinstance(settings, list):
+        for item in settings:
+            if not isinstance(item, str) or "=" not in item or item.startswith("="):
+                raise ValueError(
+                    "ATREX_CODEX_SESSION_SETTINGS array entries must be key=value strings"
+                )
+            key = item.split("=", 1)[0]
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", key):
+                raise ValueError(f"invalid Codex config key: {key!r}")
+            pairs.append(item)
+    else:
+        raise ValueError(
+            "ATREX_CODEX_SESSION_SETTINGS must be a JSON object or an array of key=value strings"
+        )
+
+    args: list[str] = []
+    for pair in pairs:
+        args += ["-c", pair]
+    return args
+
+
 def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
     """Return a non-interactive, fresh-session command for the selected coding CLI."""
     if agent_cli == "claude":
@@ -439,17 +506,32 @@ def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
             "--reasoning-effort", "max",
         ]
         provider_settings = "ATREX_QODER_SESSION_SETTINGS"
+    elif agent_cli == "codex":
+        # --ephemeral is the Codex equivalent of a fresh, non-persistent session.  The
+        # dangerous bypass is intentional and symmetric with the existing Claude/Qoder
+        # automation flags: the coding agent must edit the local optimization workspace and
+        # invoke tools/sandbox.py non-interactively. GPU execution is still forced across the
+        # separately enforced atrex gateway boundary by the injected prompt.
+        cmd = [
+            "codex", "exec", "--json", "--ephemeral", "--color", "never",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-c", 'model_reasoning_effort="max"',
+        ]
+        provider_settings = "ATREX_CODEX_SESSION_SETTINGS"
     else:
         raise ValueError(f"unsupported agent CLI: {agent_cli!r}")
 
     # Provider-specific settings win. ATREX_SESSION_SETTINGS remains the backward-compatible
-    # generic fallback and is interpreted by whichever CLI was selected.
+    # generic fallback and is interpreted by whichever CLI was selected. Claude/Qoder expect
+    # their native --settings value; Codex expects the documented JSON object/array format.
     session_settings = os.environ.get(provider_settings) or os.environ.get("ATREX_SESSION_SETTINGS")
-    if session_settings:
+    if agent_cli == "codex":
+        cmd += _codex_settings_args(session_settings or "")
+    elif session_settings:
         cmd += ["--settings", session_settings]
-    # Both supported CLIs accept Claude-compatible local plugins. humanize is loaded from the
-    # source submodule rather than installed into the user's global runtime.
-    if (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
+    # Claude and Qoder accept Claude-compatible local plugins. Codex discovers the hydrated
+    # Humanize skill from the workspace-local .agents/skills tree created by link_runtime().
+    if agent_cli != "codex" and (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists():
         cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
     cmd.append(prompt)
     return cmd
@@ -458,6 +540,8 @@ def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
 def _agent_auth_hint(agent_cli: str) -> str:
     if agent_cli == "qodercli":
         return "run `qodercli status` and `qodercli --print \"test\"` to diagnose"
+    if agent_cli == "codex":
+        return "run `codex login status` and `codex exec --ephemeral \"reply ok\"` to diagnose"
     return "run `claude auth status` and `claude --print \"test\"` to diagnose"
 
 
@@ -945,17 +1029,107 @@ def hardware_directive(platform: str, arch: str) -> str:
 
 
 
+def _install_codex_humanize_skills(skills_dir: Path) -> None:
+    """Install a workspace-local, hydrated Humanize subset for Codex.
+
+    Humanize's upstream Codex installer also changes user-global hooks and configuration. The
+    orchestrator must not mutate global state, so this mirrors only the skill/runtime hydration
+    into the campaign's repository-scoped ``.agents/skills`` directory.
+    """
+    source_skills = HUMANIZE_DIR / "skills"
+    if not (source_skills / "humanize-gen-plan" / "SKILL.md").is_file():
+        return
+
+    skill_names = (
+        "humanize",
+        "humanize-gen-plan",
+        "humanize-refine-plan",
+        "humanize-rlcr",
+    )
+    runtime_root = skills_dir / "humanize"
+    for skill_name in skill_names:
+        source = source_skills / skill_name / "SKILL.md"
+        if not source.is_file():
+            continue
+        destination_dir = skills_dir / skill_name
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        text = source.read_text(encoding="utf-8").replace(
+            "{{HUMANIZE_RUNTIME_ROOT}}", str(runtime_root)
+        )
+        # These Claude plugin frontmatter keys are stripped by Humanize's own Codex installer.
+        text = "\n".join(
+            line for line in text.splitlines()
+            if not line.startswith((
+                "user-invocable:",
+                "disable-model-invocation:",
+                "hide-from-slash-command-tool:",
+            ))
+        ) + "\n"
+        destination = destination_dir / "SKILL.md"
+        if not destination.exists() or destination.read_text(encoding="utf-8") != text:
+            destination.write_text(text, encoding="utf-8")
+
+    for component in ("scripts", "hooks", "prompt-template", "templates", "config", "agents"):
+        source = HUMANIZE_DIR / component
+        destination = runtime_root / component
+        if source.exists() and not destination.exists():
+            os.symlink(source, destination)
+
+
+def _agent_runtime_directive(agent_cli: str) -> str:
+    if agent_cli == "codex":
+        return (
+            "- `.agents/skills/` — repository-local Codex skills, including "
+            "`gpu-kernel-baseline`, `ncu-report-skill`, `KernelWiki`, and "
+            "`humanize-gen-plan`. Invoke a named skill with Codex's `$skill-name` syntax."
+        )
+    return (
+        "- `.claude/skills/ncu-report-skill/` — NVIDIA profiling skill.\n"
+        "- `.claude/skills/KernelWiki/` — kernel optimization knowledge base."
+    )
+
+
+def _baseline_driver_directive(agent_cli: str) -> str:
+    if agent_cli == "codex":
+        return (
+            "Use the `$gpu-kernel-baseline` skill and complete its baseline workflow in this "
+            "session. If Codex collaboration/sub-agent tools are available, delegate that bounded "
+            "implementation task and wait for it; otherwise execute the skill directly yourself"
+        )
+    return (
+        "Launch the `gpu-kernel-baseline` subagent (by name). You may spawn it in the "
+        "background, but **you MUST wait for it to complete before you exit**"
+    )
+
+
+def _plan_generator_directive(agent_cli: str, version: int) -> str:
+    draft = f"plans/v{version}_draft.md"
+    plan = f"plans/v{version}_plan.md"
+    if agent_cli == "codex":
+        return (
+            f"Invoke the `$humanize-gen-plan` skill with `{draft}` as input and `{plan}` as "
+            "output. Use direct/no-discussion mode for this single-action optimization plan. "
+            "The skill is repository-local under `.agents/skills/`; do not look for a slash "
+            "command or Claude plugin."
+        )
+    return (
+        "```text\n"
+        f"/humanize:gen-plan --input {draft} --output {plan} --direct\n"
+        "```"
+    )
+
+
 def link_runtime(workspace: Path) -> None:
     """Make the skill's `tools/`, `reference/`, `skills/`, `reference-projects/`, `gpu-wiki/` resolvable from cwd=workspace.
 
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
     so symlink them in (absolute targets, so the workspace can live anywhere). Idempotent.
 
-    Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/`` so
-    either supported coding CLI can discover them.
+    Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/``, and
+    repository-local Codex skills into ``.agents/skills/``.
 
-    humanize is loaded via ``--plugin-dir`` (see ``run_session``); it is NOT installed as a
-    workspace skill.
+    Claude/Qoder load Humanize via ``--plugin-dir``. Codex receives a repository-scoped,
+    hydrated Humanize skill without changing global user state.
     """
     for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
         src, dst = REPO_ROOT / sub, workspace / sub
@@ -979,6 +1153,26 @@ def link_runtime(workspace: Path) -> None:
         # gpu-kernel-convert, gpu-kernel-profiler, gpu-kernel-research, kernel-optimize).
         if agents_src.exists() and not runtime_agents_dir.exists():
             os.symlink(agents_src, runtime_agents_dir)
+
+    # Codex discovers repository-scoped skills from .agents/skills. Keep these local to the
+    # campaign so choosing --agent-cli codex neither requires nor mutates the user's global
+    # CODEX_HOME. The project-native optimization skills can remain symlinks; Humanize needs a
+    # hydrated SKILL.md, so it is materialized by the helper above.
+    codex_skills_dir = workspace / ".agents" / "skills"
+    codex_skills_dir.mkdir(parents=True, exist_ok=True)
+    project_skills = REPO_ROOT / "skills"
+    if project_skills.is_dir():
+        for source in project_skills.iterdir():
+            if not (source / "SKILL.md").is_file():
+                continue
+            destination = codex_skills_dir / source.name
+            if not destination.exists():
+                os.symlink(source, destination)
+    for source, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
+        destination = codex_skills_dir / name
+        if source.exists() and not destination.exists():
+            os.symlink(source, destination)
+    _install_codex_humanize_skills(codex_skills_dir)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
     add = ""
@@ -988,6 +1182,8 @@ def link_runtime(workspace: Path) -> None:
         add += "/.claude\n"
     if "/.qoder" not in existing:
         add += "/.qoder\n"
+    if "/.agents" not in existing:
+        add += "/.agents\n"
     if "/" + STALL_STATE_FILE not in existing:
         add += ("\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
                 "/" + STALL_STATE_FILE + "\n")
@@ -1020,7 +1216,7 @@ class Campaign:
     sandbox_profile: str = ""      # pre/prod; empty preserves normal agate URL resolution
     sandbox_url: str = ""          # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int = 600      # agate dev hard limit
-    agent_cli: str = "claude"       # clean-session coding backend: claude or qodercli
+    agent_cli: str = "claude"       # clean-session coding backend: claude, qodercli, or codex
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     tokens_spent: int = field(default=0, init=False)
 
@@ -1081,6 +1277,8 @@ class Campaign:
             WORKSPACE=str(self.workspace), PLATFORM=self.platform,
             FRAMEWORK=self.framework, KERNEL_DEMO=self.kernel_demo,
             NOTES=self.notes,
+            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+            BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
             MODE_POLICY=self._mode_directive(),
@@ -1223,6 +1421,8 @@ class Campaign:
                 prompt = _render(PROMPTS_DIR / "iteration.md",
                                  WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
                                  PLATFORM=self.platform, NOTES=self.notes,
+                                 AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+                                 PLAN_GENERATOR=_plan_generator_directive(self.agent_cli, n),
                                  HARDWARE=hardware_directive(self.platform, self.arch),
                                  SANDBOX=self._sandbox_directive(),
                                  MODE_POLICY=self._mode_directive())
@@ -1583,6 +1783,7 @@ class LayerCampaign:
     # ── phase 1: decompose ────────────────────────────────────────────────────
     def decompose(self) -> None:
         self.layer_dir.mkdir(parents=True, exist_ok=True)
+        link_runtime(self.layer_dir)
         install_workspace_policy(self.layer_dir, self.optimization_mode, self.framework)
         prompt = _render(
             PROMPTS_DIR / "decompose.md",
@@ -1631,6 +1832,8 @@ class LayerCampaign:
                 PROMPTS_DIR / "setup.md",
                 WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
                 KERNEL_DEMO=str(demo), NOTES=self.notes,
+                AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+                BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
                 HARDWARE=hardware_directive(self.platform, self.arch),
                 SANDBOX=self._sandbox_directive(),
                 MODE_POLICY=self._mode_directive(),
@@ -1749,6 +1952,8 @@ class LayerCampaign:
             prompt = _render(PROMPTS_DIR / "iteration.md",
                              WORKSPACE=str(ws), N=n, PREV=n - 1,
                              PLATFORM=self.platform, NOTES=self.notes,
+                             AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+                             PLAN_GENERATOR=_plan_generator_directive(self.agent_cli, n),
                              HARDWARE=hardware_directive(self.platform, self.arch),
                              SANDBOX=self._sandbox_directive(),
                              MODE_POLICY=self._mode_directive())
@@ -1817,6 +2022,7 @@ class LayerCampaign:
 
     # ── phase 4: recombine ────────────────────────────────────────────────────
     def recombine(self) -> None:
+        link_runtime(self.layer_dir)
         install_workspace_policy(self.layer_dir, self.optimization_mode, self.framework)
         prompt = _render(PROMPTS_DIR / "recombine.md",
                          LAYER_DIR=str(self.layer_dir),
@@ -1902,7 +2108,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     ap.add_argument(
         "--agent-cli", choices=AGENT_CLI_CHOICES, default="claude",
-        help="Coding CLI used for clean optimization sessions (default: claude; alternative: qodercli).",
+        help="Coding CLI used for clean optimization sessions: claude, qodercli, or codex "
+             "(default: claude).",
     )
     ap.add_argument(
         "--optimization-mode",
@@ -1956,6 +2163,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("--sandbox-url and --sandbox-profile are mutually exclusive")
     if shutil.which(args.agent_cli) is None:
         ap.error(f"--agent-cli executable not found on PATH: {args.agent_cli}")
+    if args.agent_cli == "codex":
+        codex_settings = (
+            os.environ.get("ATREX_CODEX_SESSION_SETTINGS")
+            or os.environ.get("ATREX_SESSION_SETTINGS")
+            or ""
+        )
+        try:
+            _codex_settings_args(codex_settings)
+        except ValueError as exc:
+            ap.error(str(exc))
     if args.agent_cli == "qodercli" and args.token_budget > 0:
         print(
             "[orchestrator] WARNING: qodercli token-budget enforcement depends on token usage "

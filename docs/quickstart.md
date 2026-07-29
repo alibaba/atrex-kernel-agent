@@ -14,7 +14,7 @@ AKA ships two independent ways to run the same profile-driven workflow. Use the 
 Route-specific prerequisites:
 
 - Route 1 requires `jq` for `install.sh`.
-- Route 2 requires Python 3, `torch`, and either `claude` or `qodercli` available on `PATH`.
+- Route 2 requires Python 3, `torch`, and one of `claude`, `qodercli`, or `codex` available on `PATH`.
 
 ## 1. Clone the Repository
 
@@ -57,7 +57,27 @@ The orchestrator initializes its required submodules on first run, creates a fla
 spawns fresh clean sessions per iteration. GPU tests and profiles run through `tools/sandbox.py` on
 `--sandbox-hardware`; `memory/` and Git stay local. It finalizes a directly submittable SOL-ExecBench output
 after a passing run. Omit `--agent-cli` to use Claude, or pass `--agent-cli qodercli` after authenticating
-with `qodercli status`.
+with `qodercli status`. To use Codex, authenticate with `codex login status` and pass
+`--agent-cli codex`:
+
+```bash
+python orchestrator/optimize.py \
+    --op-dir /path/to/sol-execbench/op \
+    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
+    --agent-cli codex --max-iters 20 --token-budget 8000000
+```
+
+Each Codex iteration uses `codex exec --json --ephemeral`. The orchestrator installs the required
+optimization and Humanize skills into the campaign's repository-scoped `.agents/skills/` tree; it does
+not modify `${CODEX_HOME}`. Optional Codex config overrides use a JSON object or an array of literal
+`key=value` values:
+
+```bash
+export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_effort":"xhigh"}'
+```
+
+These entries become repeatable `codex exec -c key=value` arguments. The default Codex reasoning effort
+is `max`; a value supplied through `ATREX_CODEX_SESSION_SETTINGS` appears later and overrides it.
 
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
