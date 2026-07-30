@@ -19,7 +19,8 @@ when the agent works inside this workspace.
   are acceptable implementation targets.
 - The `framework` value is the recommended optimization direction. A different DSL or mixed approach is
   allowed if profile evidence shows a better performance path.
-- Third-party helper libraries (utility/math libraries) MAY be introduced freely to assist optimization.
+- Preinstalled third-party helper libraries may be used, but the campaign environment is immutable: never
+  install or locally build a package. If a library is unavailable, use existing tooling or record a blocker.
 
 ## Benchmark and Correctness Integrity
 
@@ -59,6 +60,10 @@ fail on another (numerical edge-cases, magnitude-dependent accumulation). Before
 re-run correctness under **several different random seeds** — extend the seed in `test_kernel.py` if it does
 not already vary — and require ALL to PASS. If any seed fails, the kernel is BROKEN: revert
 (`git reset --hard HEAD`) and try a different lever.
+
+Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass; never repeat
+warmup/timing/reference benchmarking per extra seed. This keeps the complete robustness check within the
+public gateway's 600-second command limit without reducing correctness coverage.
 
 ### Precision margin (don't surf the tolerance line)
 

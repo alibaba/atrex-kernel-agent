@@ -176,9 +176,27 @@ fi
 # ============================================================
 # Environment check
 # ============================================================
+# Local gateway workers intentionally inherit a minimal PATH.  Honor an
+# explicit binary first, then consult the host's executable index without
+# embedding any machine-specific installation layout.
+if ! command -v ncu &>/dev/null; then
+    NCU_BIN_CANDIDATES=()
+    [[ -n "${NCU_BIN:-}" ]] && NCU_BIN_CANDIDATES+=("$NCU_BIN")
+    if command -v whereis &>/dev/null; then
+        read -r -a located_ncu <<< "$(whereis -b ncu 2>/dev/null)"
+        NCU_BIN_CANDIDATES+=("${located_ncu[@]:1}")
+    fi
+    for candidate in "${NCU_BIN_CANDIDATES[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            export PATH="$(dirname "$candidate"):$PATH"
+            break
+        fi
+    done
+fi
+
 if ! command -v ncu &>/dev/null; then
     echo "Error: ncu not found. Please ensure NVIDIA Nsight Compute is installed and ncu is in PATH"
-    echo "  Common paths: /usr/local/cuda/bin/ncu or /usr/local/cuda-*/nsight-compute-*/ncu"
+    echo "  Set NCU_BIN when the executable is outside PATH."
     exit 1
 fi
 
@@ -190,18 +208,41 @@ fi
 # Nsight Compute ships its Python report API beside the GUI/CLI installation,
 # not in the active Python environment's site-packages.  Remote pods often set
 # this path for us; a localhost gateway intentionally inherits the host Python
-# environment and therefore needs explicit discovery.
-if ! python3 -c 'import ncu_report' &>/dev/null; then
-    shopt -s nullglob
+# environment and therefore needs explicit discovery.  Its extension also
+# requires the matching, newer libstdc++ bundled with Nsight on some hosts;
+# scope that library path to report-parser subprocesses so candidate kernels do
+# not inherit a different C++ runtime.
+NCU_HOST_LIB_DIR=""
+
+ncu_python() {
+    if [[ -n "$NCU_HOST_LIB_DIR" ]]; then
+        LD_LIBRARY_PATH="$NCU_HOST_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" python3 "$@"
+    else
+        python3 "$@"
+    fi
+}
+
+if ! ncu_python -c 'import ncu_report' &>/dev/null; then
+    ncu_executable="$(command -v ncu)"
+    ncu_install_dir="$(cd "$(dirname "$ncu_executable")" && pwd)"
     NCU_PYTHON_CANDIDATES=(
-        /opt/nvidia/nsight-compute/*/extras/python
-        /usr/local/cuda/nsight-compute-*/extras/python
-        /usr/local/cuda-*/nsight-compute-*/extras/python
+        "${NCU_PYTHON_PATH:-}"
+        "$ncu_install_dir/extras/python"
+        "$ncu_install_dir/../extras/python"
     )
-    shopt -u nullglob
     for candidate in "${NCU_PYTHON_CANDIDATES[@]}"; do
-        if [[ -f "$candidate/ncu_report.py" ]]; then
+        if [[ -n "$candidate" && -f "$candidate/ncu_report.py" ]]; then
             export PYTHONPATH="$candidate${PYTHONPATH:+:$PYTHONPATH}"
+            ncu_root="$(cd "$candidate/../.." && pwd)"
+            shopt -s nullglob
+            NCU_HOST_LIB_CANDIDATES=("$ncu_root"/host/*)
+            shopt -u nullglob
+            for host_lib in "${NCU_HOST_LIB_CANDIDATES[@]}"; do
+                if [[ -f "$host_lib/libstdc++.so.6" ]]; then
+                    NCU_HOST_LIB_DIR="$host_lib"
+                    break
+                fi
+            done
             break
         fi
     done
@@ -288,7 +329,7 @@ if [[ -n "$NCU_HELPERS" ]]; then
     echo "  Step 3: Parse key metrics"
     echo "=========================================="
 
-    python3 "$NCU_HELPERS/analyze_reports.py" \
+    ncu_python "$NCU_HELPERS/analyze_reports.py" \
         --run-dir "$OUTPUT_DIR" \
         --report "$OUTPUT_DIR/ncu.ncu-rep" \
         --tag run
@@ -296,7 +337,7 @@ if [[ -n "$NCU_HELPERS" ]]; then
     # Optional: source-level stall hotspots
     if [[ "$COLLECT_SOURCE" == true && -f "$OUTPUT_DIR/ncu_source.ncu-rep" ]]; then
         if [[ -f "$NCU_HELPERS/extract_stall_hotspots.py" ]]; then
-            python3 "$NCU_HELPERS/extract_stall_hotspots.py" \
+            ncu_python "$NCU_HELPERS/extract_stall_hotspots.py" \
                 --run-dir "$OUTPUT_DIR" \
                 --report "$OUTPUT_DIR/ncu_source.ncu-rep" \
                 --tag run
@@ -321,7 +362,7 @@ if [[ "$COLLECT_SOURCE" == true && -n "$NCU_HELPERS" \
     echo "  Step 3b: source-level evidence (disasm / warp-stalls / source-metrics)"
     echo "=========================================="
 
-    python3 "$NCU_HELPERS/source_evidence.py" \
+    ncu_python "$NCU_HELPERS/source_evidence.py" \
         --run-dir "$OUTPUT_DIR" \
         --report "$OUTPUT_DIR/ncu.ncu-rep" \
         --source-report "$OUTPUT_DIR/ncu_source.ncu-rep" \
@@ -345,7 +386,7 @@ if [[ -n "$DIFF_DIR" && -n "$NCU_HELPERS" && -f "$NCU_HELPERS/row_key.py" ]]; th
         if [[ -f "$PREV_AN/$name.json" && -f "$CUR_AN/$name.json" ]]; then
             sort_arg=()
             [[ -n "$field" ]] && sort_arg=(--sort-field "$field")
-            python3 "$NCU_HELPERS/row_key.py" \
+            ncu_python "$NCU_HELPERS/row_key.py" \
                 --a "$PREV_AN/$name.json" --b "$CUR_AN/$name.json" \
                 "${sort_arg[@]}" --output "$CUR_AN/diff_$name.txt" || true
         fi
@@ -361,7 +402,7 @@ if [[ "$NO_CLASSIFY" != true && -f "$OUTPUT_DIR/analysis/metrics_key_run.json" ]
     echo "  Step 4: Symptom classification"
     echo "=========================================="
 
-    python3 "$SCRIPT_DIR/classify_ncu.py" \
+    ncu_python "$SCRIPT_DIR/classify_ncu.py" \
         --metrics "$OUTPUT_DIR/analysis/metrics_key_run.json" \
         --output "$OUTPUT_DIR/summary.txt"
 

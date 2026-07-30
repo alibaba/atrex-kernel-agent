@@ -14,6 +14,8 @@ OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
 MODE_STATE_FILE = ".orchestrator_mode.json"
 POLICY_BEGIN = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_BEGIN -->"
 POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
+AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
+AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 
 
 def _framework_key(framework: str) -> str:
@@ -238,40 +240,97 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
     except SyntaxError as exc:
         return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
 
-    roots, has_relative_import = _import_roots(tree)
+    policy_sources = [source]
+    policy_trees = [tree]
+    aggregate_dispatch = workspace / AGGREGATE_DISPATCH_FILE
+    aggregate_mode = aggregate_dispatch.is_file()
+    if aggregate_mode:
+        try:
+            dispatch = json.loads(aggregate_dispatch.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"{AGGREGATE_DISPATCH_FILE} is invalid: {exc}")
+            dispatch = {}
+        if dispatch.get("schema_version") != 1 or dispatch.get("mode") != "deterministic_dispatch":
+            errors.append("aggregate dispatcher manifest is not deterministic schema v1")
+        modules = dispatch.get("modules")
+        if not isinstance(modules, dict) or not modules:
+            errors.append("aggregate dispatcher manifest has no bucket modules")
+            modules = {}
+        for bucket, record in sorted(modules.items()):
+            relative = record.get("path") if isinstance(record, dict) else None
+            if not isinstance(relative, str):
+                errors.append(f"aggregate bucket {bucket} has no source path")
+                continue
+            relative_path = Path(relative)
+            if (
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or len(relative_path.parts) != 2
+                or relative_path.parts[0] != AGGREGATE_KERNELS_DIR
+                or relative_path.suffix != ".py"
+            ):
+                errors.append(f"invalid aggregate bucket source path: {relative}")
+                continue
+            module_path = workspace / relative_path
+            if not module_path.is_file():
+                errors.append(f"aggregate bucket source is missing: {relative}")
+                continue
+            module_source = module_path.read_text(encoding="utf-8", errors="replace")
+            try:
+                module_tree = ast.parse(module_source, filename=str(module_path))
+            except SyntaxError as exc:
+                errors.append(
+                    f"aggregate bucket {bucket} is not valid Python: "
+                    f"{exc.msg} (line {exc.lineno})"
+                )
+                continue
+            policy_sources.append(module_source)
+            policy_trees.append(module_tree)
+
+    roots: set[str] = set()
+    has_relative_import = False
+    for policy_tree in policy_trees:
+        tree_roots, tree_relative = _import_roots(policy_tree)
+        roots.update(tree_roots)
+        has_relative_import = has_relative_import or tree_relative
     if has_relative_import:
         errors.append("relative/local-module imports are not self-contained")
     allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[key]
+    if aggregate_mode:
+        allowed = allowed | {AGGREGATE_KERNELS_DIR}
     for root in sorted(roots - allowed):
         errors.append(f"third-party import is not allowed in production mode: {root}")
     for root in sorted(roots & {"ctypes", "importlib", "pkgutil", "runpy", "subprocess"}):
         errors.append(f"dynamic external-code loading is forbidden in production candidate: {root}")
-    errors.extend(_torch_compute_violations(tree))
+    for policy_tree in policy_trees:
+        errors.extend(_torch_compute_violations(policy_tree))
+
+    policy_source = "\n".join(policy_sources)
 
     marker_checks = {
         "triton": (
-            bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", source)),
+            bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
             "missing Triton implementation/import",
         ),
-        "gluon": ("triton.experimental" in source and "gluon" in source, "missing Gluon implementation"),
-        "cutedsl": ("cutlass.cute" in source or "@cute.kernel" in source, "missing CuteDSL implementation"),
+        "gluon": ("triton.experimental" in policy_source and "gluon" in policy_source, "missing Gluon implementation"),
+        "cutedsl": ("cutlass.cute" in policy_source or "@cute.kernel" in policy_source, "missing CuteDSL implementation"),
         "cuda": (
-            "__global__" in source
-            and bool(re.search(r"load_inline|cpp_extension|CUDAExtension|nvrtc|cuda\.bindings", source)),
+            "__global__" in policy_source
+            and bool(re.search(r"load_inline|cpp_extension|CUDAExtension|nvrtc|cuda\.bindings", policy_source)),
             "missing self-authored CUDA kernel/loader",
         ),
-        "flydsl": (bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", source)), "missing FlyDSL implementation"),
+        "flydsl": (bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)), "missing FlyDSL implementation"),
     }
     marker_ok, marker_error = marker_checks[key]
     if not marker_ok:
         errors.append(marker_error)
 
     foreign_markers = {
-        "triton": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", source)),
-        "gluon": "triton.experimental" in source and "gluon" in source,
-        "cutedsl": "cutlass.cute" in source or "@cute.kernel" in source,
-        "cuda": "__global__" in source,
-        "flydsl": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", source)),
+        "triton": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
+        "gluon": "triton.experimental" in policy_source and "gluon" in policy_source,
+        "cutedsl": "cutlass.cute" in policy_source or "@cute.kernel" in policy_source,
+        "cuda": "__global__" in policy_source,
+        "flydsl": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)),
     }
     compatible_markers = {key}
     if key == "gluon":
@@ -289,7 +348,7 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
         r"#\s*include\s*[<\"]cutlass/": "prebuilt CUTLASS C++ kernels are forbidden outside CuteDSL",
     }
     for pattern, message in banned_source_patterns.items():
-        if re.search(pattern, source, flags=re.IGNORECASE) and not (
+        if re.search(pattern, policy_source, flags=re.IGNORECASE) and not (
             key == "cutedsl" and "CUTLASS" in message
         ):
             errors.append(message)

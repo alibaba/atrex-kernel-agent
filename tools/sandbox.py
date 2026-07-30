@@ -43,11 +43,16 @@ import base64
 import io
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
@@ -77,6 +82,11 @@ INPUT_SKIP_DIRS = {
     # single uploaded-file argument past Linux MAX_ARG_STRLEN.
     "plans",
     ".humanize",
+    # The aggregate workspace can contain multiple independent bucket
+    # workspaces.  A full-kernel validation needs only the aggregate sources;
+    # recursively uploading every bucket would duplicate repositories and can
+    # exceed the gateway request-size limit.
+    "workload_buckets",
 }
 INPUT_SKIP_PATHS = {
     # A pod must not recursively submit another sandbox job, and memory updates
@@ -85,6 +95,16 @@ INPUT_SKIP_PATHS = {
     "tools/sandbox.py",
     "tools/local_gateway.py",
     "tools/memory_manager.py",
+    # The durable host-side monitor is never invoked inside a GPU worker.  It
+    # grew the materialized tools bundle enough to push large aggregate kernels
+    # over agate's per-argument limit despite being unrelated to validation.
+    "tools/monitor_optimize_tasks.py",
+    # Duplicate of kernel.py from a prior session — not a runtime input.
+    "_cute_fa_kernel.py",
+    # Exploratory test/debug scripts that are not part of the evaluation harness.
+    "test_triton_dot.py",
+    "test_triton_dot2.py",
+    "valid.py",
 }
 INPUT_SKIP_SUFFIXES = {
     ".pyc", ".pyo", ".ncu-rep", ".att", ".pftrace", ".otf2",
@@ -96,6 +116,35 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
+DEFAULT_COMMAND_TIMEOUT = 600
+MAX_COMMAND_TIMEOUT = 600
+DEFAULT_QUEUE_WAIT_GRACE = 14_400
+MAX_HTTP_REQUEST_TIMEOUT = 600
+RUNTIME_CHUNK_BYTES = 80 * 1024
+SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
+DISPATCH_SIGNATURE_INPUT_PATHS = frozenset(
+    {
+        "definition.json",
+        "input.py",
+        "reference.py",
+        "shapes.json",
+        "tools/collect_dispatch_signatures.py",
+        "workload.jsonl",
+    }
+)
+EVALUATION_INPUT_PATHS = frozenset(
+    {
+        "definition.json",
+        "input.py",
+        "kernel.py",
+        "metadata.json",
+        "reference.py",
+        "shapes.json",
+        "solution.json",
+        "test_kernel.py",
+        "workload.jsonl",
+    }
+)
 
 
 def _safe_relative(value: str) -> str:
@@ -106,6 +155,14 @@ def _safe_relative(value: str) -> str:
     if normalized in ("", "."):
         raise ValueError(f"path must not resolve to the workspace root: {value!r}")
     return normalized
+
+
+def _find_agate() -> str | None:
+    """Find agate beside the active Python before consulting the shell PATH."""
+    adjacent = Path(sys.executable).resolve().parent / "agate"
+    if adjacent.is_file() and os.access(adjacent, os.X_OK):
+        return str(adjacent)
+    return shutil.which("agate")
 
 
 def _walk_files(root: Path) -> Iterable[Path]:
@@ -125,6 +182,7 @@ def _make_input_bundle(
     workspace: Path,
     max_file_bytes: int,
     profile_input_paths: Iterable[str] = (),
+    input_paths: Iterable[str] = (),
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing the workspace and runtime tools."""
     archive = io.BytesIO()
@@ -132,43 +190,48 @@ def _make_input_bundle(
     skipped: list[str] = []
     count = 0
     profile_roots = tuple(path.rstrip("/") for path in profile_input_paths)
+    selected_inputs = frozenset(input_paths)
+
+    def add_file(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
+        nonlocal count
+        arc_parts = PurePosixPath(arcname).parts
+        # Profile reports/metrics are synchronized back for local analysis
+        # and must not be re-uploaded on every later test.  Only executable
+        # profile harnesses requested by this invocation are inputs to a
+        # fresh sandbox job.  Historical harnesses are local campaign state
+        # and accumulate indefinitely on long-running optimizations.
+        if arc_parts and arc_parts[0] == "profiles":
+            if "harness" not in arc_parts or not any(
+                arcname == root or arcname.startswith(root + "/")
+                for root in profile_roots
+            ):
+                return
+        if (
+            arcname in seen
+            or arcname in INPUT_SKIP_PATHS
+            or path.suffix in INPUT_SKIP_SUFFIXES
+            or (selected_inputs and arcname not in selected_inputs)
+        ):
+            return
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            skipped.append(f"{arcname} ({exc})")
+            return
+        if size > max_file_bytes:
+            skipped.append(f"{arcname} ({size} bytes > input limit)")
+            return
+        tf.add(path, arcname=arcname, recursive=False)
+        seen.add(arcname)
+        count += 1
 
     def add_tree(tf: tarfile.TarFile, source: Path, prefix: str = "") -> None:
-        nonlocal count
         if not source.is_dir():
             return
         for path in _walk_files(source):
             rel = path.relative_to(source).as_posix()
             arcname = f"{prefix}/{rel}" if prefix else rel
-            arc_parts = PurePosixPath(arcname).parts
-            # Profile reports/metrics are synchronized back for local analysis
-            # and must not be re-uploaded on every later test.  Only executable
-            # profile harnesses requested by this invocation are inputs to a
-            # fresh sandbox job.  Historical harnesses are local campaign state
-            # and accumulate indefinitely on long-running optimizations.
-            if arc_parts and arc_parts[0] == "profiles":
-                if "harness" not in arc_parts or not any(
-                    arcname == root or arcname.startswith(root + "/")
-                    for root in profile_roots
-                ):
-                    continue
-            if (
-                arcname in seen
-                or arcname in INPUT_SKIP_PATHS
-                or path.suffix in INPUT_SKIP_SUFFIXES
-            ):
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError as exc:
-                skipped.append(f"{arcname} ({exc})")
-                continue
-            if size > max_file_bytes:
-                skipped.append(f"{arcname} ({size} bytes > input limit)")
-                continue
-            tf.add(path, arcname=arcname, recursive=False)
-            seen.add(arcname)
-            count += 1
+            add_file(tf, path, arcname)
 
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
         add_tree(tf, workspace)
@@ -177,8 +240,101 @@ def _make_input_bundle(
         workspace_tools = workspace / "tools"
         if workspace_tools.is_symlink() or not workspace_tools.exists():
             add_tree(tf, REPO_ROOT / "tools", "tools")
-
     return base64.b64encode(archive.getvalue()).decode("ascii"), count, skipped
+
+
+def _evaluation_input_paths(workspace: Path) -> frozenset[str]:
+    """Return evaluator inputs plus every candidate source declared by solution.json."""
+    selected = set(EVALUATION_INPUT_PATHS)
+    solution_path = workspace / "solution.json"
+    if solution_path.is_file():
+        try:
+            solution = json.loads(solution_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"invalid workspace solution.json: {exc}") from exc
+        sources = solution.get("sources", []) if isinstance(solution, dict) else []
+        if not isinstance(sources, list):
+            raise RuntimeError("workspace solution.json sources must be a list of paths")
+        for source in sources:
+            if isinstance(source, str):
+                source_path = source
+            elif isinstance(source, dict) and isinstance(source.get("path"), str):
+                source_path = source["path"]
+            else:
+                raise RuntimeError(
+                    "workspace solution.json source entries must be paths or path objects"
+                )
+            selected.add(_safe_relative(source_path))
+
+    aggregate_sources = workspace / "aggregate_kernels"
+    if aggregate_sources.is_dir():
+        for path in _walk_files(aggregate_sources):
+            selected.add(path.relative_to(workspace).as_posix())
+    return frozenset(selected)
+
+
+def _is_test_kernel_command(parts: list[str]) -> bool:
+    command = parts[1:] if parts and parts[0] == "--" else parts
+    return (
+        len(command) >= 2
+        and Path(command[0]).name in {"python", "python3", "python3.10", "python3.12"}
+        and Path(command[1]).name == "test_kernel.py"
+    )
+
+
+def _make_atrex_bench_runtime_bundle(
+    workspace: Path, *, minimal: bool = False, evaluator_only: bool = False
+) -> str | None:
+    """Package the canonical native evaluator separately from workspace state.
+
+    The compressed runtime is split into multiple uploaded files by ``main``
+    because agate's worker places each file value in one Linux argv entry.
+    """
+    runtime_link = workspace / "atrex-bench"
+    if not runtime_link.is_symlink():
+        return None
+    runtime_root = runtime_link.resolve()
+    run_eval = runtime_root / "scripts" / "run_eval.py"
+    package = runtime_root / "src" / "atrex_bench"
+    runtime_module = package / "eval" / "_runtime.py"
+    utils_module = package / "utils.py"
+    if (
+        not package.is_dir()
+        or (minimal and not runtime_module.is_file())
+        or (not minimal and not run_eval.is_file())
+        or (evaluator_only and not utils_module.is_file())
+    ):
+        raise RuntimeError(f"invalid workspace Atrex-Bench runtime link: {runtime_link}")
+
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+        if minimal:
+            tf.add(
+                runtime_module,
+                arcname="atrex-bench/src/atrex_bench/eval/_runtime.py",
+                recursive=False,
+            )
+        elif evaluator_only:
+            evaluator_files = [package / "__init__.py", utils_module]
+            evaluator_files.extend(_walk_files(package / "eval"))
+            tf.add(run_eval, arcname="atrex-bench/scripts/run_eval.py", recursive=False)
+            for path in evaluator_files:
+                relative = path.relative_to(package).as_posix()
+                tf.add(
+                    path,
+                    arcname=f"atrex-bench/src/atrex_bench/{relative}",
+                    recursive=False,
+                )
+        else:
+            tf.add(run_eval, arcname="atrex-bench/scripts/run_eval.py", recursive=False)
+            for path in _walk_files(package):
+                relative = path.relative_to(package).as_posix()
+                tf.add(
+                    path,
+                    arcname=f"atrex-bench/src/atrex_bench/{relative}",
+                    recursive=False,
+                )
+    return base64.b64encode(archive.getvalue()).decode("ascii")
 
 
 REMOTE_COLLECTOR = r'''#!/usr/bin/env python3
@@ -242,6 +398,13 @@ mkdir -p workspace
 if ! base64 -d __atrex_workspace.tar.gz.b64 | tar -xzf - -C workspace; then
     echo "[sandbox] failed to unpack workspace" >&2
     exit 97
+fi
+runtime_parts=(__atrex_bench_runtime.tar.gz.b64.part*)
+if [[ -e "${runtime_parts[0]}" ]]; then
+    if ! cat "${runtime_parts[@]}" | base64 -d | tar -xzf - -C workspace; then
+        echo "[sandbox] failed to unpack Atrex-Bench evaluator runtime" >&2
+        exit 97
+    fi
 fi
 cd workspace
 set +e
@@ -324,8 +487,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workspace", default=".", help="Local workspace to upload (default: cwd).")
     parser.add_argument(
-        "--timeout", type=int, default=int(os.environ.get("ATREX_SANDBOX_TIMEOUT", "600")),
-        help="Remote command timeout in seconds, 1..600 (default: 600; gateway limit).",
+        "--timeout",
+        type=int,
+        default=int(os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))),
+        help=(
+            "Remote command execution timeout in seconds, 1..600 "
+            "(default: 600; queue wait is budgeted separately)."
+        ),
     )
     parser.add_argument(
         "--sync", action="append", default=[], metavar="PATH",
@@ -335,6 +503,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-raw-profile", action="store_true",
         help="Return raw .ncu-rep/ATT artifacts (can make the gateway response very large).",
+    )
+    parser.add_argument(
+        "--dispatch-signatures",
+        action="store_true",
+        help=(
+            "Upload only evaluator input generators and the minimal native "
+            "runtime needed to collect deterministic dispatch signatures."
+        ),
     )
     parser.add_argument(
         "--max-input-file-mb", type=int, default=16,
@@ -352,6 +528,250 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Package and print the request summary only.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command after --.")
     return parser
+
+
+def _gateway_json(
+    base_url: str,
+    method: str,
+    path: str,
+    payload: dict | None,
+    timeout: float,
+) -> dict:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        method=method,
+        data=body,
+        headers={"Content-Type": "application/json"} if body is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"gateway HTTP {exc.code}: {detail}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("gateway returned a non-object JSON response")
+    return result
+
+
+def _run_direct_gateway(
+    *,
+    url: str,
+    hardware: str,
+    timeout: int,
+    queue_wait_grace: int,
+    env_items: list[str],
+    files: dict[str, Path],
+    command: str,
+) -> subprocess.CompletedProcess[str]:
+    """Use the public dev-job HTTP API when the optional agate CLI is absent."""
+    env_vars: dict[str, str] = {}
+    for item in env_items:
+        if "=" not in item or item.startswith("="):
+            raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
+        key, value = item.split("=", 1)
+        env_vars[key] = value
+    payload = {
+        "spec": {"target_hardware": [hardware]},
+        "command": command,
+        "timeout_s": timeout,
+        "env_vars": env_vars,
+        "files": {name: path.read_text(encoding="utf-8") for name, path in files.items()},
+    }
+    prior_note = ""
+    for submission in range(2):
+        accepted = _gateway_json(url, "POST", "/v1/jobs/dev", payload, 30)
+        job_id = accepted.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
+        deadline = time.monotonic() + timeout + queue_wait_grace
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
+                wait_for = min(30.0, remaining)
+                job = _gateway_json(
+                    url,
+                    "GET",
+                    f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}",
+                    None,
+                    wait_for + 10,
+                )
+                if job.get("status") in ("succeeded", "failed", "cancelled"):
+                    if submission == 0 and _cancelled_without_outcome(job):
+                        prior_note = (
+                            f"[sandbox] gateway cancelled job_id={job_id} without a "
+                            "result/error; resubmitted once"
+                        )
+                        break
+                    return subprocess.CompletedProcess(
+                        args=["direct-gateway", job_id],
+                        returncode=0 if job.get("status") == "succeeded" else 1,
+                        stdout=json.dumps(job),
+                        stderr=prior_note,
+                    )
+        except BaseException:
+            try:
+                _gateway_json(url, "POST", f"/v1/jobs/{job_id}/cancel", {}, 10)
+            except Exception:
+                pass
+            raise
+
+    raise AssertionError("unreachable: direct gateway retry loop returned no terminal job")
+
+
+def _job_response(stdout: str) -> dict | None:
+    """Return an agate job response when stdout is complete JSON."""
+    try:
+        result = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(result, dict) or not isinstance(result.get("job_id"), str):
+        return None
+    return result
+
+
+def _cancelled_without_outcome(job: dict | None) -> bool:
+    """Return whether a job was cancelled before producing any outcome.
+
+    The production gateway can occasionally cancel a queued job before an
+    attempt starts.  Such a response has no command result and no gateway
+    error, so it says nothing about the submitted kernel.  A cancellation
+    carrying either field is a real terminal outcome and must not be retried.
+    """
+    return bool(
+        job
+        and job.get("status") == "cancelled"
+        and not job.get("result")
+        and not job.get("error")
+    )
+
+
+def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
+    """Recover the job id printed by agate before it starts polling."""
+    match = SUBMITTED_JOB_RE.search((proc.stderr or "") + "\n" + (proc.stdout or ""))
+    return match.group(1) if match else None
+
+
+def _resume_interrupted_agate_wait(
+    *,
+    executable: str,
+    url: str,
+    gateway_profile: str | None,
+    command_timeout: int,
+    wait_budget: int,
+    elapsed: float,
+    initial: subprocess.CompletedProcess[str],
+) -> subprocess.CompletedProcess[str]:
+    """Continue waiting for an already-submitted job without resubmitting it.
+
+    A long-lived ``agate dev`` polling process can occasionally receive SIGTERM
+    while its remote job continues running.  In that case Python normalizes the
+    child's ``-SIGTERM`` return code to exit 241, and treating it as a kernel
+    failure loses a perfectly valid later RESULT_JSON.  Agate prints the job id
+    before polling, so attach to that same job with ``agate get --wait`` for the
+    remainder of the original client-side budget.
+    """
+    if _job_response(initial.stdout or "") is not None:
+        return initial
+    job_id = _submitted_job_id(initial)
+    remaining = int(wait_budget - elapsed)
+    if not job_id or remaining <= 0:
+        return initial
+
+    get_command = [executable, "get"]
+    if url:
+        get_command += ["--url", url]
+    elif gateway_profile:
+        get_command += ["--profile", gateway_profile]
+    get_command += [
+        "--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
+        "--wait-timeout", str(max(1, remaining)),
+        "--job-timeout", str(command_timeout),
+        "--wait",
+        job_id,
+    ]
+    resumed = subprocess.run(get_command, capture_output=True, text=True)
+    note = (
+        f"[sandbox] agate polling exited {initial.returncode}; "
+        f"resumed existing job_id={job_id} without resubmission"
+    )
+    stderr_parts = [part.rstrip() for part in (initial.stderr, note, resumed.stderr) if part]
+    return subprocess.CompletedProcess(
+        args=resumed.args,
+        returncode=resumed.returncode,
+        stdout=resumed.stdout,
+        stderr="\n".join(stderr_parts),
+    )
+
+
+def _run_agate_once(
+    *,
+    agate: list[str],
+    executable: str,
+    url: str,
+    gateway_profile: str | None,
+    command_timeout: int,
+    wait_budget: int,
+) -> subprocess.CompletedProcess[str]:
+    """Submit one agate job and preserve the existing interrupted-wait recovery."""
+    wait_started = time.monotonic()
+    proc = subprocess.run(agate, capture_output=True, text=True)
+    return _resume_interrupted_agate_wait(
+        executable=executable,
+        url=url,
+        gateway_profile=gateway_profile,
+        command_timeout=command_timeout,
+        wait_budget=wait_budget,
+        elapsed=time.monotonic() - wait_started,
+        initial=proc,
+    )
+
+
+def _run_agate_with_cancel_retry(
+    *,
+    agate: list[str],
+    executable: str,
+    url: str,
+    gateway_profile: str | None,
+    command_timeout: int,
+    wait_budget: int,
+) -> subprocess.CompletedProcess[str]:
+    """Retry once only when a cancelled job produced no result or error."""
+    first = _run_agate_once(
+        agate=agate,
+        executable=executable,
+        url=url,
+        gateway_profile=gateway_profile,
+        command_timeout=command_timeout,
+        wait_budget=wait_budget,
+    )
+    first_job = _job_response(first.stdout or "")
+    if not _cancelled_without_outcome(first_job):
+        return first
+
+    first_job_id = first_job.get("job_id")
+    second = _run_agate_once(
+        agate=agate,
+        executable=executable,
+        url=url,
+        gateway_profile=gateway_profile,
+        command_timeout=command_timeout,
+        wait_budget=wait_budget,
+    )
+    note = (
+        f"[sandbox] gateway cancelled job_id={first_job_id} without a result/error; "
+        "resubmitted once"
+    )
+    stderr_parts = [part.rstrip() for part in (first.stderr, note, second.stderr) if part]
+    return subprocess.CompletedProcess(
+        args=second.args,
+        returncode=second.returncode,
+        stdout=second.stdout,
+        stderr="\n".join(stderr_parts),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -374,8 +794,19 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(
                 "sandbox: ATREX_SANDBOX_URL and ATREX_SANDBOX_PROFILE are mutually exclusive"
             )
-    if not 1 <= args.timeout <= 600:
-        raise SystemExit("sandbox: --timeout must be in the gateway-supported range 1..600")
+    if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
+        raise SystemExit(
+            "sandbox: --timeout must be in the gateway-supported range "
+            f"1..{MAX_COMMAND_TIMEOUT}"
+        )
+    try:
+        queue_wait_grace = int(
+            os.environ.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE))
+        )
+    except ValueError as exc:
+        raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer") from exc
+    if queue_wait_grace < 0:
+        raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
     try:
@@ -395,24 +826,45 @@ def main(argv: list[str] | None = None) -> int:
         path for path in sync_paths
         if PurePosixPath(path).parts and PurePosixPath(path).parts[0] == "profiles"
     ]
+    evaluator_command = _is_test_kernel_command(args.command)
+    if args.dispatch_signatures:
+        selected_inputs: Iterable[str] = DISPATCH_SIGNATURE_INPUT_PATHS
+    elif evaluator_command:
+        selected_inputs = _evaluation_input_paths(workspace)
+    else:
+        selected_inputs = ()
     bundle, file_count, skipped = _make_input_bundle(
         workspace,
         args.max_input_file_mb * 1024 * 1024,
         profile_input_paths,
+        selected_inputs,
+    )
+    runtime_bundle = _make_atrex_bench_runtime_bundle(
+        workspace,
+        minimal=args.dispatch_signatures,
+        evaluator_only=evaluator_command,
     )
     bundle_bytes = len(bundle.encode("ascii"))
+    runtime_bundle_bytes = len(runtime_bundle.encode("ascii")) if runtime_bundle else 0
+    agate_executable = _find_agate()
+    direct_http = bool(args.url and agate_executable is None)
     # Linux limits each individual argv entry to 128 KiB (MAX_ARG_STRLEN).
     # agate's worker materializes an uploaded file through one such argument,
     # so leave headroom for its framing instead of creating a doomed job.
-    if bundle_bytes > 120 * 1024:
+    # The direct HTTP fallback does not place file contents in argv and can use
+    # the gateway's normal request-body allowance instead.
+    safe_bundle_bytes = 20 * 1024 * 1024 if direct_http else 120 * 1024
+    if bundle_bytes > safe_bundle_bytes:
         raise SystemExit(
             f"sandbox: packaged payload is {bundle_bytes / 1024:.1f} KiB, "
-            "above the safe 120 KiB gateway argument limit; exclude additional "
+            f"above the safe {safe_bundle_bytes / 1024:.0f} KiB gateway argument limit; "
+            "exclude additional "
             "local-only workspace artifacts"
         )
     print(
         f"[sandbox] hardware={args.hardware} files={file_count} "
-        f"payload={bundle_bytes / 1024:.1f} KiB command={command!r}",
+        f"payload={bundle_bytes / 1024:.1f} KiB "
+        f"atrex_runtime={runtime_bundle_bytes / 1024:.1f} KiB command={command!r}",
         file=sys.stderr,
     )
     if skipped:
@@ -425,6 +877,7 @@ def main(argv: list[str] | None = None) -> int:
             "workspace": str(workspace),
             "files": file_count,
             "payload_bytes": bundle_bytes,
+            "atrex_runtime_payload_bytes": runtime_bundle_bytes,
             "sync": sync_paths,
             "command": command,
         }, indent=2))
@@ -441,12 +894,21 @@ def main(argv: list[str] | None = None) -> int:
         command_path = temp / "command.sh"
         collector_path = temp / "collect.py"
         outputs_path = temp / "outputs.json"
+        runtime_part_paths: list[Path] = []
         bundle_path.write_text(bundle, encoding="ascii")
         command_path.write_text("#!/usr/bin/env bash\nset -o pipefail\n" + command + "\n", encoding="utf-8")
         collector_path.write_text(REMOTE_COLLECTOR, encoding="utf-8")
         outputs_path.write_text(json.dumps(output_cfg), encoding="utf-8")
+        if runtime_bundle:
+            for index, offset in enumerate(range(0, len(runtime_bundle), RUNTIME_CHUNK_BYTES)):
+                part_path = temp / f"atrex_runtime.part{index:03d}"
+                part_path.write_text(
+                    runtime_bundle[offset : offset + RUNTIME_CHUNK_BYTES],
+                    encoding="ascii",
+                )
+                runtime_part_paths.append(part_path)
 
-        agate = ["agate", "dev"]
+        agate = [agate_executable or "agate", "dev"]
         if args.url:
             agate += ["--url", args.url]
         elif args.gateway_profile:
@@ -454,12 +916,19 @@ def main(argv: list[str] | None = None) -> int:
         agate += [
             "--gpu", args.hardware,
             "--dev-timeout", str(args.timeout),
-            "--timeout", str(args.timeout + 120),
+            "--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
+            "--wait-timeout", str(args.timeout + queue_wait_grace),
+            "--job-timeout", str(args.timeout),
             "--file", f"__atrex_workspace.tar.gz.b64={bundle_path}",
             "--file", f"__atrex_command.sh={command_path}",
             "--file", f"__atrex_collect.py={collector_path}",
             "--file", f"__atrex_outputs.json={outputs_path}",
         ]
+        for index, part_path in enumerate(runtime_part_paths):
+            agate += [
+                "--file",
+                f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}={part_path}",
+            ]
         for item in args.env:
             if "=" not in item or item.startswith("="):
                 raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
@@ -473,12 +942,51 @@ def main(argv: list[str] | None = None) -> int:
         runner_path.write_text(_runner_source(), encoding="utf-8")
         agate[-1:-1] = ["--file", f"__atrex_runner.sh={runner_path}"]
 
-        try:
-            proc = subprocess.run(agate, capture_output=True, text=True)
-        except FileNotFoundError as exc:
-            raise SystemExit(
-                "sandbox: agate not found; install atrex-gateway-client first"
-            ) from exc
+        if direct_http:
+            print(
+                "[sandbox] agate CLI not found; using direct gateway HTTP API",
+                file=sys.stderr,
+            )
+            try:
+                direct_files = {
+                    "__atrex_workspace.tar.gz.b64": bundle_path,
+                    "__atrex_command.sh": command_path,
+                    "__atrex_collect.py": collector_path,
+                    "__atrex_outputs.json": outputs_path,
+                    "__atrex_runner.sh": runner_path,
+                }
+                direct_files.update(
+                    {
+                        f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}": path
+                        for index, path in enumerate(runtime_part_paths)
+                    }
+                )
+                proc = _run_direct_gateway(
+                    url=args.url,
+                    hardware=args.hardware,
+                    timeout=args.timeout,
+                    queue_wait_grace=queue_wait_grace,
+                    env_items=args.env,
+                    files=direct_files,
+                    command="bash __atrex_runner.sh",
+                )
+            except (OSError, RuntimeError, TimeoutError) as exc:
+                raise SystemExit(f"sandbox: direct gateway request failed: {exc}") from exc
+        else:
+            try:
+                proc = _run_agate_with_cancel_retry(
+                    agate=agate,
+                    executable=agate_executable or "agate",
+                    url=args.url,
+                    gateway_profile=args.gateway_profile,
+                    command_timeout=args.timeout,
+                    wait_budget=args.timeout + queue_wait_grace,
+                )
+            except FileNotFoundError as exc:
+                raise SystemExit(
+                    "sandbox: agate not found and no explicit --url was provided; "
+                    "install atrex-gateway-client first"
+                ) from exc
 
     if proc.stderr:
         print(proc.stderr.rstrip(), file=sys.stderr)

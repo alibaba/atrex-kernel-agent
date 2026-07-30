@@ -64,12 +64,17 @@ The installer detects supported runtime home directories and prepares local hook
 
 ![route2 optimization loop](assets/optimize_workflow.png)
 
-This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude, Qoder, or Codex CLI session for each iteration over the same git workspace. Select the backend with `--agent-cli claude|qodercli|codex` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel. Codex runs use `codex exec --json --ephemeral`; repository-scoped skills are prepared under each campaign's `.agents/skills/` without modifying the user's global Codex installation.
+This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude, Qoder, or Codex CLI session for each iteration. Select the backend with `--agent-cli claude|qodercli|codex` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel. Codex runs use `codex exec --json --ephemeral`; repository-scoped skills are prepared under each campaign's `.agents/skills/` without modifying the user's global Codex installation.
+
+For single-operator SOL and atrex-bench campaigns, the default outer flow first runs a workload inspector over the complete `workload.jsonl` or `shapes.json`. The inspector writes an exact, disjoint `workload_buckets.json`; every bucket then runs the original optimization loop concurrently in an independent Git workspace. Before bucketing, evaluator-faithful runtime input signatures are collected once in the sandbox; workloads that are indistinguishable at the entry point cannot be split. The first ten iterations are an aggregation warmup: improvements are recorded but do not edit the main kernel. Once every bucket has reached at least V10 and has a committed improvement, the orchestrator deterministically copies every bucket's committed kernel and generates an exact runtime dispatcher—no coding-agent/LLM aggregation is used. Every later bucket improvement replaces only that bucket module and regenerates the dispatcher. Every candidate is accepted only after a separate full-workload, multi-seed correctness run and full-workload geomean benchmark beat the main incumbent. Dispatcher sources, provenance, pending improvements, accepted kernels, and rejected attempts are auditable in the main workspace's Git history, `aggregate_dispatch.json`, and `aggregation_state.json`.
 
 Correctness/performance validation and profiling run on an atrex-gpu-gateway sandbox selected by
 `--sandbox-hardware`. The gateway worker receives code and test/profile inputs only: optimizer `memory/`, plans,
 edits, and Git state remain local. Structured test results and profile analysis artifacts are returned to the
-local session. The same transport can be used directly:
+local session. Evaluation is selected by input format: native atrex-bench operators (`shapes.json`) use the
+canonical `atrex-bench/scripts/run_eval.py`, with workspace `test_kernel.py` acting only as an immutable
+result adapter; SOL operators (`definition.json` + `workload.jsonl`) continue using SOL-ExecBench unchanged.
+The same transport can be used directly:
 
 ```bash
 python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
@@ -89,12 +94,20 @@ persists their status in SQLite, and speaks the same public `agate dev`/jobs API
 
 Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
 
-Everything op-specific (workspace name, the reference to optimize, the full workload/shape set, per-workload tolerances) is read from the SOL-ExecBench `--op-dir`; the ground-truth files (`definition.json`, `reference.py`, `workload.jsonl`) are used verbatim and never edited. `--platform` is required. In the default `leaderboard` mode, `--framework` may select one framework explicitly; when omitted, the orchestrator launches independent campaigns in parallel for Triton/CuteDSL/Cuda on NVIDIA, Triton/FlyDSL on AMD, or Triton on unknown hardware. A version that passes `test_kernel.py` in its workspace is directly submittable to SOL-ExecBench.
+Everything op-specific (workspace name, reference, and full workload/shape set) is read from `--op-dir`.
+Ground-truth files are never edited. Bucket workspaces receive derived filtered `workload.jsonl` or
+`shapes.json` copies, while the main workspace retains and validates the complete set. `--platform` is
+required. In the default `leaderboard` mode, `--framework` may select one framework explicitly; when omitted,
+the orchestrator launches independent campaigns in parallel for Triton/CuteDSL/Cuda on NVIDIA,
+Triton/FlyDSL on AMD, or Triton on unknown hardware.
 
 Key options:
 
 ```bash
 --max-iters N        # Hard cap on optimization iterations
+--max-workload-buckets N # Inspector bucket cap (default 8)
+--aggregate-min-improvement-pct PCT # Full-workload gain required for aggregate acceptance
+--no-workload-bucketing # Restore the legacy single-workspace SOL flow
 --token-budget N     # Hard token cap across all sessions (0 = no cap)
 --agent-cli CLI      # Optimization session backend: claude (default), qodercli, or codex
 --optimization-mode MODE # leaderboard (default) or production
@@ -110,9 +123,11 @@ Key options:
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
 
-Auto-dispatched campaigns use flat framework/hardware suffixes; for example,
+Auto-dispatched main campaigns use flat framework/hardware suffixes; for example,
 `<workspace>/kernel_opt_<name>_triton_h20` and
-`<workspace>/kernel_opt_<name>_cutedsl_h20`. Each campaign receives its own full iteration and
+`<workspace>/kernel_opt_<name>_cutedsl_h20`. Each main workspace owns its full-workload `kernel.py`,
+bucket manifest, aggregation history, and ignored `workload_buckets/` directory containing the
+independent bucket Git workspaces. Each bucket receives its own full iteration and
 token budgets. Explicit `--framework` campaigns use the same naming convention.
 
 `--optimization-mode leaderboard` preserves the existing permissive `CLAUDE.md` workflow: sessions may

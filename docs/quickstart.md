@@ -13,7 +13,7 @@ AKA ships two independent ways to run the same profile-driven workflow. Use the 
 
 Route-specific prerequisites:
 
-- Route 1 requires `jq` for `install.sh`.
+- `install.sh` automatically installs `jq` with an available package manager when needed.
 - Route 2 requires Python 3, `torch`, and one of `claude`, `qodercli`, or `codex` available on `PATH`.
 
 ## 1. Clone the Repository

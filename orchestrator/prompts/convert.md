@@ -5,6 +5,18 @@ This is a framework lowering, **not** an optimization: preserve the algorithm, t
 Gluon is a lower-level DSL, so the *following* sessions will optimize deeper — your job is to hand them
 a correct Gluon kernel. Do **one** conversion, then exit.
 
+**The host GPU boundary is non-negotiable.** Never run `python test_kernel.py`, `python kernel.py`, or
+`python -c "import kernel"` directly in the workspace, even as a quick smoke/import check. Always route the
+command through `python tools/sandbox.py ... --`; the orchestrator terminates the whole session on a direct
+kernel import or execution.
+
+Never delete or move Git-tracked workspace state (`memory/`, `roofline.json`, helpers, historical plans or
+profiles). Do not delete campaign history to reduce a sandbox payload; filtering belongs to the sandbox wrapper.
+
+**The gateway is shared orchestrator-owned infrastructure.** Never start, stop, restart, signal, or replace
+its service or `screen` session; never delete/edit its configured state directory, job database/log, or cancel gateway jobs
+directly. Report an unavailable endpoint as an infrastructure failure and exit instead of repairing it.
+
 **Do the conversion yourself, in THIS session — do not delegate it to a subagent.** The steps below are
 your work directly: read the sheet, extract TTGIR, rewrite `kernel.py`, validate, and commit or revert.
 (You may still spawn a short-lived helper for a narrow diagnostic — e.g. a profiler to explain a >5%
@@ -18,6 +30,7 @@ launches work and exits early produces no v{{N}} and wastes the whole attempt.)
 
 {{HARDWARE}}
 {{SANDBOX}}
+{{EVALUATOR}}
 
 ## Workflow
 

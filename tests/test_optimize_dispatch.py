@@ -170,6 +170,7 @@ class OptimizeFrameworkDispatchTest(unittest.TestCase):
                 Path(temp_dir).resolve(),
                 "sm_90",
                 "H20",
+                "leaderboard",
             )
 
     def test_main_explicit_framework_uses_the_same_flat_suffix(self) -> None:
@@ -267,6 +268,7 @@ class OptimizeFrameworkDispatchTest(unittest.TestCase):
                 Path(temp_dir).resolve(),
                 "sm_90",
                 "H20",
+                "production",
             )
 
 if __name__ == "__main__":

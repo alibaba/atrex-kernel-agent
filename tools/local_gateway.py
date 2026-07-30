@@ -59,6 +59,8 @@ KNOWN_KINDS = frozenset({"eval", "profile", "dev", "disassemble"})
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_BODY_LIMIT = 32 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 32 * 1024 * 1024
+DEFAULT_JOB_TIMEOUT = 600
+MAX_JOB_TIMEOUT = 600
 
 
 def _json_dumps(value: Any) -> str:
@@ -342,9 +344,15 @@ def _validate_dev_request(payload: Any) -> dict[str, Any]:
     if len(command.encode("utf-8")) > 1024 * 1024:
         raise ValueError("command exceeds the 1 MiB limit")
 
-    timeout_s = payload.get("timeout_s", 600)
-    if isinstance(timeout_s, bool) or not isinstance(timeout_s, int) or not 1 <= timeout_s <= 600:
-        raise ValueError("timeout_s must be an integer in the range 1..600")
+    timeout_s = payload.get("timeout_s", DEFAULT_JOB_TIMEOUT)
+    if (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, int)
+        or not 1 <= timeout_s <= MAX_JOB_TIMEOUT
+    ):
+        raise ValueError(
+            f"timeout_s must be an integer in the range 1..{MAX_JOB_TIMEOUT}"
+        )
 
     env_vars = payload.get("env_vars") or {}
     if not isinstance(env_vars, dict) or not all(
@@ -481,13 +489,40 @@ class LocalScheduler:
             stdout_path = workdir / ".stdout"
             stderr_path = workdir / ".stderr"
             env = os.environ.copy()
-            env.update(request.get("env_vars") or {})
+            request_env = request.get("env_vars") or {}
+            env.update(request_env)
+            if "PATH" not in request_env:
+                # Starting the gateway with an explicit environment Python
+                # The active interpreter and its sibling tools must make that same
+                # toolchain the default for worker commands.  Invoking an
+                # interpreter by absolute path does not otherwise update PATH.
+                python_bin = str(Path(sys.executable).resolve().parent)
+                path_parts = [
+                    part for part in env.get("PATH", "").split(os.pathsep)
+                    if part and part != python_bin
+                ]
+                env["PATH"] = os.pathsep.join([python_bin, *path_parts])
+            if "TORCH_EXTENSIONS_DIR" not in request_env:
+                # Torch's load/load_inline lock file has no owner metadata and
+                # survives SIGTERM/SIGKILL.  Reusing the gateway account's
+                # global cache can therefore make a later, unrelated job wait
+                # forever on a stale lock (or collide with another candidate
+                # that chose the same extension name).  A job-local cache
+                # matches fresh remote workers and contains all build state
+                # inside the job's already-isolated directory.
+                torch_extensions = workdir / ".torch_extensions"
+                torch_extensions.mkdir(mode=0o700)
+                env["TORCH_EXTENSIONS_DIR"] = str(torch_extensions)
             env["ATREX_LOCAL_JOB_ID"] = job_id
             with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
                 stdout_path.chmod(0o600)
                 stderr_path.chmod(0o600)
                 process = subprocess.Popen(
-                    ["bash", "-lc", request["command"]],
+                    # Preserve the gateway/request environment exactly.  A login
+                    # shell may source /etc/profile and silently replace PATH,
+                    # causing jobs to use a different Python/toolchain from the
+                    # gateway process.
+                    ["bash", "-c", request["command"]],
                     cwd=workdir,
                     env=env,
                     stdout=stdout_file,
@@ -502,7 +537,7 @@ class LocalScheduler:
                     self._terminate(process)
                 timed_out = False
                 try:
-                    process.wait(timeout=int(request.get("timeout_s", 600)))
+                    process.wait(timeout=int(request.get("timeout_s", DEFAULT_JOB_TIMEOUT)))
                 except subprocess.TimeoutExpired:
                     timed_out = True
                     self._terminate(process)
@@ -522,7 +557,10 @@ class LocalScheduler:
                     job_id,
                     status="failed",
                     result=result,
-                    error=_error("command_timeout", f"command exceeded {request.get('timeout_s', 600)} seconds"),
+                    error=_error(
+                        "command_timeout",
+                        f"command exceeded {request.get('timeout_s', DEFAULT_JOB_TIMEOUT)} seconds",
+                    ),
                 )
             elif stdout_truncated or stderr_truncated:
                 self.store.complete(

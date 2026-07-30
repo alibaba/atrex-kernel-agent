@@ -92,10 +92,43 @@ CLAUDE_HOOK_TAG="gpu-kernel-optimizer-claude-hook-v1"
 GPU_WIKI_DIR="$INSTALL_BASE/gpu-wiki"
 REFERENCE_PROJECTS_DIR="$INSTALL_BASE/reference-projects"
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq is required. Install it with your system package manager."
-  exit 1
-fi
+install_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "[deps] jq not found; attempting automatic installation"
+  local -a privileged=()
+  if [[ "$(id -u)" -ne 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      privileged=(sudo)
+    else
+      privileged=(false)
+    fi
+  fi
+
+  if [[ "${privileged[0]:-}" != "false" ]]; then
+    if command -v apt-get >/dev/null 2>&1 && "${privileged[@]}" apt-get install -y jq; then :
+    elif command -v dnf >/dev/null 2>&1 && "${privileged[@]}" dnf install -y jq; then :
+    elif command -v yum >/dev/null 2>&1 && "${privileged[@]}" yum install -y jq; then :
+    elif command -v apk >/dev/null 2>&1 && "${privileged[@]}" apk add jq; then :
+    elif command -v zypper >/dev/null 2>&1 && "${privileged[@]}" zypper --non-interactive install jq; then :
+    fi
+  fi
+  if ! command -v jq >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
+    brew install jq || true
+  fi
+  if ! command -v jq >/dev/null 2>&1 && command -v conda >/dev/null 2>&1; then
+    CONDA_SOLVER=classic conda install -y -c conda-forge jq || true
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required and automatic installation failed."
+    exit 1
+  fi
+  echo "[deps] jq installed"
+}
+
+install_jq
 
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: git is required. Install git and retry."

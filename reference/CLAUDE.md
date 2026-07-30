@@ -7,7 +7,8 @@ The full stage-by-stage workflow is defined in `orchestrator/prompts/iteration.m
 
 - **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet in any optimized DSL. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the *suggested* first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
 - The `--framework` value is a **recommended optimization direction**, not a hard constraint. Sessions MAY use a different DSL or mixed approaches if evidence shows a better performance path.
-- Third-party helper libraries (e.g., utility libraries, math libraries) MAY be introduced freely to assist optimization.
+- Preinstalled third-party helper libraries may be used, but the campaign environment is immutable: never
+  install or locally build a package. If a library is unavailable, use existing tooling or record a blocker.
 - `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
 - When Triton-level optimization plateaus, the orchestrator spawns a dedicated **convert-only session** (`orchestrator/prompts/convert.md` → `gpu-kernel-convert`) that lowers the kernel Triton→Gluon with NO optimization, gated on correctness alone; the following sessions then optimize the Gluon kernel (deeper levers). Do not hand-trigger the rewrite inside a normal optimization iteration.
 
@@ -58,6 +59,11 @@ python test_kernel.py --version v<N> --multi-seed 5
 This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds
 pass. If any seed fails correctness, the kernel is BROKEN — revert with `git reset --hard HEAD`
 and try a different lever. See `iteration.md` Stage 3 step 4 for the full procedure.
+
+Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass;
+do not repeat warmup/timing/reference benchmarking for extra seeds. The public gateway caps
+one command at 600 seconds, and multi-seed robustness must stay within that limit without
+reducing seed or shape coverage.
 
 ### Cache-hack ZERO-TOLERANCE policy
 
