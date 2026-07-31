@@ -177,7 +177,6 @@ OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
-AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
 AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
@@ -488,10 +487,8 @@ def _typed_workspace_limitation(workspace: Path, command: list[str]) -> str | No
         return "missing " + ", ".join(missing)
     if (workspace / "workload.jsonl").is_file():
         return "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
-    if (workspace / AGGREGATE_DISPATCH_FILE).is_file() or (
-        workspace / AGGREGATE_KERNELS_DIR
-    ).is_dir():
-        return "aggregate multi-file candidate is not supported by the single-file typed API"
+    if (workspace / AGGREGATE_KERNELS_DIR).is_dir():
+        return "legacy aggregate multi-file candidate is not supported by the single-file typed API"
 
     solution = _json_object(workspace / "solution.json")
     if solution is not None:

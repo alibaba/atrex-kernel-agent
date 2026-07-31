@@ -244,48 +244,60 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
     policy_trees = [tree]
     aggregate_dispatch = workspace / AGGREGATE_DISPATCH_FILE
     aggregate_mode = aggregate_dispatch.is_file()
+    legacy_aggregate_modules = False
     if aggregate_mode:
         try:
             dispatch = json.loads(aggregate_dispatch.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             errors.append(f"{AGGREGATE_DISPATCH_FILE} is invalid: {exc}")
             dispatch = {}
-        if dispatch.get("schema_version") != 1 or dispatch.get("mode") != "deterministic_dispatch":
-            errors.append("aggregate dispatcher manifest is not deterministic schema v1")
+        schema_version = dispatch.get("schema_version")
+        if schema_version not in {1, 2} or dispatch.get("mode") != "deterministic_dispatch":
+            errors.append("aggregate dispatcher manifest is not deterministic schema v1/v2")
         modules = dispatch.get("modules")
         if not isinstance(modules, dict) or not modules:
             errors.append("aggregate dispatcher manifest has no bucket modules")
             modules = {}
-        for bucket, record in sorted(modules.items()):
-            relative = record.get("path") if isinstance(record, dict) else None
-            if not isinstance(relative, str):
-                errors.append(f"aggregate bucket {bucket} has no source path")
-                continue
-            relative_path = Path(relative)
-            if (
-                relative_path.is_absolute()
-                or ".." in relative_path.parts
-                or len(relative_path.parts) != 2
-                or relative_path.parts[0] != AGGREGATE_KERNELS_DIR
-                or relative_path.suffix != ".py"
-            ):
-                errors.append(f"invalid aggregate bucket source path: {relative}")
-                continue
-            module_path = workspace / relative_path
-            if not module_path.is_file():
-                errors.append(f"aggregate bucket source is missing: {relative}")
-                continue
-            module_source = module_path.read_text(encoding="utf-8", errors="replace")
-            try:
-                module_tree = ast.parse(module_source, filename=str(module_path))
-            except SyntaxError as exc:
-                errors.append(
-                    f"aggregate bucket {bucket} is not valid Python: "
-                    f"{exc.msg} (line {exc.lineno})"
-                )
-                continue
-            policy_sources.append(module_source)
-            policy_trees.append(module_tree)
+        if schema_version == 1:
+            legacy_aggregate_modules = True
+            for bucket, record in sorted(modules.items()):
+                relative = record.get("path") if isinstance(record, dict) else None
+                if not isinstance(relative, str):
+                    errors.append(f"aggregate bucket {bucket} has no source path")
+                    continue
+                relative_path = Path(relative)
+                if (
+                    relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                    or len(relative_path.parts) != 2
+                    or relative_path.parts[0] != AGGREGATE_KERNELS_DIR
+                    or relative_path.suffix != ".py"
+                ):
+                    errors.append(f"invalid aggregate bucket source path: {relative}")
+                    continue
+                module_path = workspace / relative_path
+                if not module_path.is_file():
+                    errors.append(f"aggregate bucket source is missing: {relative}")
+                    continue
+                module_source = module_path.read_text(encoding="utf-8", errors="replace")
+                try:
+                    module_tree = ast.parse(module_source, filename=str(module_path))
+                except SyntaxError as exc:
+                    errors.append(
+                        f"aggregate bucket {bucket} is not valid Python: "
+                        f"{exc.msg} (line {exc.lineno})"
+                    )
+                    continue
+                policy_sources.append(module_source)
+                policy_trees.append(module_tree)
+        elif schema_version == 2:
+            if dispatch.get("source_layout") != "embedded_single_file":
+                errors.append("schema-v2 aggregate source layout is not embedded_single_file")
+            for bucket, record in sorted(modules.items()):
+                if not isinstance(record, dict) or record.get("embedded") is not True:
+                    errors.append(f"aggregate bucket {bucket} is not marked as embedded")
+                elif record.get("path"):
+                    errors.append(f"embedded aggregate bucket {bucket} declares an external path")
 
     roots: set[str] = set()
     has_relative_import = False
@@ -296,7 +308,7 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
     if has_relative_import:
         errors.append("relative/local-module imports are not self-contained")
     allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[key]
-    if aggregate_mode:
+    if legacy_aggregate_modules:
         allowed = allowed | {AGGREGATE_KERNELS_DIR}
     for root in sorted(roots - allowed):
         errors.append(f"third-party import is not allowed in production mode: {root}")
