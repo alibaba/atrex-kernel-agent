@@ -72,11 +72,12 @@ Execute each stage (1–4) directly in this session. All rules are defined inlin
 
 **Goal**: Profile the current kernel, place outputs in `profiles/v{{N}}/`, and extract concrete bottleneck evidence.
 
-**Execution**: First create `profiles/v{{N}}/harness/profile_driver.py` locally. It must import the current
-`kernel.py` plus immutable `input.py`, select a representative workload from `shapes.json`, allocate inputs,
-warm up, and invoke `Model` repeatedly so the profiler captures real GPU kernels. The driver is profile-only;
-it must not update memory. Collection and analysis then finish inside one sandbox job so a fresh pod is safe
-and raw profiler binaries never become optimizer state. Run exactly one platform-specific command.
+**Execution**: Collection uses the gateway's typed `profile` interface against the current `kernel.py` and
+immutable Atrex-Bench reference bundle; its structured response is saved as
+`profiles/v{{N}}/gateway_profile.json`. Also create `profiles/v{{N}}/harness/profile_driver.py` locally as the
+compatibility command used only if the typed endpoint cannot represent the workload. That fallback driver
+must import `kernel.py` plus immutable `input.py`, select a representative workload from `shapes.json`, warm
+up, invoke `Model` repeatedly, and never update memory. Run exactly one platform-specific sandbox command.
 
 Because the driver lives below `profiles/v{{N}}/harness/`, Python does not automatically put the workspace
 root on its import path. Before importing `kernel` or `input`, the driver **must** add that root explicitly:
@@ -88,36 +89,35 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 ```
-Do not run a profile until a lightweight sandbox import check confirms that both workspace modules resolve.
+Sandbox input transfer is allowlist-only. A dev fallback automatically uploads the wrapper, harness directory,
+candidate sources, and workload modules. For a nonstandard fallback helper or a file opened dynamically by
+command code, add repeatable `--input <relative-file-or-directory>` options before `--`; never probe evaluator
+health with an unrelated `python -c print(...)` command.
 
 **NVIDIA**:
 ```bash
-python tools/sandbox.py --sync profiles/v{{N}} -- \
+python tools/sandbox.py --kind profile --profile-level sol --sync profiles/v{{N}} -- \
   bash tools/profile_nvidia.sh profiles/v{{N}}/harness/profile_driver.py \
-    --output-dir profiles/v{{N}} --source
+    --output-dir profiles/v{{N}}
 ```
 
-For a named DSL kernel (especially a Triton `@triton.jit` function), append
-`--kernel-name <exact_base_function_name>` to both NCU collections through this
-wrapper. Use the exact name reported by NCU (for example
-`--kernel-name _attn_fwd_kernel`), not a substring or a `regex:.*...*` guess.
-Without a filter, NCU's default first-launch capture often selects a
-`torch.randn`/input-generation elementwise kernel instead of the candidate.
-After collection, verify that the `Kernel:` line in `summary.txt` names the
-intended candidate kernel; a mismatched or empty capture is invalid and must be
-rerun before writing `REPORT.md`.
+For a named DSL kernel (especially a Triton `@triton.jit` function), rerun as a focused typed profile with
+`--profile-level deep --kernel-regex '^<exact_base_function_name>$'`. Use the exact name reported by the
+survey/SOL result, not a substring guess. If source-line correlation is required and the typed profile does
+not expose it, add `--source --kernel-name <exact_base_function_name>` to the fallback wrapper; this is a
+documented profile-interface gap and may use `dev`.
 
 **AMD**:
 ```bash
-python tools/sandbox.py --sync profiles/v{{N}} -- \
+python tools/sandbox.py --kind profile --profile-level sol --sync profiles/v{{N}} -- \
   bash tools/profile_kernel.sh profiles/v{{N}}/harness/profile_driver.py \
     --output-dir profiles/v{{N}}
 ```
 
-The wrapper synchronizes the small profile analysis and summary artifacts back locally. Raw
-`.ncu-rep`/ATT binaries stay remote by default. Follow the runtime's available `ncu-report-skill` only for
-interpreting the returned evidence, then write `profiles/v{{N}}/REPORT.md` locally. Pin any source-targeted
-change to the line/SASS evidence produced by the NVIDIA `--source` run.
+Interpret `gateway_profile.json` (structured per-kernel counters plus a bounded raw tail), then write
+`profiles/v{{N}}/REPORT.md` locally. A dev fallback may additionally synchronize the wrapper's small analysis
+artifacts; raw `.ncu-rep`/ATT binaries stay remote by default. Pin any source-targeted change to evidence from
+an explicit source-correlation fallback run.
 
 **Output**: `profiles/v{{N}}/REPORT.md` with bottleneck evidence, diagnosis, and ranked recommendations — this feeds Stage 2.
 
@@ -160,7 +160,7 @@ Execution steps:
    - Constraints: target framework, platform, correctness requirements
    - Stall context: current `STALL_COUNT` and whether forced expansion was triggered
    - Performance expectation: a measurable post-change profile/latency expectation, plus the condition that would justify PTX/SASS inspection if compiler lowering could explain a mismatch
-8. **Generate plan** via humanize:
+8. **Generate plan** using the backend-specific planner:
 
    {{PLAN_GENERATOR}}
    This produces a structured plan with acceptance criteria. Keep generation in direct/one-shot mode without convergence rounds; this iteration implements only one optimization action.
@@ -181,7 +181,7 @@ Execution steps:
    - Do not mix unrelated refactors, formatting, or cleanup.
 4. **Correctness validation** — immediately after editing:
    ```bash
-   python tools/sandbox.py --no-sync -- python test_kernel.py --version v{{N}} --no-memory
+   python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v{{N}} --no-memory
    ```
    Parse the emitted `RESULT_JSON`, then update local `memory/v{{N}}.json`. If validation fails, iteratively
    fix until it passes. Do not proceed to Stage 4 with broken correctness.
@@ -193,7 +193,7 @@ Execution steps:
 
    ```bash
    # Run 5 additional seeds (1..5). Reports PASS only if ALL seeds pass.
-   python tools/sandbox.py --no-sync -- \
+   python tools/sandbox.py --kind run --no-sync -- \
      python test_kernel.py --version v{{N}} --multi-seed 5 --no-memory
    ```
 
@@ -231,7 +231,7 @@ Execution steps:
 
 1. **Run the benchmark harness** with timeout guard:
    ```bash
-   python tools/sandbox.py --no-sync -- python test_kernel.py --version v{{N}} --no-memory
+   python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v{{N}} --no-memory
    ```
    This runs the campaign's immutable evaluator over **every entry in its ground-truth workload source**.
    Native `shapes.json` campaigns are evaluated by the official Atrex-Bench `run_eval`; SOL

@@ -47,7 +47,7 @@ Do the following, in order, but only through baseline:
    route declared above, validate correctness and baseline performance, write `baseline_report.md`, write
    `memory/v0.json` (via `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
-   `python test_kernel.py --version v0 --no-memory` through `tools/sandbox.py`, parse the emitted
+   `python test_kernel.py --version v0 --no-memory` through `tools/sandbox.py --kind run`, parse the emitted
    `[test_kernel] RESULT_JSON=...`, and write `memory/v0.json` locally. Reject local-GPU measurement and remotely
    written memory. The test must cover every shape in `shapes.json`; record all shape latencies and their
    geomean. Do not edit an evaluator adapter supplied by the orchestrator. A derived legacy boundary may create

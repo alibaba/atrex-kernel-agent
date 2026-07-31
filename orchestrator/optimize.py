@@ -990,15 +990,22 @@ def _codex_settings_args(raw: str) -> list[str]:
     return args
 
 
-def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
+def _session_command(
+    agent_cli: str,
+    prompt: str,
+    session_id: str,
+    reasoning_effort: str = "max",
+) -> list[str]:
     """Return a non-interactive, fresh-session command for the selected coding CLI."""
+    if reasoning_effort not in {"low", "medium", "high", "max"}:
+        raise ValueError(f"unsupported reasoning effort: {reasoning_effort!r}")
     if agent_cli == "claude":
         cmd = [
             "claude", "--print", "--verbose",
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
             "--session-id", session_id,
-            "--effort", "max",
+            "--effort", reasoning_effort,
         ]
         provider_settings = "ATREX_CLAUDE_SESSION_SETTINGS"
     elif agent_cli == "qodercli":
@@ -1008,7 +1015,7 @@ def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
             "--output-format", "stream-json",
             "--session-id", session_id,
             "--no-session-persistence",
-            "--reasoning-effort", "max",
+            "--reasoning-effort", reasoning_effort,
         ]
         provider_settings = "ATREX_QODER_SESSION_SETTINGS"
     elif agent_cli == "codex":
@@ -1020,7 +1027,7 @@ def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
         cmd = [
             "codex", "exec", "--json", "--ephemeral", "--color", "never",
             "--dangerously-bypass-approvals-and-sandbox",
-            "-c", 'model_reasoning_effort="max"',
+            "-c", f'model_reasoning_effort="{reasoning_effort}"',
         ]
         provider_settings = "ATREX_CODEX_SESSION_SETTINGS"
     else:
@@ -1034,12 +1041,11 @@ def _session_command(agent_cli: str, prompt: str, session_id: str) -> list[str]:
         cmd += _codex_settings_args(session_settings or "")
     elif session_settings:
         cmd += ["--settings", session_settings]
-    # Claude and Qoder accept Claude-compatible local plugins. Codex discovers the hydrated
-    # Humanize skill from the workspace-local .agents/skills tree created by link_runtime().
-    # ensure_submodules() provisions jq before sessions start, so Humanize loads consistently
-    # for Claude and Qoder. Codex uses its hydrated repository-local skill instead.
+    # Claude uses the upstream Humanize plugin. Qoder generates plans directly and must not load
+    # Humanize: its headless Skill tool cannot invoke the plugin's model-disabled gen-plan flow.
+    # Codex discovers the hydrated Humanize skill from the workspace-local .agents/skills tree.
     if (
-        agent_cli != "codex"
+        agent_cli == "claude"
         and (HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md").exists()
     ):
         cmd += ["--plugin-dir", str(HUMANIZE_DIR)]
@@ -1173,10 +1179,11 @@ def run_session(
     sandbox_profile: str = "",
     sandbox_url: str = "",
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT,
+    reasoning_effort: str = "max",
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     session_id = str(uuid.uuid4())
-    cmd = _session_command(agent_cli, prompt, session_id)
+    cmd = _session_command(agent_cli, prompt, session_id, reasoning_effort)
     env = _session_env(agent_cli)
     env["IS_SANDBOX"] = "1"
     if sandbox_hardware:
@@ -1211,11 +1218,12 @@ def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
         f"- Target gateway hardware: **{hardware}**{endpoint}. All GPU execution must cross this "
         "gateway boundary, including when the endpoint is localhost; source edits, optimizer state, and "
         "Git operations remain in the workspace.\n"
-        "- Run every correctness or performance test through the gateway sandbox. Always pass `--no-memory`; "
+        "- Run every correctness or performance test through the gateway sandbox's `run` interface. "
+        "Always pass `--kind run --no-memory`; "
         "read the emitted `[test_kernel] RESULT_JSON=...` line, then update `memory/v<N>.json` locally.\n"
         "  ```bash\n"
-        "  python tools/sandbox.py --no-sync -- python test_kernel.py --version v<N> --no-memory\n"
-        "  python tools/sandbox.py --no-sync -- python test_kernel.py --version v<N> --multi-seed 5 --no-memory\n"
+        "  python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v<N> --no-memory\n"
+        "  python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v<N> --multi-seed 5 --no-memory\n"
         "  ```\n"
         "  The harness must benchmark only the base seed. Additional `--multi-seed` runs are "
         "correctness-only (no warmup/timing/reference benchmark repetition), so the full robustness "
@@ -1223,12 +1231,21 @@ def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
         "coverage. Follow the declared evaluator route: an orchestrator-installed Atrex-Bench adapter "
         "must never be edited; only a derived legacy boundary may create its harness before V0. After "
         "V0 every route's harness remains immutable.\n"
-        "- Run NVIDIA/AMD profiling in the sandbox as one self-contained command; `profiles/` analysis "
-        "artifacts are synchronized back automatically:\n"
+        "- Sandbox uploads are allowlist-only. `test_kernel.py`, dispatch-signature collection, standard "
+        "profile wrappers, and direct `import kernel` checks select their required inputs automatically. "
+        "For any nonstandard command or dynamically opened local file, declare each dependency before `--` "
+        "with repeatable `--input <relative-file-or-directory>`. Never use a generic `python -c print(...)` "
+        "job to infer evaluator health; it does not exercise the evaluator payload or code path.\n"
+        "- Run NVIDIA/AMD profiling through the typed `profile` interface. The structured response is "
+        "saved as `profiles/v<N>/gateway_profile.json`; the wrapper command after `--` is used only as "
+        "a dev fallback when the endpoint cannot represent the workload:\n"
         "  ```bash\n"
-        "  python tools/sandbox.py --sync profiles/v<N> -- bash tools/profile_nvidia.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N> --source\n"
-        "  python tools/sandbox.py --sync profiles/v<N> -- bash tools/profile_kernel.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N>\n"
+        "  python tools/sandbox.py --kind profile --profile-level sol --sync profiles/v<N> -- bash tools/profile_nvidia.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N>\n"
+        "  python tools/sandbox.py --kind profile --profile-level sol --sync profiles/v<N> -- bash tools/profile_kernel.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N>\n"
         "  ```\n"
+        "  Use `--profile-level deep --kernel-regex '^<exact kernel name>$'` for a focused typed profile. "
+        "If source-line correlation or another typed-profile gap is specifically required, the sandbox may "
+        "use the supplied wrapper through `dev`; do not choose dev merely for convenience.\n"
         "- Never run `test_kernel.py`, GPU timers, `ncu`, `rocprofv3`, or the profile wrappers outside "
         "the gateway interface. Never upload or create optimizer `memory/` as worker state; memory updates, "
         "plans, edits, and git operations stay local.\n"
@@ -1263,10 +1280,12 @@ def _sandbox_command(
     sync: tuple[str, ...] = (),
     wall_timeout: Optional[int] = None,
     dispatch_signatures: bool = False,
+    gateway_kind: str = "auto",
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     cmd = [
         sys.executable, str(SANDBOX_TOOL),
+        "--kind", gateway_kind,
         "--hardware", hardware,
         "--workspace", str(workspace),
         "--timeout", str(timeout),
@@ -1889,6 +1908,13 @@ def _baseline_driver_directive(agent_cli: str) -> str:
             "session. If Codex collaboration/sub-agent tools are available, delegate that bounded "
             "implementation task and wait for it; otherwise execute the skill directly yourself"
         )
+    if agent_cli == "qodercli":
+        return (
+            "Complete the baseline workflow directly in this Qoder session. Do not launch an "
+            "Agent/subagent: nested workload-bucket repositories can otherwise be resolved as the "
+            "aggregate parent workspace. Treat the current working directory as the only writable "
+            "workspace and use relative paths for every campaign file"
+        )
     return (
         "Launch the `gpu-kernel-baseline` subagent (by name). You may spawn it in the "
         "background, but **you MUST wait for it to complete before you exit**"
@@ -1904,6 +1930,14 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
             "output. Use direct/no-discussion mode for this single-action optimization plan. "
             "The skill is repository-local under `.agents/skills/`; do not look for a slash "
             "command or Claude plugin."
+        )
+    if agent_cli == "qodercli":
+        return (
+            f"Read `{draft}` and generate `{plan}` yourself in this Qoder session. Do not invoke "
+            "Humanize, a slash command, the Skill tool, or a planning subagent. Write a complete "
+            "one-shot plan containing the evidence-to-action chain, exactly one optimization "
+            "category, concrete file changes, correctness/performance validation steps, and "
+            "measurable acceptance criteria. Preserve the draft's Search Log and constraints."
         )
     return (
         "```text\n"
@@ -1921,9 +1955,9 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/``, and
     repository-local Codex skills into ``.agents/skills/``.
 
-    Claude/Qoder load Humanize via ``--plugin-dir`` after the orchestrator provisions ``jq``.
-    Codex receives a repository-scoped, hydrated Humanize skill without changing global user
-    state.
+    Claude loads Humanize via ``--plugin-dir`` after the orchestrator provisions ``jq``. Qoder
+    owns plan generation directly and does not load Humanize. Codex receives a repository-scoped,
+    hydrated Humanize skill without changing global user state.
     """
     for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
         src, dst = REPO_ROOT / sub, workspace / sub
@@ -2149,6 +2183,7 @@ class Campaign:
             sandbox_profile=self.sandbox_profile,
             sandbox_url=self.sandbox_url,
             sandbox_timeout=self.sandbox_timeout,
+            reasoning_effort="high",
         )
         self._account(res, "setup")
         if res.exit_status != 0 and res.tokens == 0:
@@ -2193,6 +2228,7 @@ class Campaign:
                 sandbox_profile=self.sandbox_profile,
                 sandbox_url=self.sandbox_url,
                 sandbox_timeout=self.sandbox_timeout,
+                reasoning_effort="high",
             )
             self._account(recovery, "setup recovery")
             if recovery.exit_status != 0 and recovery.tokens == 0:
@@ -2230,6 +2266,7 @@ class Campaign:
             self.sandbox_url,
             self.sandbox_timeout,
             ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+            gateway_kind="run",
         )
         if test.stdout:
             print(test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True)
@@ -2790,6 +2827,118 @@ def _materialize_bucket_op(
             )
 
 
+def _bucket_baseline_memory(
+    aggregate_memory: dict,
+    bucket: WorkloadBucket,
+    workload_source: WorkloadSource,
+    *,
+    aggregate_workspace: Path,
+    aggregate_v0_commit: str,
+) -> dict:
+    """Derive one bucket's V0 record from the aggregate V0 measurement.
+
+    The aggregate evaluator already measured every workload independently and
+    persisted those measurements in ``latency_us_by_shape``.  Re-running the
+    same baseline once per bucket wastes both coding-agent and GPU time.  A
+    bucket baseline is therefore the exact subset of those measurements, with
+    scalar latency aggregates recomputed over only that subset.
+    """
+    performance = aggregate_memory.get("performance") or {}
+    per_workload = performance.get("latency_us_by_shape")
+    if not isinstance(per_workload, dict):
+        raise RuntimeError(
+            "aggregate memory/v0.json has no performance.latency_us_by_shape; "
+            "cannot derive bucket baselines without re-running V0"
+        )
+
+    selected: dict[str, float] = {}
+    selected_ids: list[str] = []
+    ordered_keys = list(per_workload)
+    for index in bucket.workload_indices:
+        entry = workload_source.entries[index]
+        candidates = [workload_source.ids[index]]
+        for field_name in ("uuid", "id"):
+            value = entry.get(field_name)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                candidates.append(str(value))
+        key = next((candidate for candidate in candidates if candidate in per_workload), None)
+        # Older SOL records can be keyed by evaluator UUID while the source view
+        # exposes only ordinal ids.  Equal cardinality makes the evaluator's
+        # stable insertion order an unambiguous final fallback.
+        if key is None and len(ordered_keys) == len(workload_source.entries):
+            key = ordered_keys[index]
+        if key is None:
+            raise RuntimeError(
+                f"aggregate V0 has no per-workload latency for bucket {bucket.name!r} "
+                f"workload index {index}"
+            )
+        latency = per_workload.get(key)
+        if (
+            isinstance(latency, bool)
+            or not isinstance(latency, (int, float))
+            or not math.isfinite(float(latency))
+            or float(latency) <= 0
+        ):
+            raise RuntimeError(
+                f"aggregate V0 latency for workload {key!r} is not a positive finite number"
+            )
+        selected[str(key)] = float(latency)
+        selected_ids.append(str(key))
+
+    latencies = list(selected.values())
+    geomean = (
+        latencies[0]
+        if len(latencies) == 1
+        else math.exp(sum(math.log(value) for value in latencies) / len(latencies))
+    )
+    arithmetic_mean = sum(latencies) / len(latencies)
+    # JSON round-tripping gives a deep copy while also guaranteeing the derived
+    # record remains JSON serializable like every other memory entry.
+    derived = json.loads(json.dumps(aggregate_memory))
+    derived["version"] = "v0"
+    derived["masked"] = False
+    derived["timestamp"] = datetime.now(timezone.utc).isoformat()
+    derived_performance = derived.setdefault("performance", {})
+    derived_performance["latency_us"] = geomean
+    derived_performance["latency_us_geomean"] = geomean
+    derived_performance["latency_us_arith_mean"] = arithmetic_mean
+    derived_performance["latency_us_by_shape"] = selected
+    derived_performance["derived_from_aggregate_v0"] = True
+    derived_performance["aggregate_v0_latency_us"] = performance.get("latency_us")
+    # Throughput/utilization scalars in aggregate V0 were reduced over the full
+    # workload set.  They are not mathematically valid for a subset and could
+    # incorrectly trip the bucket's peak-utilization stop condition.
+    for aggregate_only_metric in (
+        "tflops",
+        "bandwidth_gbps",
+        "tflops_peak_utilization_pct",
+        "bandwidth_peak_utilization_pct",
+        "speedup_vs_ref_geomean",
+    ):
+        derived_performance.pop(aggregate_only_metric, None)
+    derived_performance["measurement_note"] = (
+        f"Mechanically selected aggregate V0 per-workload timings for bucket {bucket.name}; "
+        "no separate baseline evaluation was run."
+    )
+    optimization = derived.setdefault("optimization", {})
+    optimization["action_category"] = "baseline"
+    optimization["action_description"] = (
+        f"V0 mechanically derived from aggregate baseline for bucket {bucket.name}; "
+        f"selected workloads: {', '.join(selected_ids)}. No separate baseline session "
+        "or GPU evaluation was run."
+    )
+    derived["baseline_derivation"] = {
+        "source": "aggregate_v0",
+        "aggregate_workspace": str(aggregate_workspace),
+        "aggregate_v0_commit": aggregate_v0_commit,
+        "bucket": bucket.name,
+        "workload_indices": list(bucket.workload_indices),
+        "workload_ids": selected_ids,
+    }
+    derived["git_commit_hash"] = None
+    return derived
+
+
 def _freeze_dispatch_signature(value: object) -> object:
     """Convert JSON arrays into hashable tuples while preserving scalars."""
     if isinstance(value, list):
@@ -3162,6 +3311,7 @@ class WorkloadBucketCoordinator:
                 ],
                 wall_timeout=timeout + AGGREGATE_QUEUE_WAIT_GRACE,
                 dispatch_signatures=True,
+                gateway_kind="dev",
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RuntimeError(f"dispatch signature collection failed to run: {exc}") from exc
@@ -3980,6 +4130,7 @@ class WorkloadBucketCoordinator:
                             wall_timeout=(
                                 validation_timeout + AGGREGATE_QUEUE_WAIT_GRACE
                             ),
+                            gateway_kind="run",
                         )
                     except (OSError, subprocess.SubprocessError) as exc:
                         rejection = (
@@ -4212,20 +4363,184 @@ class WorkloadBucketCoordinator:
             on_improvement=on_improvement,
             on_iteration=on_iteration,
         )
-        # Native shapes buckets must use the same already-validated generic
-        # harness as the aggregate workspace.  Leaving harness creation to a
-        # coding session can accidentally select reference/test_kernel.py,
-        # which is SOL-only and requires workload.jsonl/sol-execbench.  Seed
-        # only pre-V0 workspaces; a committed bucket harness is immutable.
-        aggregate_harness = self.workspace / "test_kernel.py"
-        if (
-            workload_source.kind == "shapes"
-            and aggregate_harness.is_file()
-            and latest_version(campaign.workspace) < 0
-        ):
-            campaign.workspace.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(aggregate_harness, campaign.workspace / "test_kernel.py")
         return campaign
+
+    def _seed_bucket_baseline_from_aggregate(
+        self,
+        bucket: WorkloadBucket,
+        campaign: Campaign,
+        workload_source: WorkloadSource,
+    ) -> None:
+        """Create a bucket V0 from the already-validated aggregate V0.
+
+        This is deliberately mechanical: no coding-agent session and no GPU
+        command are involved.  The bucket receives the aggregate's original V0
+        kernel plus only its own workload files and per-workload measurements.
+        """
+        if latest_version(campaign.workspace) >= 0:
+            return
+        aggregate_memory = read_memory(self.workspace, 0)
+        if aggregate_memory is None:
+            raise RuntimeError("cannot seed bucket baseline before aggregate memory/v0.json exists")
+        aggregate_passed = _status_is(
+            (aggregate_memory.get("quality_gate") or {}).get("result"), "PASS"
+        ) or _status_is(
+            (aggregate_memory.get("correctness") or {}).get("status"), "PASS"
+        )
+        if not aggregate_passed:
+            raise RuntimeError("cannot seed bucket baseline from a non-passing aggregate V0")
+
+        roots = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            cwd=str(self.workspace),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        if len(roots) != 1:
+            raise RuntimeError("aggregate workspace must have exactly one V0 root commit")
+        aggregate_v0_commit = roots[0]
+
+        def aggregate_v0_file(name: str, *, required: bool = False) -> Optional[str]:
+            result = subprocess.run(
+                ["git", "show", f"{aggregate_v0_commit}:{name}"],
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return result.stdout
+            if required:
+                raise RuntimeError(f"aggregate V0 commit has no {name}")
+            return None
+
+        workspace = campaign.workspace
+        for directory in (workspace, workspace / "memory", workspace / "plans", workspace / "profiles"):
+            directory.mkdir(parents=True, exist_ok=True)
+        if not (workspace / ".git").exists():
+            subprocess.run(
+                ["git", "init"], cwd=str(workspace), check=True, stdout=subprocess.DEVNULL
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "gpu-kernel-optimizer@local"],
+                cwd=str(workspace),
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "GPU Kernel Optimizer"],
+                cwd=str(workspace),
+                check=True,
+            )
+
+        bucket_op = Path(campaign.kernel_demo).resolve().parent
+        tracked_files: set[str] = set()
+        for source in bucket_op.iterdir():
+            if not source.is_file():
+                continue
+            shutil.copy2(source, workspace / source.name)
+            tracked_files.add(source.name)
+
+        # These files define the runnable baseline and must come from the
+        # aggregate's original V0 commit, never from a later dispatcher HEAD.
+        for name in (
+            "kernel.py",
+            "solution.json",
+            "test_kernel.py",
+            "config.json",
+            ".gitignore",
+            "CLAUDE.md",
+        ):
+            content = aggregate_v0_file(name, required=name == "kernel.py")
+            if content is None and name == "test_kernel.py":
+                aggregate_harness = self.workspace / name
+                if aggregate_harness.is_file():
+                    content = aggregate_harness.read_text(encoding="utf-8")
+                else:
+                    raise RuntimeError("aggregate workspace has no immutable test_kernel.py")
+            if content is not None:
+                (workspace / name).write_text(content, encoding="utf-8")
+                tracked_files.add(name)
+
+        selected_ids = [workload_source.ids[index] for index in bucket.workload_indices]
+        readme = aggregate_v0_file("README.md") or "# GPU kernel optimization\n"
+        (workspace / "README.md").write_text(
+            f"# Workload bucket: {bucket.name}\n\n"
+            f"This workspace V0 is derived from aggregate V0 `{aggregate_v0_commit[:12]}`. "
+            f"It contains workload ids {', '.join(selected_ids)} and was not re-evaluated.\n\n"
+            + readme,
+            encoding="utf-8",
+        )
+        tracked_files.add("README.md")
+        aggregate_report = aggregate_v0_file("baseline_report.md") or ""
+        (workspace / "baseline_report.md").write_text(
+            f"# Derived bucket V0 baseline — {bucket.name}\n\n"
+            "This baseline reuses the aggregate V0 kernel, correctness result, and the "
+            "per-workload timings selected below. No separate baseline agent or GPU run was used.\n\n"
+            f"- Aggregate V0 commit: `{aggregate_v0_commit}`\n"
+            f"- Workload indices: {', '.join(map(str, bucket.workload_indices))}\n"
+            f"- Workload ids: {', '.join(selected_ids)}\n\n"
+            + aggregate_report,
+            encoding="utf-8",
+        )
+        tracked_files.add("baseline_report.md")
+
+        derived_memory = _bucket_baseline_memory(
+            aggregate_memory,
+            bucket,
+            workload_source,
+            aggregate_workspace=self.workspace,
+            aggregate_v0_commit=aggregate_v0_commit,
+        )
+        memory_path = workspace / "memory" / "v0.json"
+        memory_path.write_text(
+            json.dumps(derived_memory, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        tracked_files.add("memory/v0.json")
+
+        campaign._link_runtime()
+        tracked_files.update(name for name in (".gitignore", "CLAUDE.md") if (workspace / name).is_file())
+        # A previously interrupted setup may have staged arbitrary files.  Keep
+        # the worktree intact, but rebuild the index so this mechanical commit
+        # contains only the deterministic V0 files listed above.
+        if git_head(workspace):
+            subprocess.run(
+                ["git", "reset"],
+                cwd=str(workspace),
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.run(["git", "read-tree", "--empty"], cwd=str(workspace), check=True)
+        subprocess.run(
+            ["git", "add", "--", *sorted(tracked_files)],
+            cwd=str(workspace),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "V0: derive bucket baseline from aggregate V0"],
+            cwd=str(workspace),
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        first_commit = git_head(workspace)
+        derived_memory["git_commit_hash"] = first_commit
+        memory_path.write_text(
+            json.dumps(derived_memory, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "memory/v0.json"], cwd=str(workspace), check=True)
+        subprocess.run(
+            ["git", "commit", "--amend", "--no-edit"],
+            cwd=str(workspace),
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        print(
+            f"[workload-coordinator] derived {bucket.name} V0 from aggregate V0 "
+            f"for {len(bucket.workload_indices)} workloads (no agent/GPU rerun)",
+            flush=True,
+        )
 
     def _reconcile_resumed_bucket(
         self, bucket: WorkloadBucket, campaign: Campaign
@@ -4291,6 +4606,10 @@ class WorkloadBucketCoordinator:
             bucket.name: self._make_bucket_campaign(bucket, workload_source)
             for bucket in buckets
         }
+        for bucket in buckets:
+            self._seed_bucket_baseline_from_aggregate(
+                bucket, self._bucket_campaigns[bucket.name], workload_source
+            )
         # Reconciliation prompts read bucket files from the worktree, while
         # aggregation provenance is the committed HEAD.  Clean interrupted
         # tracked edits before either reconciling or launching new iterations
@@ -4629,6 +4948,7 @@ class LayerCampaign:
                 sandbox_profile=self.sandbox_profile,
                 sandbox_url=self.sandbox_url,
                 sandbox_timeout=self.sandbox_timeout,
+                reasoning_effort="high",
             )
             self._account(res, f"baseline {b['name']}")
             if read_memory(ws, 0) is None:

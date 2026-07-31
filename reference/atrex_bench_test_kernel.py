@@ -44,6 +44,35 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
     return sorted((str(shape_id) for shape_id in payload), key=sort_key)
 
 
+def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
+    """Return compile failures for aggregate and per-shape evaluator schemas."""
+    if not isinstance(compile_result, dict):
+        compile_result = {}
+
+    if "status" in compile_result:
+        if compile_result.get("status") == "passed":
+            return []
+        return [
+            "compile: "
+            + str(
+                compile_result.get("reason")
+                or compile_result.get("status")
+                or "did not pass"
+            )
+        ]
+
+    failures: list[str] = []
+    for shape_id in shape_ids:
+        status = compile_result.get(shape_id)
+        status = status if isinstance(status, dict) else {}
+        if status.get("status") != "passed":
+            failures.append(
+                f"sid={shape_id}: compile "
+                + str(status.get("reason") or status.get("status") or "missing")
+            )
+    return failures
+
+
 def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str, Any]:
     """Convert one official Atrex-Bench result into optimizer metrics."""
     failures: list[str] = []
@@ -52,12 +81,7 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
         failures.append("evaluation: " + str(evaluation_error))
     passed = payload.get("passed")
     passed = passed if isinstance(passed, dict) else {}
-    compile_result = passed.get("compile")
-    compile_result = compile_result if isinstance(compile_result, dict) else {}
-    if compile_result.get("status") != "passed":
-        failures.append(
-            "compile: " + str(compile_result.get("reason") or "did not pass")
-        )
+    failures.extend(_compile_failures(passed.get("compile"), shape_ids))
 
     correctness_status = passed.get("correctness")
     correctness_status = (

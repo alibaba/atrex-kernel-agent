@@ -81,7 +81,7 @@ accumulator-residency pattern, and reproduce the original `num_stages` (nothing 
 
 ```bash
 python tools/sandbox.py --no-sync -- python -c "import kernel"   # must compile remotely
-python tools/sandbox.py --no-sync -- \
+python tools/sandbox.py --kind run --no-sync -- \
   python test_kernel.py --version v{{N}} --no-memory             # real evaluator, every workload
 ```
 
