@@ -88,6 +88,7 @@ try:
         optimization_mode_directive,
         production_kernel_violations,
         reject_production_commit,
+        source_uses_gluon,
     )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
     from aggregate_dispatch import embed_bucket_sources  # type: ignore[no-redef]
@@ -97,6 +98,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         optimization_mode_directive,
         production_kernel_violations,
         reject_production_commit,
+        source_uses_gluon,
     )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -108,10 +110,8 @@ SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
 CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
-CONVERT_MIN_TOKENS = 200_000  # a convert session below this (and no gluon) barely ran -> "bailed"
-                              # (set below a genuine-but-incomplete attempt, e.g. ~336K; the launch-and-
-                              # exit bail we saw was ~85K — only that class should trip the give-up)
-CONVERT_MAX_BAILS = 2         # consecutive bails -> disable escalation, continue triton-only
+CONVERT_MIN_TOKENS = 200_000  # below this, flag a shallow attempt in the retry diagnostics
+DEFAULT_CONVERT_AFTER = 3     # mandatory Triton->Gluon escalation after three consecutive stalls
 MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = ("claude", "qodercli", "codex")
@@ -121,6 +121,7 @@ DEFAULT_FRAMEWORKS = ("Triton",)
 WORKLOAD_BUCKETS_FILE = "workload_buckets.json"
 AGGREGATION_STATE_FILE = "aggregation_state.json"
 DISPATCH_SIGNATURES_FILE = "dispatch_signatures.json"
+DISPATCH_VISIBILITY_POLICY = "host_no_sync_structural_v1"
 AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
 AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 AGGREGATE_DISPATCH_SCHEMA_VERSION = 2
@@ -456,9 +457,11 @@ def _is_triton_family(framework: str) -> bool:
 
 
 def kernel_is_gluon(workspace: Path) -> bool:
-    """True once kernel.py has been converted to Gluon (import present)."""
+    """True once the working-tree kernel.py has a real Gluon import."""
     k = workspace / "kernel.py"
-    return k.exists() and "gluon" in k.read_text(encoding="utf-8", errors="ignore")
+    return k.exists() and source_uses_gluon(
+        k.read_text(encoding="utf-8", errors="ignore")
+    )
 
 
 def head_kernel_is_gluon(workspace: Path) -> bool:
@@ -470,7 +473,28 @@ def head_kernel_is_gluon(workspace: Path) -> bool:
                              capture_output=True, text=True)
     except OSError:
         return False
-    return out.returncode == 0 and "gluon" in out.stdout
+    return out.returncode == 0 and source_uses_gluon(out.stdout)
+
+
+def should_convert_to_gluon(
+    framework: str,
+    stall: int,
+    convert_after: int,
+    *,
+    head_is_gluon: bool,
+) -> bool:
+    """Whether the campaign is latched into mandatory Triton->Gluon conversion.
+
+    Once the threshold is reached this remains true after a failed conversion because
+    the stall counter is deliberately not reset.  Only a committed Gluon HEAD releases
+    the latch and returns the campaign to ordinary optimization.
+    """
+    return (
+        convert_after > 0
+        and _is_triton_family(framework)
+        and not head_is_gluon
+        and stall >= convert_after
+    )
 
 
 # ── thin IO ─────────────────────────────────────────────────────────────────
@@ -2065,7 +2089,7 @@ class Campaign:
     iter_timeout: int = 5400       # 90 min hang-backstop per optimization session
     setup_timeout: int = 7200      # 120 min for the baseline session
     max_stall: int = 0             # 0 = disabled (budget-only); >0 = stop after N no-commit iters
-    convert_after: int = 5         # triton-only: after N stalled iters, run ONE triton->gluon convert session (0=off)
+    convert_after: int = DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     sandbox_hardware: str = ""     # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
     sandbox_profile: str = ""      # pre/prod; empty preserves normal agate URL resolution
     sandbox_url: str = ""          # explicit endpoint, e.g. http://127.0.0.1:8000
@@ -2401,27 +2425,33 @@ class Campaign:
         if stall > 0:
             print(f"[orchestrator] stall counter restored: {stall} rounds without progress", flush=True)
         infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
-        convert_bails = 0  # consecutive convert sessions that bailed early (low tokens, no gluon)
         n = latest_version(self.workspace)  # 0 after baseline
         mask_half_memory(self.workspace, n)  # also covers resuming an unmasked v100/v200/...
         while True:
+            conversion_pending = should_convert_to_gluon(
+                self.framework,
+                stall,
+                self.convert_after,
+                head_is_gluon=head_kernel_is_gluon(self.workspace),
+            )
             if n >= self.max_iters:
+                if conversion_pending:
+                    raise RuntimeError(
+                        "mandatory Triton->Gluon conversion did not succeed before max-iters"
+                    )
                 return self._finish("budget: max-iters")
             if self.budget_exhausted():
+                if conversion_pending:
+                    raise RuntimeError(
+                        "mandatory Triton->Gluon conversion did not succeed before token-budget"
+                    )
                 return self._finish("budget: token-budget")
 
             n += 1
-            # Triton→Gluon escalation: after `convert_after` stalled triton iterations, spend ONE
-            # session purely converting the kernel to Gluon (no optimization). Gluon is lower-level,
-            # so the following sessions can go further. Re-fires after each `convert_after` stalled
-            # rounds — the cooldown resets on every convert issued, win or lose (see below).
-            do_convert = (
-                self.optimization_mode == "leaderboard"
-                and self.convert_after > 0
-                and _is_triton_family(self.framework)
-                and not kernel_is_gluon(self.workspace)
-                and stall >= self.convert_after
-            )
+            # Triton→Gluon escalation is a latch, not a periodic best-effort attempt. Once
+            # `convert_after` consecutive stalls are reached, every following session is a
+            # convert-only retry until a correctness- and parity-passing Gluon HEAD is committed.
+            do_convert = conversion_pending
             if do_convert:
                 print(f"[orchestrator] triton stalled {stall} iters -> triton->gluon convert session v{n}", flush=True)
                 prompt = _render(PROMPTS_DIR / "convert.md",
@@ -2443,6 +2473,7 @@ class Campaign:
                                  EVALUATOR=self._evaluator_directive(),
                                  MODE_POLICY=self._mode_directive())
             previous_latency = incumbent_latency(self.workspace, n)
+            pre_head_was_gluon = head_kernel_is_gluon(self.workspace)
             pre_head = git_head(self.workspace)  # win = a commit that changes kernel.py vs this
             res = run_session(
                 self.workspace, prompt, timeout=self.iter_timeout,
@@ -2463,6 +2494,11 @@ class Campaign:
             if res.exit_status != 0 and not res.timed_out:
                 infra_fails += 1
                 if infra_fails >= 15:
+                    if do_convert:
+                        raise RuntimeError(
+                            "mandatory Triton->Gluon conversion could not complete after "
+                            f"{infra_fails} consecutive session crashes"
+                        )
                     return self._finish(
                         f"infra: {infra_fails} consecutive sessions crashed (exit={res.exit_status}) "
                         f"(likely API key / auth issue — {_agent_auth_hint(self.agent_cli)})"
@@ -2475,6 +2511,11 @@ class Campaign:
             elif res.exit_status != 0 and res.timed_out:
                 infra_fails += 1
                 if infra_fails >= 15:
+                    if do_convert:
+                        raise RuntimeError(
+                            "mandatory Triton->Gluon conversion could not complete after "
+                            f"{infra_fails} consecutive timeouts"
+                        )
                     return self._finish(f"infra: {infra_fails} consecutive timeouts")
                 import time as _time
                 _backoff = min(60 * infra_fails, 300)
@@ -2486,7 +2527,11 @@ class Campaign:
             mem = read_memory(self.workspace, n)
             won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
             if won and self.optimization_mode == "production":
-                violations = production_kernel_violations(self.workspace, self.framework)
+                violations = production_kernel_violations(
+                    self.workspace,
+                    self.framework,
+                    require_gluon=pre_head_was_gluon,
+                )
                 if violations:
                     reject_production_commit(self.workspace, n, pre_head, violations)
                     print(
@@ -2500,8 +2545,9 @@ class Campaign:
             if do_convert:
                 # A direct triton->gluon translation must preserve BOTH correctness and performance.
                 # Accept only a committed gluon kernel whose geomean is within +CONVERT_PERF_TOL of the
-                # incumbent triton HEAD. Otherwise reject, keep triton, and record WHY — then let triton
-                # run another `convert_after` stalled rounds and RETRY conversion (informed by the record).
+                # incumbent triton HEAD. Otherwise reject, keep triton, record WHY, and immediately
+                # retry conversion in the next clean session. Ordinary Triton optimization stays
+                # disabled until conversion succeeds.
                 # Accept only when the COMMITTED HEAD kernel is gluon, correctness PASSed, and geomean is
                 # within +CONVERT_PERF_TOL of the incumbent triton HEAD. Detect the committed gluon via git
                 # HEAD (not memory's git_commit_hash, which a session may leave unset even after committing).
@@ -2525,39 +2571,50 @@ class Campaign:
                         )
                     mask_half_memory(self.workspace, n)
                     continue
-                # rejected: if a bad gluon kernel got committed as HEAD, revert to the triton incumbent
-                # (pre_head — the HEAD before this convert session, which is always the best triton kernel)
-                if head_gluon and pre_head:
+                # Revert every rejected kernel-changing conversion commit, including a session that
+                # incorrectly committed another Triton kernel.  The next clean attempt must always
+                # start from the same accepted Triton incumbent until a Gluon candidate passes.
+                if won and pre_head:
                     subprocess.run(["git", "reset", "--hard", pre_head], cwd=str(self.workspace),
                                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    reason = (f"regressed {conv_lat / prev_best - 1:+.1%} vs triton (> {CONVERT_PERF_TOL:.0%})"
-                              if isinstance(conv_lat, (int, float)) and prev_best and not parity_ok
-                              else "correctness gate not PASS")
+                    if not head_gluon:
+                        reason = "convert session committed a non-Gluon kernel"
+                    elif isinstance(conv_lat, (int, float)) and prev_best and not parity_ok:
+                        reason = (
+                            f"regressed {conv_lat / prev_best - 1:+.1%} vs triton "
+                            f"(> {CONVERT_PERF_TOL:.0%})"
+                        )
+                    else:
+                        reason = "correctness gate not PASS"
                     self._record_failed_convert(n, reason)
                     print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {pre_head[:8]}", flush=True)
                 else:
+                    # A session may leave an uncommitted Gluon edit behind. Restore the committed
+                    # Triton/record HEAD before retrying so every attempt starts from auditable state.
+                    if kernel_is_gluon(self.workspace) and not head_gluon:
+                        subprocess.run(
+                            ["git", "reset", "--hard", "HEAD"],
+                            cwd=str(self.workspace),
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
                     if read_memory(self.workspace, n) is None:
                         self._record_failed_convert(n, "convert session produced no committed gluon kernel")
-                    print("[orchestrator] convert produced no committed gluon kernel; staying on triton", flush=True)
-                # Classify the failed convert. A "bail" (session barely ran — low tokens AND no gluon)
-                # is a model-compliance failure (e.g. launched work then exited), not a genuinely hard
-                # conversion. Retrying it identically just loops forever, so after a few bails disable
-                # the escalation and stay triton-only rather than burning cooldown cycles for nothing.
-                # A genuine attempt (did real work: extracted TTGIR, rewrote, validated) uses many tokens
-                # even when it fails parity — that resets the streak and keeps the learning-retry path.
+                    print(
+                        "[orchestrator] convert produced no committed gluon kernel; "
+                        "mandatory conversion remains latched",
+                        flush=True,
+                    )
                 if res.tokens < CONVERT_MIN_TOKENS:
-                    convert_bails += 1
-                    print(f"[orchestrator] convert v{n} bailed early ({res.tokens} tokens, no gluon) "
-                          f"[{convert_bails}/{CONVERT_MAX_BAILS}]", flush=True)
-                    if convert_bails >= CONVERT_MAX_BAILS:
-                        self.convert_after = 0  # disable escalation for the rest of this run
-                        print("[orchestrator] convert repeatedly bailed -> disabling triton->gluon "
-                              "escalation; continuing triton-only", flush=True)
-                else:
-                    convert_bails = 0
-                # A convert was issued -> reset the cooldown regardless of outcome; conversion
-                # re-fires only after another `convert_after` stalled rounds.
-                stall = 0
+                    print(
+                        f"[orchestrator] convert v{n} ended shallowly ({res.tokens} tokens, no gluon); "
+                        "retrying conversion next session",
+                        flush=True,
+                    )
+                # Preserve the reached threshold. This makes the next loop iteration another
+                # conversion attempt rather than returning to Triton optimization.
+                stall = max(stall, self.convert_after)
                 write_stall(self.workspace, stall)
                 self._notify_iteration(n, read_memory(self.workspace, n), False)
                 mask_half_memory(self.workspace, n)
@@ -2577,7 +2634,13 @@ class Campaign:
                 stall += 1
                 write_stall(self.workspace, stall)
                 self._notify_iteration(n, mem, False)
-                if self.max_stall > 0 and stall >= self.max_stall:
+                conversion_now_required = should_convert_to_gluon(
+                    self.framework,
+                    stall,
+                    self.convert_after,
+                    head_is_gluon=head_kernel_is_gluon(self.workspace),
+                )
+                if self.max_stall > 0 and stall >= self.max_stall and not conversion_now_required:
                     mask_half_memory(self.workspace, n)
                     return self._finish(f"stall: {stall} iterations with no commit")
             mask_half_memory(self.workspace, n)
@@ -2693,7 +2756,11 @@ def _read_workload_source(op_dir: Path) -> WorkloadSource:
 
 
 def validate_workload_buckets(
-    manifest: object, workload_count: int, max_buckets: int
+    manifest: object,
+    workload_count: int,
+    max_buckets: int,
+    *,
+    require_visibility_policy: bool = False,
 ) -> list[WorkloadBucket]:
     """Validate the inspector contract and return normalized buckets.
 
@@ -2706,6 +2773,17 @@ def validate_workload_buckets(
         raise ValueError(f"{WORKLOAD_BUCKETS_FILE} must contain a top-level buckets list")
     if isinstance(manifest.get("schema_version"), bool) or manifest.get("schema_version") != 1:
         raise ValueError(f"{WORKLOAD_BUCKETS_FILE} schema_version must be 1")
+    visibility_policy = manifest.get("dispatch_visibility_policy")
+    if visibility_policy not in (None, DISPATCH_VISIBILITY_POLICY):
+        raise ValueError(
+            f"{WORKLOAD_BUCKETS_FILE} dispatch visibility policy is unsupported: "
+            f"{visibility_policy!r}"
+        )
+    if require_visibility_policy and visibility_policy != DISPATCH_VISIBILITY_POLICY:
+        raise ValueError(
+            f"{WORKLOAD_BUCKETS_FILE} must declare dispatch_visibility_policy="
+            f"{DISPATCH_VISIBILITY_POLICY!r}"
+        )
     if (
         isinstance(manifest.get("workload_count"), bool)
         or manifest.get("workload_count") != workload_count
@@ -2767,6 +2845,7 @@ def validate_workload_buckets(
 def _normalized_bucket_manifest(buckets: list[WorkloadBucket], workload_count: int) -> dict:
     return {
         "schema_version": 1,
+        "dispatch_visibility_policy": DISPATCH_VISIBILITY_POLICY,
         "workload_count": workload_count,
         "buckets": [
             {
@@ -2954,6 +3033,114 @@ def _freeze_dispatch_signature(value: object) -> object:
     return value
 
 
+def _validate_dispatch_value_signature(value: object, path: str) -> None:
+    """Validate one no-sync, production-visible value signature.
+
+    Tensor signatures intentionally contain metadata only.  A cached or agent-edited
+    signature cannot add tensor values, summaries, pointers, or other evaluator-only
+    information and later smuggle it into the generated production dispatcher.
+    """
+    if not isinstance(value, list) or not value or not isinstance(value[0], str):
+        raise ValueError(f"{path} is not a tagged dispatch value signature")
+    tag = value[0]
+    if tag == "tensor":
+        if len(value) != 6:
+            raise ValueError(
+                f"{path} tensor signature must contain only shape/stride/dtype/layout/requires_grad"
+            )
+        shape, stride, dtype, layout, requires_grad = value[1:]
+        if (
+            not isinstance(shape, list)
+            or any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in shape)
+        ):
+            raise ValueError(f"{path} tensor shape is invalid")
+        if (
+            not isinstance(stride, list)
+            or len(stride) != len(shape)
+            or any(isinstance(item, bool) or not isinstance(item, int) for item in stride)
+        ):
+            raise ValueError(f"{path} tensor stride is invalid")
+        if not isinstance(dtype, str) or not isinstance(layout, str):
+            raise ValueError(f"{path} tensor dtype/layout is invalid")
+        if not isinstance(requires_grad, bool):
+            raise ValueError(f"{path} tensor requires_grad flag is invalid")
+        return
+    if tag == "none":
+        if len(value) != 1:
+            raise ValueError(f"{path} none signature has extra data")
+        return
+    if tag == "bool":
+        if len(value) != 2 or not isinstance(value[1], bool):
+            raise ValueError(f"{path} bool signature is invalid")
+        return
+    if tag == "int":
+        if len(value) != 2 or isinstance(value[1], bool) or not isinstance(value[1], int):
+            raise ValueError(f"{path} int signature is invalid")
+        return
+    if tag == "float":
+        if len(value) != 2 or not isinstance(value[1], str):
+            raise ValueError(f"{path} float signature is invalid")
+        rendered = value[1]
+        if rendered not in {"nan", "inf", "-inf"}:
+            try:
+                float.fromhex(rendered)
+            except ValueError as exc:
+                raise ValueError(f"{path} float signature is invalid") from exc
+        return
+    if tag in {"str", "torch.dtype"}:
+        if len(value) != 2 or not isinstance(value[1], str):
+            raise ValueError(f"{path} {tag} signature is invalid")
+        return
+    if tag in {"tuple", "list"}:
+        if len(value) != 2 or not isinstance(value[1], list):
+            raise ValueError(f"{path} {tag} signature is invalid")
+        for index, item in enumerate(value[1]):
+            _validate_dispatch_value_signature(item, f"{path}[{index}]")
+        return
+    if tag == "dict":
+        if len(value) != 2 or not isinstance(value[1], list):
+            raise ValueError(f"{path} dict signature is invalid")
+        keys: list[str] = []
+        for index, item in enumerate(value[1]):
+            if (
+                not isinstance(item, list)
+                or len(item) != 2
+                or not isinstance(item[0], str)
+            ):
+                raise ValueError(f"{path} dict entry {index} is invalid")
+            keys.append(item[0])
+            _validate_dispatch_value_signature(item[1], f"{path}.{item[0]}")
+        if keys != sorted(set(keys)):
+            raise ValueError(f"{path} dict keys must be unique and sorted")
+        return
+    raise ValueError(f"{path} uses unsupported dispatch signature tag {tag!r}")
+
+
+def _validate_invocation_signature(value: object, path: str) -> None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 3
+        or value[0] != "invocation"
+        or not isinstance(value[1], list)
+        or not isinstance(value[2], list)
+    ):
+        raise ValueError(f"{path} is not a valid invocation signature")
+    for index, item in enumerate(value[1]):
+        _validate_dispatch_value_signature(item, f"{path}.args[{index}]")
+    names: list[str] = []
+    for index, item in enumerate(value[2]):
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or not isinstance(item[0], str)
+        ):
+            raise ValueError(f"{path}.kwargs[{index}] is invalid")
+        names.append(item[0])
+        _validate_dispatch_value_signature(item[1], f"{path}.kwargs.{item[0]}")
+    if names != sorted(set(names)):
+        raise ValueError(f"{path} keyword names must be unique and sorted")
+
+
 def validate_dispatch_signatures(
     payload: object, workload_source: WorkloadSource
 ) -> list[dict]:
@@ -2968,6 +3155,12 @@ def validate_dispatch_signatures(
         raise ValueError(
             f"{DISPATCH_SIGNATURES_FILE} workload source does not match "
             f"{workload_source.filename}"
+        )
+    visibility_policy = payload.get("visibility_policy")
+    if visibility_policy not in (None, DISPATCH_VISIBILITY_POLICY):
+        raise ValueError(
+            f"{DISPATCH_SIGNATURES_FILE} visibility policy is unsupported: "
+            f"{visibility_policy!r}"
         )
     records = payload.get("workloads")
     if not isinstance(records, list) or len(records) != len(workload_source.entries):
@@ -2988,6 +3181,8 @@ def validate_dispatch_signatures(
             record.get("call"), list
         ):
             raise ValueError(f"dispatch signature record {index} is missing init/call")
+        _validate_invocation_signature(record["init"], f"workloads[{index}].init")
+        _validate_invocation_signature(record["call"], f"workloads[{index}].call")
         normalized.append(
             {
                 "index": index,
@@ -3303,7 +3498,28 @@ class WorkloadBucketCoordinator:
                 payload = json.loads(signature_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise RuntimeError(f"invalid {signature_path}: {exc}") from exc
-            return validate_dispatch_signatures(payload, workload_source)
+            records = validate_dispatch_signatures(payload, workload_source)
+            if payload.get("visibility_policy") != DISPATCH_VISIBILITY_POLICY:
+                signature_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "visibility_policy": DISPATCH_VISIBILITY_POLICY,
+                            "kind": workload_source.kind,
+                            "workload_source": workload_source.filename,
+                            "workloads": records,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self._commit_main(
+                    "workload inspector: certify no-sync dispatch signatures",
+                    DISPATCH_SIGNATURES_FILE,
+                )
+            return records
 
         timeout = max(
             self.aggregate_campaign.sandbox_timeout,
@@ -3354,6 +3570,7 @@ class WorkloadBucketCoordinator:
         records = validate_dispatch_signatures(payload, workload_source)
         persisted = {
             "schema_version": 1,
+            "visibility_policy": DISPATCH_VISIBILITY_POLICY,
             "kind": workload_source.kind,
             "workload_source": workload_source.filename,
             "workloads": records,
@@ -3381,6 +3598,40 @@ class WorkloadBucketCoordinator:
             manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             buckets = validate_workload_buckets(manifest, workload_count, self.max_buckets)
             validate_dispatch_bucket_compatibility(buckets, signature_records)
+            if manifest.get("dispatch_visibility_policy") != DISPATCH_VISIBILITY_POLICY:
+                # A legacy partition is still mechanically safe when every exact
+                # production-visible signature has one owner. Remove rationales that may
+                # have cited evaluator-only values and certify the partition under the
+                # current no-sync policy without renaming its existing bucket workspaces.
+                buckets = [
+                    WorkloadBucket(
+                        name=bucket.name,
+                        workload_indices=bucket.workload_indices,
+                        rationale=(
+                            "Legacy partition revalidated as a union of exact "
+                            f"{DISPATCH_VISIBILITY_POLICY} signature classes; no tensor "
+                            "contents or workload-source values are dispatch inputs."
+                        ),
+                    )
+                    for bucket in buckets
+                ]
+                self.manifest_path.write_text(
+                    json.dumps(
+                        {
+                            **_normalized_bucket_manifest(buckets, workload_count),
+                            "workload_source": workload_source.filename,
+                            "workload_ids": list(workload_source.ids),
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self._commit_main(
+                    "workload inspector: certify production-visible bucket partition",
+                    WORKLOAD_BUCKETS_FILE,
+                )
             print(
                 f"[workload-inspector] reusing {len(buckets)} validated buckets from "
                 f"{self.manifest_path}",
@@ -3388,20 +3639,46 @@ class WorkloadBucketCoordinator:
             )
             return buckets
 
-        prompt = _render(
-            PROMPTS_DIR / "inspect_workloads.md",
-            WORKSPACE=str(self.workspace),
-            MAX_BUCKETS=self.max_buckets,
-            WORKLOAD_COUNT=workload_count,
-            WORKLOAD_FILE=workload_source.filename,
-            WORKLOAD_KIND=workload_source.kind,
-            PLATFORM=self.aggregate_campaign.platform,
-            FRAMEWORK=self.aggregate_campaign.framework,
-        )
-        pre_head = git_head(self.workspace)
-        try:
+        # The LLM inspector runs in a data-minimized workspace. It receives only the
+        # signatures the generated production dispatcher can recompute without a device
+        # synchronization; reference.py, input.py, shapes.json/workload.jsonl, tensor
+        # contents, and evaluator metadata are not present.
+        with tempfile.TemporaryDirectory(prefix="atrex-dispatch-inspector-") as temp_dir:
+            inspector_workspace = Path(temp_dir)
+            inspector_signature_path = inspector_workspace / DISPATCH_SIGNATURES_FILE
+            inspector_signature_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "visibility_policy": DISPATCH_VISIBILITY_POLICY,
+                        "kind": workload_source.kind,
+                        "workload_source": workload_source.filename,
+                        "workloads": signature_records,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=str(inspector_workspace),
+                check=True,
+            )
+            prompt = _render(
+                PROMPTS_DIR / "inspect_workloads.md",
+                WORKSPACE=str(inspector_workspace),
+                MAX_BUCKETS=self.max_buckets,
+                WORKLOAD_COUNT=workload_count,
+                WORKLOAD_FILE=workload_source.filename,
+                WORKLOAD_KIND=workload_source.kind,
+                VISIBILITY_POLICY=DISPATCH_VISIBILITY_POLICY,
+                PLATFORM=self.aggregate_campaign.platform,
+                FRAMEWORK=self.aggregate_campaign.framework,
+            )
             result = run_session(
-                self.workspace,
+                inspector_workspace,
                 prompt,
                 timeout=self.aggregate_campaign.setup_timeout,
                 agent_cli=self.aggregate_campaign.agent_cli,
@@ -3410,27 +3687,13 @@ class WorkloadBucketCoordinator:
                 sandbox_url=self.aggregate_campaign.sandbox_url,
                 sandbox_timeout=self.aggregate_campaign.sandbox_timeout,
             )
-        except Exception:
-            if pre_head:
-                subprocess.run(
-                    ["git", "reset", "--hard", pre_head],
-                    cwd=str(self.workspace),
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                )
-            raise
-        self._account(result, "workload inspector")
-        manifest_text = self.manifest_path.read_text(encoding="utf-8") if self.manifest_path.exists() else ""
-
-        # The inspector is analysis-only.  Preserve only its validated manifest,
-        # even if the coding CLI edited or committed unrelated workspace files.
-        if pre_head:
-            subprocess.run(
-                ["git", "reset", "--hard", pre_head],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
+            inspector_manifest_path = inspector_workspace / WORKLOAD_BUCKETS_FILE
+            manifest_text = (
+                inspector_manifest_path.read_text(encoding="utf-8")
+                if inspector_manifest_path.exists()
+                else ""
             )
+        self._account(result, "workload inspector")
         if result.exit_status != 0 or result.timed_out:
             raise RuntimeError(
                 f"workload inspector failed (exit={result.exit_status}, timed_out={result.timed_out})"
@@ -3441,7 +3704,12 @@ class WorkloadBucketCoordinator:
             manifest = json.loads(manifest_text)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"workload inspector produced invalid JSON: {exc}") from exc
-        buckets = validate_workload_buckets(manifest, workload_count, self.max_buckets)
+        buckets = validate_workload_buckets(
+            manifest,
+            workload_count,
+            self.max_buckets,
+            require_visibility_policy=True,
+        )
         validate_dispatch_bucket_compatibility(buckets, signature_records)
         self.manifest_path.write_text(
             json.dumps(
@@ -3832,6 +4100,7 @@ class WorkloadBucketCoordinator:
             "schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
             "mode": "deterministic_dispatch",
             "source_layout": AGGREGATE_SOURCE_LAYOUT,
+            "dispatch_visibility_policy": DISPATCH_VISIBILITY_POLICY,
             "kind": workload_source.kind,
             "workload_source": workload_source.filename,
             "signature_source": DISPATCH_SIGNATURES_FILE,
@@ -5305,10 +5574,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
     ap.add_argument("--max-stall", type=int, default=0,
                     help="Optional: stop after N consecutive no-commit iterations (0 = disabled).")
-    ap.add_argument("--convert-after", type=int, default=5,
-                    help="Leaderboard Triton only: after N consecutive stalled iterations, spend ONE session "
-                         "converting the kernel Triton->Gluon (no optimization), then optimize the Gluon "
-                         "kernel. Always disabled in production mode. 0 = disabled.")
+    ap.add_argument("--convert-after", type=int, default=DEFAULT_CONVERT_AFTER,
+                    help="Triton only: after N consecutive stalled iterations, require conversion "
+                         "to Gluon. Failed conversions retry immediately until one passes correctness "
+                         "and performance parity, then optimization continues in Gluon. Default: 3; "
+                         "0 disables conversion.")
     ap.add_argument("--arch", default="",
                     help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
                          "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
@@ -5328,6 +5598,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     if args.max_workload_buckets < 1:
         ap.error("--max-workload-buckets must be at least 1")
+    if args.convert_after < 0:
+        ap.error("--convert-after must be non-negative")
     if not 0.0 <= args.aggregate_min_improvement_pct < 100.0:
         ap.error("--aggregate-min-improvement-pct must be in [0, 100)")
     if args.sandbox_url and args.sandbox_profile:
@@ -5352,14 +5624,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
             flush=True,
         )
-    if args.optimization_mode == "production" and args.convert_after > 0:
-        print(
-            "[orchestrator] production mode disables Triton->Gluon conversion so each campaign's "
-            "framework remains an exact implementation constraint",
-            file=sys.stderr,
-            flush=True,
-        )
-
     sandbox_hardware = args.sandbox_hardware or args.platform
     if args.workspace:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
@@ -5425,7 +5689,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
-        convert_after=(0 if args.optimization_mode == "production" else args.convert_after),
+        convert_after=args.convert_after,
     )
     if is_bucketable_op(Path(op["op_dir"])) and not args.no_workload_bucketing:
         coordinator = WorkloadBucketCoordinator(

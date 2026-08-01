@@ -66,7 +66,7 @@ The installer detects supported runtime home directories and prepares local hook
 
 This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude, Qoder, or Codex CLI session for each iteration. Select the backend with `--agent-cli claude|qodercli|codex` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel. Codex runs use `codex exec --json --ephemeral`; repository-scoped skills are prepared under each campaign's `.agents/skills/` without modifying the user's global Codex installation.
 
-For single-operator SOL and atrex-bench campaigns, the default outer flow first runs a workload inspector over the complete `workload.jsonl` or `shapes.json`. The inspector writes an exact, disjoint `workload_buckets.json`; every bucket then runs the original optimization loop concurrently in an independent Git workspace. Before bucketing, evaluator-faithful runtime input signatures are collected once in the sandbox; workloads that are indistinguishable at the entry point cannot be split. The first ten iterations are an aggregation warmup: improvements are recorded but do not edit the main kernel. Once every bucket has reached at least V10 and has a committed improvement, the orchestrator deterministically copies every bucket's committed kernel and generates an exact runtime dispatcher—no coding-agent/LLM aggregation is used. Every later bucket improvement replaces only that bucket module and regenerates the dispatcher. Every candidate is accepted only after a separate full-workload, multi-seed correctness run and full-workload geomean benchmark beat the main incumbent. Dispatcher sources, provenance, pending improvements, accepted kernels, and rejected attempts are auditable in the main workspace's Git history, `aggregate_dispatch.json`, and `aggregation_state.json`.
+For single-operator SOL and atrex-bench campaigns, the default outer flow first collects evaluator-faithful, production-visible runtime signatures in the sandbox. These signatures contain only explicit non-tensor arguments and tensor shape/stride/dtype/layout metadata—never tensor contents or evaluator-only workload values. The workload inspector runs in a data-minimized temporary workspace containing only those signatures and writes an exact, disjoint `workload_buckets.json`; every bucket boundary must therefore be reproducible by the no-sync production dispatcher, and indistinguishable signatures cannot be split. Every bucket then runs the original optimization loop concurrently in an independent Git workspace. The first ten iterations are an aggregation warmup: improvements are recorded but do not edit the main kernel. Once every bucket has reached at least V10 and has a committed improvement, the orchestrator deterministically copies every bucket's committed kernel and generates an exact runtime dispatcher—no coding-agent/LLM aggregation is used. Every later bucket improvement replaces only that bucket module and regenerates the dispatcher. Every candidate is accepted only after a separate full-workload, multi-seed correctness run and full-workload geomean benchmark beat the main incumbent. Dispatcher sources, visibility policy, provenance, pending improvements, accepted kernels, and rejected attempts are auditable in the main workspace's Git history, `dispatch_signatures.json`, `aggregate_dispatch.json`, and `aggregation_state.json`.
 
 Correctness/performance validation and profiling run on an atrex-gpu-gateway sandbox selected by
 `--sandbox-hardware`. The gateway worker receives code and test/profile inputs only: optimizer `memory/`, plans,
@@ -119,7 +119,7 @@ Key options:
 --sandbox-timeout S  # Remote command timeout, max 600 seconds
 --workspace DIR      # Working directory for the campaign (default: current directory)
 --max-stall N        # Stop after N consecutive no-commit iterations (0 = disabled)
---convert-after N    # Triton only: after N stalled iters, run one Triton->Gluon convert session
+--convert-after N    # Triton only: after N stalls, require Gluon conversion until it succeeds (default 3)
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
 
@@ -137,8 +137,9 @@ hardware-supported frameworks and binds every child campaign to its assigned fra
 PyTorch correctness baseline, but every accepted optimized candidate must be implemented directly and
 exclusively in that child's framework. Third-party kernel/operator imports, calls, and solution dependencies are forbidden. A mechanical
 post-session gate rejects and reverts non-compliant kernel commits, records a `production_policy_rejection`,
-and refuses to package a non-compliant final kernel. Triton-to-Gluon conversion is disabled in production
-mode because the selected framework is exact.
+and refuses to package a non-compliant final kernel. A production Triton campaign escalates to the same
+toolchain's Gluon DSL after three consecutive stalls. Once triggered, conversion is mandatory and retries
+immediately until correctness and performance parity pass; later iterations remain in Gluon.
 
 ```bash
 python orchestrator/optimize.py \

@@ -68,7 +68,7 @@ class _ModuleImportCollector(ast.NodeVisitor):
 
 
 class _GlobalRenamer(ast.NodeTransformer):
-    """Prefix one module's globals while preserving locals and import aliases."""
+    """Prefix one module's globals while preserving local bindings."""
 
     def __init__(
         self,
@@ -133,6 +133,47 @@ class _GlobalRenamer(ast.NodeTransformer):
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id in self.mapping and self._is_global(node.id):
             node.id = self.mapping[node.id]
+        return node
+
+    def visit_Import(self, node: ast.Import) -> ast.AST:
+        renamed_aliases: list[ast.alias] = []
+        for alias_index, alias in enumerate(node.names):
+            bound = alias.asname or alias.name.split(".", 1)[0]
+            renamed = self._renamed_binding(bound)
+            if renamed == bound:
+                renamed_aliases.append(alias)
+                continue
+
+            if alias.asname is not None or "." not in alias.name:
+                alias.asname = renamed
+                renamed_aliases.append(alias)
+                continue
+
+            # ``import package.submodule`` binds ``package``, whereas adding a
+            # direct alias would bind ``package.submodule``.  Load the complete
+            # module under a private throwaway name, then bind the top-level
+            # package separately so references keep their original semantics.
+            top_level = alias.name.split(".", 1)[0]
+            scratch = (
+                f"{renamed}__atrex_import_{node.lineno}_{alias_index}"
+            )
+            renamed_aliases.extend(
+                (
+                    ast.alias(name=alias.name, asname=scratch),
+                    ast.alias(name=top_level, asname=renamed),
+                )
+            )
+        node.names = renamed_aliases
+        return node
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
+        if node.module == "__future__" and node.level == 0:
+            return node
+        for alias in node.names:
+            bound = alias.asname or alias.name
+            renamed = self._renamed_binding(bound)
+            if renamed != bound:
+                alias.asname = renamed
         return node
 
     def visit_Global(self, node: ast.Global) -> ast.AST:
@@ -243,7 +284,8 @@ def _embed_one(
     bucket_name: str,
     bucket_index: int,
     entry_name: str,
-) -> tuple[str, str, dict[str, set[tuple[str, ...]]], set[str]]:
+    import_renames: dict[str, str],
+) -> tuple[str, str, set[str]]:
     filename = f"<aggregate bucket {bucket_name}>"
     tree = ast.parse(source, filename=filename)
     symbols = symtable.symtable(source, filename, "exec")
@@ -279,6 +321,12 @@ def _embed_one(
 
     prefix = f"_atrex_bucket_{bucket_index}_"
     mapping = {name: prefix + name for name in sorted(globals_to_prefix)}
+    unknown_imports = sorted(set(import_renames) - imported)
+    if unknown_imports:
+        raise ValueError(
+            f"bucket {bucket_name} cannot rename unknown imports: {unknown_imports}"
+        )
+    mapping.update(import_renames)
     collector = _ModuleImportCollector()
     collector.visit(tree)
     tree.body = [
@@ -298,7 +346,7 @@ def _embed_one(
         f"{rendered}\n"
         f"# END embedded bucket: {bucket_name}"
     )
-    return block, mapping[entry_name], collector.bindings, collector.future_features
+    return block, mapping[entry_name], collector.future_features
 
 
 def embed_bucket_sources(
@@ -309,15 +357,19 @@ def embed_bucket_sources(
     entries: list[str] = []
     future_features = {"annotations"}
     import_bindings: dict[str, tuple[str, ...]] = {}
+    bucket_import_renames: dict[str, dict[str, str]] = {}
 
+    # Pick one canonical target for every import binding.  A bucket that uses
+    # the same local name for a different target gets a private import alias;
+    # identical imports remain shared and retain their original binding.
     for index, name in enumerate(sorted(module_sources)):
-        block, entry, bindings, features = _embed_one(
-            module_sources[name],
-            bucket_name=name,
-            bucket_index=index,
-            entry_name=entry_name,
-        )
-        for binding, targets in bindings.items():
+        filename = f"<aggregate bucket {name}>"
+        tree = ast.parse(module_sources[name], filename=filename)
+        collector = _ModuleImportCollector()
+        collector.visit(tree)
+        renames: dict[str, str] = {}
+        prefix = f"_atrex_bucket_{index}_"
+        for binding, targets in collector.bindings.items():
             if len(targets) != 1:
                 raise ValueError(
                     f"bucket {name} imports {binding!r} from multiple targets: "
@@ -326,11 +378,19 @@ def embed_bucket_sources(
             target = next(iter(targets))
             previous = import_bindings.get(binding)
             if previous is not None and previous != target:
-                raise ValueError(
-                    f"embedded bucket import collision for {binding!r}: "
-                    f"{previous} vs {target}"
-                )
-            import_bindings[binding] = target
+                renames[binding] = prefix + binding
+            elif previous is None:
+                import_bindings[binding] = target
+        bucket_import_renames[name] = renames
+
+    for index, name in enumerate(sorted(module_sources)):
+        block, entry, features = _embed_one(
+            module_sources[name],
+            bucket_name=name,
+            bucket_index=index,
+            entry_name=entry_name,
+            import_renames=bucket_import_renames[name],
+        )
         future_features.update(features)
         blocks.append(block)
         entries.append(entry)

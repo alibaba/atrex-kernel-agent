@@ -21,6 +21,7 @@ import torch
 
 
 RESULT_PREFIX = "[dispatch-signatures] RESULT_JSON="
+VISIBILITY_POLICY = "host_no_sync_structural_v1"
 
 
 def value_signature(value: Any) -> tuple[Any, ...]:
@@ -186,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
 
     payload = {
         "schema_version": 1,
+        "visibility_policy": VISIBILITY_POLICY,
         "kind": kind,
         "workload_source": source,
         "workloads": records,

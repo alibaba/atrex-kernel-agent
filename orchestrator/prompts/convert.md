@@ -3,7 +3,9 @@
 You are one **clean session** whose ONLY job is to convert the current Triton `kernel.py` to **Gluon**.
 This is a framework lowering, **not** an optimization: preserve the algorithm, tiling, and block sizes.
 Gluon is a lower-level DSL, so the *following* sessions will optimize deeper — your job is to hand them
-a correct Gluon kernel. Do **one** conversion, then exit.
+a correct Gluon kernel. The campaign is now in a **mandatory conversion phase**: ordinary Triton
+optimization will not resume. Do one complete conversion attempt in this session, then exit; if it
+fails, the orchestrator starts another clean conversion session that must use the recorded failure.
 
 **The host GPU boundary is non-negotiable.** Never run `python test_kernel.py`, `python kernel.py`, or
 `python -c "import kernel"` directly in the workspace, even as a quick smoke/import check. Always route the
@@ -40,8 +42,8 @@ Read `memory/v*.json` entries with `optimization.action_category="triton_to_gluo
 ```bash
 python tools/memory_manager.py read --workspace .
 ```
-The orchestrator re-issues conversion each time Triton re-plateaus, so earlier attempts may have
-failed or come out >5% slower — their `pitfalls_and_fixes` tell you which lowering to avoid.
+The orchestrator re-issues conversion immediately until one attempt succeeds, so earlier attempts may
+have failed or come out >5% slower — their `pitfalls_and_fixes` tell you which lowering to avoid.
 Take a **different** approach this time; do not repeat a recorded dead-end.
 
 ### Step 1 — Read the conversion sheet
@@ -132,7 +134,8 @@ git add memory/v{{N}}.json && \
 ```
 
 The orchestrator mechanically re-checks parity and will revert a >5%-slower commit anyway —
-so never force a slow/broken conversion through.
+so never force a slow/broken conversion through. Reverting a defective attempt is allowed, but it does
+not cancel conversion: the next clean session retries with a different lowering until one succeeds.
 
 ## Diagnosing a >5% regression (fix, don't accept)
 
@@ -153,7 +156,7 @@ Re-read the sheet's pitfalls and the cited source, fix the specific construct, a
 and on failure the exact cause (compile error / correctness mismatch / which construct made it >5% slower)
 in `pitfalls_and_fixes`. **Commit the record even on revert**
 (`git add memory/v{{N}}.json plans/ && git commit -m "v{{N}}: conversion reverted (<reason>)"`) so the
-next conversion attempt — after Triton plateaus again — learns from it.
+next immediate conversion attempt learns from it.
 
 Then print one line and stop:
 ```

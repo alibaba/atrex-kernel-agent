@@ -34,6 +34,37 @@ def _framework_key(framework: str) -> str:
     return aliases.get(token, token)
 
 
+def source_uses_gluon(source: str) -> bool:
+    """Return whether Python source imports the Triton experimental Gluon DSL.
+
+    Parse imports instead of searching for the word ``gluon`` so comments, strings,
+    and failure notes cannot accidentally satisfy the mandatory conversion gate.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(
+                alias.name == "triton.experimental.gluon"
+                or alias.name.startswith("triton.experimental.gluon.")
+                for alias in node.names
+            ):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "triton.experimental" and any(
+                alias.name == "gluon" for alias in node.names
+            ):
+                return True
+            if module == "triton.experimental.gluon" or module.startswith(
+                "triton.experimental.gluon."
+            ):
+                return True
+    return False
+
+
 def optimization_mode_directive(mode: str, framework: str) -> str:
     """Self-contained policy block injected into every coding-agent prompt."""
     if mode == "leaderboard":
@@ -46,15 +77,29 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         )
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
+    if _framework_key(framework) == "triton":
+        framework_rule = (
+            "- The initial implementation framework is exactly **Triton**. After the orchestrator "
+            "enters its mandatory Triton-to-Gluon conversion phase, a direct implementation in "
+            "`triton.experimental.gluon` is allowed and becomes the required framework for later "
+            "iterations. Do not switch early, switch back, mix Triton and Gluon compute kernels, "
+            "or use any other DSL.\n"
+        )
+        candidate_framework = "the active Triton/Gluon phase"
+    else:
+        framework_rule = (
+            f"- The implementation framework is exactly **{framework}**. It is a hard constraint, "
+            "not a recommendation. Do not switch to another DSL, mix another kernel framework "
+            "into the candidate, or replace the implementation with a prebuilt operator.\n"
+        )
+        candidate_framework = framework
     return (
         "## Optimization mode: production (hard gate)\n\n"
         "This generated section overrides any conflicting permissive framework or third-party-library "
         "guidance elsewhere in `CLAUDE.md`.\n\n"
-        f"- The implementation framework is exactly **{framework}**. It is a hard constraint, not a "
-        "recommendation. Do not switch to another DSL, mix another kernel framework into the candidate, "
-        "or replace the implementation with a prebuilt operator.\n"
+        f"{framework_rule}"
         "- The V0 PyTorch reference wrapper is the only baseline exception. Every optimized candidate "
-        f"committed after V0 must implement the GPU computation directly in **{framework}**.\n"
+        f"committed after V0 must implement the GPU computation directly in **{candidate_framework}**.\n"
         "- Do not import, call, dispatch to, or depend on third-party kernel/operator libraries "
         "(for example FlashInfer, FlashAttention, xFormers, vLLM custom ops, cuBLAS/cuDNN wrappers, "
         "CUTLASS kernels outside CuteDSL itself, or another DSL). Documentation and source may be read "
@@ -220,7 +265,12 @@ def _torch_compute_violations(tree: ast.AST) -> list[str]:
     return list(dict.fromkeys(violations))
 
 
-def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
+def production_kernel_violations(
+    workspace: Path,
+    framework: str,
+    *,
+    require_gluon: bool = False,
+) -> list[str]:
     """Return static production-policy violations for the current candidate.
 
     This is deliberately a fail-closed commit gate. Runtime correctness and
@@ -307,7 +357,18 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
         has_relative_import = has_relative_import or tree_relative
     if has_relative_import:
         errors.append("relative/local-module imports are not self-contained")
-    allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[key]
+    policy_source = "\n".join(policy_sources)
+    # A production Triton campaign may enter the orchestrator-controlled Gluon phase.
+    # Once a Gluon marker is present, validate the candidate as Gluon (which necessarily
+    # imports the Triton package) rather than rejecting it as an alternate framework.
+    effective_key = key
+    has_gluon_import = any(source_uses_gluon(source) for source in policy_sources)
+    if key == "triton" and has_gluon_import:
+        effective_key = "gluon"
+    if require_gluon and effective_key != "gluon":
+        errors.append("switching back from the accepted Gluon phase to Triton is forbidden")
+
+    allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[effective_key]
     if legacy_aggregate_modules:
         allowed = allowed | {AGGREGATE_KERNELS_DIR}
     for root in sorted(roots - allowed):
@@ -317,14 +378,12 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
     for policy_tree in policy_trees:
         errors.extend(_torch_compute_violations(policy_tree))
 
-    policy_source = "\n".join(policy_sources)
-
     marker_checks = {
         "triton": (
             bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
             "missing Triton implementation/import",
         ),
-        "gluon": ("triton.experimental" in policy_source and "gluon" in policy_source, "missing Gluon implementation"),
+        "gluon": (has_gluon_import, "missing Gluon implementation"),
         "cutedsl": ("cutlass.cute" in policy_source or "@cute.kernel" in policy_source, "missing CuteDSL implementation"),
         "cuda": (
             "__global__" in policy_source
@@ -333,19 +392,19 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
         ),
         "flydsl": (bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)), "missing FlyDSL implementation"),
     }
-    marker_ok, marker_error = marker_checks[key]
+    marker_ok, marker_error = marker_checks[effective_key]
     if not marker_ok:
         errors.append(marker_error)
 
     foreign_markers = {
         "triton": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
-        "gluon": "triton.experimental" in policy_source and "gluon" in policy_source,
+        "gluon": has_gluon_import,
         "cutedsl": "cutlass.cute" in policy_source or "@cute.kernel" in policy_source,
         "cuda": "__global__" in policy_source,
         "flydsl": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)),
     }
-    compatible_markers = {key}
-    if key == "gluon":
+    compatible_markers = {effective_key}
+    if effective_key == "gluon":
         compatible_markers.add("triton")  # Gluon is distributed under triton.experimental.
     for other, present in foreign_markers.items():
         if present and other not in compatible_markers:
@@ -361,7 +420,7 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
     }
     for pattern, message in banned_source_patterns.items():
         if re.search(pattern, policy_source, flags=re.IGNORECASE) and not (
-            key == "cutedsl" and "CUTLASS" in message
+            effective_key == "cutedsl" and "CUTLASS" in message
         ):
             errors.append(message)
 
@@ -373,7 +432,7 @@ def production_kernel_violations(workspace: Path, framework: str) -> list[str]:
             errors.append(f"solution.json is invalid: {exc}")
         else:
             dependencies = ((solution.get("spec") or {}).get("dependencies") or [])
-            allowed_dependencies = _ALLOWED_DEPENDENCY_TOKENS[key]
+            allowed_dependencies = _ALLOWED_DEPENDENCY_TOKENS[effective_key]
             for dependency in dependencies:
                 token = _normalized_dependency(dependency)
                 if token and token not in allowed_dependencies:
