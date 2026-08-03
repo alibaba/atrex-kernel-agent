@@ -88,6 +88,38 @@ class OptimizationPolicyTest(unittest.TestCase):
             self.assertIn("missing CuteDSL implementation", wrong_framework)
             self.assertIn("mixed/alternate framework marker is forbidden: triton", wrong_framework)
 
+    def test_prose_naming_a_third_party_library_is_not_a_dependency(self) -> None:
+        described = (
+            "from __future__ import annotations\n\n"
+            '"""vLLM-style paged causal GQA attention implemented in CuteDSL."""\n\n'
+            "import torch\nimport cutlass\nimport cutlass.cute as cute  # not a flash_attn port\n\n"
+            "@cute.kernel\ndef kernel(x):\n    return\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="production-prose-") as temp_dir:
+            workspace = self._workspace(Path(temp_dir), described, ["torch", "nvidia-cutlass-dsl"])
+            self.assertEqual(production_kernel_violations(workspace, "CuteDSL"), [])
+
+    def test_real_third_party_import_is_still_rejected(self) -> None:
+        used = (
+            "import torch\nimport vllm\nimport cutlass\nimport cutlass.cute as cute\n"
+            "@cute.kernel\ndef kernel(x):\n    return\n"
+            "def run(x):\n    return vllm.attention(x)\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="production-import-") as temp_dir:
+            workspace = self._workspace(Path(temp_dir), used, ["torch", "nvidia-cutlass-dsl"])
+            violations = production_kernel_violations(workspace, "CuteDSL")
+            self.assertIn("third-party import is not allowed in production mode: vllm", violations)
+            self.assertIn("third-party kernel/operator library reference", violations)
+
+    def test_prose_cannot_satisfy_a_framework_marker(self) -> None:
+        commented = "import torch\n\n\n# implemented with triton under the hood\ndef run(x):\n    return x\n"
+        with tempfile.TemporaryDirectory(prefix="production-marker-") as temp_dir:
+            workspace = self._workspace(Path(temp_dir), commented, ["torch"])
+            self.assertIn(
+                "missing Triton implementation/import",
+                production_kernel_violations(workspace, "Triton"),
+            )
+
     def test_unused_framework_marker_does_not_hide_pytorch_compute(self) -> None:
         kernel = (
             "import torch\nimport triton\nimport triton.language as tl\n"

@@ -113,6 +113,17 @@ CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be
 CONVERT_MIN_TOKENS = 200_000  # below this, flag a shallow attempt in the retry diagnostics
 DEFAULT_CONVERT_AFTER = 3     # mandatory Triton->Gluon escalation after three consecutive stalls
 MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
+SALVAGE_TIMEOUT_S = 1200      # post-mortem session budget for an iteration killed mid-flight
+INTERRUPTED_CATEGORY = "interrupted_session"
+FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
+FRAMEWORK_BASELINE_VERSION = 1     # the framework baseline always occupies v1, retries overwrite it
+FRAMEWORK_BASELINE_TIMEOUT_S = 10800
+FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
+FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
+IMMUTABLE_BASELINE_PATHS = (
+    "test_kernel.py", "reference.py", "input.py", "shapes.json", "metadata.json",
+    "roofline.json", "workload.jsonl", "definition.json", "valid.py", "memory/v0.json",
+)
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = ("claude", "qodercli", "codex")
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda")
@@ -507,6 +518,7 @@ class SessionResult:
     tokens: int
     stdout_tail: str
     stderr_tail: str
+    session_id: str = ""
 
 
 def _render(template_path: Path, **kw: str) -> str:
@@ -1230,6 +1242,7 @@ def run_session(
         tokens=_tokens_from_stream(stdout),
         stdout_tail=stdout[-2000:],
         stderr_tail=stderr[-2000:],
+        session_id=session_id,
     )
 
 
@@ -1416,6 +1429,110 @@ def read_memory(workspace: Path, n: int) -> Optional[dict]:
         return None
 
 
+def memory_record_is_empty(memory: Optional[dict]) -> bool:
+    """Whether a record carries no findings at all.
+
+    `memory_manager create` writes an all-null template, so a session killed mid-round usually
+    leaves a file with no verdict, no measurement, and no lessons. Treating that as a real record
+    would silently skip recovery and hand the next session a blank round.
+    """
+    if not memory:
+        return True
+    gate = (memory.get("quality_gate") or {}).get("result")
+    status = (memory.get("correctness") or {}).get("status")
+    latency = (memory.get("performance") or {}).get("latency_us")
+    category = (memory.get("optimization") or {}).get("action_category")
+    lessons = memory.get("pitfalls_and_fixes") or memory.get("search_log") or memory.get("open_directions")
+    return not (gate or status or isinstance(latency, (int, float)) or category or lessons)
+
+
+def session_transcript_path(agent_cli: str, session_id: str) -> Optional[Path]:
+    """Locate a finished session's transcript so a post-mortem session can read what it tried.
+
+    Resolved by globbing for the session id rather than reconstructing the CLI's project-slug
+    encoding, which is an internal convention. Codex sessions are ephemeral and leave none.
+    """
+    if not session_id:
+        return None
+    roots = {"claude": ".claude", "qodercli": ".qoder"}
+    root = roots.get(agent_cli)
+    if root is None:
+        return None
+    for candidate in sorted((Path.home() / root / "projects").glob(f"*/{session_id}.jsonl")):
+        return candidate
+    return None
+
+
+def record_interrupted_iteration(
+    workspace: Path,
+    n: int,
+    *,
+    kind: str,
+    exit_status: int,
+    timed_out: bool,
+    timeout_s: int,
+    stderr_tail: str = "",
+) -> Path:
+    """Mechanical fallback record for an iteration killed before it wrote its own memory.
+
+    Every version must leave a record: `latest_version` and the next session's history read are
+    both driven by `memory/v*.json`, so a hole makes the following sessions re-derive state from
+    scratch and re-run already-refuted experiments. Merges into a partial record instead of
+    overwriting it, and stays uncommitted so it survives the safety-net `git reset --hard`.
+    """
+    memory_path = workspace / "memory" / f"v{n}.json"
+    try:
+        memory = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        memory = {}
+    if not isinstance(memory, dict):
+        memory = {}
+
+    if timed_out:
+        cause = f"{kind} session killed by the {timeout_s}s hang backstop"
+        status = "TIMEOUT_FAIL"
+    else:
+        cause = f"{kind} session crashed with exit={exit_status}"
+        status = "FAIL"
+    tail = stderr_tail.strip()[:500]
+    failure_reason = f"{cause}; no result was recorded by the session" + (f". stderr: {tail}" if tail else "")
+
+    memory["version"] = f"v{n}"
+    memory["masked"] = False
+    memory.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    memory["git_commit_hash"] = None
+    memory["quality_gate"] = {"result": "FAIL", "failure_reason": failure_reason}
+    correctness = memory.setdefault("correctness", {})
+    if isinstance(correctness, dict):
+        correctness["status"] = status
+    else:
+        memory["correctness"] = {"status": status}
+    optimization = memory.setdefault("optimization", {})
+    if not isinstance(optimization, dict):
+        optimization = {}
+        memory["optimization"] = optimization
+    optimization["action_category"] = INTERRUPTED_CATEGORY
+    optimization["action_description"] = (
+        f"{cause}; whatever it was attempting is unvalidated and its conclusions are untrustworthy"
+    )
+    pitfalls = memory.setdefault("pitfalls_and_fixes", [])
+    if not isinstance(pitfalls, list):
+        pitfalls = []
+        memory["pitfalls_and_fixes"] = pitfalls
+    pitfalls.append({
+        "error_type": "infra",
+        "error_message": failure_reason,
+        "lesson": (
+            "This round was cut off by infrastructure, not by evidence. Do not treat its direction "
+            "as a refuted dead-end, and do not assume any measurement from it is valid."
+        ),
+    })
+
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return memory_path
+
+
 def mask_half_memory(workspace: Path, iteration: int) -> list[str]:
     """Randomly mask half of active optimization memory every 100 iterations.
 
@@ -1496,11 +1613,32 @@ def git_head(workspace: Path) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def git_kernel_blob(workspace: Path) -> str:
-    """Committed kernel.py blob id, stable across metadata-only commits."""
+def git_path_blob(workspace: Path, ref: str, path: str) -> str:
+    """Committed blob id of one path at one ref, or '' when it is absent there."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD:kernel.py"],
+            ["git", "rev-parse", f"{ref}:{path}"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def git_kernel_blob(workspace: Path) -> str:
+    """Committed kernel.py blob id, stable across metadata-only commits."""
+    return git_path_blob(workspace, "HEAD", "kernel.py")
+
+
+def git_worktree_blob(workspace: Path, path: str) -> str:
+    """Blob id of the on-disk file, or '' when it is missing."""
+    if not (workspace / path).is_file():
+        return ""
+    try:
+        result = subprocess.run(
+            ["git", "hash-object", "--", path],
             cwd=str(workspace),
             capture_output=True,
             text=True,
@@ -1518,6 +1656,10 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     metadata without changing ``kernel.py``.  Resume must recognize that state
     by kernel provenance, not by assuming ``latest_version > 0`` means an
     optimized kernel was accepted.
+
+    Once the framework-baseline stage lands v1 this returns False, because the
+    accepted framework kernel is a real kernel change.  The framework baseline
+    is tracked by ``framework_baseline.json``, not by this predicate.
     """
     roots = subprocess.run(
         ["git", "rev-list", "--max-parents=0", "HEAD"],
@@ -1540,6 +1682,82 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
         baseline_blob.stdout.strip()
         and baseline_blob.stdout.strip() == git_kernel_blob(workspace)
     )
+
+
+def read_framework_baseline(workspace: Path) -> Optional[dict]:
+    """Read the framework-baseline marker from committed HEAD, never from the worktree.
+
+    An interrupted session can leave an unstaged marker behind; trusting it would pin bucket
+    baselines to a kernel that was never validated.
+    """
+    show = subprocess.run(
+        ["git", "show", f"HEAD:{FRAMEWORK_BASELINE_FILE}"],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+    )
+    if show.returncode != 0:
+        return None
+    try:
+        marker = json.loads(show.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} is not valid JSON: {exc}") from exc
+    if not isinstance(marker, dict):
+        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} must contain a JSON object")
+    return marker
+
+
+def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
+    """Return the pinned (commit, version) of the framework baseline, or ("", 0) when unpinned.
+
+    Verification is fail-closed and never consults HEAD's tree, so the pin survives HEAD
+    advancing to an aggregated dispatcher kernel. A broken marker is an error rather than a
+    silent fallback to the root commit: falling back would mix PyTorch and framework
+    provenance across buckets, which is exactly what pinning exists to prevent.
+    """
+    marker = read_framework_baseline(workspace)
+    if marker is None:
+        return "", 0
+    commit = _normalize_commit_hash(marker.get("commit"))
+    if not commit:
+        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has no usable commit hash")
+    exists = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{commit}^{{commit}}"],
+        cwd=str(workspace), capture_output=True, text=True,
+    )
+    if exists.returncode != 0:
+        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} points at missing commit {commit[:12]}")
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, "HEAD"],
+        cwd=str(workspace), capture_output=True, text=True,
+    )
+    if ancestry.returncode != 0:
+        raise RuntimeError(
+            f"{FRAMEWORK_BASELINE_FILE} commit {commit[:12]} is not an ancestor of HEAD"
+        )
+    blob = subprocess.run(
+        ["git", "rev-parse", f"{commit}:kernel.py"],
+        cwd=str(workspace), capture_output=True, text=True,
+    )
+    recorded_blob = str(marker.get("kernel_blob") or "").strip()
+    if blob.returncode != 0 or not recorded_blob or blob.stdout.strip() != recorded_blob:
+        raise RuntimeError(
+            f"{FRAMEWORK_BASELINE_FILE} kernel blob does not match commit {commit[:12]}"
+        )
+    version_text = str(marker.get("version") or "")
+    match = re.fullmatch(r"v(\d+)", version_text)
+    if match is None:
+        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has an unusable version {version_text!r}")
+    return commit, int(match.group(1))
+
+
+def head_kernel_is_framework_baseline(workspace: Path) -> bool:
+    """Whether the committed HEAD kernel is still exactly the pinned framework baseline."""
+    marker = read_framework_baseline(workspace)
+    if marker is None:
+        return False
+    recorded_blob = str(marker.get("kernel_blob") or "").strip()
+    return bool(recorded_blob and recorded_blob == git_kernel_blob(workspace))
 
 
 def preserve_interrupted_tracked_changes(workspace: Path, context: str) -> str:
@@ -1754,10 +1972,18 @@ def peak_util(mem: Optional[dict]) -> float:
     return max([float(v) for v in vals if isinstance(v, (int, float))] or [0.0])
 
 
-def best_validated_latency_us(workspace: Path) -> Optional[float]:
-    """Best correctness-passing measured latency in a workspace."""
+def best_validated_latency_us(workspace: Path, *, from_version: Optional[int] = None) -> Optional[float]:
+    """Best correctness-passing measured latency in a workspace.
+
+    Versions before a pinned framework baseline are excluded by default: production cannot ship
+    the PyTorch V0 wrapper, so treating its (typically much faster, library-backed) latency as the
+    incumbent would reject every candidate a from-scratch DSL kernel can produce.
+    """
+    if from_version is None:
+        _pinned_commit, pinned_version = resolve_framework_baseline_commit(workspace)
+        from_version = pinned_version
     best: Optional[float] = None
-    for version in range(0, latest_version(workspace) + 1):
+    for version in range(from_version, latest_version(workspace) + 1):
         memory = read_memory(workspace, version)
         if not memory:
             continue
@@ -2088,6 +2314,7 @@ class Campaign:
     target_util: float = 90.0
     iter_timeout: int = 5400       # 90 min hang-backstop per optimization session
     setup_timeout: int = 7200      # 120 min for the baseline session
+    salvage_timeout: int = SALVAGE_TIMEOUT_S  # 0 = skip the post-mortem agent, record mechanically
     max_stall: int = 0             # 0 = disabled (budget-only); >0 = stop after N no-commit iters
     convert_after: int = DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     sandbox_hardware: str = ""     # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
@@ -2097,6 +2324,8 @@ class Campaign:
     atrex_bench_root: str = ""      # native shapes route: canonical checkout owning run_eval.py
     agent_cli: str = "claude"       # clean-session coding backend: claude, qodercli, or codex
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
+    framework_baseline: str = "auto"        # auto = production only; always | never override it
+    framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
     on_improvement: Optional[Callable[["Campaign", int, dict], None]] = field(
         default=None, repr=False, compare=False
     )
@@ -2121,6 +2350,78 @@ class Campaign:
               f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
         if res.exit_status != 0 or res.timed_out:
             print(f"[orchestrator] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
+
+    def _salvage_memory(self, n: int, res: SessionResult, kind: str) -> bool:
+        """Run a short record-only session that reconstructs the killed round into memory/v<N>.json."""
+        if self.salvage_timeout <= 0:
+            return False
+        if res.timed_out:
+            kill_reason = f"it hit the {self.iter_timeout}s hang backstop and was killed"
+        else:
+            kill_reason = (
+                f"it exited with status {res.exit_status} "
+                "(typically an API failure such as a provider rate limit, or a policy termination)"
+            )
+        transcript = session_transcript_path(self.agent_cli, res.session_id)
+        prompt = _render(
+            PROMPTS_DIR / "salvage.md",
+            WORKSPACE=str(self.workspace),
+            N=n,
+            PREV=n - 1,
+            KIND=kind,
+            KILL_REASON=kill_reason,
+            TRANSCRIPT=str(transcript) if transcript else "(no transcript was retained for this session)",
+            STDOUT_TAIL=res.stdout_tail or "(empty)",
+            MODE_POLICY=self._mode_directive(),
+        )
+        head_before = git_head(self.workspace)
+        salvage_res = run_session(
+            self.workspace, prompt, timeout=self.salvage_timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+            reasoning_effort="high",
+        )
+        self._account(salvage_res, f"salvage v{n}")
+        # A post-mortem session must not move HEAD. Undo with --soft: an unwanted commit disappears
+        # while the interrupted round's uncommitted kernel edits stay in the worktree for the next session.
+        if head_before and git_head(self.workspace) != head_before:
+            subprocess.run(
+                ["git", "reset", "--soft", head_before],
+                cwd=str(self.workspace),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(
+                f"[orchestrator] salvage v{n} committed against policy; HEAD restored to {head_before[:8]}",
+                file=sys.stderr,
+                flush=True,
+            )
+        return not memory_record_is_empty(read_memory(self.workspace, n))
+
+    def _ensure_iteration_memory(self, n: int, res: SessionResult, kind: str) -> None:
+        """Guarantee every round leaves a memory record, even when its session never finished one."""
+        if not memory_record_is_empty(read_memory(self.workspace, n)):
+            return
+        salvaged = self._salvage_memory(n, res, kind)
+        if memory_record_is_empty(read_memory(self.workspace, n)):
+            record_interrupted_iteration(
+                self.workspace, n,
+                kind=kind,
+                exit_status=res.exit_status,
+                timed_out=res.timed_out,
+                timeout_s=self.iter_timeout,
+                stderr_tail=res.stderr_tail,
+            )
+            salvaged = False
+        print(
+            f"[orchestrator] v{n} memory: "
+            f"{'reconstructed by salvage session' if salvaged else 'mechanical interrupted-round record'}",
+            flush=True,
+        )
 
     def _link_runtime(self) -> None:
         native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
@@ -2320,6 +2621,400 @@ class Campaign:
         subprocess.run(["git", "commit", "--amend", "--no-edit"], cwd=str(self.workspace),
                        check=True, stdout=subprocess.DEVNULL)
 
+    def ensure_framework_baseline(self) -> None:
+        """Land the campaign's first real framework kernel as v1, exactly once.
+
+        V0 is a PyTorch reference wrapper. Without this stage every workload bucket repeats the
+        same framework bring-up from scratch, which is where whole days get lost on toolchain
+        quirks. Buckets derive from the commit pinned here, so the bring-up cost is paid once.
+
+        Idempotent and resume-safe: a pinned baseline is never rewritten, and a campaign that has
+        already progressed past V0 without a pin is left exactly as it is. Not wired into
+        LayerCampaign, which drives its own sessions.
+        """
+        action, reason = self._framework_baseline_decision()
+        if action == "skip":
+            if reason:
+                print(f"[orchestrator] framework baseline skipped: {reason}", flush=True)
+            return
+        print(f"[orchestrator] framework baseline: {action} ({reason})", flush=True)
+        if action == "pin":
+            root_commit = self._single_root_commit()
+            self._pin_framework_baseline(root_commit, version=0)
+            return
+
+        n = FRAMEWORK_BASELINE_VERSION
+        root_commit = self._single_root_commit()
+        v0_blob = git_path_blob(self.workspace, root_commit, "kernel.py")
+        pre_head = git_head(self.workspace)
+
+        if action == "run":
+            self._link_runtime()
+            res = run_session(
+                self.workspace, self._framework_baseline_prompt(n),
+                timeout=self.framework_baseline_timeout,
+                agent_cli=self.agent_cli,
+                sandbox_hardware=self.sandbox_hardware,
+                sandbox_profile=self.sandbox_profile,
+                sandbox_url=self.sandbox_url,
+                sandbox_timeout=self.sandbox_timeout,
+                reasoning_effort="high",
+            )
+            self._account(res, f"framework baseline v{n}")
+            if res.exit_status != 0 and res.tokens == 0:
+                raise RuntimeError(
+                    "framework baseline session produced no output "
+                    f"(likely API key / auth issue — {_agent_auth_hint(self.agent_cli)})"
+                )
+            self._warn_restored_baseline_paths(root_commit)
+            problem = self._framework_baseline_problem(v0_blob, root_commit)
+            if problem:
+                self._recover_framework_baseline(problem, v0_blob, root_commit, pre_head)
+                self._warn_restored_baseline_paths(root_commit)
+                problem = self._framework_baseline_problem(v0_blob, root_commit)
+        else:  # adopt: our own interrupted run already committed the kernel
+            self._warn_restored_baseline_paths(root_commit)
+            problem = self._framework_baseline_problem(v0_blob, root_commit)
+        result: Optional[dict] = None
+        if not problem:
+            result, problem = self._validate_framework_baseline(n)
+        if problem:
+            self._record_framework_baseline_failure(problem)
+            if pre_head:
+                subprocess.run(["git", "reset", "--hard", pre_head], cwd=str(self.workspace),
+                               check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
+
+        commit = self._commit_framework_baseline(n, result or {})
+        latency = ((read_memory(self.workspace, n) or {}).get("performance") or {}).get("latency_us")
+        print(
+            f"[orchestrator] framework baseline v{n} accepted: {self.framework} "
+            f"@ {commit[:8]} ({latency} us geomean)",
+            flush=True,
+        )
+
+    def _framework_baseline_decision(self) -> tuple[str, str]:
+        """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
+        if self.framework_baseline == "never":
+            return "skip", ""
+        if latest_version(self.workspace) < 0 or not git_head(self.workspace):
+            raise RuntimeError("framework baseline requires a committed V0 baseline first")
+
+        pinned_commit, pinned_version = resolve_framework_baseline_commit(self.workspace)
+        if pinned_commit:
+            return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
+
+        violations = production_kernel_violations(self.workspace, self.framework)
+        progressed = not head_kernel_is_initial_baseline(self.workspace)
+        if not violations and not progressed:
+            return "pin", "the V0 kernel is already a compliant framework implementation"
+        if any(v.startswith("unsupported production framework") for v in violations):
+            return "skip", "; ".join(violations)
+        if self.framework_baseline == "auto" and self.optimization_mode != "production":
+            return "skip", "leaderboard mode keeps the permissive V0 (use --framework-baseline always)"
+        if not progressed:
+            return "run", f"V0 is not a self-contained {self.framework} kernel"
+        if (
+            latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION
+            and not violations
+            and not (self.workspace / AGGREGATE_DISPATCH_FILE).is_file()
+        ):
+            return "adopt", "an interrupted framework baseline is already committed"
+        return "skip", (
+            "HEAD has progressed beyond V0 without a framework-baseline pin; "
+            "leaving this campaign on its existing baseline"
+        )
+
+    def _single_root_commit(self) -> str:
+        roots = subprocess.run(
+            ["git", "rev-list", "--max-parents=0", "HEAD"],
+            cwd=str(self.workspace), capture_output=True, text=True,
+        )
+        root_commits = roots.stdout.split() if roots.returncode == 0 else []
+        if len(root_commits) != 1:
+            raise RuntimeError("framework baseline requires exactly one V0 root commit")
+        return root_commits[0]
+
+    def _framework_baseline_prompt(self, n: int) -> str:
+        return _render(
+            PROMPTS_DIR / "framework_baseline.md",
+            WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
+            PLATFORM=self.platform, FRAMEWORK=self.framework,
+            ARCH=self.arch or "the runtime GPU arch",
+            NOTES=self.notes,
+            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+            HARDWARE=hardware_directive(self.platform, self.arch),
+            SANDBOX=self._sandbox_directive(),
+            EVALUATOR=self._evaluator_directive(),
+            MODE_POLICY=self._mode_directive(),
+        )
+
+    def _restore_immutable_baseline_paths(self, root_commit: str) -> list[str]:
+        """Put back any ground-truth file the session edited, and report what was restored.
+
+        A session that "fixes" the harness or memory/v0.json is a compliance problem, but a
+        mechanically repairable one — discarding its kernel over it would throw away hours of
+        work for nothing. Acceptance is decided by the kernel itself.
+        """
+        restored: list[str] = []
+        for path in IMMUTABLE_BASELINE_PATHS:
+            original = git_path_blob(self.workspace, root_commit, path)
+            if not original or original == git_worktree_blob(self.workspace, path):
+                continue
+            checkout = subprocess.run(
+                ["git", "checkout", root_commit, "--", path],
+                cwd=str(self.workspace), check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if checkout.returncode == 0:
+                restored.append(path)
+        return restored
+
+    def _framework_baseline_problem(self, v0_blob: str, root_commit: str) -> str:
+        """Static acceptance checks on the candidate about to be validated and committed.
+
+        Everything is judged from the worktree: that is what the gateway uploads, and it lets a
+        session that wrote the kernel but never committed it still be accepted.
+        """
+        candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
+        if not candidate_blob or candidate_blob == v0_blob:
+            return "the session left the V0 kernel unchanged; no framework implementation was produced"
+        violations = production_kernel_violations(self.workspace, self.framework)
+        if violations:
+            return (
+                f"the candidate is not a self-contained {self.framework} implementation: "
+                + "; ".join(violations)
+            )
+        if self.framework.lower() in {"triton", "gluon"} and kernel_is_gluon(self.workspace):
+            # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
+            return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
+        mutated = [
+            path for path in IMMUTABLE_BASELINE_PATHS
+            if git_path_blob(self.workspace, root_commit, path)
+            and git_path_blob(self.workspace, root_commit, path)
+            != git_worktree_blob(self.workspace, path)
+        ]
+        if mutated:
+            return "the session modified immutable ground truth: " + ", ".join(mutated)
+        return ""
+
+    def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
+        """Re-validate the candidate through the gateway: single seed, then five seeds."""
+        stages = (
+            ("single-seed", ["python", "test_kernel.py", "--version", f"v{n}", "--no-memory"]),
+            ("multi-seed", ["python", "test_kernel.py", "--version", f"v{n}",
+                            "--multi-seed", "5", "--no-memory"]),
+        )
+        result: Optional[dict] = None
+        for stage_name, command in stages:
+            try:
+                test = _sandbox_command(
+                    self.workspace,
+                    self.sandbox_hardware,
+                    self.sandbox_profile,
+                    self.sandbox_url,
+                    self.sandbox_timeout,
+                    command,
+                    gateway_kind="run",
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return None, f"{stage_name} validation failed to run: {exc}"
+            if test.stdout:
+                print(test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True)
+            if test.stderr:
+                print(test.stderr, end="" if test.stderr.endswith("\n") else "\n",
+                      file=sys.stderr, flush=True)
+            if test.returncode != 0:
+                return None, f"{stage_name} validation command failed (exit={test.returncode})"
+            try:
+                result = _test_result_from_stdout(test.stdout)
+            except (RuntimeError, json.JSONDecodeError) as exc:
+                return None, f"{stage_name} validation produced no usable result: {exc}"
+            if not result.get("all_pass"):
+                return None, f"{stage_name} correctness validation failed"
+
+        assert result is not None
+        latency = result.get("latency_us_geomean")
+        if not isinstance(latency, (int, float)) or latency <= 0:
+            return None, "validation reported no usable latency_us_geomean"
+        # Bucket baselines are derived from this map, so a missing or re-keyed shape here would
+        # otherwise surface hours later as a hard failure in bucket seeding.
+        baseline_shapes = set(
+            ((read_memory(self.workspace, 0) or {}).get("performance") or {}).get(
+                "latency_us_by_shape", {}
+            )
+        )
+        measured_shapes = set(result.get("latency_us_by_shape") or {})
+        if baseline_shapes and measured_shapes != baseline_shapes:
+            return None, (
+                "latency_us_by_shape does not cover the same workloads as v0 "
+                f"(missing {sorted(baseline_shapes - measured_shapes)}, "
+                f"unexpected {sorted(measured_shapes - baseline_shapes)})"
+            )
+        return result, ""
+
+    def _warn_restored_baseline_paths(self, root_commit: str) -> None:
+        restored = self._restore_immutable_baseline_paths(root_commit)
+        if restored:
+            print(
+                "[orchestrator] framework baseline session edited immutable ground truth; "
+                f"restored from V0: {', '.join(restored)}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _recover_framework_baseline(
+        self, problem: str, v0_blob: str, root_commit: str, pre_head: str
+    ) -> None:
+        """Run one clean recovery session for a rejected candidate."""
+        print(
+            f"[orchestrator] WARNING: framework baseline rejected ({problem}); "
+            "starting one clean recovery session",
+            file=sys.stderr,
+            flush=True,
+        )
+        if pre_head and git_head(self.workspace) != pre_head:
+            # Undo the session's commits, keep its files: the recovery session needs to read them.
+            subprocess.run(["git", "reset", "--soft", pre_head], cwd=str(self.workspace),
+                           check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        recovery_prompt = (
+            self._mode_directive()
+            + "\n\n# Recover a rejected framework baseline\n\n"
+            + f"Workspace: `{self.workspace}`\n\n"
+            + "A previous non-interactive session tried to replace the V0 PyTorch wrapper with a "
+            + f"self-contained **{self.framework}** kernel and was rejected: "
+            + f"**{problem}**\n\n"
+            + "Continue from the files already present and finish the job autonomously. Do not ask "
+            + "for confirmation. Keep the algorithm you already have where it is sound, fix the "
+            + "stated problem, validate correctness through the sandbox with `--multi-seed 5`, "
+            + f"write `memory/v{FRAMEWORK_BASELINE_VERSION}.json`, and commit `kernel.py`. Never "
+            + "modify `test_kernel.py`, `reference.py`, `input.py`, `shapes.json`, `memory/v0.json`, "
+            + f"or create `{FRAMEWORK_BASELINE_FILE}`. Do not enter optimization iterations.\n\n"
+            + self._evaluator_directive()
+            + "\n\n"
+            + self._sandbox_directive()
+        )
+        recovery = run_session(
+            self.workspace, recovery_prompt, timeout=self.framework_baseline_timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+            reasoning_effort="high",
+        )
+        self._account(recovery, f"framework baseline recovery v{FRAMEWORK_BASELINE_VERSION}")
+
+    def _record_framework_baseline_failure(self, problem: str) -> None:
+        """Persist why the framework baseline was rejected, uncommitted so a reset cannot lose it."""
+        n = FRAMEWORK_BASELINE_VERSION
+        memory_path = self.workspace / "memory" / f"v{n}.json"
+        try:
+            memory = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            memory = {}
+        if not isinstance(memory, dict):
+            memory = {}
+        memory["version"] = f"v{n}"
+        memory["masked"] = False
+        memory["git_commit_hash"] = None
+        memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
+        memory["correctness"] = {"status": "FAIL"}
+        memory["optimization"] = {
+            "action_category": FRAMEWORK_BASELINE_CATEGORY,
+            "action_description": f"rejected {self.framework} baseline attempt",
+        }
+        pitfalls = memory.setdefault("pitfalls_and_fixes", [])
+        if not isinstance(pitfalls, list):
+            pitfalls = []
+            memory["pitfalls_and_fixes"] = pitfalls
+        pitfalls.append({
+            "error_type": "production_policy" if "self-contained" in problem else "correctness",
+            "error_message": problem,
+            "lesson": f"the next attempt must land a compliant, correctness-passing {self.framework} kernel",
+        })
+        memory_path.parent.mkdir(parents=True, exist_ok=True)
+        memory_path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def _commit_framework_baseline(self, n: int, result: dict) -> str:
+        """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
+        staged = [
+            path for path in ("kernel.py", "solution.json", "CLAUDE.md", "README.md",
+                              f"memory/v{n}.json")
+            if (self.workspace / path).exists()
+        ]
+        staged += [
+            str(path.relative_to(self.workspace))
+            for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
+        ]
+        subprocess.run(["git", "add", *staged], cwd=str(self.workspace), check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(self.workspace),
+                          check=False).returncode != 0:
+            subprocess.run(
+                ["git", "commit", "-m",
+                 f"v{n}: framework baseline ({self.framework}) replacing the V0 PyTorch wrapper"],
+                cwd=str(self.workspace), check=True, stdout=subprocess.DEVNULL,
+            )
+        kernel_commit = subprocess.run(
+            ["git", "rev-list", "-1", "HEAD", "--", "kernel.py"],
+            cwd=str(self.workspace), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if git_kernel_blob(self.workspace) != git_worktree_blob(self.workspace, "kernel.py"):
+            raise RuntimeError(
+                "framework baseline kernel.py differs between the worktree and the commit"
+            )
+
+        _record_local_test_result(self.workspace, f"v{n}", result)
+        memory_path = self.workspace / "memory" / f"v{n}.json"
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+        optimization = memory.setdefault("optimization", {})
+        optimization["action_category"] = FRAMEWORK_BASELINE_CATEGORY
+        optimization["action_description"] = (
+            f"first self-contained {self.framework} implementation of the whole operator"
+        )
+        memory["git_commit_hash"] = kernel_commit
+        memory[FRAMEWORK_BASELINE_CATEGORY] = {
+            "framework": self.framework,
+            "validated_stages": ["single-seed", "multi-seed-5"],
+        }
+        memory_path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        self._pin_framework_baseline(kernel_commit, version=n)
+        return kernel_commit
+
+    def _pin_framework_baseline(self, commit: str, *, version: int) -> None:
+        """Write and commit the marker that bucket seeding resolves.
+
+        Deliberately a separate commit rather than an amend: amending would rewrite the very
+        commit whose sha the marker records, leaving a dangling pointer. This commit does not
+        touch kernel.py, so it never registers as an optimization win.
+        """
+        marker = {
+            "schema_version": 1,
+            "version": f"v{version}",
+            "framework": self.framework,
+            "platform": self.platform,
+            "arch": self.arch,
+            "commit": commit,
+            "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
+            json.dumps(marker, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        paths = [FRAMEWORK_BASELINE_FILE]
+        if (self.workspace / "memory" / f"v{version}.json").exists():
+            paths.append(f"memory/v{version}.json")
+        subprocess.run(["git", "add", *paths], cwd=str(self.workspace), check=True,
+                       stdout=subprocess.DEVNULL)
+        if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(self.workspace),
+                          check=False).returncode != 0:
+            subprocess.run(
+                ["git", "commit", "-m", f"v{version}: pin framework baseline {commit[:8]}"],
+                cwd=str(self.workspace), check=True, stdout=subprocess.DEVNULL,
+            )
+        # The metadata commit must not read as a stalled optimization round on the next resume.
+        write_stall(self.workspace, 0)
+
     def _record_failed_convert(self, n: int, reason: str) -> None:
         """Persist a failed/reverted triton->gluon conversion as memory/v<N>.json so the NEXT convert
         attempt reads it and avoids repeating the same lowering. Survives the safety-net git reset
@@ -2403,6 +3098,8 @@ class Campaign:
                 self.workspace, f"resume {self.campaign_name}"
             )
             self._link_runtime()  # ensure runtime symlinks exist for iteration sessions
+
+        self.ensure_framework_baseline()
 
         if self.optimization_mode == "production" and latest_version(self.workspace) > 0:
             violations = production_kernel_violations(self.workspace, self.framework)
@@ -2491,36 +3188,33 @@ class Campaign:
             # regularly produced back-to-back non-zero exits with low tokens, killing the
             # whole campaign for a recoverable hiccup. Backoff avoids hammering a
             # rate-limited endpoint.
-            if res.exit_status != 0 and not res.timed_out:
+            if res.exit_status != 0 or res.timed_out:
                 infra_fails += 1
+                if res.timed_out:
+                    backoff = min(60 * infra_fails, 300)
+                    notice = f"timeout #{infra_fails}"
+                else:
+                    backoff = min(30 * infra_fails, 180)
+                    notice = f"infra fail #{infra_fails} (exit={res.exit_status})"
+                if infra_fails < 15:
+                    # Back off before retrying to avoid hammering a rate-limited API
+                    print(f"[orchestrator] {notice}, backing off {backoff}s", flush=True)
+                    time.sleep(backoff)
+                # Recover this round's findings once the endpoint has cooled: a killed session wrote
+                # no memory, and an empty version forces the next session to re-derive everything.
+                self._ensure_iteration_memory(n, res, "convert" if do_convert else "iter")
                 if infra_fails >= 15:
                     if do_convert:
                         raise RuntimeError(
                             "mandatory Triton->Gluon conversion could not complete after "
-                            f"{infra_fails} consecutive session crashes"
+                            f"{infra_fails} consecutive failed sessions"
                         )
+                    if res.timed_out:
+                        return self._finish(f"infra: {infra_fails} consecutive timeouts")
                     return self._finish(
                         f"infra: {infra_fails} consecutive sessions crashed (exit={res.exit_status}) "
                         f"(likely API key / auth issue — {_agent_auth_hint(self.agent_cli)})"
                     )
-                # Back off before retrying to avoid hammering a rate-limited API
-                import time as _time
-                _backoff = min(30 * infra_fails, 180)
-                print(f"[orchestrator] infra fail #{infra_fails} (exit={res.exit_status}), backing off {_backoff}s", flush=True)
-                _time.sleep(_backoff)
-            elif res.exit_status != 0 and res.timed_out:
-                infra_fails += 1
-                if infra_fails >= 15:
-                    if do_convert:
-                        raise RuntimeError(
-                            "mandatory Triton->Gluon conversion could not complete after "
-                            f"{infra_fails} consecutive timeouts"
-                        )
-                    return self._finish(f"infra: {infra_fails} consecutive timeouts")
-                import time as _time
-                _backoff = min(60 * infra_fails, 300)
-                print(f"[orchestrator] timeout #{infra_fails}, backing off {_backoff}s", flush=True)
-                _time.sleep(_backoff)
             else:
                 infra_fails = 0
 
@@ -2916,22 +3610,26 @@ def _bucket_baseline_memory(
     workload_source: WorkloadSource,
     *,
     aggregate_workspace: Path,
-    aggregate_v0_commit: str,
+    aggregate_baseline_commit: str,
+    aggregate_baseline_version: int = 0,
 ) -> dict:
-    """Derive one bucket's V0 record from the aggregate V0 measurement.
+    """Derive one bucket's V0 record from the aggregate baseline measurement.
 
     The aggregate evaluator already measured every workload independently and
     persisted those measurements in ``latency_us_by_shape``.  Re-running the
     same baseline once per bucket wastes both coding-agent and GPU time.  A
     bucket baseline is therefore the exact subset of those measurements, with
     scalar latency aggregates recomputed over only that subset.
+
+    The source is the aggregate framework baseline when the campaign pinned one, otherwise
+    the original V0 record.
     """
     performance = aggregate_memory.get("performance") or {}
     per_workload = performance.get("latency_us_by_shape")
     if not isinstance(per_workload, dict):
         raise RuntimeError(
-            "aggregate memory/v0.json has no performance.latency_us_by_shape; "
-            "cannot derive bucket baselines without re-running V0"
+            f"aggregate memory/v{aggregate_baseline_version}.json has no "
+            "performance.latency_us_by_shape; cannot derive bucket baselines without re-running it"
         )
 
     selected: dict[str, float] = {}
@@ -2981,13 +3679,18 @@ def _bucket_baseline_memory(
     derived["version"] = "v0"
     derived["masked"] = False
     derived["timestamp"] = datetime.now(timezone.utc).isoformat()
+    # A bucket baseline is neither the campaign's framework baseline nor an aggregate candidate.
+    derived.pop(FRAMEWORK_BASELINE_CATEGORY, None)
+    derived.pop("aggregation", None)
     derived_performance = derived.setdefault("performance", {})
     derived_performance["latency_us"] = geomean
     derived_performance["latency_us_geomean"] = geomean
     derived_performance["latency_us_arith_mean"] = arithmetic_mean
     derived_performance["latency_us_by_shape"] = selected
     derived_performance["derived_from_aggregate_v0"] = True
+    derived_performance["derived_from_aggregate_version"] = f"v{aggregate_baseline_version}"
     derived_performance["aggregate_v0_latency_us"] = performance.get("latency_us")
+    derived_performance["aggregate_baseline_latency_us"] = performance.get("latency_us")
     # Throughput/utilization scalars in aggregate V0 were reduced over the full
     # workload set.  They are not mathematically valid for a subset and could
     # incorrectly trip the bucket's peak-utilization stop condition.
@@ -2999,21 +3702,30 @@ def _bucket_baseline_memory(
         "speedup_vs_ref_geomean",
     ):
         derived_performance.pop(aggregate_only_metric, None)
+    source_label = (
+        f"framework baseline v{aggregate_baseline_version}"
+        if aggregate_baseline_version > 0
+        else "V0"
+    )
     derived_performance["measurement_note"] = (
-        f"Mechanically selected aggregate V0 per-workload timings for bucket {bucket.name}; "
-        "no separate baseline evaluation was run."
+        f"Mechanically selected aggregate {source_label} per-workload timings for bucket "
+        f"{bucket.name}; no separate baseline evaluation was run."
     )
     optimization = derived.setdefault("optimization", {})
     optimization["action_category"] = "baseline"
     optimization["action_description"] = (
-        f"V0 mechanically derived from aggregate baseline for bucket {bucket.name}; "
+        f"V0 mechanically derived from aggregate {source_label} for bucket {bucket.name}; "
         f"selected workloads: {', '.join(selected_ids)}. No separate baseline session "
         "or GPU evaluation was run."
     )
     derived["baseline_derivation"] = {
-        "source": "aggregate_v0",
+        "source": (
+            "aggregate_framework_baseline" if aggregate_baseline_version > 0 else "aggregate_v0"
+        ),
         "aggregate_workspace": str(aggregate_workspace),
-        "aggregate_v0_commit": aggregate_v0_commit,
+        "aggregate_v0_commit": aggregate_baseline_commit,
+        "aggregate_baseline_commit": aggregate_baseline_commit,
+        "aggregate_baseline_version": f"v{aggregate_baseline_version}",
         "bucket": bucket.name,
         "workload_indices": list(bucket.workload_indices),
         "workload_ids": selected_ids,
@@ -3472,6 +4184,10 @@ class WorkloadBucketCoordinator:
                     f"{ignore_line}\n"
                 )
         self._commit_main("workload coordinator: ignore derived bucket workspaces", ".gitignore")
+        # Buckets inherit this kernel, so the framework bring-up happens once here rather than
+        # once per bucket. Ordered after the ignore rule: the session must never stage the
+        # nested bucket repositories of a resumed campaign.
+        self.aggregate_campaign.ensure_framework_baseline()
 
     def _commit_main(self, message: str, *paths: str) -> None:
         subprocess.run(["git", "add", "--", *paths], cwd=str(self.workspace), check=True)
@@ -4639,6 +5355,9 @@ class WorkloadBucketCoordinator:
             target_util=parent.target_util,
             iter_timeout=parent.iter_timeout,
             setup_timeout=parent.setup_timeout,
+            salvage_timeout=parent.salvage_timeout,
+            framework_baseline="never",
+            framework_baseline_timeout=parent.framework_baseline_timeout,
             max_stall=parent.max_stall,
             convert_after=parent.convert_after,
             sandbox_hardware=parent.sandbox_hardware,
@@ -4659,24 +5378,35 @@ class WorkloadBucketCoordinator:
         campaign: Campaign,
         workload_source: WorkloadSource,
     ) -> None:
-        """Create a bucket V0 from the already-validated aggregate V0.
+        """Create a bucket V0 from the already-validated aggregate baseline.
 
         This is deliberately mechanical: no coding-agent session and no GPU
-        command are involved.  The bucket receives the aggregate's original V0
-        kernel plus only its own workload files and per-workload measurements.
+        command are involved.  The bucket receives the aggregate's pinned
+        framework-baseline kernel (or its original V0 kernel when the campaign has none)
+        plus only its own workload files and per-workload measurements.
         """
+        if self.aggregate_campaign.framework_baseline == "never":
+            baseline_commit, baseline_version = "", 0
+        else:
+            baseline_commit, baseline_version = resolve_framework_baseline_commit(self.workspace)
         if latest_version(campaign.workspace) >= 0:
+            self._assert_bucket_baseline_provenance(bucket, campaign, baseline_commit)
             return
-        aggregate_memory = read_memory(self.workspace, 0)
+        aggregate_memory = read_memory(self.workspace, baseline_version)
         if aggregate_memory is None:
-            raise RuntimeError("cannot seed bucket baseline before aggregate memory/v0.json exists")
+            raise RuntimeError(
+                "cannot seed bucket baseline before aggregate "
+                f"memory/v{baseline_version}.json exists"
+            )
         aggregate_passed = _status_is(
             (aggregate_memory.get("quality_gate") or {}).get("result"), "PASS"
         ) or _status_is(
             (aggregate_memory.get("correctness") or {}).get("status"), "PASS"
         )
         if not aggregate_passed:
-            raise RuntimeError("cannot seed bucket baseline from a non-passing aggregate V0")
+            raise RuntimeError(
+                f"cannot seed bucket baseline from a non-passing aggregate v{baseline_version}"
+            )
 
         roots = subprocess.run(
             ["git", "rev-list", "--max-parents=0", "HEAD"],
@@ -4687,11 +5417,11 @@ class WorkloadBucketCoordinator:
         ).stdout.split()
         if len(roots) != 1:
             raise RuntimeError("aggregate workspace must have exactly one V0 root commit")
-        aggregate_v0_commit = roots[0]
+        aggregate_baseline_commit = baseline_commit or roots[0]
 
-        def aggregate_v0_file(name: str, *, required: bool = False) -> Optional[str]:
+        def baseline_file(name: str, *, required: bool = False) -> Optional[str]:
             result = subprocess.run(
-                ["git", "show", f"{aggregate_v0_commit}:{name}"],
+                ["git", "show", f"{aggregate_baseline_commit}:{name}"],
                 cwd=str(self.workspace),
                 capture_output=True,
                 text=True,
@@ -4699,7 +5429,9 @@ class WorkloadBucketCoordinator:
             if result.returncode == 0:
                 return result.stdout
             if required:
-                raise RuntimeError(f"aggregate V0 commit has no {name}")
+                raise RuntimeError(
+                    f"aggregate baseline commit {aggregate_baseline_commit[:8]} has no {name}"
+                )
             return None
 
         workspace = campaign.workspace
@@ -4728,8 +5460,9 @@ class WorkloadBucketCoordinator:
             shutil.copy2(source, workspace / source.name)
             tracked_files.add(source.name)
 
-        # These files define the runnable baseline and must come from the
-        # aggregate's original V0 commit, never from a later dispatcher HEAD.
+        # These files define the runnable baseline and must come from the aggregate's validated
+        # framework-baseline commit (or its original V0 commit when the campaign has none),
+        # never from a later dispatcher HEAD.
         for name in (
             "kernel.py",
             "solution.json",
@@ -4738,7 +5471,7 @@ class WorkloadBucketCoordinator:
             ".gitignore",
             "CLAUDE.md",
         ):
-            content = aggregate_v0_file(name, required=name == "kernel.py")
+            content = baseline_file(name, required=name == "kernel.py")
             if content is None and name == "test_kernel.py":
                 aggregate_harness = self.workspace / name
                 if aggregate_harness.is_file():
@@ -4749,22 +5482,26 @@ class WorkloadBucketCoordinator:
                 (workspace / name).write_text(content, encoding="utf-8")
                 tracked_files.add(name)
 
+        source_label = (
+            f"framework baseline v{baseline_version}" if baseline_version > 0 else "V0"
+        )
         selected_ids = [workload_source.ids[index] for index in bucket.workload_indices]
-        readme = aggregate_v0_file("README.md") or "# GPU kernel optimization\n"
+        readme = baseline_file("README.md") or "# GPU kernel optimization\n"
         (workspace / "README.md").write_text(
             f"# Workload bucket: {bucket.name}\n\n"
-            f"This workspace V0 is derived from aggregate V0 `{aggregate_v0_commit[:12]}`. "
+            f"This workspace V0 is derived from aggregate {source_label} "
+            f"`{aggregate_baseline_commit[:12]}`. "
             f"It contains workload ids {', '.join(selected_ids)} and was not re-evaluated.\n\n"
             + readme,
             encoding="utf-8",
         )
         tracked_files.add("README.md")
-        aggregate_report = aggregate_v0_file("baseline_report.md") or ""
+        aggregate_report = baseline_file("baseline_report.md") or ""
         (workspace / "baseline_report.md").write_text(
             f"# Derived bucket V0 baseline — {bucket.name}\n\n"
-            "This baseline reuses the aggregate V0 kernel, correctness result, and the "
+            f"This baseline reuses the aggregate {source_label} kernel, correctness result, and the "
             "per-workload timings selected below. No separate baseline agent or GPU run was used.\n\n"
-            f"- Aggregate V0 commit: `{aggregate_v0_commit}`\n"
+            f"- Aggregate baseline: {source_label} at `{aggregate_baseline_commit}`\n"
             f"- Workload indices: {', '.join(map(str, bucket.workload_indices))}\n"
             f"- Workload ids: {', '.join(selected_ids)}\n\n"
             + aggregate_report,
@@ -4777,7 +5514,8 @@ class WorkloadBucketCoordinator:
             bucket,
             workload_source,
             aggregate_workspace=self.workspace,
-            aggregate_v0_commit=aggregate_v0_commit,
+            aggregate_baseline_commit=aggregate_baseline_commit,
+            aggregate_baseline_version=baseline_version,
         )
         memory_path = workspace / "memory" / "v0.json"
         memory_path.write_text(
@@ -4806,7 +5544,7 @@ class WorkloadBucketCoordinator:
             check=True,
         )
         subprocess.run(
-            ["git", "commit", "-m", "V0: derive bucket baseline from aggregate V0"],
+            ["git", "commit", "-m", f"V0: derive bucket baseline from aggregate {source_label}"],
             cwd=str(workspace),
             check=True,
             stdout=subprocess.DEVNULL,
@@ -4825,10 +5563,38 @@ class WorkloadBucketCoordinator:
             stdout=subprocess.DEVNULL,
         )
         print(
-            f"[workload-coordinator] derived {bucket.name} V0 from aggregate V0 "
+            f"[workload-coordinator] derived {bucket.name} V0 from aggregate {source_label} "
             f"for {len(bucket.workload_indices)} workloads (no agent/GPU rerun)",
             flush=True,
         )
+
+    def _assert_bucket_baseline_provenance(
+        self, bucket: WorkloadBucket, campaign: Campaign, baseline_commit: str
+    ) -> None:
+        """Refuse to mix baselines: an already-seeded bucket must match the pinned baseline.
+
+        Continuing silently would leave the aggregate advertising a framework baseline while some
+        bucket sources still descend from the PyTorch V0 — invisible from the outside and exactly
+        the provenance confusion the pin exists to prevent. Re-seeding is not an option either: it
+        would destroy that bucket's optimization history.
+        """
+        if not baseline_commit:
+            return
+        derivation = (read_memory(campaign.workspace, 0) or {}).get("baseline_derivation") or {}
+        seeded_from = _normalize_commit_hash(
+            derivation.get("aggregate_baseline_commit") or derivation.get("aggregate_v0_commit")
+        )
+        if not seeded_from or seeded_from == baseline_commit:
+            return
+        message = (
+            f"bucket {bucket.name} was seeded from aggregate commit {seeded_from[:12]} but the "
+            f"aggregate now pins framework baseline {baseline_commit[:12]}; re-seeding would "
+            "destroy that bucket's history. Continue with --framework-baseline never to keep the "
+            "existing bucket baselines, or start a fresh --workspace."
+        )
+        if self.aggregate_campaign.optimization_mode == "production":
+            raise RuntimeError(message)
+        print(f"[workload-coordinator] WARNING: {message}", file=sys.stderr, flush=True)
 
     def _reconcile_resumed_bucket(
         self, bucket: WorkloadBucket, campaign: Campaign
@@ -5572,6 +6338,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="Peak-utilization %% short-circuit (default stop condition).")
     ap.add_argument("--iter-timeout", type=int, default=5400, help="Per-iteration hang backstop (s).")
     ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
+    ap.add_argument("--salvage-timeout", type=int, default=SALVAGE_TIMEOUT_S,
+                    help="Budget (s) for the post-mortem session that records an iteration killed by "
+                         "timeout or API failure (0 = write the mechanical record only).")
+    ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",
+                    help="Run one dedicated session between V0 setup and workload bucketing that "
+                         "replaces the V0 PyTorch wrapper with the first self-contained framework "
+                         "kernel, recorded as v1 (so optimization rounds start at v2) and inherited "
+                         "by every workload bucket. auto = production mode only; always = "
+                         "leaderboard too; never = legacy flow (buckets derive from the V0 kernel).")
+    ap.add_argument("--framework-baseline-timeout", type=int, default=FRAMEWORK_BASELINE_TIMEOUT_S,
+                    help="Framework baseline session timeout (s).")
     ap.add_argument("--max-stall", type=int, default=0,
                     help="Optional: stop after N consecutive no-commit iterations (0 = disabled).")
     ap.add_argument("--convert-after", type=int, default=DEFAULT_CONVERT_AFTER,
@@ -5600,6 +6377,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("--max-workload-buckets must be at least 1")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
+    if args.salvage_timeout < 0:
+        ap.error("--salvage-timeout must be non-negative (0 disables the post-mortem session)")
+    if args.framework_baseline_timeout <= 0:
+        ap.error("--framework-baseline-timeout must be positive")
     if not 0.0 <= args.aggregate_min_improvement_pct < 100.0:
         ap.error("--aggregate-min-improvement-pct must be in [0, 100)")
     if args.sandbox_url and args.sandbox_profile:
@@ -5689,6 +6470,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
+        salvage_timeout=args.salvage_timeout,
+        framework_baseline=args.framework_baseline,
+        framework_baseline_timeout=args.framework_baseline_timeout,
         convert_after=args.convert_after,
     )
     if is_bucketable_op(Path(op["op_dir"])) and not args.no_workload_bucketing:

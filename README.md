@@ -176,7 +176,7 @@ that case `--token-budget` cannot be enforced and `--max-iters` remains the hard
 ├── install.sh                       # Route 1 installer / uninstaller
 ├── orchestrator/                    # Route 2: clean-session optimization orchestrator
 │   ├── optimize.py                  # Outer optimization loop driver
-│   └── prompts/                     # Per-session prompts (setup, iteration, convert)
+│   └── prompts/                     # Per-session prompts (setup, framework baseline, iteration, convert)
 ├── agents/                          # Subagent definitions used by both routes
 ├── docs/                            # Detailed project design docs
 ├── reference/                       # Workspace, plan, memory, and profiling templates

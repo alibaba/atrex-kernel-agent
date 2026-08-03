@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 
@@ -32,6 +34,44 @@ def _framework_key(framework: str) -> str:
         "fly": "flydsl",
     }
     return aliases.get(token, token)
+
+
+def _code_without_prose(source: str) -> str:
+    """Blank comments and docstrings so textual scans judge code, not description.
+
+    A docstring reading "vLLM-style paged attention" describes the algorithm; it is not a
+    dependency. Ordinary string literals are preserved because a Cuda candidate embeds its
+    C++ source (with ``#include`` and ``__global__``) in one.
+    """
+    lines = source.splitlines()
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in ast.walk(tree):
+            # Any bare string statement is discarded at runtime, so it can only be
+            # documentation. This also covers a "docstring" that Python does not count as
+            # one because `from __future__ import annotations` precedes it.
+            if (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+                and node.end_lineno is not None
+            ):
+                for index in range(node.lineno, node.end_lineno + 1):
+                    lines[index - 1] = ""
+    blanked = "\n".join(lines)
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(blanked).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return blanked
+    out = blanked.splitlines()
+    for token in tokens:
+        if token.type == tokenize.COMMENT:
+            row, column = token.start
+            out[row - 1] = out[row - 1][:column]
+    return "\n".join(out)
 
 
 def source_uses_gluon(source: str) -> bool:
@@ -357,7 +397,7 @@ def production_kernel_violations(
         has_relative_import = has_relative_import or tree_relative
     if has_relative_import:
         errors.append("relative/local-module imports are not self-contained")
-    policy_source = "\n".join(policy_sources)
+    policy_source = "\n".join(_code_without_prose(source) for source in policy_sources)
     # A production Triton campaign may enter the orchestrator-controlled Gluon phase.
     # Once a Gluon marker is present, validate the candidate as Gluon (which necessarily
     # imports the Triton package) rather than rejecting it as an alternate framework.

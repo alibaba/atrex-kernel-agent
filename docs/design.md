@@ -80,6 +80,23 @@ Path: `agents/gpu-kernel-baseline.md`
 
 The baseline Skill implements the first correct kernel version from PyTorch logic or a kernel demo. It learns the target framework through `gpu-wiki`, writes `kernel.py` and `test_kernel.py`, validates correctness, records baseline performance, writes `baseline_report.md`, creates `memory/v0.json`, and commits the baseline.
 
+### Framework Baseline Stage
+
+Path: `orchestrator/prompts/framework_baseline.md`
+
+V0 is allowed to be the PyTorch reference wrapper, so the first real framework implementation used to be
+written independently inside every workload bucket — the same DSL bring-up and the same toolchain traps,
+repeated N times. This stage runs one dedicated session between V0 setup and workload bucketing: research
+(no profile evidence, no plan generation), implement one self-contained kernel in the campaign's framework,
+validate single-seed and 5-seed correctness through the gateway, bench, then record `memory/v1.json` and
+commit.
+
+The orchestrator re-checks the result mechanically — framework purity via the production policy gate, plain
+Triton rather than Gluon, immutable ground truth untouched, per-shape coverage identical to v0 — and pins the
+accepted kernel commit in `framework_baseline.json`. Bucket seeding resolves that pin by sha, so every bucket
+starts from the framework kernel even after the aggregate HEAD has advanced to a dispatcher. Controlled by
+`--framework-baseline {auto,always,never}`; `auto` runs it in production mode only.
+
 ### Profile Optimizer Skill
 
 Path: `skills/gpu-kernel-profile-optimizer/SKILL.md`
