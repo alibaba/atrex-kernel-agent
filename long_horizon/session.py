@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import signal
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +16,36 @@ CompletionCheck = Callable[[EpisodeHandoff], str]
 CommandExecutor = Callable[
     [list[str], Path, int, dict[str, str]], tuple[str, str, int, bool]
 ]
+
+
+_CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
+
+
+def _claude_transient_api_error(stdout: str) -> str:
+    """Return a whitelisted transient error from Claude's structured stream."""
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("isApiErrorMessage") is not True:
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            value = block.get("text")
+            if not isinstance(value, str):
+                continue
+            normalized = value.strip().casefold()
+            if normalized in _CLAUDE_TRANSIENT_API_ERRORS:
+                return value.strip()
+    return ""
 
 
 class LongSessionRunner:
@@ -34,6 +66,7 @@ class LongSessionRunner:
         session_id: str = "",
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
+        active_session_id = session_id if self.agent_cli != "codex" else ""
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         deadline = time.monotonic() + timeout
@@ -76,6 +109,12 @@ class LongSessionRunner:
                         or f"{self.agent_cli} ended without a valid terminal handoff"
                     )
                     break
+                if not active_session_id:
+                    completion_diagnosis = (
+                        completion_diagnosis
+                        or f"{self.agent_cli} ended without exposing a resumable session id"
+                    )
+                    break
                 resume_count += 1
                 diagnosis = completion_diagnosis or handoff_diagnosis(handoff_path)
                 turn_prompt = (
@@ -86,11 +125,11 @@ class LongSessionRunner:
                 )
                 command = (
                     main_adapter.resume_session_command(
-                        turn_prompt, session_id, reasoning_effort
+                        turn_prompt, active_session_id, reasoning_effort
                     )
                     if self.agent_cli == "claude"
                     else main_adapter.resume_session_command(
-                        turn_prompt, session_id, reasoning_effort, self.agent_cli
+                        turn_prompt, active_session_id, reasoning_effort, self.agent_cli
                     )
                 )
             stdout, stderr, exit_status, turn_timed_out = self.executor(
@@ -99,6 +138,11 @@ class LongSessionRunner:
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
             total_tokens += main_adapter.tokens_from_stream(stdout)
+            observed_session_id = main_adapter.session_id_from_stream(
+                self.agent_cli, stdout, session_id
+            )
+            if observed_session_id:
+                active_session_id = observed_session_id
             timed_out = timed_out or turn_timed_out
             observed = read_handoff(handoff_path)
             if observed is not None:
@@ -108,7 +152,31 @@ class LongSessionRunner:
                     break
             else:
                 completion_diagnosis = handoff_diagnosis(handoff_path)
-            if exit_status != 0 or timed_out:
+            if timed_out:
+                break
+            if exit_status != 0:
+                externally_terminated = exit_status == -signal.SIGTERM
+                dependency_terminated = "dependency policy violation" in stderr.lower()
+                transient_api_error = (
+                    _claude_transient_api_error(stdout)
+                    if self.agent_cli == "claude"
+                    else ""
+                )
+                can_resume = (
+                    (externally_terminated or bool(transient_api_error))
+                    and not dependency_terminated
+                    and active_session_id
+                    and main_adapter.supports_same_session_resume(self.agent_cli)
+                    and attempt < max(0, handoff_resumes)
+                )
+                if can_resume:
+                    completion_diagnosis = (
+                        f"Claude coding session hit transient {transient_api_error} before "
+                        "publishing a valid handoff"
+                        if transient_api_error
+                        else "coding session received SIGTERM before publishing a valid handoff"
+                    )
+                    continue
                 break
 
         stdout_all = "\n".join(stdout_parts)
@@ -117,7 +185,7 @@ class LongSessionRunner:
             exit_status=exit_status,
             timed_out=timed_out,
             tokens=total_tokens,
-            session_id=session_id,
+            session_id=active_session_id or session_id,
             resume_count=resume_count,
             handoff=handoff,
             stdout_tail=stdout_all[-4000:],

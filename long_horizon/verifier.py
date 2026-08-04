@@ -15,6 +15,24 @@ from .protocol import atomic_write_json
 from .store import VERIFY_DIR
 
 
+ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
+
+
+def _payload_from_stdout(stdout: str) -> dict[str, Any]:
+    """Extract the long-horizon ABBA payload from ordinary sandbox stdout."""
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(ABBA_RESULT_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(ABBA_RESULT_PREFIX) :])
+        except json.JSONDecodeError as exc:
+            raise ValueError("malformed ABBA result sentinel") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("ABBA result sentinel must contain a JSON object")
+        return payload
+    raise ValueError("missing ABBA result sentinel")
+
+
 def verification_schedule(repeats: int) -> list[dict[str, int | str]]:
     schedule: list[dict[str, int | str]] = []
     for repeat in range(max(1, repeats)):
@@ -210,7 +228,10 @@ class GatewayABBAValidator:
                     request_relative,
                     result_relative,
                 ],
-                sync=(result_relative,),
+                # The result is emitted with a long-horizon-only stdout
+                # sentinel.  No artifact is synchronized, avoiding the
+                # gateway's elided-payload/base64 transport failure.
+                sync=(),
                 wall_timeout=self.timeout + self.queue_wait_grace + 120,
                 gateway_kind="dev",
             )
@@ -218,19 +239,26 @@ class GatewayABBAValidator:
             return VerificationResult(
                 "ERROR", None, None, None, error="gateway ABBA verifier timed out"
             )
-        result_path = workspace / result_relative
-        if process.returncode != 0 and not result_path.is_file():
+        if process.returncode != 0:
             return VerificationResult(
                 "ERROR", None, None, None,
                 error=f"gateway ABBA command exited {process.returncode}: "
                 + (process.stdout + "\n" + process.stderr)[-3000:],
             )
         try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            payload = _payload_from_stdout(process.stdout)
+        except ValueError as exc:
             return VerificationResult(
                 "ERROR", None, None, None,
-                error=f"gateway returned no valid ABBA result: {type(exc).__name__}",
+                error=f"gateway returned no valid ABBA result: {exc}",
+            )
+        result_path = workspace / result_relative
+        try:
+            atomic_write_json(result_path, payload)
+        except (OSError, TypeError, ValueError) as exc:
+            return VerificationResult(
+                "ERROR", None, None, None,
+                error=f"cannot persist gateway ABBA result: {type(exc).__name__}: {exc}",
             )
         return score_verification_payload(
             payload,

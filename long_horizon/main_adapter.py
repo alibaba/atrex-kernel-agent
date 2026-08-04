@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from orchestrator import optimize as base
@@ -78,7 +79,18 @@ def fresh_session_command(
     reasoning_effort: str,
     agent_cli: str = "claude",
 ) -> list[str]:
-    return base._session_command(agent_cli, prompt, session_id, reasoning_effort)
+    command = base._session_command(agent_cli, prompt, session_id, reasoning_effort)
+    if agent_cli == "codex":
+        if command[:2] != ["codex", "exec"] or command[-1] != prompt:
+            raise RuntimeError("current main Codex command has no compatible exec seam")
+        # Main deliberately starts disposable Codex iterations. Long Horizon owns a
+        # different lifecycle: its bounded recovery turns must resume the same thread.
+        # Adapt that policy here instead of changing the main orchestrator command.
+        try:
+            command.remove("--ephemeral")
+        except ValueError:
+            pass
+    return command
 
 
 def resume_session_command(
@@ -87,6 +99,20 @@ def resume_session_command(
     reasoning_effort: str,
     agent_cli: str = "claude",
 ) -> list[str]:
+    if agent_cli == "codex":
+        command = fresh_session_command(prompt, session_id, reasoning_effort, agent_cli)
+        if command[:2] != ["codex", "exec"] or command[-1] != prompt:
+            raise RuntimeError("current main Codex command has no compatible exec seam")
+        command = command[:-1]
+        try:
+            color_index = command.index("--color")
+        except ValueError:
+            pass
+        else:
+            del command[color_index : color_index + 2]
+        command.insert(2, "resume")
+        command.extend([session_id, prompt])
+        return command
     if agent_cli != "claude":
         raise RuntimeError(
             f"same-session handoff recovery is not supported by current main for {agent_cli}"
@@ -105,7 +131,29 @@ def session_environment(agent_cli: str = "claude") -> dict[str, str]:
 
 
 def supports_same_session_resume(agent_cli: str) -> bool:
-    return agent_cli == "claude"
+    return agent_cli in {"claude", "codex"}
+
+
+def session_id_from_stream(agent_cli: str, stdout: str, requested_session_id: str) -> str:
+    """Return the persistent CLI session id observed in one stream.
+
+    Claude accepts the supervisor-provided id. Codex creates its own thread id
+    and reports it in the initial ``thread.started`` JSONL event, so recovery
+    must use that observed id rather than the supervisor's bookkeeping UUID.
+    """
+    if agent_cli != "codex":
+        return requested_session_id
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "thread.started":
+            continue
+        thread_id = event.get("thread_id") or event.get("threadId")
+        if isinstance(thread_id, str) and thread_id.strip():
+            return thread_id.strip()
+    return ""
 
 
 def run_bounded(

@@ -13,6 +13,7 @@ from typing import Any
 
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
+ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 
 
 def _safe_relative(value: object) -> str:
@@ -124,6 +125,15 @@ def run(request_path: Path, result_path: Path) -> int:
             "error": f"{type(exc).__name__}: {exc}",
         }
     _atomic_json(result_path, payload)
+    # Return the authoritative result through ordinary command stdout.  The
+    # long-horizon verifier deliberately runs the sandbox with --no-sync so a
+    # gateway cannot replace an artifact frame with an elision notice that is
+    # not valid base64.  Keep result.json on the worker as debugging evidence.
+    print(
+        ABBA_RESULT_PREFIX
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        flush=True,
+    )
     return 0
 
 

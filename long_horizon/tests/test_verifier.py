@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -11,7 +13,9 @@ from long_horizon.remote_abba import run as run_remote
 from long_horizon.store import CampaignStore
 from long_horizon.tests.helpers import init_repo, run_git
 from long_horizon.verifier import (
+    ABBA_RESULT_PREFIX,
     GatewayABBAValidator,
+    _payload_from_stdout,
     score_verification_payload,
     verification_schedule,
 )
@@ -70,6 +74,21 @@ class VerificationScoringTests(unittest.TestCase):
         self.assertEqual(result.gate, "FAIL")
 
 
+class StdoutPayloadTests(unittest.TestCase):
+    def test_parses_sentinel_amid_other_output(self) -> None:
+        payload = {"schema_version": 1, "runs": [], "error": None}
+        stdout = "gateway prelude\n" + ABBA_RESULT_PREFIX + json.dumps(payload) + "\n"
+        self.assertEqual(_payload_from_stdout(stdout), payload)
+
+    def test_missing_sentinel_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing ABBA result sentinel"):
+            _payload_from_stdout("ordinary output only\n")
+
+    def test_malformed_sentinel_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "malformed ABBA result sentinel"):
+            _payload_from_stdout(ABBA_RESULT_PREFIX + "{bad json}\n")
+
+
 class RemoteDriverTests(unittest.TestCase):
     def test_revisions_are_applied_in_requested_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -103,10 +122,13 @@ class RemoteDriverTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 __import__("os").chdir(root)
-                self.assertEqual(run_remote(request_path, result_path), 0)
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    self.assertEqual(run_remote(request_path, result_path), 0)
             finally:
                 __import__("os").chdir(previous)
             payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(_payload_from_stdout(stdout.getvalue()), payload)
             latencies = [item["result"]["latency_us_geomean"] for item in payload["runs"]]
             self.assertEqual(latencies, [10.0, 8.0, 8.0, 10.0])
 
@@ -122,6 +144,11 @@ class GatewayCommandTests(unittest.TestCase):
             run_git(workspace, "commit", "-m", "candidate")
             candidate = git_head(workspace)
             captured: dict = {}
+            payload = {
+                "schema_version": 1,
+                "error": None,
+                "runs": [row("incumbent", 0, 10.0), row("candidate", 0, 8.0)],
+            }
 
             def fake_run(
                 workspace_arg,
@@ -141,16 +168,8 @@ class GatewayCommandTests(unittest.TestCase):
                     command=command,
                     kwargs=kwargs,
                 )
-                result_relative = kwargs["sync"][0]
-                payload = {
-                    "schema_version": 1,
-                    "error": None,
-                    "runs": [row("incumbent", 0, 10.0), row("candidate", 0, 8.0)],
-                }
-                path = workspace / result_relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(payload), encoding="utf-8")
-                return __import__("subprocess").CompletedProcess(command, 0, "", "")
+                stdout = ABBA_RESULT_PREFIX + json.dumps(payload) + "\n"
+                return __import__("subprocess").CompletedProcess(command, 0, stdout, "")
 
             validator = GatewayABBAValidator(
                 hardware="REMOTE_GPU", timeout=300, repeats=1, per_run_timeout=100
@@ -165,10 +184,16 @@ class GatewayCommandTests(unittest.TestCase):
             self.assertTrue(result.passed)
             self.assertEqual(captured["hardware"], "REMOTE_GPU")
             self.assertEqual(captured["kwargs"]["gateway_kind"], "dev")
+            self.assertEqual(captured["kwargs"]["sync"], ())
             self.assertNotIn("--input", captured["command"])
             remote_command = captured["command"][1]
             self.assertTrue(remote_command.endswith("/test_kernel.py"))
             self.assertIn("aggregate_kernels/.atrex_long_horizon_verify", remote_command)
+            artifact = Path(result.artifact)
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(json.loads(artifact.read_text(encoding="utf-8")), payload)
+            self.assertEqual(artifact.name, "result.json")
+            self.assertFalse(result.artifact.startswith("remote:"))
             self.assertEqual(run_git(workspace, "status", "--porcelain"), "")
 
     def test_current_sandbox_dry_run_packages_abba_driver_as_evaluator_input(self) -> None:
@@ -194,7 +219,7 @@ class GatewayCommandTests(unittest.TestCase):
                 "python3", str(repo_root / "tools/sandbox.py"),
                 "--dry-run", "--kind", "dev", "--hardware", "REMOTE_GPU",
                 "--workspace", str(workspace), "--timeout", "600",
-                "--sync", result_relative,
+                "--no-sync",
                 "--", "python3",
                 "aggregate_kernels/.atrex_long_horizon_verify/test/test_kernel.py",
                 "aggregate_kernels/.atrex_long_horizon_verify/test/request.json",
