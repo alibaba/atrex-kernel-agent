@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Long-horizon episode terminal handoff",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "status": {"enum": ["candidate_ready", "pivot", "blocked"]},
+    "candidate_commit": {"type": "string", "minLength": 1},
+    "last_trial_commit": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "candidate_ready"}}},
+      "then": {"required": ["candidate_commit"]}
+    }
+  ]
+}

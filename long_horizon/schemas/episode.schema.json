@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Long-horizon episode journal",
+  "type": "object",
+  "required": [
+    "schema_version", "episode", "base_commit", "episode_branch", "state",
+    "experiments", "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "episode": {"type": "integer", "minimum": 1},
+    "base_commit": {"type": "string", "minLength": 1},
+    "episode_branch": {"type": "string", "minLength": 1},
+    "state": {"enum": ["in_progress", "candidate_ready", "pivot", "blocked"]},
+    "experiments": {"type": "array", "items": {"type": "object"}},
+    "outcome": {"type": ["object", "null"]},
+    "candidate_commit": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "minLength": 1},
+    "finalized_at": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}
