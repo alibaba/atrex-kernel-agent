@@ -1,126 +1,252 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import json
+import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
-from . import main_adapter
+from orchestrator import optimize as base
+
 from .campaign import LongHorizonCampaign
+from .session import LongSessionRunner
 from .verifier import GatewayABBAValidator
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Standalone long-horizon episode supervisor for Atrex Kernel Agent."
+@dataclass(frozen=True)
+class LongHorizonOptions:
+    handoff_resumes: int = 2
+    verify_repeats: int = 2
+    verify_run_timeout: int = 120
+    min_improvement_pct: float = 0.0
+
+    def child_args(self) -> list[str]:
+        return [
+            "--handoff-resumes", str(self.handoff_resumes),
+            "--verify-repeats", str(self.verify_repeats),
+            "--verify-run-timeout", str(self.verify_run_timeout),
+            "--min-improvement-pct", str(self.min_improvement_pct),
+        ]
+
+
+def build_long_horizon_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=False)
+    group = parser.add_argument_group("long-horizon episode options")
+    group.add_argument(
+        "--handoff-resumes",
+        type=int,
+        default=2,
+        help="Same-session Claude resume attempts when the terminal handoff is incomplete.",
     )
-    parser.add_argument("--op-dir", required=True)
-    parser.add_argument("--platform", required=True)
-    parser.add_argument("--framework", required=True)
-    parser.add_argument("--sandbox-hardware", default="")
-    parser.add_argument("--sandbox-profile", choices=("pre", "prod"), default="")
-    parser.add_argument("--sandbox-url", default="")
-    parser.add_argument(
-        "--sandbox-timeout", type=int, default=main_adapter.DEFAULT_SANDBOX_TIMEOUT
+    group.add_argument(
+        "--verify-repeats",
+        type=int,
+        default=2,
+        help="Incumbent/candidate ABBA repeat pairs in one gateway allocation.",
     )
-    parser.add_argument("--agent-cli", choices=main_adapter.AGENT_CLI_CHOICES, default="claude")
-    parser.add_argument(
-        "--optimization-mode",
-        choices=main_adapter.OPTIMIZATION_MODE_CHOICES,
-        default="leaderboard",
+    group.add_argument(
+        "--verify-run-timeout",
+        type=int,
+        default=120,
+        help="Timeout for each evaluator run inside the ABBA allocation.",
     )
-    parser.add_argument("--notes", default="none")
-    parser.add_argument("--workspace", default="")
-    parser.add_argument("--arch", default="")
-    parser.add_argument("--max-episodes", type=int, default=8)
-    parser.add_argument("--token-budget", type=int, default=0)
-    parser.add_argument("--session-timeout", type=int, default=18_000)
-    parser.add_argument("--setup-timeout", type=int, default=7200)
-    parser.add_argument("--handoff-resumes", type=int, default=2)
-    parser.add_argument("--max-stall", type=int, default=0)
-    parser.add_argument("--verify-repeats", type=int, default=2)
-    parser.add_argument("--verify-run-timeout", type=int, default=120)
-    parser.add_argument("--min-improvement-pct", type=float, default=0.0)
-    parser.add_argument(
-        "--framework-baseline",
-        choices=main_adapter.FRAMEWORK_BASELINE_MODES,
-        default="auto",
+    group.add_argument(
+        "--min-improvement-pct",
+        type=float,
+        default=0.0,
+        help="Minimum strict candidate improvement required for squash promotion.",
     )
-    parser.add_argument("--framework-baseline-timeout", type=int, default=10_800)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.sandbox_url and args.sandbox_profile:
-        parser.error("--sandbox-url and --sandbox-profile are mutually exclusive")
-    if not 1 <= args.sandbox_timeout <= main_adapter.MAX_SANDBOX_TIMEOUT:
-        parser.error(
-            f"--sandbox-timeout must be in 1..{main_adapter.MAX_SANDBOX_TIMEOUT}"
-        )
-    for name in (
-        "max_episodes", "session_timeout", "setup_timeout", "verify_repeats",
-        "verify_run_timeout", "framework_baseline_timeout",
-    ):
-        if getattr(args, name) <= 0:
-            parser.error(f"--{name.replace('_', '-')} must be positive")
-    if args.handoff_resumes < 0 or args.max_stall < 0 or args.token_budget < 0:
-        parser.error("resume/stall/token budgets must be non-negative")
-    if args.min_improvement_pct < 0.0:
+def _extract_options(argv: list[str]) -> tuple[LongHorizonOptions, list[str]]:
+    parser = build_long_horizon_parser()
+    values, remaining = parser.parse_known_args(argv)
+    if values.handoff_resumes < 0:
+        parser.error("--handoff-resumes must be non-negative")
+    if values.verify_repeats <= 0:
+        parser.error("--verify-repeats must be positive")
+    if values.verify_run_timeout <= 0:
+        parser.error("--verify-run-timeout must be positive")
+    if values.min_improvement_pct < 0.0:
         parser.error("--min-improvement-pct must be non-negative")
-    if shutil.which(args.agent_cli) is None:
-        parser.error(f"agent executable not found: {args.agent_cli}")
-    if args.workspace:
-        Path(args.workspace).mkdir(parents=True, exist_ok=True)
-    main_adapter.ensure_submodules()
-    operator = main_adapter.resolve_operator(args.op_dir)
-    hardware = args.sandbox_hardware or args.platform
-    arch = args.arch or main_adapter.detect_arch(
-        hardware, args.sandbox_profile, args.sandbox_url
+    return LongHorizonOptions(**vars(values)), remaining
+
+
+def _verifier(campaign: base.Campaign, options: LongHorizonOptions) -> GatewayABBAValidator:
+    return GatewayABBAValidator(
+        hardware=campaign.sandbox_hardware,
+        profile=campaign.sandbox_profile,
+        url=campaign.sandbox_url,
+        timeout=campaign.sandbox_timeout,
+        repeats=options.verify_repeats,
+        per_run_timeout=options.verify_run_timeout,
+        min_improvement_pct=options.min_improvement_pct,
     )
-    suffix = main_adapter.framework_workspace_suffix(
-        args.framework, args.platform, args.optimization_mode
+
+
+def _run_campaign(campaign: base.Campaign, options: LongHorizonOptions) -> str:
+    long_campaign = LongHorizonCampaign(
+        base_campaign=campaign,
+        max_version=campaign.max_iters,
+        token_budget=campaign.token_budget,
+        session_timeout=campaign.iter_timeout,
+        handoff_resumes=options.handoff_resumes,
+        max_stall=campaign.max_stall,
+        verifier=_verifier(campaign, options),
+        session_runner=LongSessionRunner(agent_cli=campaign.agent_cli),
     )
-    base_campaign = main_adapter.Campaign(
-        name=operator.name,
-        kernel_demo=operator.reference,
-        platform=args.platform,
-        framework=args.framework,
-        notes=args.notes,
-        arch=arch,
-        sandbox_hardware=hardware,
-        sandbox_profile=args.sandbox_profile,
-        sandbox_url=args.sandbox_url,
-        sandbox_timeout=args.sandbox_timeout,
-        atrex_bench_root=operator.atrex_bench_root,
-        agent_cli=args.agent_cli,
-        optimization_mode=args.optimization_mode,
-        work_dir=args.workspace,
-        workspace_suffix=suffix,
-        setup_timeout=args.setup_timeout,
-        framework_baseline=args.framework_baseline,
-        framework_baseline_timeout=args.framework_baseline_timeout,
+    reason = long_campaign.run()
+    return campaign._finish(reason)
+
+
+def _boundary_campaign(layer: base.LayerCampaign, boundary: dict) -> base.Campaign:
+    name = f"{layer.name}__{boundary['name']}"
+    return base.Campaign(
+        name=name,
+        kernel_demo=str(layer._boundary_ws(boundary["name"]) / "kernel.py"),
+        platform=layer.platform,
+        framework=layer.framework,
+        notes=layer.notes,
+        arch=layer.arch,
+        work_dir=layer.work_dir,
+        workspace_suffix=layer.workspace_suffix,
+        max_iters=layer.max_iters,
+        token_budget=0,
+        iter_timeout=layer.iter_timeout,
+        setup_timeout=layer.setup_timeout,
+        max_stall=0,
+        convert_after=0,
+        sandbox_hardware=layer.sandbox_hardware,
+        sandbox_profile=layer.sandbox_profile,
+        sandbox_url=layer.sandbox_url,
+        sandbox_timeout=layer.sandbox_timeout,
+        agent_cli=layer.agent_cli,
+        optimization_mode=layer.optimization_mode,
+        framework_baseline="never",
     )
-    verifier = GatewayABBAValidator(
-        hardware=hardware,
-        profile=args.sandbox_profile,
-        url=args.sandbox_url,
-        timeout=args.sandbox_timeout,
-        repeats=args.verify_repeats,
-        per_run_timeout=args.verify_run_timeout,
-        min_improvement_pct=args.min_improvement_pct,
+
+
+def _run_layer_schedule(
+    layer: base.LayerCampaign,
+    boundaries: list[dict],
+    options: LongHorizonOptions,
+) -> str | None:
+    """Keep main's ROI scheduler; replace only its fresh one-cycle session."""
+    while True:
+        for boundary in boundaries:
+            workspace = layer._boundary_ws(boundary["name"])
+            base.mask_half_memory(workspace, base.latest_version(workspace))
+        spent = layer._total_versions(boundaries)
+        if spent >= layer.max_iters:
+            return "budget: max-iters (Σ versions)"
+        if layer.budget_exhausted():
+            return "budget: token-budget"
+        if layer._all_plateaued(boundaries):
+            return "all boundaries plateaued"
+
+        ranked = sorted(boundaries, key=layer._priority, reverse=True)
+        target = ranked[0]
+        if layer._priority(target) <= 0.0:
+            return "all boundaries at/above ceiling"
+
+        campaign = _boundary_campaign(layer, target)
+        current_version = base.latest_version(campaign.workspace)
+        print(
+            f"[layer] long-horizon round {spent + 1}/{layer.max_iters} -> "
+            f"{target['name']} v{current_version + 1} "
+            f"(priority={layer._priority(target):.4g})",
+            flush=True,
+        )
+        state_path = campaign.workspace / ".atrex_long_horizon" / "state.json"
+        before_tokens = 0
+        if state_path.is_file():
+            try:
+                before_tokens = int(json.loads(state_path.read_text()).get("tokens", 0))
+            except (OSError, ValueError, TypeError):
+                before_tokens = 0
+        LongHorizonCampaign(
+            base_campaign=campaign,
+            max_version=current_version + 1,
+            episode_limit=1,
+            token_budget=0,
+            session_timeout=layer.iter_timeout,
+            handoff_resumes=options.handoff_resumes,
+            verifier=_verifier(campaign, options),
+            session_runner=LongSessionRunner(agent_cli=layer.agent_cli),
+        ).run()
+        after_tokens = before_tokens
+        if state_path.is_file():
+            try:
+                after_tokens = int(json.loads(state_path.read_text()).get("tokens", 0))
+            except (OSError, ValueError, TypeError):
+                pass
+        layer.tokens_spent += max(0, after_tokens - before_tokens)
+
+
+@contextmanager
+def _install_main_integration(options: LongHorizonOptions) -> Iterator[None]:
+    original_campaign_run = base.Campaign.run
+    original_layer_schedule = base.LayerCampaign.schedule
+    original_dispatch = base.dispatch_framework_campaigns
+
+    def campaign_run(campaign: base.Campaign) -> str:
+        return _run_campaign(campaign, options)
+
+    def layer_schedule(layer: base.LayerCampaign, boundaries: list[dict]) -> str | None:
+        return _run_layer_schedule(layer, boundaries, options)
+
+    def dispatch(argv, frameworks, workspace_base, arch, platform, optimization_mode="leaderboard"):
+        # Main's dispatcher is retained in full. Point only its child entry path at
+        # this wrapper and forward the long-horizon-only flags it does not parse.
+        original_file = base.__file__
+        try:
+            base.__file__ = str(Path(__file__).with_name("__main__.py"))
+            return original_dispatch(
+                [*argv, *options.child_args()],
+                frameworks,
+                workspace_base,
+                arch,
+                platform,
+                optimization_mode,
+            )
+        finally:
+            base.__file__ = original_file
+
+    base.Campaign.run = campaign_run
+    base.LayerCampaign.schedule = layer_schedule
+    base.dispatch_framework_campaigns = dispatch
+    try:
+        yield
+    finally:
+        base.Campaign.run = original_campaign_run
+        base.LayerCampaign.schedule = original_layer_schedule
+        base.dispatch_framework_campaigns = original_dispatch
+
+
+def _print_long_help() -> None:
+    print("\nLong-horizon additions (all other options are inherited from optimize.py):")
+    build_long_horizon_parser().print_help()
+    print(
+        "\nLong-horizon semantics: --max-iters caps canonical memory versions, "
+        "--iter-timeout bounds one complete episode, and --token-budget/--max-stall "
+        "retain their main meanings."
     )
-    campaign = LongHorizonCampaign(
-        base_campaign=base_campaign,
-        max_episodes=args.max_episodes,
-        token_budget=args.token_budget,
-        session_timeout=args.session_timeout,
-        handoff_resumes=args.handoff_resumes,
-        max_stall=args.max_stall,
-        verifier=verifier,
-    )
-    campaign.run()
-    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    options, main_argv = _extract_options(raw_argv)
+    wants_help = "-h" in main_argv or "--help" in main_argv
+    try:
+        with _install_main_integration(options):
+            return base.main(main_argv)
+    except SystemExit as exc:
+        if wants_help and exc.code == 0:
+            _print_long_help()
+        raise
 
 
 if __name__ == "__main__":

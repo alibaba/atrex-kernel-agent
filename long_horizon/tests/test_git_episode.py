@@ -61,6 +61,26 @@ class EpisodeGitTests(unittest.TestCase):
             self.assertIn("protected path", violation)
             episode.remove(repo)
 
+    def test_main_plan_and_profile_evidence_are_allowed_with_kernel_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            base = init_repo(repo)
+            episode = EpisodeWorktree.create(repo, 1, base, root=root / "worktrees")
+            (episode.path / "kernel.py").write_text("VALUE = 5\n", encoding="utf-8")
+            (episode.path / "plans").mkdir()
+            (episode.path / "plans" / "v1_plan.md").write_text("plan\n", encoding="utf-8")
+            (episode.path / "profiles").mkdir()
+            (episode.path / "profiles" / "REPORT.md").write_text("profile\n", encoding="utf-8")
+            run_git(episode.path, "add", "kernel.py", "plans", "profiles")
+            run_git(episode.path, "commit", "-m", "candidate with evidence")
+            violation, paths = episode.validate_candidate(git_head(episode.path))
+            self.assertEqual(violation, "")
+            self.assertEqual(
+                paths, ["kernel.py", "plans/v1_plan.md", "profiles/REPORT.md"]
+            )
+            episode.remove(repo)
+
     def test_archive_preserves_uncommitted_and_untracked_work(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

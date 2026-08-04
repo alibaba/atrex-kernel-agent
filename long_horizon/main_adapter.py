@@ -1,52 +1,41 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from orchestrator import optimize as base
 from orchestrator.optimization_policy import install_workspace_policy
 
 
-@dataclass(frozen=True)
-class OperatorInfo:
-    name: str
-    reference: str
-    op_dir: str
-    atrex_bench_root: str = ""
-
-
-def resolve_operator(op_dir: str) -> OperatorInfo:
-    directory = Path(op_dir).resolve()
-    if not directory.is_dir():
-        raise ValueError(f"operator directory not found: {directory}")
-    reference = directory / "reference.py"
-    if not reference.is_file():
-        raise ValueError(f"operator directory has no reference.py: {directory}")
-    atrex_root = ""
-    if not base.is_sol_op(directory) and (directory / "shapes.json").is_file():
-        root = base.find_atrex_bench_root(directory)
-        if root is None:
-            raise ValueError(
-                "native Atrex-Bench operator requires scripts/run_eval.py and src/atrex_bench"
-            )
-        atrex_root = str(root)
-    return OperatorInfo(
-        name=directory.name,
-        reference=str(reference),
-        op_dir=str(directory),
-        atrex_bench_root=atrex_root,
-    )
-
-
 def prepare_campaign(campaign: base.Campaign) -> None:
-    """Use current main for baseline setup, never for the optimization loop."""
+    """Run current main's complete setup/resume prelude, excluding only its loop."""
     if base.latest_version(campaign.workspace) < 0:
         campaign.setup_baseline()
     else:
         if not base.git_head(campaign.workspace):
             raise RuntimeError("existing campaign workspace has no Git HEAD")
+        print(
+            f"[orchestrator] resuming: latest = v{base.latest_version(campaign.workspace)}",
+            flush=True,
+        )
+        base.preserve_interrupted_tracked_changes(
+            campaign.workspace, f"resume {campaign.campaign_name}"
+        )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
+    if campaign.optimization_mode == "production" and base.latest_version(campaign.workspace) > 0:
+        violations = base.production_kernel_violations(
+            campaign.workspace, campaign.framework
+        )
+        if violations and not base.head_kernel_is_initial_baseline(campaign.workspace):
+            raise RuntimeError(
+                "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
+            )
+        if violations:
+            print(
+                "[orchestrator] production resume: HEAD kernel is still the original "
+                "V0 baseline; continuing until a framework-compliant candidate is accepted",
+                flush=True,
+            )
 
 
 def link_episode_runtime(campaign: base.Campaign, workspace: Path) -> None:
@@ -64,12 +53,45 @@ def episode_directives(campaign: base.Campaign) -> dict[str, str]:
     }
 
 
-def fresh_session_command(prompt: str, session_id: str, reasoning_effort: str) -> list[str]:
-    return base._session_command("claude", prompt, session_id, reasoning_effort)
+def iteration_playbook(campaign: base.Campaign, workspace: Path, version: int) -> str:
+    """Render main's current iteration playbook as the episode's inherited workflow."""
+    agent_cli = getattr(campaign, "agent_cli", "claude")
+    return base._render(
+        base.PROMPTS_DIR / "iteration.md",
+        WORKSPACE=str(workspace),
+        N=version,
+        PREV=version - 1,
+        PLATFORM=campaign.platform,
+        NOTES=campaign.notes,
+        AGENT_RUNTIME=base._agent_runtime_directive(agent_cli),
+        PLAN_GENERATOR=base._plan_generator_directive(agent_cli, version),
+        HARDWARE=base.hardware_directive(campaign.platform, campaign.arch),
+        SANDBOX=campaign._sandbox_directive(),
+        EVALUATOR=campaign._evaluator_directive(),
+        MODE_POLICY=campaign._mode_directive(),
+    )
 
 
-def resume_session_command(prompt: str, session_id: str, reasoning_effort: str) -> list[str]:
-    command = fresh_session_command(prompt, session_id, reasoning_effort)
+def fresh_session_command(
+    prompt: str,
+    session_id: str,
+    reasoning_effort: str,
+    agent_cli: str = "claude",
+) -> list[str]:
+    return base._session_command(agent_cli, prompt, session_id, reasoning_effort)
+
+
+def resume_session_command(
+    prompt: str,
+    session_id: str,
+    reasoning_effort: str,
+    agent_cli: str = "claude",
+) -> list[str]:
+    if agent_cli != "claude":
+        raise RuntimeError(
+            f"same-session handoff recovery is not supported by current main for {agent_cli}"
+        )
+    command = fresh_session_command(prompt, session_id, reasoning_effort, agent_cli)
     try:
         index = command.index("--session-id")
     except ValueError as exc:
@@ -78,8 +100,12 @@ def resume_session_command(prompt: str, session_id: str, reasoning_effort: str) 
     return command
 
 
-def session_environment() -> dict[str, str]:
-    return base._session_env("claude")
+def session_environment(agent_cli: str = "claude") -> dict[str, str]:
+    return base._session_env(agent_cli)
+
+
+def supports_same_session_resume(agent_cli: str) -> bool:
+    return agent_cli == "claude"
 
 
 def run_bounded(
@@ -96,21 +122,78 @@ def latest_version(workspace: Path) -> int:
     return base.latest_version(workspace)
 
 
-def ensure_submodules() -> None:
-    base.ensure_submodules()
+def run_sandbox(
+    workspace: Path,
+    hardware: str,
+    profile: str,
+    url: str,
+    timeout: int,
+    command: list[str],
+    *,
+    sync: tuple[str, ...] = (),
+    wall_timeout: int | None = None,
+    gateway_kind: str = "auto",
+):
+    """Use main's sandbox command builder and queue/timeout semantics verbatim."""
+    return base._sandbox_command(
+        workspace,
+        hardware,
+        profile,
+        url,
+        timeout,
+        command,
+        sync=sync,
+        wall_timeout=wall_timeout,
+        gateway_kind=gateway_kind,
+    )
 
 
-def detect_arch(hardware: str, profile: str, url: str) -> str:
-    return base.detect_arch(hardware, profile, url)
+def candidate_policy_violations(campaign: base.Campaign, workspace: Path) -> list[str]:
+    if campaign.optimization_mode != "production":
+        return []
+    return base.production_kernel_violations(workspace, campaign.framework)
 
 
-def framework_workspace_suffix(framework: str, platform: str, mode: str) -> str:
-    return base.framework_workspace_suffix(framework, platform, mode)
+def notify_iteration(
+    campaign: base.Campaign,
+    version: int,
+    memory: dict | None,
+    won: bool,
+    previous_latency: float | None = None,
+) -> None:
+    if won and hasattr(campaign, "_notify_improvement"):
+        campaign._notify_improvement(version, memory, previous_latency)
+    if hasattr(campaign, "_notify_iteration"):
+        campaign._notify_iteration(version, memory, won)
+
+
+def peak_util(memory: dict | None) -> float:
+    return base.peak_util(memory)
+
+
+def conversion_required(campaign: base.Campaign, stall: int, workspace: Path) -> bool:
+    return base.should_convert_to_gluon(
+        campaign.framework,
+        stall,
+        int(getattr(campaign, "convert_after", base.DEFAULT_CONVERT_AFTER)),
+        head_is_gluon=base.head_kernel_is_gluon(workspace),
+    )
+
+
+def candidate_is_gluon(workspace: Path) -> bool:
+    return base.head_kernel_is_gluon(workspace)
+
+
+def restored_stall(workspace: Path) -> int:
+    value = base.read_stall(workspace)
+    return int(value if value is not None else base.reconstruct_stall(workspace))
+
+
+def save_stall(workspace: Path, value: int) -> None:
+    base.write_stall(workspace, value)
 
 
 Campaign = base.Campaign
-AGENT_CLI_CHOICES = ("claude",)
-OPTIMIZATION_MODE_CHOICES = base.OPTIMIZATION_MODE_CHOICES
-FRAMEWORK_BASELINE_MODES = base.FRAMEWORK_BASELINE_MODES
-DEFAULT_SANDBOX_TIMEOUT = base.DEFAULT_SANDBOX_TIMEOUT
-MAX_SANDBOX_TIMEOUT = base.MAX_SANDBOX_TIMEOUT
+IMMUTABLE_BASELINE_PATHS = base.IMMUTABLE_BASELINE_PATHS
+CONVERT_PERF_TOL = base.CONVERT_PERF_TOL
+STALL_STATE_FILE = base.STALL_STATE_FILE

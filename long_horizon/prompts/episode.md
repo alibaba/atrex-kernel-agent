@@ -12,6 +12,7 @@ episode branch. The external supervisor exclusively owns the incumbent branch, a
 verification, and final squash promotion.
 
 - Workspace: `{{WORKSPACE}}`
+- Main-compatible campaign version: `v{{VERSION}}`
 - Platform: `{{PLATFORM}}`
 - Framework: `{{FRAMEWORK}}`
 - Incumbent commit: `{{BASE_COMMIT}}`
@@ -32,6 +33,10 @@ including `test_kernel.py`, `definition.json`, `reference.py`, `workload.jsonl`,
 {{HARDWARE}}
 
 {{SANDBOX}}
+
+## Framework escalation state
+
+{{CONVERSION_DIRECTIVE}}
 
 ## Prior episode evidence
 
@@ -99,3 +104,21 @@ Only after finalizing, atomically publish the small control handoff by writing c
 
 Chat text is not a handoff. A missing or invalid file causes the supervisor to resume this same
 session. Do not claim a speedup merely to terminate; a well-supported pivot is a valid outcome.
+
+## Inherited current-main optimization playbook
+
+The playbook below is rendered directly from the latest `orchestrator/prompts/iteration.md`; follow
+its profiling, research, implementation, sandbox, correctness, multi-seed, benchmark, and evidence
+requirements. This long-horizon overlay changes only four iteration mechanics:
+
+1. repeat its engineering cycle as many times as useful instead of stopping after one cycle;
+2. write the structured episode journal instead of canonical `memory/v{{VERSION}}.json`;
+3. private checkpoint commits are allowed on the isolated episode branch;
+4. finish with the atomic terminal handoff above rather than main's single-iteration exit format.
+
+All evaluator, framework policy, dependency, sandbox, profiling, and correctness rules below remain
+authoritative.
+
+---
+
+{{MAIN_ITERATION_PLAYBOOK}}

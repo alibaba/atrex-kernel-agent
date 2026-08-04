@@ -17,8 +17,9 @@ CommandExecutor = Callable[
 
 
 class LongSessionRunner:
-    def __init__(self, executor: CommandExecutor | None = None):
+    def __init__(self, executor: CommandExecutor | None = None, agent_cli: str = "claude"):
         self.executor = executor or main_adapter.run_bounded
+        self.agent_cli = agent_cli
 
     def run(
         self,
@@ -36,7 +37,11 @@ class LongSessionRunner:
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         deadline = time.monotonic() + timeout
-        environment = main_adapter.session_environment()
+        environment = (
+            main_adapter.session_environment()
+            if self.agent_cli == "claude"
+            else main_adapter.session_environment(self.agent_cli)
+        )
         environment["IS_SANDBOX"] = "1"
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
@@ -55,10 +60,22 @@ class LongSessionRunner:
                 break
             if attempt == 0:
                 turn_prompt = prompt
-                command = main_adapter.fresh_session_command(
-                    turn_prompt, session_id, reasoning_effort
+                command = (
+                    main_adapter.fresh_session_command(
+                        turn_prompt, session_id, reasoning_effort
+                    )
+                    if self.agent_cli == "claude"
+                    else main_adapter.fresh_session_command(
+                        turn_prompt, session_id, reasoning_effort, self.agent_cli
+                    )
                 )
             else:
+                if not main_adapter.supports_same_session_resume(self.agent_cli):
+                    completion_diagnosis = (
+                        completion_diagnosis
+                        or f"{self.agent_cli} ended without a valid terminal handoff"
+                    )
+                    break
                 resume_count += 1
                 diagnosis = completion_diagnosis or handoff_diagnosis(handoff_path)
                 turn_prompt = (
@@ -67,8 +84,14 @@ class LongSessionRunner:
                     "work from the current Git worktree. Do not merely explain the problem. Before "
                     "stopping, finalize the episode journal and atomically publish a valid handoff."
                 )
-                command = main_adapter.resume_session_command(
-                    turn_prompt, session_id, reasoning_effort
+                command = (
+                    main_adapter.resume_session_command(
+                        turn_prompt, session_id, reasoning_effort
+                    )
+                    if self.agent_cli == "claude"
+                    else main_adapter.resume_session_command(
+                        turn_prompt, session_id, reasoning_effort, self.agent_cli
+                    )
                 )
             stdout, stderr, exit_status, turn_timed_out = self.executor(
                 command, workspace, remaining, environment

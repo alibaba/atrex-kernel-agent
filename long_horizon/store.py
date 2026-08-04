@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from . import main_adapter
 from .models import SupervisorState
 from .protocol import atomic_write_json, atomic_write_text
 
@@ -33,7 +34,11 @@ class CampaignStore:
             path = workspace / path
         path.parent.mkdir(parents=True, exist_ok=True)
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        rules = (f"/{RUNTIME_DIR}/", f"/{VERIFY_DIR}/")
+        rules = (
+            f"/{RUNTIME_DIR}/",
+            f"/{VERIFY_DIR}/",
+            f"/{main_adapter.STALL_STATE_FILE}",
+        )
         missing = [rule for rule in rules if rule not in text.splitlines()]
         if missing:
             suffix = ("" if not text or text.endswith("\n") else "\n") + "\n".join(missing) + "\n"

@@ -121,11 +121,27 @@ class GatewayCommandTests(unittest.TestCase):
             run_git(workspace, "add", "kernel.py")
             run_git(workspace, "commit", "-m", "candidate")
             candidate = git_head(workspace)
-            captured: list[str] = []
+            captured: dict = {}
 
-            def fake_run(command, workspace_arg, timeout):
-                captured.extend(command)
-                result_relative = command[command.index("--sync") + 1]
+            def fake_run(
+                workspace_arg,
+                hardware,
+                profile,
+                url,
+                timeout,
+                command,
+                **kwargs,
+            ):
+                captured.update(
+                    workspace=workspace_arg,
+                    hardware=hardware,
+                    profile=profile,
+                    url=url,
+                    timeout=timeout,
+                    command=command,
+                    kwargs=kwargs,
+                )
+                result_relative = kwargs["sync"][0]
                 payload = {
                     "schema_version": 1,
                     "error": None,
@@ -139,7 +155,7 @@ class GatewayCommandTests(unittest.TestCase):
             validator = GatewayABBAValidator(
                 hardware="REMOTE_GPU", timeout=300, repeats=1, per_run_timeout=100
             )
-            with mock.patch("long_horizon.verifier._run_gateway_command", side_effect=fake_run):
+            with mock.patch("long_horizon.main_adapter.run_sandbox", side_effect=fake_run):
                 result = validator.verify(
                     workspace,
                     base_commit=base,
@@ -147,10 +163,10 @@ class GatewayCommandTests(unittest.TestCase):
                     changed_paths=["kernel.py"],
                 )
             self.assertTrue(result.passed)
-            self.assertIn("--kind", captured)
-            self.assertEqual(captured[captured.index("--kind") + 1], "dev")
-            self.assertNotIn("--input", captured)
-            remote_command = captured[captured.index("--") + 2]
+            self.assertEqual(captured["hardware"], "REMOTE_GPU")
+            self.assertEqual(captured["kwargs"]["gateway_kind"], "dev")
+            self.assertNotIn("--input", captured["command"])
+            remote_command = captured["command"][1]
             self.assertTrue(remote_command.endswith("/test_kernel.py"))
             self.assertIn("aggregate_kernels/.atrex_long_horizon_verify", remote_command)
             self.assertEqual(run_git(workspace, "status", "--porcelain"), "")

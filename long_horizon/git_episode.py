@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import main_adapter
 from .protocol import atomic_write_json
 from .store import CampaignStore
 
 
 PROTECTED_PATHS = frozenset(
     {
+        *main_adapter.IMMUTABLE_BASELINE_PATHS,
         "definition.json",
         "reference.py",
         "workload.jsonl",
@@ -30,8 +32,6 @@ PROTECTED_PATHS = frozenset(
 )
 PROTECTED_PREFIXES = (
     "memory/",
-    "plans/",
-    "profiles/",
     "eval/",
     ".claude/",
     ".qoder/",
@@ -150,6 +150,8 @@ class EpisodeWorktree:
         violation = protected_violation(paths)
         if violation:
             return violation, paths
+        if "kernel.py" not in paths:
+            return "candidate must change kernel.py relative to incumbent", paths
         return "", paths
 
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:
@@ -235,3 +237,42 @@ def promote_candidate(
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         raise
+
+
+def record_episode_outcome(
+    incumbent_workspace: Path,
+    *,
+    base_commit: str,
+    version: int,
+    episode: int,
+    status: str,
+    memory_record: dict[str, Any],
+) -> str:
+    """Advance main-compatible version history without changing the incumbent kernel."""
+    if git_head(incumbent_workspace) != base_commit:
+        raise RuntimeError("incumbent advanced during episode; refusing outcome record")
+    memory_path = incumbent_workspace / "memory" / f"v{version}.json"
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(memory_path, memory_record)
+    subprocess.run(
+        ["git", "add", str(memory_path.relative_to(incumbent_workspace))],
+        cwd=str(incumbent_workspace),
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=atrex-long-horizon",
+            "-c",
+            "user.email=atrex-long-horizon@local",
+            "commit",
+            "-m",
+            f"v{version}: long-horizon episode {episode} {status}",
+        ],
+        cwd=str(incumbent_workspace),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return git_head(incumbent_workspace)

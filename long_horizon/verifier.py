@@ -4,11 +4,11 @@ import json
 import math
 import shutil
 import subprocess
-import sys
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import main_adapter
 from .git_episode import _git
 from .models import VerificationResult, VerificationRun
 from .protocol import atomic_write_json
@@ -21,16 +21,6 @@ def verification_schedule(repeats: int) -> list[dict[str, int | str]]:
         revisions = ("incumbent", "candidate") if repeat % 2 == 0 else ("candidate", "incumbent")
         schedule.extend({"revision": revision, "repeat": repeat} for revision in revisions)
     return schedule
-
-
-def _run_gateway_command(command: list[str], workspace: Path, timeout: int):
-    return subprocess.run(
-        command,
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
 
 
 def _geomean(values: list[float]) -> float | None:
@@ -207,25 +197,22 @@ class GatewayABBAValidator:
             "run_timeout_seconds": self.per_run_timeout,
         }
         atomic_write_json(workspace / request_relative, request)
-        command = [
-            sys.executable,
-            str(workspace / "tools" / "sandbox.py"),
-            "--kind", "dev",
-            "--hardware", self.hardware,
-            "--workspace", str(workspace),
-            "--timeout", str(self.timeout),
-            "--sync", result_relative,
-        ]
-        if self.url:
-            command += ["--url", self.url]
-        elif self.profile:
-            command += ["--gateway-profile", self.profile]
-        command += [
-            "--", "python3", f"{relative_dir}/test_kernel.py", request_relative, result_relative
-        ]
         try:
-            process = _run_gateway_command(
-                command, workspace, self.timeout + self.queue_wait_grace + 120
+            process = main_adapter.run_sandbox(
+                workspace,
+                self.hardware,
+                self.profile,
+                self.url,
+                self.timeout,
+                [
+                    "python3",
+                    f"{relative_dir}/test_kernel.py",
+                    request_relative,
+                    result_relative,
+                ],
+                sync=(result_relative,),
+                wall_timeout=self.timeout + self.queue_wait_grace + 120,
+                gateway_kind="dev",
             )
         except subprocess.TimeoutExpired:
             return VerificationResult(

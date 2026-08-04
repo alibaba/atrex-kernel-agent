@@ -14,6 +14,7 @@ from .git_episode import (
     git_head,
     git_text,
     promote_candidate,
+    record_episode_outcome,
     working_changes,
 )
 from .journal import initialize as initialize_journal
@@ -27,6 +28,7 @@ from .verifier import GatewayABBAValidator
 
 PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "episode.md"
 MODULE_ROOT = Path(__file__).resolve().parent.parent
+EVIDENCE_PREFIXES = ("plans/", "profiles/")
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -39,10 +41,27 @@ def _iso_timestamp(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
+def _conversion_parity_passes(verification: VerificationResult) -> bool:
+    candidate = verification.candidate_latency_us
+    incumbent = verification.incumbent_latency_us
+    if not isinstance(candidate, (int, float)) or not isinstance(incumbent, (int, float)):
+        return False
+    if candidate > incumbent * (1.0 + main_adapter.CONVERT_PERF_TOL):
+        return False
+    return bool(verification.runs) and all(
+        run.exit_code == 0
+        and isinstance(run.result, dict)
+        and bool(run.result.get("all_pass"))
+        for run in verification.runs
+    )
+
+
 @dataclass
 class LongHorizonCampaign:
     base_campaign: main_adapter.Campaign
     max_episodes: int = 8
+    max_version: int | None = None
+    episode_limit: int = 0
     token_budget: int = 0
     session_timeout: int = 18_000
     handoff_resumes: int = 2
@@ -74,10 +93,12 @@ class LongHorizonCampaign:
         self,
         *,
         episode: int,
+        version: int,
         worktree: EpisodeWorktree,
         journal_path: Path,
         handoff_path: Path,
         state: SupervisorState,
+        conversion_pending: bool,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign)
         journal_command = f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal"
@@ -85,6 +106,7 @@ class LongHorizonCampaign:
             PROMPT_PATH.read_text(encoding="utf-8"),
             {
                 "EPISODE": episode,
+                "VERSION": version,
                 "WORKSPACE": worktree.path,
                 "PLATFORM": self.base_campaign.platform,
                 "FRAMEWORK": self.base_campaign.framework,
@@ -100,6 +122,17 @@ class LongHorizonCampaign:
                 "SANDBOX": directives["sandbox"],
                 "HISTORY": self._history(state),
                 "JOURNAL_COMMAND": journal_command,
+                "MAIN_ITERATION_PLAYBOOK": main_adapter.iteration_playbook(
+                    self.base_campaign, worktree.path, version
+                ),
+                "CONVERSION_DIRECTIVE": (
+                    "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
+                    "submit another Triton kernel. A candidate must be a committed Gluon kernel, "
+                    f"pass correctness, and stay within {main_adapter.CONVERT_PERF_TOL:.0%} of "
+                    "the incumbent latency."
+                    if conversion_pending
+                    else "No mandatory framework conversion is currently latched."
+                ),
             },
         )
 
@@ -172,7 +205,19 @@ class LongHorizonCampaign:
             "performance": {
                 "latency_us": verification.candidate_latency_us,
                 "latency_us_geomean": verification.candidate_latency_us,
+                "latency_us_arith_mean": representative.get(
+                    "latency_us_arith_mean", verification.candidate_latency_us
+                ),
                 "latency_us_by_shape": by_shape if isinstance(by_shape, dict) else {},
+                "speedup_vs_ref_geomean": representative.get(
+                    "speedup_vs_ref_geomean", 0.0
+                ),
+                "tflops_peak_utilization_pct": representative.get(
+                    "tflops_peak_utilization_pct"
+                ),
+                "bandwidth_peak_utilization_pct": representative.get(
+                    "bandwidth_peak_utilization_pct"
+                ),
                 "authoritative_improvement_pct": verification.improvement_pct,
             },
             "optimization": {
@@ -187,13 +232,64 @@ class LongHorizonCampaign:
                 "bottleneck_type": "episode-derived",
                 "evidence_chain": "episode evidence -> candidate -> independent ABBA -> promotion",
             },
-            "correctness": {"status": "PASS"},
+            "correctness": {
+                "status": "PASS",
+                "max_abs_err": representative.get("max_abs_err", 0.0),
+                "max_rel_err": representative.get("max_rel_err", 0.0),
+            },
             "quality_gate": {"result": "PASS", "failure_reason": None},
             "open_directions": [
                 {"direction": value, "rationale": "carried from terminal episode journal"}
                 for value in directions if isinstance(value, str)
             ],
             "git_commit_hash": candidate_commit,
+        }
+
+    def _outcome_memory_record(
+        self,
+        *,
+        version: int,
+        status: str,
+        violation: str,
+        journal: dict[str, Any],
+        candidate_commit: str,
+    ) -> dict[str, Any]:
+        outcome = journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
+        directions = outcome.get("next_directions", []) if isinstance(outcome, dict) else []
+        failure = violation or str(outcome.get("summary", status))
+        return {
+            "version": f"v{version}",
+            "masked": False,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "performance": {
+                "latency_us": None,
+                "latency_us_geomean": None,
+                "latency_us_by_shape": {},
+            },
+            "optimization": {
+                "action_category": "long_horizon_episode",
+                "action_description": str(outcome.get("summary", status)),
+                "expected_impact": "episode exploration did not produce a promotable improvement",
+                "risks_and_rollback": "incumbent kernel was preserved",
+            },
+            "profile_evidence": {
+                "tool_used": "episode journal",
+                "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
+                "bottleneck_type": "episode-derived",
+                "evidence_chain": "episode evidence -> terminal handoff -> no promotion",
+            },
+            "correctness": {"status": "FAIL" if violation else "UNKNOWN"},
+            "quality_gate": {"result": "FAIL", "failure_reason": failure},
+            "open_directions": [
+                {"direction": value, "rationale": "carried from terminal episode journal"}
+                for value in directions
+                if isinstance(value, str)
+            ],
+            "git_commit_hash": None,
+            "long_horizon": {
+                "status": status,
+                "candidate_commit": candidate_commit or None,
+            },
         }
 
     def _recover_interrupted(self, store: CampaignStore, state: SupervisorState) -> None:
@@ -210,6 +306,8 @@ class LongHorizonCampaign:
             else None
         )
         phase = str(active.get("phase", ""))
+        memory_version = int(active.get("memory_version", 0) or 0)
+        terminal_status = str(active.get("terminal_status", ""))
         already_recorded = any(
             attempt.get("episode") == episode and attempt.get("episode_branch") == branch
             for attempt in state.attempts
@@ -221,17 +319,45 @@ class LongHorizonCampaign:
                 self.workspace, "show", f"HEAD:memory/long_horizon_e{episode:04d}.json",
                 check=False,
             )
-            if not (
+            promoted = (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
                 and message == f"episode {episode}: promote verified long-horizon candidate"
                 and bool(evidence)
-            ):
+            )
+            outcome_recorded = (
+                phase in {"recording", "recorded"}
+                and memory_version > 0
+                and bool(terminal_status)
+                and parent == base_commit
+                and message
+                == f"v{memory_version}: long-horizon episode {episode} {terminal_status}"
+                and bool(
+                    git_text(
+                        self.workspace,
+                        "show",
+                        f"HEAD:memory/v{memory_version}.json",
+                        check=False,
+                    )
+                )
+            )
+            if not (promoted or outcome_recorded):
                 raise RuntimeError("incumbent advanced during an interrupted episode without proof")
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
-                state.accepted += 1
-                state.consecutive_without_promotion = 0
+                if promoted:
+                    state.accepted += 1
+                    state.consecutive_without_promotion = 0
+                else:
+                    state.consecutive_without_promotion += 1
+                    if terminal_status == "pivot":
+                        state.pivoted += 1
+                    elif terminal_status == "blocked":
+                        state.blocked += 1
+                    elif terminal_status == "invalid_handoff":
+                        state.protocol_failures += 1
+                    else:
+                        state.rejected += 1
         else:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these
@@ -274,6 +400,7 @@ class LongHorizonCampaign:
                         "episode_branch": branch,
                     }
                 )
+        main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
         store.save_state(state)
         store.clear_active()
 
@@ -281,6 +408,8 @@ class LongHorizonCampaign:
         main_adapter.prepare_campaign(self.base_campaign)
         store = CampaignStore(self.workspace)
         state = store.load_state()
+        if state.episodes == 0 and state.consecutive_without_promotion == 0:
+            state.consecutive_without_promotion = main_adapter.restored_stall(self.workspace)
         self._recover_interrupted(store, state)
         if working_changes(self.workspace):
             raise RuntimeError(
@@ -293,20 +422,46 @@ class LongHorizonCampaign:
             url=self.base_campaign.sandbox_url,
             timeout=self.base_campaign.sandbox_timeout,
         )
-        runner = self.session_runner or LongSessionRunner()
-        reason = "max-episodes"
+        runner = self.session_runner or LongSessionRunner(
+            agent_cli=getattr(self.base_campaign, "agent_cli", "claude")
+        )
+        starting_episodes = state.episodes
+        reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
-        while state.episodes < self.max_episodes:
+        while True:
+            conversion_pending = main_adapter.conversion_required(
+                self.base_campaign, state.consecutive_without_promotion, self.workspace
+            )
+            if self.max_version is not None:
+                if main_adapter.latest_version(self.workspace) >= self.max_version:
+                    if conversion_pending:
+                        raise RuntimeError(
+                            "mandatory Triton->Gluon conversion did not succeed before max-iters"
+                        )
+                    reason = "budget: max-iters"
+                    break
+            elif state.episodes >= self.max_episodes:
+                reason = "max-episodes"
+                break
+            if self.episode_limit and state.episodes - starting_episodes >= self.episode_limit:
+                reason = "episode-limit"
+                break
             if self.token_budget and state.tokens >= self.token_budget:
-                reason = "token-budget"
+                if conversion_pending:
+                    raise RuntimeError(
+                        "mandatory Triton->Gluon conversion did not succeed before token-budget"
+                    )
+                reason = "budget: token-budget"
                 break
             episode = state.episodes + 1
+            memory_version = main_adapter.latest_version(self.workspace) + 1
             base_commit = git_head(self.workspace)
             worktree = EpisodeWorktree.plan(
                 self.workspace, episode, base_commit, root=self.worktree_root
             )
             active = {
                 "episode": episode,
+                "memory_version": memory_version,
                 "base_commit": base_commit,
                 "episode_branch": worktree.branch,
                 "worktree": str(worktree.path),
@@ -336,10 +491,12 @@ class LongHorizonCampaign:
             )
             prompt = self._prompt(
                 episode=episode,
+                version=memory_version,
                 worktree=worktree,
                 journal_path=journal_path,
                 handoff_path=handoff_path,
                 state=state,
+                conversion_pending=conversion_pending,
             )
             store.write_brief(episode, prompt)
             result = runner.run(
@@ -367,6 +524,20 @@ class LongHorizonCampaign:
                 violation = result.completion_diagnosis or "session produced no valid terminal handoff"
             elif status == "candidate_ready":
                 violation, paths = worktree.validate_candidate(candidate_commit)
+                if (
+                    not violation
+                    and conversion_pending
+                    and not main_adapter.candidate_is_gluon(worktree.path)
+                ):
+                    violation = "mandatory conversion candidate is not a committed Gluon kernel"
+                if not violation:
+                    policy_violations = main_adapter.candidate_policy_violations(
+                        self.base_campaign, worktree.path
+                    )
+                    if policy_violations:
+                        violation = "production policy rejected candidate: " + "; ".join(
+                            policy_violations
+                        )
                 if not violation:
                     active["phase"] = "verifying"
                     store.save_active(active)
@@ -374,8 +545,25 @@ class LongHorizonCampaign:
                         worktree.path,
                         base_commit=base_commit,
                         candidate_commit=candidate_commit,
-                        changed_paths=paths,
+                        changed_paths=[
+                            path
+                            for path in paths
+                            if not path.startswith(EVIDENCE_PREFIXES)
+                        ],
                     )
+                    if (
+                        conversion_pending
+                        and not verification.passed
+                        and _conversion_parity_passes(verification)
+                    ):
+                        verification = VerificationResult(
+                            "PASS",
+                            verification.candidate_latency_us,
+                            verification.incumbent_latency_us,
+                            verification.improvement_pct,
+                            runs=verification.runs,
+                            artifact=verification.artifact,
+                        )
                     accepted = verification.passed
 
             episode_dir = store.episode_dir(episode)
@@ -388,6 +576,7 @@ class LongHorizonCampaign:
             outcome = journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
             attempt = {
                 "episode": episode,
+                "version": memory_version,
                 "status": status,
                 "accepted": accepted,
                 "violation": violation or None,
@@ -404,11 +593,18 @@ class LongHorizonCampaign:
                 "verification": verification.as_dict() if verification else None,
             }
             promotion_commit = ""
+            outcome_commit = ""
+            memory: dict[str, Any] | None = None
             if accepted and verification is not None:
                 active["phase"] = "promoting"
                 store.save_active(active)
-                memory_version = main_adapter.latest_version(self.workspace) + 1
                 evidence = {**attempt, "journal": journal}
+                memory = self._memory_record(
+                    version=memory_version,
+                    candidate_commit=candidate_commit,
+                    journal=journal,
+                    verification=verification,
+                )
                 promotion_commit = promote_candidate(
                     self.workspace,
                     base_commit=base_commit,
@@ -416,21 +612,39 @@ class LongHorizonCampaign:
                     episode=episode,
                     evidence=evidence,
                     memory_version=memory_version,
-                    memory_record=self._memory_record(
-                        version=memory_version,
-                        candidate_commit=candidate_commit,
-                        journal=journal,
-                        verification=verification,
-                    ),
+                    memory_record=memory,
                 )
                 attempt["promotion_commit"] = promotion_commit
                 state.accepted += 1
                 state.consecutive_without_promotion = 0
+                main_adapter.save_stall(self.workspace, 0)
                 active["phase"] = "promoted"
                 active["promotion_commit"] = promotion_commit
                 store.save_active(active)
             else:
+                active["phase"] = "recording"
+                active["terminal_status"] = status
+                store.save_active(active)
+                memory = self._outcome_memory_record(
+                    version=memory_version,
+                    status=status,
+                    violation=violation,
+                    journal=journal,
+                    candidate_commit=candidate_commit,
+                )
+                outcome_commit = record_episode_outcome(
+                    self.workspace,
+                    base_commit=base_commit,
+                    version=memory_version,
+                    episode=episode,
+                    status=status,
+                    memory_record=memory,
+                )
+                attempt["outcome_commit"] = outcome_commit
                 state.consecutive_without_promotion += 1
+                main_adapter.save_stall(
+                    self.workspace, state.consecutive_without_promotion
+                )
                 if status == "pivot" and not violation:
                     state.pivoted += 1
                 elif status == "blocked" and not violation:
@@ -439,6 +653,13 @@ class LongHorizonCampaign:
                     state.protocol_failures += 1
                 else:
                     state.rejected += 1
+            main_adapter.notify_iteration(
+                self.base_campaign,
+                memory_version,
+                memory,
+                accepted,
+                verification.incumbent_latency_us if verification else None,
+            )
             store.archive_attempt(episode, attempt)
             state.attempts.append(attempt)
             store.save_state(state)
@@ -446,14 +667,31 @@ class LongHorizonCampaign:
             store.clear_active()
             print(
                 f"[long-horizon] episode={episode} status={status} accepted={accepted} "
-                f"tokens={result.tokens} promotion={promotion_commit or '-'}",
+                f"version=v{memory_version} tokens={result.tokens} "
+                f"commit={promotion_commit or outcome_commit or '-'}",
                 flush=True,
             )
+            if accepted and memory is not None:
+                target_util = float(getattr(self.base_campaign, "target_util", 0.0))
+                if target_util > 0.0 and main_adapter.peak_util(memory) >= target_util:
+                    reason = (
+                        f"success: peak_util {main_adapter.peak_util(memory):.1f}% "
+                        f">= {target_util:.0f}%"
+                    )
+                    break
             if status == "blocked" and not violation:
                 reason = "blocked"
                 break
-            if self.max_stall and state.consecutive_without_promotion >= self.max_stall:
-                reason = f"max-stall:{state.consecutive_without_promotion}"
+            if (
+                self.max_stall
+                and state.consecutive_without_promotion >= self.max_stall
+                and not main_adapter.conversion_required(
+                    self.base_campaign,
+                    state.consecutive_without_promotion,
+                    self.workspace,
+                )
+            ):
+                reason = f"stall: {state.consecutive_without_promotion} episodes without promotion"
                 break
 
         print(
