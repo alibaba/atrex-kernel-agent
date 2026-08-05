@@ -662,6 +662,7 @@ def _make_atrex_bench_runtime_bundle(
     package = runtime_root / "src" / "atrex_bench"
     runtime_module = package / "eval" / "_runtime.py"
     utils_module = package / "utils.py"
+    sdk_module = package / "sdk.py"
     if (
         not package.is_dir()
         or (minimal and not runtime_module.is_file())
@@ -680,6 +681,12 @@ def _make_atrex_bench_runtime_bundle(
             )
         elif evaluator_only:
             evaluator_files = [package / "__init__.py", utils_module]
+            # Newer Atrex-Bench releases re-export the Python evaluation API
+            # from ``atrex_bench.__init__``.  Keep the file optional so the
+            # evaluator-only bundle remains compatible with older releases
+            # that predate sdk.py.
+            if sdk_module.is_file():
+                evaluator_files.append(sdk_module)
             evaluator_files.extend(_walk_files(package / "eval"))
             tf.add(run_eval, arcname="atrex-bench/scripts/run_eval.py", recursive=False)
             for path in evaluator_files:
