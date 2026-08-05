@@ -155,7 +155,10 @@ class LongSessionRunner:
             if timed_out:
                 break
             if exit_status != 0:
-                externally_terminated = exit_status == -signal.SIGTERM
+                externally_terminated = exit_status in {
+                    -signal.SIGTERM,
+                    128 + signal.SIGTERM,
+                }
                 dependency_terminated = "dependency policy violation" in stderr.lower()
                 transient_api_error = (
                     _claude_transient_api_error(stdout)
