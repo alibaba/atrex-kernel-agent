@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from long_horizon.campaign import LongHorizonCampaign, _conversion_parity_passes
-from long_horizon.git_episode import EpisodeWorktree, git_head
+from long_horizon.git_episode import EpisodeWorktree, git_head, record_episode_outcome
 from long_horizon.journal import append_experiment, finalize
 from long_horizon.models import (
     EpisodeHandoff,
@@ -72,6 +72,56 @@ class CandidateRunner:
         )
 
 
+class BlockedRunner:
+    def __init__(self):
+        self.calls = 0
+
+    def run(
+        self,
+        workspace,
+        prompt,
+        *,
+        timeout,
+        handoff_path,
+        handoff_resumes,
+        completion_check,
+        **kwargs,
+    ):
+        self.calls += 1
+        journal_path = workspace / ".atrex_long_horizon" / "journal.json"
+        append_experiment(
+            journal_path,
+            {
+                "name": f"blocked probe {self.calls}",
+                "hypothesis": "external infrastructure may recover on a fresh attempt",
+                "evidence": "the required external route is unavailable",
+                "result": "blocked",
+                "decision": "pivot",
+            },
+        )
+        finalize(
+            journal_path,
+            state="blocked",
+            outcome={
+                "summary": f"external infrastructure blocker {self.calls}",
+                "next_directions": ["retry with a fresh episode"],
+            },
+        )
+        handoff = EpisodeHandoff("blocked")
+        atomic_write_json(handoff_path, handoff.as_dict())
+        diagnosis = completion_check(handoff)
+        if diagnosis:
+            raise AssertionError(diagnosis)
+        return SessionResult(
+            exit_status=0,
+            timed_out=False,
+            tokens=10,
+            session_id=f"blocked-session-{self.calls}",
+            resume_count=0,
+            handoff=handoff,
+        )
+
+
 class FixedVerifier:
     def __init__(self, passed: bool):
         self.passed = passed
@@ -117,6 +167,24 @@ def fake_base(workspace: Path):
         _notify_improvement=mock.Mock(),
         _notify_iteration=mock.Mock(),
     )
+
+
+def seed_version(repo: Path, version: int, *, accepted_kernel: bool) -> str:
+    (repo / "memory").mkdir(exist_ok=True)
+    (repo / "memory" / f"v{version}.json").write_text(
+        json.dumps(
+            {
+                "version": f"v{version}",
+                "quality_gate": {"result": "PASS" if accepted_kernel else "FAIL"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    if accepted_kernel:
+        (repo / "kernel.py").write_text("VALUE = 9\n", encoding="utf-8")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "-m", f"seed v{version}")
+    return git_head(repo)
 
 
 class CampaignIntegrationTests(unittest.TestCase):
@@ -228,6 +296,136 @@ class CampaignIntegrationTests(unittest.TestCase):
             base_campaign._notify_iteration.assert_called_once()
             self.assertFalse(base_campaign._notify_iteration.call_args.args[2])
 
+    def test_blocked_retries_once_without_padding_a_non_bucket_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "campaign"
+            init_repo(repo)
+            seed_version(repo, 4, accepted_kernel=True)
+            runner = BlockedRunner()
+            with (
+                mock.patch("long_horizon.main_adapter.prepare_campaign", return_value=None),
+                mock.patch("long_horizon.main_adapter.link_episode_runtime", return_value=None),
+                mock.patch(
+                    "long_horizon.main_adapter.episode_directives",
+                    return_value={
+                        "hardware": "hardware",
+                        "sandbox": "sandbox",
+                        "evaluator": "evaluator",
+                        "mode_policy": "policy",
+                    },
+                ),
+                mock.patch(
+                    "long_horizon.main_adapter.iteration_playbook",
+                    return_value="current main playbook",
+                ),
+            ):
+                base_campaign = fake_base(repo)
+                reason = LongHorizonCampaign(
+                    base_campaign=base_campaign,
+                    max_episodes=1,
+                    session_runner=runner,
+                    worktree_root=root / "worktrees",
+                ).run()
+            self.assertEqual(reason, "blocked")
+            self.assertEqual(runner.calls, 2)
+            self.assertTrue((repo / "memory/v5.json").is_file())
+            self.assertTrue((repo / "memory/v6.json").is_file())
+            self.assertFalse((repo / "memory/v7.json").exists())
+            state = json.loads((repo / ".atrex_long_horizon/state.json").read_text())
+            self.assertEqual(state["episodes"], 2)
+            self.assertEqual(state["blocked"], 2)
+            self.assertTrue(state["attempts"][0]["blocked_retry_scheduled"])
+            self.assertTrue(state["attempts"][1]["blocked_terminal"])
+
+    def test_repeated_bucket_block_pads_to_main_barrier_without_changing_kernel(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "campaign"
+            init_repo(repo)
+            accepted_head = seed_version(repo, 4, accepted_kernel=True)
+            runner = BlockedRunner()
+            with (
+                mock.patch("long_horizon.main_adapter.prepare_campaign", return_value=None),
+                mock.patch("long_horizon.main_adapter.link_episode_runtime", return_value=None),
+                mock.patch(
+                    "long_horizon.main_adapter.episode_directives",
+                    return_value={
+                        "hardware": "hardware",
+                        "sandbox": "sandbox",
+                        "evaluator": "evaluator",
+                        "mode_policy": "policy",
+                    },
+                ),
+                mock.patch(
+                    "long_horizon.main_adapter.iteration_playbook",
+                    return_value="current main playbook",
+                ),
+            ):
+                base_campaign = fake_base(repo)
+                base_campaign.on_improvement = mock.Mock()
+                base_campaign.on_iteration = mock.Mock()
+                reason = LongHorizonCampaign(
+                    base_campaign=base_campaign,
+                    max_episodes=1,
+                    session_runner=runner,
+                    worktree_root=root / "worktrees",
+                ).run()
+            self.assertEqual(reason, "blocked")
+            self.assertEqual(runner.calls, 2)
+            self.assertEqual(
+                run_git(repo, "diff", accepted_head, "HEAD", "--", "kernel.py"), ""
+            )
+            self.assertEqual((repo / "kernel.py").read_text(encoding="utf-8"), "VALUE = 9\n")
+            for version in range(7, 11):
+                memory = json.loads((repo / "memory" / f"v{version}.json").read_text())
+                self.assertEqual(memory["quality_gate"]["result"], "FAIL")
+                self.assertTrue(memory["long_horizon"]["terminal_padding"])
+                self.assertEqual(memory["long_horizon"]["source_blocked_version"], 6)
+            self.assertEqual(base_campaign._notify_improvement.call_count, 0)
+            self.assertEqual(base_campaign._notify_iteration.call_count, 6)
+            self.assertTrue(
+                all(not call.args[2] for call in base_campaign._notify_iteration.call_args_list)
+            )
+
+    def test_repeated_bucket_block_without_an_accepted_kernel_does_not_pad(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "campaign"
+            init_repo(repo)
+            seed_version(repo, 4, accepted_kernel=False)
+            runner = BlockedRunner()
+            with (
+                mock.patch("long_horizon.main_adapter.prepare_campaign", return_value=None),
+                mock.patch("long_horizon.main_adapter.link_episode_runtime", return_value=None),
+                mock.patch(
+                    "long_horizon.main_adapter.episode_directives",
+                    return_value={
+                        "hardware": "hardware",
+                        "sandbox": "sandbox",
+                        "evaluator": "evaluator",
+                        "mode_policy": "policy",
+                    },
+                ),
+                mock.patch(
+                    "long_horizon.main_adapter.iteration_playbook",
+                    return_value="current main playbook",
+                ),
+            ):
+                base_campaign = fake_base(repo)
+                base_campaign.on_improvement = mock.Mock()
+                base_campaign.on_iteration = mock.Mock()
+                reason = LongHorizonCampaign(
+                    base_campaign=base_campaign,
+                    max_episodes=1,
+                    session_runner=runner,
+                    worktree_root=root / "worktrees",
+                ).run()
+            self.assertEqual(reason, "blocked")
+            self.assertEqual(runner.calls, 2)
+            self.assertFalse((repo / "memory/v7.json").exists())
+            self.assertEqual((repo / "kernel.py").read_text(encoding="utf-8"), "VALUE = 10\n")
+
     def test_interrupted_episode_is_archived_and_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -252,6 +450,62 @@ class CampaignIntegrationTests(unittest.TestCase):
             recovered = store.load_state()
             self.assertEqual(recovered.interrupted, 1)
             self.assertFalse(store.active_path.exists())
+
+    def test_recovery_of_second_block_remains_terminal_without_a_third_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "campaign"
+            base = init_repo(repo)
+            store = CampaignStore(repo)
+            state = store.load_state()
+            state.episodes = 1
+            state.blocked = 1
+            state.attempts.append(
+                {
+                    "episode": 1,
+                    "version": 1,
+                    "status": "blocked",
+                    "accepted": False,
+                    "violation": None,
+                    "blocked_retry_scheduled": True,
+                    "blocked_terminal": False,
+                }
+            )
+            store.save_state(state)
+            memory = {
+                "version": "v2",
+                "quality_gate": {"result": "FAIL", "failure_reason": "blocked again"},
+            }
+            outcome_commit = record_episode_outcome(
+                repo,
+                base_commit=base,
+                version=2,
+                episode=2,
+                status="blocked",
+                memory_record=memory,
+            )
+            store.save_active(
+                {
+                    "episode": 2,
+                    "memory_version": 2,
+                    "base_commit": base,
+                    "episode_branch": "atrex/long-e0002-test",
+                    "worktree": str(root / "missing-worktree"),
+                    "phase": "recording",
+                    "terminal_status": "blocked",
+                }
+            )
+            campaign = LongHorizonCampaign(base_campaign=fake_base(repo))
+            recovered = store.load_state()
+            campaign._recover_interrupted(store, recovered)
+            recovered = store.load_state()
+            self.assertEqual(git_head(repo), outcome_commit)
+            self.assertEqual(recovered.episodes, 2)
+            self.assertEqual(recovered.blocked, 2)
+            self.assertEqual(len(recovered.attempts), 2)
+            self.assertTrue(recovered.attempts[-1]["blocked_terminal"])
+            self.assertEqual(recovered.attempts[-1]["blocked_retry_of_episode"], 1)
+            self.assertFalse(campaign._blocked_retry_pending(recovered))
 
 
 if __name__ == "__main__":

@@ -170,6 +170,20 @@ def latest_version(workspace: Path) -> int:
     return base.latest_version(workspace)
 
 
+def initial_aggregation_padding_target(campaign: base.Campaign) -> int | None:
+    """Return main's bootstrap barrier only for coordinator-owned bucket campaigns."""
+    if not callable(getattr(campaign, "on_improvement", None)):
+        return None
+    if not callable(getattr(campaign, "on_iteration", None)):
+        return None
+    return int(base.INITIAL_AGGREGATION_MIN_ITERATIONS)
+
+
+def has_accepted_bucket_kernel(campaign: base.Campaign) -> bool:
+    """Use main's kernel-provenance predicate instead of trusting counters or memory."""
+    return not base.head_kernel_is_initial_baseline(campaign.workspace)
+
+
 def run_sandbox(
     workspace: Path,
     hardware: str,
