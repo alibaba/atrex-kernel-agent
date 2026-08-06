@@ -63,7 +63,8 @@ python orchestrator/optimize.py \
 
 `--framework` can be omitted to start all frameworks supported by the runtime GPU architecture in
 parallel. Their sandbox requests still enter this scheduler's FIFO queue, and their local optimizer state
-uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`.
+uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`. Production
+campaigns use a separate path ending in `_production`.
 
 `--sandbox-hardware local` selects the gateway backend independently of the logical `--platform` value.
 The optimizer does not compare platform and inventory names because a gateway may expose an alias or a
@@ -75,16 +76,18 @@ The community scheduler implements:
 
 - `GET /healthz`
 - `GET /v1/env` and `GET /v1/env/local`
+- `POST /v1/jobs/eval` for native Atrex-Bench evaluation
+- `POST /v1/jobs/profile` for supported `ncu`/`rocprofv3` profiling requests
 - `POST /v1/jobs/dev`, including uploaded text files, environment variables, timeouts, and idempotency keys
 - `GET /v1/jobs` with the standard kind/user/status/limit filters
 - `GET /v1/jobs/<job_id>`, including `wait=true&timeout=<seconds>` long polling
 - `POST /v1/jobs/<job_id>/cancel`
 - legacy `GET /v1/evals/<job_id>` polling compatibility
 
-Specialized `eval`, `profile`, and `disassemble` submissions return a structured HTTP 501
-`kind_not_supported` response. The repository does not depend on those routes: `tools/sandbox.py` submits
-self-contained correctness, performance, and profiler work as `dev` commands. Keeping unsupported routes
-explicit avoids pretending that the community scheduler reproduces server-side evaluator internals.
+`tools/sandbox.py` prefers typed `eval` and `profile` requests when the workspace fits their source
+contract, and falls back to a self-contained `dev` request for SOL, aggregate, custom-input, or otherwise
+unrepresentable commands. `disassemble` remains unsupported and returns a structured HTTP 501
+`kind_not_supported` response.
 
 ## Security Boundary
 

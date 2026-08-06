@@ -1,53 +1,80 @@
-# Kernel Opt Session Configuration
+# Campaign Workspace Reference
+
+This file describes the runtime contract linked into workspaces by
+`orchestrator/optimize.py`. It is guidance for Agent sessions, not a standalone entry point or
+workspace template.
 
 ## Target
-- platform: <H20 / MI308X / MI355X / ...> (parsed from user input)
-- arch: <Hopper / CDNA3 / CDNA4 / ...> (derived from platform)
-- framework: <CuteDSL / Gluon / FlyDSL / Triton / ...> (parsed from user input)
-- dtype: <bf16 / fp16 / fp8 / ...>
-- kernel type: <GEMM / Attention / Norm / MoE / ...>
 
-## Execution
-- execution_mode: local
-- local_gpu: <local GPU model>
+- logical platform: `<H20 / B200 / MI308X / MI355X / ...>` from `--platform`
+- runtime architecture: `<sm_90 / sm_100 / gfx942 / gfx950 / ...>` probed through the sandbox or
+  supplied by `--arch`
+- framework: `<Triton / CuteDSL / Cuda / FlyDSL / ...>` selected per campaign
+- optimization mode: `leaderboard` or `production`
+- operator and dtype: derived from immutable files under `--op-dir`
 
-## Inputs
-- kernel_demo: <path to the initial kernel implementation file> (parsed from user input and copied into the workspace as kernel.py)
-- shapes: <...>
-- reference: <path to reference.py>
-- correctness threshold: rel_err < 0.01 (bf16 default) / 0.05 (fp8/fp4)
+## Execution Boundary
 
-## Hard Constraints
-- profiling: trust only ncu (tools/profile_nvidia.sh) / tools/profile_kernel.sh;
-- performance targets: sourced from gpu-wiki; see Stop Conditions
-- workspace: kernel_opt_<name>/; commit every accepted iteration with git
-- knowledge base: `~/aka_kernel_opt/gpu-wiki/`; the entire repository may be searched, not only docs/ or reference-kernels/;
-- reference_project: `~/aka_kernel_opt/reference-projects/` (optional source of similar optimized kernels)
+- Every compile, correctness, benchmark, signature collection, and profile command runs through
+  `tools/sandbox.py` on `--sandbox-hardware`.
+- Host-side GPU/JIT execution and dependency installation are forbidden.
+- The logical platform and gateway hardware selector may use different names; runtime architecture
+  probing is authoritative for vendor/framework dispatch.
+- Optimizer memory, plans, source edits, episode journals, worktrees, and Git state remain local.
 
-## Additional Notes (parsed from user input)
-- <extra information such as constraints, known bottlenecks, preferred optimization directions, edge cases; use none if empty>
+## Inputs and Immutable State
 
-## Tools (top-level paths)
-- compute_utilization.py / bench_bandwidth.py / measure_bandwidth_ceiling.py
-- measure_kernel_time.py / extract_asm.py / profile_kernel.sh
-- profile_nvidia.sh / classify_ncu.py / extract_nvidia_asm.py (NVIDIA; helpers in ncu_helpers/)
+- SOL campaigns consume `reference.py`, `definition.json`, and `workload.jsonl`.
+- Native Atrex-Bench campaigns consume `reference.py`, `shapes.json`, and their canonical
+  `scripts/run_eval.py`; optional evaluator metadata is copied when present.
+- The orchestrator installs an immutable workspace `test_kernel.py` adapter. Agent sessions must
+  not replace it or edit evaluator/ground-truth files.
+- V0 is a correctness-passing baseline. Production normally creates and pins a framework-native
+  V1 before workload buckets are derived.
 
-## Stop Conditions
-The following targets are filled by Step 0 after calculation as `hardware peak * 90%`. Prefer measured maxima from gpu-wiki when available; otherwise use hardware spec values.
+## State Ownership
 
-- compute-bound target: <dtype> TFLOPS >= <peak * 90%> T, for example MI308X bf16 peak 206T -> target >= 185.4T
-- memory-bound target: bandwidth >= <peak * 90%> TB/s, for example MI308X HBM peak 4.3TB/s -> target >= 3.87TB/s
-- end-to-end latency: measured via `triton.testing.do_bench(kernel_fn, warmup=N, rep=N)` (p50 median, in ms); use this as the performance data source for TFLOPS and bandwidth calculation
+- The Agent owns only its isolated episode worktree, private checkpoints, plan, profile evidence,
+  journal, and terminal handoff.
+- The supervisor owns canonical `memory/v<N>.json`, incumbent `HEAD`, ABBA verification, promotion,
+  workload aggregation, budgets, and final packaging.
+- A `candidate_ready` handoff is only a request for verification. It is never promotion authority.
+- Accepted candidates are squash-promoted; rejected, pivoted, and blocked episodes advance
+  canonical memory without changing the incumbent kernel.
+
+## Knowledge and Tools
+
+- Search `gpu-wiki/` first with the exact runtime architecture and framework.
+- Search `reference-projects/` only when the local knowledge base is insufficient.
+- Use `tools/profile_nvidia.sh` and `tools/classify_ncu.py` for NVIDIA evidence.
+- Use `tools/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.
+- Use `tools/compute_utilization.py` and the measurement/extraction helpers for supporting
+  calculations; use `tools/memory_manager.py` only for workspace memory operations allowed by the
+  current prompt.
+
+## Mechanical Stop and Acceptance Rules
+
+- Correctness must pass before performance can influence promotion.
+- Ordinary episode promotion requires a strict same-allocation ABBA improvement and policy pass.
+- Aggregate promotion requires the base seed, five additional correctness seeds, and the configured
+  full-workload geomean improvement.
+- Campaigns stop on canonical version budget, token budget, optional stall budget, target
+  utilization, or a terminal repeated blocker.
+- Hardware ceilings and optimization claims must be sourced from `gpu-wiki`; unknown values remain
+  explicitly unknown rather than guessed.
 
 ## Task Context
+
 - platform:
-- arch:
+- runtime arch:
+- sandbox hardware:
 - framework:
-- dtype:
-- shapes:
-- correctness_threshold:
-- stop_condition:
-- reference_project:
+- optimization mode:
+- operator/dtype:
+- workload source:
+- correctness threshold:
+- target utilization:
+- additional constraints:
 
 ## ISA Optimization Targets
 

@@ -1,4 +1,0 @@
-{"type":"thread.started","thread_id":"sanitized"}
-{"type":"item.completed","item":{"id":"sanitized","type":"command_execution","command":"sanitized","aggregated_output":"ATREX_TRACE_EVENT={\"schema\":\"atrex.iteration_trace.v1\",\"kind\":\"phase_marker\",\"action\":\"start\",\"phase\":\"benchmark\",\"marker_id\":\"marker-1\"}\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"sanitized","type":"command_execution","command":"sanitized","aggregated_output":"ATREX_TRACE_EVENT={\"schema\":\"atrex.iteration_trace.v1\",\"kind\":\"phase_marker\",\"action\":\"end\",\"phase\":\"benchmark\",\"marker_id\":\"marker-2\"}\n","exit_code":0,"status":"completed"}}
-{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":8,"output_tokens":5}}

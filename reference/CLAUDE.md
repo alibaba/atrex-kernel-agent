@@ -1,7 +1,7 @@
 # GPU Kernel Optimizer — Agent Constraints
 
 This file defines hard behavioral constraints for the optimization workflow.
-The full stage-by-stage workflow is defined in `orchestrator/prompts/iteration.md` (self-contained per session).
+The full multi-cycle workflow and terminal handoff are defined in `orchestrator/prompts/episode.md`.
 
 ## Framework Guidance
 
@@ -10,7 +10,7 @@ The full stage-by-stage workflow is defined in `orchestrator/prompts/iteration.m
 - Preinstalled third-party helper libraries may be used, but the campaign environment is immutable: never
   install or locally build a package. If a library is unavailable, use existing tooling or record a blocker.
 - `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
-- When Triton-level optimization plateaus, the orchestrator spawns a dedicated **convert-only session** (`orchestrator/prompts/convert.md` → `gpu-kernel-convert`) that lowers the kernel Triton→Gluon with NO optimization, gated on correctness alone; the following sessions then optimize the Gluon kernel (deeper levers). Do not hand-trigger the rewrite inside a normal optimization iteration.
+- When Triton-level optimization plateaus, the orchestrator latches a mandatory Triton→Gluon episode directive. The episode derives layouts from TTGIR, repairs the lowering through correctness and performance parity, and later episodes remain in Gluon. Do not hand-trigger conversion before the directive is active.
 
 ## Benchmark Harness Integrity
 
@@ -58,7 +58,7 @@ python test_kernel.py --version v<N> --multi-seed 5
 
 This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds
 pass. If any seed fails correctness, the kernel is BROKEN — revert with `git reset --hard HEAD`
-and try a different lever. See `iteration.md` Stage 3 step 4 for the full procedure.
+and try a different lever. See `orchestrator/prompts/episode.md` for the full procedure.
 
 Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass;
 do not repeat warmup/timing/reference benchmarking for extra seeds. The public gateway caps
@@ -120,8 +120,8 @@ library primitives — are unaffected.
 ## Workflow References
 
 - Optimization loop orchestrator: `orchestrator/optimize.py`
-- Per-iteration session prompt (self-contained): `orchestrator/prompts/iteration.md`
+- Multi-cycle episode prompt and handoff contract: `orchestrator/prompts/episode.md`
 - Baseline setup session: `orchestrator/prompts/setup.md`
-- Triton→Gluon convert session: `orchestrator/prompts/convert.md`
+- Triton→Gluon conversion: latched directive inside the episode prompt
 - NVIDIA profiling skill (Stage 1): `.claude/skills/ncu-report-skill/SKILL.md`
 - Plan generation (Stage 2): `/humanize:gen-plan` (plugin, loaded via `--plugin-dir`)

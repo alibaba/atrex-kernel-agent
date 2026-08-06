@@ -1,20 +1,21 @@
 # Quick Start
 
-AKA ships two independent ways to run the same profile-driven workflow. Use the interactive Skill route when you want to drive optimization inside a coding session, or the orchestrated route when you want an unattended, budget-bounded run.
+AKA exposes one supported execution path: the unattended, budget-bounded orchestrator in
+`orchestrator/optimize.py`.
 
 ## Prerequisites
 
 - `bash`
 - `git`
-- A compatible coding runtime installed
+- Python 3, `torch`, and `jq` on the coordinator host
+- One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - `agate` (`atrex-gateway-client`) configured with gateway URL and credentials
-- NVIDIA profiling: `ncu`, wrapped by `tools/profile_nvidia.sh`
-- AMD profiling: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
+- The selected gateway environment must provide the workload's framework and GPU stack
+- NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
+- AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
-Route-specific prerequisites:
-
-- `install.sh` automatically installs `jq` with an available package manager when needed.
-- Route 2 requires Python 3, `torch`, and one of `claude`, `qodercli`, `codex`, or `pi` available on `PATH`.
+The orchestrator verifies required submodules and `jq` before starting. Missing required submodules
+are initialized automatically; the large `reference-projects/` collection remains optional.
 
 ## 1. Clone the Repository
 
@@ -23,24 +24,16 @@ git clone https://github.com/alibaba/atrex-kernel-agent.git
 cd atrex-kernel-agent
 ```
 
-## 2A. Run the Interactive Skill Route
+`--op-dir` supports two evaluator-owned layouts:
 
-Install the `gpu-kernel-optimizer` Skill and hooks:
+- SOL-ExecBench: `reference.py`, `definition.json`, and `workload.jsonl`.
+- Native Atrex-Bench: `reference.py` and `shapes.json`, inside a checkout containing
+  `scripts/run_eval.py` and `src/atrex_bench`; `input.py`, `metadata.json`, `roofline.json`, and
+  `valid.py` are copied when present.
 
-```bash
-git submodule update --init
-bash install.sh --prefix ~/aka_kernel_opt
-```
+The orchestrator never treats operator inputs as editable candidate files.
 
-Restart your coding runtime or open a new session so the hooks are loaded. Then change into the directory where you want the optimization workspace to be created and ask the Agent to optimize a kernel demo:
-
-```text
-/gpu-kernel-optimizer Optimize /path/to/kernel_demo.py on MI308X with FlyDSL, dtype bf16, rel_err < 0.01.
-```
-
-The Agent creates `kernel_opt_<name>/` in the current working directory, sources hardware specs from `gpu-wiki`, builds a baseline, profiles the kernel, and iterates until Stop Conditions are met.
-
-## 2B. Run the Orchestrated Loop Route
+## 2. Run the Orchestrated Loop
 
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
@@ -53,9 +46,12 @@ python orchestrator/optimize.py \
 ```
 
 The orchestrator initializes its required submodules on first run, creates a flat
-`kernel_opt_<name>_<framework>_<platform>/` workspace under `--workspace` or the current directory, and
-spawns fresh clean sessions per iteration. GPU tests and profiles run through `tools/sandbox.py` on
-`--sandbox-hardware`; `memory/` and Git stay local. It finalizes a directly submittable SOL-ExecBench output
+leaderboard workspace named `kernel_opt_<name>_<framework>_<platform>/` under `--workspace` or
+the current directory, and runs each canonical version as an isolated Long Horizon episode. One
+episode may contain many related
+profile/edit/validate cycles; its candidate is promoted only after independent same-allocation ABBA
+verification. GPU evaluations and profiles run through `tools/sandbox.py` on `--sandbox-hardware`; `memory/`,
+episode journals, worktrees, and Git stay local. It finalizes a directly submittable SOL-ExecBench output
 after a passing run. Omit `--agent-cli` to use Claude, or pass `--agent-cli qodercli` after authenticating
 with `qodercli status`. To use Codex, authenticate with `codex login status` and pass
 `--agent-cli codex`:
@@ -67,7 +63,8 @@ python orchestrator/optimize.py \
     --agent-cli codex --max-iters 20 --token-budget 8000000
 ```
 
-Each Codex iteration uses `codex exec --json --ephemeral`. The orchestrator installs the required
+Each Codex episode starts with `codex exec --json`; bounded handoff recovery resumes that same thread.
+The orchestrator installs the required
 optimization and Humanize skills into the campaign's repository-scoped `.agents/skills/` tree; it does
 not modify `${CODEX_HOME}`. Optional Codex config overrides use a JSON object or an array of literal
 `key=value` values:
@@ -90,7 +87,7 @@ python orchestrator/optimize.py \
     --agent-cli pi --max-iters 20 --token-budget 8000000
 ```
 
-Pi runs in JSON mode with one unique persisted session per optimization attempt. The orchestrator trusts
+Pi runs in JSON mode with one unique session per optimization episode. The orchestrator trusts
 the generated campaign workspace for that run so Pi can load repository-scoped `.agents/skills`, while
 leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION_SETTINGS` accepts only
 `provider` and `model`; API keys are never added to process arguments.
@@ -105,10 +102,10 @@ python orchestrator/optimize.py \
 ```
 
 The runtime architecture is authoritative for vendor selection. NVIDIA dispatches Triton, CuteDSL, and
-Cuda; AMD dispatches Triton and FlyDSL; unknown hardware dispatches Triton. Workspaces use flat names such
-as `/path/to/runs/kernel_opt_<name>_triton_h20`, and `--max-iters`/`--token-budget` apply independently to
-each framework campaign. Passing `--framework` selects one campaign but uses the same flat
-`kernel_opt_<name>_<framework>_<platform>` naming convention.
+Cuda; AMD dispatches Triton and FlyDSL; unknown hardware dispatches Triton. Leaderboard workspaces use
+flat names such as `/path/to/runs/kernel_opt_<name>_triton_h20`; production workspaces append
+`_production`. `--max-iters` and `--token-budget` apply independently to each framework campaign.
+Passing `--framework` selects one campaign but keeps the same mode-specific naming convention.
 
 The default `--optimization-mode leaderboard` retains the existing permissive workflow: third-party kernel
 libraries and evidence-backed framework changes are allowed. Use production mode for a deployable,
@@ -126,8 +123,15 @@ Production mode may omit `--framework`; like leaderboard mode, it auto-dispatche
 by the detected hardware. Every child receives one explicit framework constraint. V0 remains a PyTorch
 correctness baseline, while every accepted optimization commit must implement the GPU computation exclusively
 in that child's framework and must not call or depend on third-party kernel/operator libraries. The orchestrator writes the policy into
-the workspace, injects it into every clean session, mechanically reverts violating commits, and refuses to
-package a non-compliant final candidate. A workspace cannot be resumed under a different mode/framework.
+the workspace, injects it into every episode, rejects violating candidates, and refuses to
+package a non-compliant final candidate. Production runs use a separate
+`kernel_opt_<name>_<framework>_<platform>_production` workspace and cannot accidentally resume a
+leaderboard campaign.
+
+With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
+session after V0. It validates the base seed plus five additional seeds and pins the resulting V1
+for all workload buckets. Use `--framework-baseline=always` to enable the same stage in leaderboard
+mode, or `never` to seed optimization directly from V0.
 
 To use the same gateway interface on a local GPU, start the bundled community scheduler. It has no
 third-party Python dependencies:
@@ -159,7 +163,7 @@ python orchestrator/optimize.py \
 ```
 
 `--sandbox-url` and `--sandbox-profile` are mutually exclusive. The localhost mode changes only where
-agate executes jobs; tests and profiles still go through `tools/sandbox.py`, while `memory/`, plans, edits,
+agate executes jobs; evaluations and profiles still go through `tools/sandbox.py`, while `memory/`, plans, edits,
 and Git remain workspace-local. `--platform` and the gateway's hardware selector are not name-validated:
 inventory data may be aliased or desensitized, so runtime architecture probing drives automatic framework
 selection.
@@ -169,7 +173,11 @@ selection.
 Each optimization workspace records the full optimization trail:
 
 - `kernel.py`: current best kernel at Git `HEAD`
-- `memory/v<N>.json`: structured iteration records
+- `memory/v<N>.json`: canonical episode/version records
+- `memory/long_horizon_e<NNNN>.json`: promoted-episode evidence
 - `plans/`: evidence-based optimization plans
 - `profiles/`: profiler artifacts and extracted bottleneck evidence
-- `submission.json`: SOL-ExecBench submission output, when using the orchestrated SOL route
+- `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
+- `dispatch_signatures.json`, `workload_buckets.json`, `aggregate_dispatch.json`, and
+  `aggregation_state.json`: workload coordination provenance when bucketing is enabled
+- `submission.json`: SOL-ExecBench submission output for SOL campaigns

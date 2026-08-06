@@ -2,391 +2,298 @@
 
 ## Overview
 
-Atrex Kernel Agent is an end-to-end Agent project for GPU kernel implementation, analysis, profiling, and iterative optimization. It turns PyTorch logic or an existing kernel into an auditable optimization workspace, then drives the workflow from hardware-spec lookup and Roofline analysis to baseline implementation, profile-driven optimization, partial restart, and final candidate packaging.
+Atrex Kernel Agent is an orchestrated system for GPU kernel implementation, profiling, and
+iterative optimization. The repository has one supported entry point: `orchestrator/optimize.py`.
+It owns the optimization lifecycle and launches isolated Long Horizon episodes through Claude,
+Qoder, Codex, or Pi.
 
-The project centers on the `gpu-kernel-optimizer` Skill. The top-level Skill acts as a router and policy owner, while sub-skills handle baseline implementation, bottleneck analysis, profile-driven optimization, final packaging, and partial restart.
+Agent sessions propose and implement changes. The orchestrator remains authoritative for
+budgets, state transitions, sandbox execution, correctness and performance gates, production
+policy, rollback, aggregation, and final packaging.
+
+Each canonical optimization version is one multi-experiment episode in a private Git worktree.
+The internal `long_horizon/` engine supplies worktree isolation, journals, handoff recovery,
+same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 
 ## Design Goals
 
-- **Profile-driven optimization**: Kernel changes must be guided by official profiler evidence instead of intuition or ad-hoc timers.
-- **Traceable hardware assumptions**: Hardware specs must come from the local `gpu-wiki` knowledge base and must be archived with source references.
-- **Auditable optimization history**: Plans, profiles, reports, structured memory, and Git commits preserve every accepted iteration.
-- **Reproducible workspaces**: Each task runs in an isolated `/tmp/kernel_opt_<name>/` workspace.
-- **Controlled iteration state**: Structured `memory/v<N>.json` files record performance, correctness, profile evidence, search logs, risks, and commit hashes.
-- **Safe final packaging**: Evaluator-facing output is separated into a clean `generated_kernel.py` contract when needed.
+- **Mechanical control**: termination and acceptance are decided by code rather than Agent
+  self-assessment.
+- **Profile-driven optimization**: kernel changes must be supported by official profiler
+  evidence.
+- **Reproducible state**: Git HEAD is the incumbent kernel; structured memory and artifacts
+  preserve the reasoning and measurements behind each attempt.
+- **Execution isolation**: GPU work crosses `tools/sandbox.py`; campaign memory, plans, edits,
+  and Git state remain local.
+- **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
+  edits or partial-shape wins from becoming accepted results.
+- **Production provenance**: production mode mechanically enforces the selected framework and
+  rejects third-party operator dependencies and PyTorch compute fallbacks.
+- **Backend portability**: one Agent Runtime interface normalizes commands, events, usage, and
+  process policy across supported coding CLIs.
 
 ## Project Structure
 
 ```text
 .
-├── README.md
-├── SKILL.md                              # Top-level gpu-kernel-optimizer router and global constraints
-├── install.sh                            # Installer / uninstaller for Skills, hooks, gpu-wiki, and references
-├── atrex-workflow.png                    # Workflow diagram
-├── docs/
-│   ├── design.md                         # This design document
-│   └── gpu-wiki-design.md                # gpu-wiki knowledge-base design
-├── gpu-wiki/                             # Local GPU knowledge base and reference index
-│   ├── README.md
-│   ├── docs/                             # Hardware specs, kernel optimization docs, pitfalls, ref docs
-│   └── reference-kernels/                # AMD, NVIDIA, and generic reference kernels
-├── reference/
-│   ├── README.md                         # Workspace README template
-│   ├── memory.md                         # Legacy / human-readable memory template
-│   ├── plan.md                           # Per-iteration plan template
-│   ├── iteration_report.md               # Iteration report template
-│   ├── profile_guide.md                  # Consolidated NVIDIA / AMD profiling guide
-│   ├── v_iteration.schema.json           # Structured memory JSON schema
-│   └── workspace_init.sh                 # Creates /tmp/kernel_opt_<name>/ workspace
-├── skills/
-│   ├── gpu-kernel-baseline/              # Stage 1 baseline implementation Agent
-│   ├── gpu-kernel-profile-optimizer/     # Stage 2 profile-driven optimization Skill
-│   ├── gpu-kernel-output-contract/       # Final generated_kernel.py packaging Skill
-│   └── gpu-kernel-partial-restart/       # Masked-memory partial restart Agent
-└── tools/
-    ├── bench_bandwidth.py                # Bandwidth benchmark helper
-    ├── compute_utilization.py            # TFLOPS / bandwidth utilization calculator
-    ├── extract_asm.py                    # Assembly extraction helper
-    ├── measure_bandwidth_ceiling.py      # Same-size bandwidth ceiling measurement
-    ├── measure_kernel_time.py            # Kernel latency helper
-    ├── memory_manager.py                 # Structured memory JSON manager
-    ├── profile_kernel.sh                 # AMD rocprofv3 / ATT / PMC / ASM wrapper
-    ├── profile_nvidia.sh                 # NVIDIA ncu wrapper (metrics + symptom classification)
-    ├── classify_ncu.py                   # NCU metrics -> symptom diagnosis
-    ├── extract_nvidia_asm.py             # NVIDIA SASS extraction / analysis
-    ├── ncu_helpers/                      # Bundled ncu-report parsing helpers
-    ├── input_att.yaml                    # ATT profiling configuration
-    └── rocprof-trace-decoder/ # AMD ATT decoder plugin
+├── orchestrator/
+│   ├── optimize.py                    # CLI, Campaign, workload coordination
+│   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
+│   ├── telemetry/                     # Phase timing and token telemetry
+│   ├── aggregate_dispatch.py          # Static single-file bucket embedding
+│   ├── optimization_policy.py         # leaderboard/production policy gates
+│   └── prompts/                       # Setup, inspection, baseline, and episode prompts
+├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
+├── agents/                            # Baseline Agent definition injected into campaign workspaces
+├── skills/                            # Baseline runtime skill for Codex/Pi
+├── tools/
+│   ├── sandbox.py                     # Gateway packaging and execution boundary
+│   ├── local_gateway.py               # Trusted localhost FIFO scheduler
+│   ├── memory_manager.py              # Structured iteration memory manager
+│   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
+├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
+├── gpu-wiki/                          # Hardware and optimization knowledge base
+├── reference-projects/                # Optional source-search repositories
+└── 3rdparty/                          # Humanize and profiler-analysis dependencies
 ```
+
+The `skills/` and `agents/` directories are internal runtime assets. The orchestrator links or
+installs them into generated campaign workspaces; they are not standalone repository entry
+points.
+
+### Authority boundaries
+
+| Boundary | Owner | Durable result |
+| --- | --- | --- |
+| Campaign control | `orchestrator/optimize.py` | Workspace Git history, canonical memory, aggregate state |
+| Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
+| GPU execution | `tools/sandbox.py` plus gateway | Structured evaluator result and requested profile artifacts |
+| Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
+
+The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
+incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
+supervisor does not generate optimization code: it validates, measures, records, promotes, and
+aggregates exact committed sources.
+
+## Supported Entry Point
+
+```bash
+python orchestrator/optimize.py \
+  --op-dir /path/to/operator \
+  --platform TARGET_GPU \
+  --sandbox-hardware REMOTE_GPU \
+  --framework Triton
+```
+
+The public path creates an isolated Git-worktree episode for each optimization version. A fresh
+Agent thread may perform several related profile/research/edit/validate cycles. Claude and Codex
+support bounded same-thread recovery when the terminal handoff is incomplete; canonical state
+crosses episode boundaries through Git, structured memory, journals, plans, and profiles.
+
+The main workspace name is deterministic. Leaderboard mode uses
+`kernel_opt_<op>_<framework>_<platform>`; production mode appends `_production` so a strict
+production campaign cannot silently resume permissive leaderboard history. Omitting `--framework`
+launches one child process and one independent workspace for every framework supported by the
+runtime-detected GPU vendor.
 
 ## Core Components
 
-### Top-Level Router: `SKILL.md`
+### Campaign lifecycle
 
-`SKILL.md` owns the global workflow and constraints. It parses user input, initializes the workspace, performs Step 0 hardware lookup and Roofline analysis, writes workspace configuration, and routes execution to the appropriate sub-skill.
+`Campaign` in `orchestrator/optimize.py` is the single-operator state machine:
 
-The router is responsible for:
+1. Materialize or resume a Git workspace and validate its committed V0.
+2. In production mode by default, create and pin a self-contained framework-native V1.
+3. Create one private branch/worktree and launch one multi-cycle episode per canonical version.
+4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
+   bounded same-thread recovery for Claude and Codex.
+5. Check protected paths, clean worktree state, exact candidate commit, and production policy.
+6. Independently compare a valid candidate with the incumbent in one ABBA allocation.
+7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
+   failure/pivot/block evidence.
+8. Stop on version budget, token budget, optional stall budget, target utilization, or a terminal
+   repeated blocker.
+9. Recheck production policy and package the final candidate.
 
-- Enforcing hardware-spec sourcing from `gpu-wiki`.
-- Creating `/tmp/kernel_opt_<name>/` workspaces.
-- Running Step 0 before baseline or optimization.
-- Choosing between baseline implementation, profile-driven optimization, bottleneck analysis, partial restart, and final packaging.
-- Ensuring accepted iterations are committed with Git.
-- Treating unmasked memory plus workspace `README.md` as the source of truth.
+`HEAD` is always the incumbent. A failed, regressing, or policy-violating candidate is not
+allowed to replace it.
 
-### Baseline Agent
+### Agent Runtime
 
-Path: `agents/gpu-kernel-baseline.md`
+`orchestrator/agent_runtime/` separates backend-specific command and event formats from campaign
+control. Adapters expose a common request/result model containing:
 
-The baseline Skill implements the first correct kernel version from PyTorch logic or a kernel demo. It learns the target framework through `gpu-wiki`, writes `kernel.py` and `test_kernel.py`, validates correctness, records baseline performance, writes `baseline_report.md`, creates `memory/v0.json`, and commits the baseline.
+- exit status and timeout state;
+- normalized session identity;
+- terminal token usage;
+- per-event usage deltas and phase-marker receipts when supported;
+- backend capability and observation-error metadata.
 
-### Framework Baseline Stage
+The process supervisor also protects the host execution boundary by rejecting dependency builds,
+direct host GPU execution, profiler use outside the sandbox, and mutations of a shared localhost
+gateway.
 
-Path: `orchestrator/prompts/framework_baseline.md`
+### Workspace runtime assets
 
-V0 is allowed to be the PyTorch reference wrapper, so the first real framework implementation used to be
-written independently inside every workload bucket — the same DSL bring-up and the same toolchain traps,
-repeated N times. This stage runs one dedicated session between V0 setup and workload bucketing: research
-(no profile evidence, no plan generation), implement one self-contained kernel in the campaign's framework,
-validate single-seed and 5-seed correctness through the gateway, bench, then record `memory/v1.json` and
-commit.
+`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/`
+inside each campaign workspace. It also prepares backend-specific project-local discovery trees:
 
-The orchestrator re-checks the result mechanically — framework purity via the production policy gate, plain
-Triton rather than Gluon, immutable ground truth untouched, per-shape coverage identical to v0 — and pins the
-accepted kernel commit in `framework_baseline.json`. Bucket seeding resolves that pin by sha, so every bucket
-starts from the framework kernel even after the aggregate HEAD has advanced to a dispatcher. Controlled by
-`--framework-baseline {auto,always,never}`; `auto` runs it in production mode only.
+- `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
+- `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
+- Humanize planning assets are hydrated locally without changing global user configuration.
 
-### Profile Optimizer Skill
+### Sandbox and gateway
 
-Path: `skills/gpu-kernel-profile-optimizer/SKILL.md`
+All correctness, benchmark, signature-collection, and profiling work crosses
+`tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
+submits a typed `run`/`profile` job when representable, and falls back to a self-contained `dev`
+job for SOL, aggregate, or custom commands.
 
-This Skill runs the main iterative optimization loop:
+Execution may target an external atrex-gpu-gateway or `tools/local_gateway.py`. The localhost
+gateway persists jobs in SQLite and consumes them FIFO with one worker by default. It is a
+transport-compatible trusted-code executor, not a security boundary.
+
+### Workload-aware optimization
+
+SOL and native Atrex-Bench operators use workload coordination by default:
+
+1. Collect evaluator-faithful runtime signatures in the sandbox.
+2. Retain only explicit scalar values and tensor shape/stride/dtype/layout metadata.
+3. Run the workload inspector in a data-minimized temporary workspace.
+4. Mechanically validate exact, disjoint coverage and reject partitions that split identical
+   runtime signatures.
+5. Materialize one independent Git campaign per bucket and optimize buckets concurrently.
+6. Hold aggregate edits during the first ten bucket versions.
+7. Statically embed exact committed bucket blobs into one deterministic, self-contained
+   `kernel.py`; no Agent generates dispatcher code.
+8. Accept the aggregate only after full-workload single-seed and five-additional-seed correctness
+   plus the configured strict geomean improvement over the incumbent.
+
+The generated dispatcher performs exact structural signature matching and never synchronizes or
+reads tensor contents to choose a bucket.
+
+### Production policy
+
+`optimization_mode=leaderboard` allows evidence-backed framework changes and compatible
+third-party libraries. `optimization_mode=production` is fail-closed:
+
+- the selected framework is a hard constraint;
+- third-party kernel/operator dependencies are forbidden;
+- PyTorch compute fallbacks and dynamic external-code loading are rejected;
+- `kernel.py`, embedded aggregate sources, and `solution.json` are checked mechanically;
+- violating episode candidates are rejected before promotion and recorded as failed memory.
+
+Production Triton campaigns enter a mandatory Triton-to-Gluon episode after the configured stall
+threshold. The episode receives an explicit conversion directive and TTGIR/conversion-sheet
+workflow. Conversion remains latched until a committed Gluon candidate passes correctness and
+performance-parity gates.
+
+### Long Horizon episode engine
+
+`Campaign.run()` in `orchestrator/optimize.py` invokes the internal Long Horizon engine. It creates
+an isolated branch and Git worktree from the incumbent for each episode. The Agent records
+structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
+`pivot`, or `blocked`.
+
+A candidate must leave a clean worktree, change `kernel.py`, preserve protected paths, satisfy
+production policy, and pass an exact same-allocation ABBA schedule. Accepted candidates are
+squash-promoted to the incumbent with canonical memory. Rejected and non-candidate episodes
+advance memory history without changing the incumbent kernel. Active episode state supports
+crash recovery. The internal engine has no public parser or module entry point; all settings are
+provided by `orchestrator/optimize.py`.
+
+## End-to-End Flow
+
+### 1. Resolve the operator and runtime
+
+`--op-dir` supplies all operator-specific ground truth. The orchestrator detects SOL or native
+Atrex-Bench format, probes the runtime GPU architecture, resolves the framework set, initializes
+required submodules, and creates a framework/hardware-suffixed workspace below `--workspace` or
+the current directory.
+
+### 2. Establish V0
+
+SOL operators receive a mechanically seeded PyTorch wrapper and immutable evaluator inputs.
+Native Atrex-Bench and derived inputs use a bounded setup session. V0 must have a passing complete
+workload result, `memory/v0.json`, and a Git root commit.
+
+### 3. Establish the framework baseline
+
+Production mode runs a dedicated framework-baseline session by default
+(`--framework-baseline=auto`). The orchestrator restores immutable inputs, checks framework
+purity, validates the base seed plus five additional seeds, commits the result as V1, and pins its commit for later bucket
+seeding. `always` enables this stage in leaderboard mode; `never` seeds buckets from V0.
+
+### 4. Inspect and partition workloads
+
+When `workload.jsonl` or `shapes.json` is present, the coordinator collects structural signatures,
+validates the Agent-produced bucket manifest, derives filtered operator inputs, and creates bucket
+campaigns. `--no-workload-bucketing` selects one unbucketed episode campaign.
+
+### 5. Explore one episode per version
+
+Each version repeats a coherent evidence loop as many times as needed within its episode:
 
 ```text
-Profile and evidence extraction
--> Query gpu-wiki / reference projects / web sources for relevant optimization knowledge
--> Evidence-driven planning
--> Single-category implementation
--> Correctness / performance / quality gate
--> memory/v<N>.json update and Git commit
--> Stop-condition check or next iteration
+profile -> research -> plan -> edit/compile/repair
+        -> correctness -> benchmark -> journal/checkpoint -> repeat or handoff
 ```
 
-Each iteration must use official profiler evidence, change exactly one optimization category, validate correctness before performance conclusions, and record results in structured memory.
+GPU commands run remotely while plans, source edits, journals, and Git remain local. A
+`candidate_ready` handoff is not authoritative: the supervisor validates protected paths, policy,
+clean worktree state, and the exact candidate commit, then runs incumbent/candidate ABBA in one
+gateway allocation. A rejected candidate, `pivot`, or `blocked` outcome advances canonical memory
+without changing the incumbent. Active episode state is restart-safe.
 
-### Output Contract Skill
+### 6. Aggregate and finalize
 
-Path: `skills/gpu-kernel-output-contract/SKILL.md`
+Bucket improvements are serialized through an aggregate lock. A deterministic dispatcher is
+generated from exact committed Git blobs and accepted only after complete evaluator validation.
+At termination, production mode rechecks policy and SOL campaigns emit a directly submittable
+output.
 
-This Skill packages a validated implementation into `generated_kernel.py` when a hidden evaluator requires a clean final candidate. The final file must contain valid Python source only, define `class Model(nn.Module)`, preserve the reference contract, and exclude tests, benchmarks, debug prints, Markdown, external file reads, and `__main__` blocks.
-
-### Partial Restart Agent
-
-Path: `agents/gpu-kernel-partial-restart.md`
-
-This Skill is used when no new actionable direction is available but Stop Conditions are not met. It masks about half of the previous optimization memories, preserves the latest successful iteration and baseline, and launches a fresh subagent from the current `kernel.py` and unmasked memory.
-
-### Layer Decomposition Overlay (optional)
-
-Path: `agents/gpu-kernel-decompose.md` (rules) + `orchestrator/optimize.py --layer` (driver) +
-`orchestrator/prompts/decompose.md` / `recombine.md`.
-
-By default the whole workflow operates on a **single fusion-bounded operator**, and this overlay is inert. It
-activates **only** when the input is a **composite of more than one separable op** — a whole LLM layer, or a
-smaller multi-op composite such as `rope+attention` or `attention+moe` — or the user explicitly asks to split.
-A single operator (one heavy op plus its fusable epilogue) bypasses it entirely — the common case. When active it:
-
-1. **Decomposes** the layer into fused-operator boundaries per the evidence-backed rules in
-   `agents/gpu-kernel-decompose.md` (the GEMM epilogue is the universal fuse surface; split where a reduction
-   crosses a parallelism boundary or the tiling regime changes; keep the flash attention core and MoE
-   token-sort monolithic). It emits one basic fused kernel per boundary plus a `boundaries.json` manifest
-   (per-boundary op type, shapes, SOL time from `atrex-bench/scripts/roofline.py`, and expected `%SOL` ceiling).
-2. **Fans out** each boundary into its **own standard atrex workspace** — own `kernel.py`, git (HEAD = best),
-   Step 0 roofline, baseline `v0`, and profile-driven optimization. A boundary *is* a single-operator campaign;
-   the per-operator machinery is reused unchanged.
-3. **Schedules a shared budget**: `optimize.py` owns one iteration budget (`--max-iters`) across all boundaries.
-   Each round it advances the highest live-ROI boundary by one version
-   (`priority = max(0, latency − SOL/ceiling) × decay(stall)`), so `Σ (per-boundary versions) == --max-iters`.
-   **No boundary is ever dropped** — a plateaued one is decayed and re-enters contention later. SOL is the
-   yardstick, never a stop gate (termination is plateau + the shared budget).
-4. **Recombines** each boundary's git-HEAD kernel into the full-layer kernel and validates end-to-end.
-
-gpu-wiki holds **no** partitioning content; it remains operator-optimization knowledge only. The single-operator
-path (`Campaign` in `optimize.py`) is untouched by this overlay.
-
-## End-to-End Workflow
-
-### 1. Parse Input and Initialize Workspace
-
-The workflow parses required fields from user input:
-
-| Field | Required | Notes |
-|------|----------|-------|
-| `platform` | Yes | Hardware target, e.g. `H20`, `H100`, `MI308X`, `MI355X`. |
-| `arch` | Derived | `H20/H100/H200 -> Hopper`, `MI300X/MI308X -> CDNA3`, `MI355X -> CDNA4`. |
-| `framework` | No | Target framework, e.g. `CuteDSL` or `FlyDSL`. If omitted, both modes dispatch all hardware-supported frameworks in parallel (NVIDIA: Triton/CuteDSL/Cuda; AMD: Triton/FlyDSL; fallback: Triton); every child receives one explicit framework. |
-| `optimization_mode` | Default: `leaderboard` | `leaderboard` keeps the permissive framework/third-party-library policy. `production` enforces a self-contained implementation in each explicit or auto-assigned child framework. |
-| `kernel_demo` | Yes | Initial kernel or PyTorch logic file. |
-| `gpu_wiki_path` | Default | `/tmp/gpu-wiki/`. |
-| `reference_project` | Default | `/tmp/reference-projects/`. |
-
-Workspace initialization uses:
-
-```bash
-bash reference/workspace_init.sh <name> <kernel_demo_path>
-```
-
-The script creates:
+## Workspace State
 
 ```text
-/tmp/kernel_opt_<name>/
-├── kernel.py          # Copied from kernel_demo
-├── .gitignore
-├── memory/
+kernel_opt_<name>_<framework>_<platform>[_production]/
+├── kernel.py
+├── test_kernel.py
+├── README.md
+├── memory/v<N>.json
+├── memory/long_horizon_e<NNNN>.json  # Evidence for promoted episodes
 ├── plans/
-└── profiles/
+├── profiles/
+├── framework_baseline.json
+├── dispatch_signatures.json
+├── workload_buckets.json
+├── aggregate_dispatch.json
+├── aggregation_state.json
+├── workload_buckets/                 # Independent bucket Git workspaces
+└── .atrex_long_horizon/               # Episode state, journals, telemetry, verification
 ```
 
-### 2. Step 0: Hardware Specs and Roofline Analysis
+Not every campaign uses every artifact. Git plus unmasked `memory/v<N>.json` files are the durable
+optimization history. `.atrex_long_horizon/`, temporary verification payloads, and bucket
+workspaces are excluded from main-workspace commits; their recoverable local state remains on disk.
 
-Before writing the workspace `README.md`, the workflow must:
+## Profiling and Telemetry
 
-1. Read `/tmp/gpu-wiki/README.md` and follow the indexed hardware-spec path.
-2. Find exact target-platform specs. Similar-product inference is forbidden.
-3. Record each spec in auditable source format:
-
-```text
-<metric>: <value> <unit> <- <gpu-wiki>/<relative-path>:<line-or-section>
-```
-
-4. Statically analyze the kernel demo:
-   - theoretical FLOPs
-   - theoretical bytes moved
-   - arithmetic intensity
-   - Roofline ridge point
-   - compute-bound or memory-bound classification
-5. Compute Stop Conditions as `hardware peak * 90%`, preferring measured maxima from `gpu-wiki` when available.
-6. Write hardware specs, Roofline analysis, and Stop Conditions into workspace `README.md`.
-
-### 3. Write Workspace README and Initialize Memory
-
-The workspace `README.md` is created from `reference/README.md`. It stores static task configuration, hardware specs, Roofline results, Stop Conditions, and ISA optimization targets.
-
-Structured iteration memory is initialized with:
-
-```bash
-python tools/memory_manager.py init --workspace /tmp/kernel_opt_<name>
-```
-
-From this point, the workspace `README.md` plus all unmasked `memory/v<N>.json` files are the source of truth.
-
-### 4. Stage 1: Baseline Implementation
-
-The main agent launches a subagent that follows `agents/gpu-kernel-baseline.md`.
-
-The subagent must:
-
-- Understand PyTorch semantics, shapes, dtype, layout, masks, and accuracy requirements.
-- Learn target framework APIs through `/tmp/gpu-wiki/README.md`.
-- Implement a correct baseline `kernel.py` and `test_kernel.py` using CuteDSL or FlyDSL.
-- Validate correctness with timeout protection.
-- Measure baseline performance and calculate TFLOPS / bandwidth utilization.
-- Write `baseline_report.md`.
-- Create and fill `memory/v0.json`.
-- Commit the baseline to Git.
-
-### 5. Stage 2: Profile-Driven Iterative Optimization
-
-Each optimization iteration follows the profile optimizer Skill.
-
-For the orchestrated route, all GPU execution crosses `tools/sandbox.py`: `--sandbox-hardware` selects the
-agate worker, tests run with `--no-memory`, and profiler analysis artifacts are synchronized from the worker.
-`memory/`, plans, source edits, and Git remain local; the local session records metrics from the test's
-structured `RESULT_JSON` output.
-
-The execution endpoint is independent of the workflow. Remote gateways can be selected through agate
-configuration or `--sandbox-profile`; `--sandbox-url http://127.0.0.1:8000` together with
-`--sandbox-hardware local` targets either atrex-gateway's localhost backend or the bundled
-`tools/local_gateway.py` community scheduler. Both modes use the same packaging, result parsing, artifact
-synchronization, and execution-boundary rules. The community scheduler persists the public job model in
-SQLite and consumes `dev` commands FIFO with one worker by default, preventing concurrent local campaigns
-from contending for the same GPU.
-Local mode is transport-compatible but not an isolation boundary: the server executes submitted commands
-as its current user and therefore must only accept trusted code.
-
-Important rules:
-
-- Official profile evidence is required before code changes.
-- NVIDIA evidence comes from `ncu`, wrapped by `tools/profile_nvidia.sh` (metrics parsing + symptom classification).
-- AMD evidence comes from `tools/profile_kernel.sh`, collecting ATT, PMC, and ASM artifacts.
-- After extracting bottleneck evidence, each iteration must query `gpu-wiki` first, then reference projects, then public web sources when needed, before writing the optimization plan.
-- Each iteration changes exactly one optimization category so attribution is clear.
-- Correctness must pass before performance conclusions or commits.
-- Performance records must include latency, TFLOPS, bandwidth, and peak-utilization ratios.
-- If a quality gate fails, the workflow reverts to the previous commit and records the failure.
-- In production mode, a second mechanical gate statically checks `kernel.py` and `solution.json` after every kernel-changing commit. Wrong-framework code, third-party kernel/operator dependencies, or PyTorch compute fallbacks are reverted and recorded as `production_policy_rejection`; a non-compliant final candidate is never packaged.
-
-### 6. Stop or Continue
-
-The optimizer stops when Stop Conditions in workspace `README.md` are met. Otherwise, it continues with the next profile-driven iteration. If no new actionable path is available, it may enter the partial restart workflow.
-
-## Workspace Artifacts
-
-A typical optimization task produces:
-
-```text
-/tmp/kernel_opt_<name>/
-├── README.md                 # Static configuration, sourced specs, Roofline analysis, Stop Conditions
-├── kernel.py                 # Current kernel implementation
-├── reference.py              # Optional runnable reference, when generated or provided
-├── test_kernel.py            # Correctness and performance validation entry point
-├── baseline_report.md        # Baseline implementation report
-├── generated_kernel.py       # Final evaluator-ready candidate, when packaging is required
-├── memory/
-│   ├── v0.json               # Baseline iteration record
-│   ├── v1.json               # Optimization iteration record
-│   └── ...                   # Files with masked=true are ignored by active planning
-├── plans/
-│   ├── v0_plan.md
-│   ├── v1_plan.md
-│   └── ...
-└── profiles/
-    ├── v1/                   # Per-version ncu / rocprof / ATT / PMC / ASM artifacts
-    └── ...
-```
-
-## Structured Memory Design
-
-`tools/memory_manager.py` manages per-iteration JSON files in `memory/v<N>.json`.
-
-Supported operations include:
-
-- `init`: create the `memory/` directory.
-- `create`: create a new iteration JSON file from the schema template.
-- `read`: read a specific iteration or all unmasked iterations.
-- `update`: update fields in a specific iteration JSON file.
-- `mask`: set `masked: true` on specified iterations.
-- `unmask`: set `masked: false` on specified iterations.
-- `summary`: print a performance summary table.
-- `latest`: print the latest unmasked iteration version.
-- `list`: list all iteration files with masked status.
-
-Common commands:
-
-```bash
-python tools/memory_manager.py init --workspace /tmp/kernel_opt_<name>
-python tools/memory_manager.py create --workspace /tmp/kernel_opt_<name> --version v0
-python tools/memory_manager.py read --workspace /tmp/kernel_opt_<name> --unmasked-only
-python tools/memory_manager.py update --workspace /tmp/kernel_opt_<name> --version v1 --set 'correctness.status=PASS'
-python tools/memory_manager.py mask --workspace /tmp/kernel_opt_<name> --version v2 v4
-python tools/memory_manager.py summary --workspace /tmp/kernel_opt_<name>
-```
-
-The `masked` field allows the workflow to discard stale optimization memory without deleting data. Masked files must not influence active planning, search deduplication, or optimization decisions.
-
-## Profiling Design
-
-The workflow trusts official profile evidence only:
-
-- NVIDIA: `ncu`, wrapped by `tools/profile_nvidia.sh` (metrics parsing + symptom classification)
-- AMD: `tools/profile_kernel.sh`, which wraps `rocprofv3`, ATT, PMC, and ASM extraction
-
-`reference/profile_guide.md` consolidates profiling commands, metric interpretation, evidence extraction, SASS/ASM analysis, and troubleshooting.
-
-AMD profiling outputs are placed under each iteration profile directory:
-
-```text
-profiles/v<N>/
-├── att/           # Instruction-level trace
-├── pmc/           # Hardware counter results
-└── kernel.s       # Assembly
-```
-
-Optimization decisions should be written as an evidence chain:
-
-```text
-evidence -> inference -> optimization action
-```
-
-Examples:
-
-- `PMC shows high SQ_LDS_BANK_CONFLICT` -> `LDS bank conflicts are significant` -> `try a swizzled layout`
-- `ASM shows many buffer_load_dword and few dwordx4` -> `global memory vectorization is insufficient` -> `adjust alignment and vector width`
-- `ncu shows memory dependency dominates warp stalls` -> `latency hiding is insufficient` -> `try double buffering or software pipelining`
-
-## Tooling
-
-The `tools/` directory provides:
-
-- `compute_utilization.py`: calculate TFLOPS, bandwidth, and peak-utilization percentages.
-- `bench_bandwidth.py`: run bandwidth benchmarks.
-- `measure_bandwidth_ceiling.py`: measure same-size bandwidth ceilings.
-- `measure_kernel_time.py`: helper for kernel latency measurement.
-- `extract_asm.py`: extract AMD assembly for analysis.
-- `profile_kernel.sh`: AMD profiling wrapper for rocprofv3, ATT, PMC, and ASM.
-- `profile_nvidia.sh`: NVIDIA profiling wrapper for ncu; parses metrics and classifies symptoms via `classify_ncu.py` and the bundled `ncu_helpers/`.
-- `extract_nvidia_asm.py`: extract and analyze NVIDIA SASS (from `.ncu-rep`, cubin, Triton, or CuteDSL).
-- `memory_manager.py`: manage structured iteration records.
+- NVIDIA profiling uses `tools/profile_nvidia.sh` and Nsight Compute.
+- AMD profiling uses `tools/profile_kernel.sh`, rocprofv3, ATT, PMC, and assembly extraction.
+- `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.
+- Episodes attribute wall time and token usage to profile, research, planning, implementation,
+  correctness, benchmark, and recording phases when the backend emits complete markers and usage
+  deltas.
+- Missing or inconsistent observations are retained with explicit partial/unavailable measurement
+  labels rather than fabricated values.
 
 ## Critical Constraints
 
-- Hardware specifications must not be guessed. They must come from `gpu-wiki` and include source references.
-- Archived specs without `gpu-wiki` sources are invalid.
-- Missing specs must be recorded as `UNKNOWN (gpu-wiki not found)` and escalated to the user.
-- Optimization decisions require official profile evidence: `ncu` / `tools/profile_nvidia.sh` for NVIDIA or `tools/profile_kernel.sh` / `rocprofv3` for AMD.
-- `do_bench`, `torch.cuda.Event`, and handwritten timers are timing helpers only; they cannot replace official profiler evidence for bottleneck decisions.
-- Each optimization iteration must change only one optimization category.
-- Kernel changes that fail correctness tests must not proceed to performance validation or commit.
-- Every accepted baseline and optimization iteration must be committed with Git.
-- `memory/v*.json` files with `masked: true` are discarded from active planning and must not influence future optimization decisions.
-- Final `generated_kernel.py`, when required, must contain only evaluator-ready runtime code.
-
-## Use Cases
-
-- Generate high-performance GPU kernels from PyTorch reference implementations.
-- Diagnose bottlenecks through Roofline analysis and official profiler evidence.
-- Optimize kernels on NVIDIA Hopper or AMD CDNA platforms.
-- Continue stalled optimization runs with partial restart and masked memory.
-- Produce clean evaluator-ready candidates for hidden benchmark systems.
-- Maintain an auditable, reproducible, and continuously iterative kernel optimization workflow.
+- Hardware specifications must come from `gpu-wiki` with auditable source references.
+- Official profiler evidence is required before optimization code changes.
+- Ground-truth evaluator inputs are immutable.
+- Correctness must pass before performance conclusions or promotion.
+- Every accepted candidate must be represented by Git and structured memory.
+- `masked: true` memory is excluded from active planning.
+- Production candidates must be self-contained in their selected framework.
+- Local gateway mode accepts trusted code only and should remain bound to loopback.

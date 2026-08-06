@@ -1,5 +1,0 @@
-{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"output_tokens":4}}}
-{"type":"user","message":{"content":[{"type":"tool_result","content":"ATREX_TRACE_EVENT={\"schema\":\"atrex.iteration_trace.v1\",\"kind\":\"phase_marker\",\"action\":\"start\",\"phase\":\"research\",\"marker_id\":\"marker-1\"}"}]}}
-{"type":"assistant","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"output_tokens":5}}}
-{"type":"user","message":{"content":[{"type":"tool_result","content":"ATREX_TRACE_EVENT={\"schema\":\"atrex.iteration_trace.v1\",\"kind\":\"phase_marker\",\"action\":\"end\",\"phase\":\"research\",\"marker_id\":\"marker-2\"}"}]}}
-{"type":"result","usage":{"input_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":100,"output_tokens":9}}

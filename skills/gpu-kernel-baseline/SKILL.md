@@ -17,7 +17,8 @@ Use this skill when the user provides PyTorch logic or a kernel demo and asks to
 
 This stage first understands the PyTorch semantics, then learns the framework APIs (CuteDSL or FlyDSL) through `<gpu-wiki>/README.md`, implements `kernel.py` and `test_kernel.py`, validates correctness, records performance, writes `baseline_report.md`, and writes `memory/v0.json`.
 
-The default knowledge base is `~/aka_kernel_opt/gpu-wiki/`, referenced below as `<gpu-wiki>/`.
+The orchestrator exposes the knowledge base at `./gpu-wiki/` inside each campaign workspace,
+referenced below as `<gpu-wiki>/`.
 
 ## Phase 1: Understand PyTorch Semantics
 

@@ -14,7 +14,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# rocprof-trace-decoder is cloned by install.sh at runtime
+# Optional local AMD ATT decoder checkout
 tools/rocprof-trace-decoder/
 
 # Optimization workspaces created by orchestrator/optimize.py
@@ -22,6 +22,3 @@ kernel_opt_*/
 
 # Git submodules are tracked via .gitmodules
 # reference-projects/ content is managed as submodules
-
-# Layer decomposition output created by orchestrator/optimize.py --layer
-layer_*/

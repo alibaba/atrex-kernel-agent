@@ -56,32 +56,16 @@ def link_episode_runtime(campaign: base.Campaign, workspace: Path) -> None:
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
-def episode_directives(campaign: base.Campaign) -> dict[str, str]:
+def episode_directives(campaign: base.Campaign, version: int) -> dict[str, str]:
+    agent_cli = getattr(campaign, "agent_cli", "claude")
     return {
         "hardware": base.hardware_directive(campaign.platform, campaign.arch),
         "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
+        "agent_runtime": base._agent_runtime_directive(agent_cli),
+        "plan_generator": base._plan_generator_directive(agent_cli, version),
     }
-
-
-def iteration_playbook(campaign: base.Campaign, workspace: Path, version: int) -> str:
-    """Render main's current iteration playbook as the episode's inherited workflow."""
-    agent_cli = getattr(campaign, "agent_cli", "claude")
-    return base._render(
-        base.PROMPTS_DIR / "iteration.md",
-        WORKSPACE=str(workspace),
-        N=version,
-        PREV=version - 1,
-        PLATFORM=campaign.platform,
-        NOTES=campaign.notes,
-        AGENT_RUNTIME=base._agent_runtime_directive(agent_cli),
-        PLAN_GENERATOR=base._plan_generator_directive(agent_cli, version),
-        HARDWARE=base.hardware_directive(campaign.platform, campaign.arch),
-        SANDBOX=campaign._sandbox_directive(),
-        EVALUATOR=campaign._evaluator_directive(),
-        MODE_POLICY=campaign._mode_directive(),
-    )
 
 
 def fresh_session_command(
@@ -94,9 +78,8 @@ def fresh_session_command(
     if agent_cli == "codex":
         if command[:2] != ["codex", "exec"] or command[-1] != prompt:
             raise RuntimeError("current main Codex command has no compatible exec seam")
-        # Main deliberately starts disposable Codex iterations. Long Horizon owns a
-        # different lifecycle: its bounded recovery turns must resume the same thread.
-        # Adapt that policy here instead of changing the main orchestrator command.
+        # A fresh Codex episode starts a persistent thread because bounded handoff
+        # recovery turns must resume that exact thread.
         try:
             command.remove("--ephemeral")
         except ValueError:

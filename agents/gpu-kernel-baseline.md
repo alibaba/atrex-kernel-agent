@@ -24,7 +24,7 @@ You will receive:
 | `pytorch_logic` | User-provided PyTorch logic or kernel demo |
 | `workspace_path` | Workspace absolute path (kernel_opt_<name>/) |
 | `platform` | Target platform: nvidia / amd |
-| `gpu_wiki_path` | gpu-wiki root path (default: `~/aka_kernel_opt/gpu-wiki/`) |
+| `gpu_wiki_path` | gpu-wiki root path (workspace runtime link: `./gpu-wiki/`) |
 
 ---
 

@@ -27,8 +27,8 @@ from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
 
 
-PROMPT_PATH = Path(__file__).resolve().parent / "prompts" / "episode.md"
 MODULE_ROOT = Path(__file__).resolve().parent.parent
+PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
 EVIDENCE_PREFIXES = ("plans/", "profiles/")
 
 
@@ -101,7 +101,7 @@ class LongHorizonCampaign:
         state: SupervisorState,
         conversion_pending: bool,
     ) -> str:
-        directives = main_adapter.episode_directives(self.base_campaign)
+        directives = main_adapter.episode_directives(self.base_campaign, version)
         journal_command = f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal"
         return _render(
             PROMPT_PATH.read_text(encoding="utf-8"),
@@ -121,11 +121,10 @@ class LongHorizonCampaign:
                 "EVALUATOR": directives["evaluator"],
                 "HARDWARE": directives["hardware"],
                 "SANDBOX": directives["sandbox"],
+                "AGENT_RUNTIME": directives["agent_runtime"],
+                "PLAN_GENERATOR": directives["plan_generator"],
                 "HISTORY": self._history(state),
                 "JOURNAL_COMMAND": journal_command,
-                "MAIN_ITERATION_PLAYBOOK": main_adapter.iteration_playbook(
-                    self.base_campaign, worktree.path, version
-                ),
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
                     "submit another Triton kernel. A candidate must be a committed Gluon kernel, "

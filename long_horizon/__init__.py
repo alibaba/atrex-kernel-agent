@@ -1,4 +1,4 @@
-"""Standalone long-horizon optimization supervisor for Atrex Kernel Agent."""
+"""Internal episode/worktree supervisor used by ``orchestrator.optimize``."""
 
 from .models import EpisodeHandoff, SessionResult, VerificationResult
 

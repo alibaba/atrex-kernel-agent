@@ -1,6 +1,9 @@
 # Atrex Kernel Agent
 
-AKA is an end-to-end Agent project for GPU kernel implementation, analysis, profiling, and iterative optimization. It helps an Agent turn PyTorch logic or an existing kernel into a high-performance GPU kernel through a structured, profile-driven workflow.
+AKA is an end-to-end Agent system for GPU kernel implementation, profiling, and iterative
+optimization. The current repository exposes one supported optimization entry point,
+`orchestrator/optimize.py`; the native `long_horizon/` package is its internal episode engine,
+not a second CLI.
 
 ![Atrex architecture](assets/atrex-architecture.png)
 
@@ -9,64 +12,78 @@ AKA is an end-to-end Agent project for GPU kernel implementation, analysis, prof
 ## News
 
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**. [[Leaderboard](https://research.nvidia.com/benchmarks/sol-execbench/leaderboard/collection/4/B200)]
-- [2026-07] We released **Atrex Kernel Agent v0.2.0** with a dual-route optimization system, an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
+- [2026-07] We released **Atrex Kernel Agent v0.2.0** with an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
 - [2026-07] We released **the Atrex paper**: [Are LLM-Generated GPU Kernels Production-Ready? A Trace-Driven Benchmark and Optimization Agent](https://arxiv.org/abs/2607.14541).
-- [2026-06] We released **Atrex Kernel Agent v0.1.0** as the initial open-source version, with the interactive `gpu-kernel-optimizer` Skill route, GPU Wiki knowledge base, profile-driven optimization workflow, profiling tools, and reference templates. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.1.0)]
+- [2026-06] We released **Atrex Kernel Agent v0.1.0** as the initial open-source version, with the GPU Wiki knowledge base, profile-driven optimization workflow, profiling tools, and reference templates. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.1.0)]
 
-## What It Does
+## Current Design
 
-- Creates an isolated optimization workspace under `kernel_opt_<name>/`.
-- Looks up target hardware specs from the local `gpu-wiki` knowledge base.
-- Runs Roofline analysis and sets auditable performance targets.
-- Implements a correct baseline kernel before entering optimization.
-- Runs the profile-driven optimization loop: profile with `ncu` or `rocprofv3`, extract bottleneck evidence, query `gpu-wiki` / reference projects / web sources for relevant optimization knowledge, write an evidence-based plan, apply one optimization category, validate correctness and performance, record memory, commit, then repeat until Stop Conditions are met.
-- Records plans, profile artifacts, structured memory, reports, and Git commits for every accepted iteration.
+- Accepts SOL-ExecBench operators and native Atrex-Bench shape operators through `--op-dir`.
+- Creates one isolated Git workspace per framework and target. Leaderboard workspaces use
+  `kernel_opt_<op>_<framework>_<platform>`; production workspaces add `_production`.
+- Establishes a correctness-passing V0 and, by default in production mode, a self-contained
+  framework-native V1 before optimization begins.
+- When workload bucketing is enabled, collects evaluator-faithful structural signatures,
+  partitions distinguishable workloads, and runs one independent Long Horizon campaign per bucket.
+- Lets each episode perform multiple profile/research/plan/edit/repair cycles, while the
+  supervisor alone owns budgets, terminal validation, same-allocation ABBA verification, and
+  squash promotion.
+- Builds workload aggregation mechanically from committed bucket kernels and accepts it only
+  after full-workload correctness and geomean improvement checks.
+- Preserves Git history, canonical `memory/v<N>.json`, plans, profiler evidence, episode journals,
+  verification artifacts, and aggregation provenance for recovery and audit.
 
 For the full architecture and workflow design, see [`docs/design.md`](docs/design.md).
 
 ## Quick Start
 
-See the [Quick Start guide](docs/quickstart.md) for prerequisites, installation, and complete runnable paths for both the interactive Skill route and the orchestrated loop route.
+See the [Quick Start guide](docs/quickstart.md) for prerequisites and complete runnable examples of the orchestrated optimization loop.
 
-## Optimization Routes
+## Orchestrated Optimization
 
-| Route | Driver | Termination | Best for |
-|-------|--------|-------------|----------|
-| [Route 1: Interactive Skill](#route-1-interactive-skill-skillmd) | `gpu-kernel-optimizer` Skill + hooks, invoked inside a coding session | In-session judgment, guarded by hooks | Hands-on, interactive optimization from a coding runtime |
-| [Route 2: Orchestrated Loop](#route-2-orchestrated-loop-orchestratoroptimizepy) | `orchestrator/optimize.py`, spawning fresh clean sessions per iteration | Mechanical (max iterations / token budget / target utilization) | Unattended, budget-bounded, batch optimization |
+`orchestrator/optimize.py` is the repository's only supported optimization entry point. It owns
+mechanical termination, state recovery, Agent session isolation, sandbox execution, workload
+coordination, and final packaging.
 
-Both routes share the same knowledge base (`gpu-wiki/`), reference projects, tools (`tools/`), and structured memory format (`memory/v<N>.json`).
+![orchestrated optimization loop](assets/optimize_workflow.png)
 
-## Route Details
-
-### Route 1: Interactive Skill (`SKILL.md`)
-
-This route installs the `gpu-kernel-optimizer` Skill and workflow hooks into your coding runtime. You then drive the optimization interactively from a coding session, and the hooks keep the workflow on track (memory reads, plan reads, correctness gates, stop-condition checks).
-
-The optimization workspace `kernel_opt_<name>/` is created **in the current working directory** where you run the session, so all artifacts stay next to where you are working.
-
-Internal users should configure git `insteadOf` URL redirect rules so that submodules and dependencies resolve against the internal network before running `git submodule update`. **External users can skip this step entirely.**
-
-The install path is optional; defaults to `~/aka_kernel_opt`.
-
-Common installer options:
-
-```bash
-bash install.sh --prefix ~/my_path    # Install to a custom directory
-bash install.sh --hooks-only          # Install or update hooks only
-bash install.sh --without-github      # Skip GitHub-hosted reference repos
-bash install.sh --uninstall           # Remove hooks installed by this script
+```text
+operator inputs
+  -> V0 correctness baseline
+  -> optional framework-native V1
+  -> structural workload inspection
+  -> parallel bucket campaigns (or one unbucketed campaign)
+  -> Long Horizon episode worktree
+  -> journal + terminal handoff
+  -> policy/protected-path checks + ABBA verification
+  -> squash promotion
+  -> deterministic full-workload aggregation when bucketed
+  -> finalization
 ```
 
-The installer detects supported runtime home directories and prepares local hooks when available. It ships **only** the Skill route; the orchestrator route (Route 2) runs from the source repo and is pruned from the installed skill directory.
+The orchestrator runs directly from the source repo and gives each canonical version an isolated
+Git branch and worktree. A fresh Claude, Qoder, Codex, or Pi session owns one Long Horizon episode
+and may execute many related engineering cycles before publishing a structured terminal handoff.
+Claude and Codex can resume the same thread for bounded handoff recovery. The supervisor then
+validates the journal and candidate, runs incumbent/candidate ABBA verification in one gateway
+allocation, and squash-promotes only a strict correctness-passing improvement. The incumbent HEAD
+therefore remains the best verified kernel. Repository-scoped skills are prepared under each
+campaign's `.agents/skills/` without modifying the user's global Codex installation.
 
-### Route 2: Orchestrated Loop (`orchestrator/optimize.py`)
+For SOL and native Atrex-Bench campaigns, the default flow collects evaluator-faithful,
+production-visible runtime signatures in the sandbox. Signatures contain explicit non-tensor
+arguments and tensor shape/stride/dtype/layout metadata, never tensor contents or hidden workload
+values. The data-minimized inspector writes an exact, disjoint `workload_buckets.json`; workloads
+with identical signatures cannot be split. Buckets then optimize concurrently in independent Git
+workspaces. The first ten bucket versions form an aggregation warmup. Once every bucket has reached
+V10 and produced a committed improvement, the orchestrator statically embeds the committed bucket
+kernels into one self-contained dispatcher. Later wins replace only the affected bucket source.
+No Agent or LLM writes aggregate dispatch code.
 
-![route2 optimization loop](assets/optimize_workflow.png)
-
-This route runs the optimization loop from the source repo without installing anything into your coding runtime. `orchestrator/optimize.py` owns the **outer loop** and spawns a fresh, clean Claude, Qoder, Codex, or Pi CLI session for each iteration. Select the backend with `--agent-cli claude|qodercli|codex|pi` (default: `claude`). State crosses the session boundary only through disk (`memory/v<N>.json`, `plans/`, `profiles/`, and git), and HEAD is always the best kernel. Codex runs use `codex exec --json --ephemeral`; repository-scoped skills are prepared under each campaign's `.agents/skills/` without modifying the user's global Codex installation.
-
-For single-operator SOL and atrex-bench campaigns, the default outer flow first collects evaluator-faithful, production-visible runtime signatures in the sandbox. These signatures contain only explicit non-tensor arguments and tensor shape/stride/dtype/layout metadata—never tensor contents or evaluator-only workload values. The workload inspector runs in a data-minimized temporary workspace containing only those signatures and writes an exact, disjoint `workload_buckets.json`; every bucket boundary must therefore be reproducible by the no-sync production dispatcher, and indistinguishable signatures cannot be split. Every bucket then runs the original optimization loop concurrently in an independent Git workspace. The first ten iterations are an aggregation warmup: improvements are recorded but do not edit the main kernel. Once every bucket has reached at least V10 and has a committed improvement, the orchestrator deterministically copies every bucket's committed kernel and generates an exact runtime dispatcher—no coding-agent/LLM aggregation is used. Every later bucket improvement replaces only that bucket module and regenerates the dispatcher. Every candidate is accepted only after a separate full-workload, multi-seed correctness run and full-workload geomean benchmark beat the main incumbent. Dispatcher sources, visibility policy, provenance, pending improvements, accepted kernels, and rejected attempts are auditable in the main workspace's Git history, `dispatch_signatures.json`, `aggregate_dispatch.json`, and `aggregation_state.json`.
+Every aggregate candidate must pass a separate full-workload single-seed run, five additional
+correctness seeds, and a full-workload geomean comparison against the main incumbent. Signatures,
+visibility policy, source blobs, pending wins, accepted kernels, and rejections remain auditable in
+Git, `dispatch_signatures.json`, `aggregate_dispatch.json`, and `aggregation_state.json`.
 
 Correctness/performance validation and profiling run on an atrex-gpu-gateway sandbox selected by
 `--sandbox-hardware`. The gateway worker receives code and test/profile inputs only: optimizer `memory/`, plans,
@@ -92,7 +109,7 @@ submitted commands run directly as the server user. The bundled scheduler serial
 persists their status in SQLite, and speaks the same public `agate dev`/jobs API. See
 [docs/local_gateway.md](docs/local_gateway.md) for startup, queue, cancellation, and compatibility details.
 
-Termination is **mechanical**, not left to in-session judgment: the loop stops on a hard budget (max iterations or token budget) or a target-utilization short-circuit on a committed, correctness-passing iteration.
+Termination is **mechanical**, not left to in-session judgment: the campaign stops on a hard budget (maximum canonical versions or token budget), an optional stall limit, or a target-utilization short-circuit on a promoted correctness-passing version.
 
 Everything op-specific (workspace name, reference, and full workload/shape set) is read from `--op-dir`.
 Ground-truth files are never edited. Bucket workspaces receive derived filtered `workload.jsonl` or
@@ -104,30 +121,38 @@ Triton/FlyDSL on AMD, or Triton on unknown hardware.
 Key options:
 
 ```bash
---max-iters N        # Hard cap on optimization iterations
+--max-iters N        # Hard cap on canonical optimization versions/episodes
 --max-workload-buckets N # Inspector bucket cap (default 8)
 --aggregate-min-improvement-pct PCT # Full-workload gain required for aggregate acceptance
---no-workload-bucketing # Restore the legacy single-workspace SOL flow
---token-budget N     # Hard token cap across all sessions (0 = no cap)
---agent-cli CLI      # Optimization session backend: claude (default), qodercli, codex, or pi
+--no-workload-bucketing # Run one unbucketed episode campaign
+--token-budget N     # Hard token cap across all episode turns (0 = no cap)
+--agent-cli CLI      # Episode backend: claude (default), qodercli, codex, or pi
 --optimization-mode MODE # leaderboard (default) or production
 --framework DSL      # One explicit DSL; omit to parallel-dispatch all supported DSLs
+--framework-baseline MODE # auto (production only), always, or never
 --target-util PCT    # Peak-utilization %% short-circuit (default 90)
+--iter-timeout S     # Wall-clock budget for one complete episode (default 5400)
+--setup-timeout S    # V0 setup session timeout (default 7200)
 --sandbox-hardware GPU # agate selector/alias; independent of the logical --platform name
 --sandbox-profile P  # Optional pre/prod endpoint; default uses agate config
 --sandbox-url URL    # Explicit endpoint; use http://127.0.0.1:8000 with hardware=local
 --sandbox-timeout S  # Remote command timeout, max 600 seconds
 --workspace DIR      # Working directory for the campaign (default: current directory)
---max-stall N        # Stop after N consecutive no-commit iterations (0 = disabled)
+--max-stall N        # Stop after N consecutive unpromoted episodes (0 = disabled)
 --convert-after N    # Triton only: after N stalls, require Gluon conversion until it succeeds (default 3)
+--handoff-resumes N  # Same-thread recovery turns for an incomplete episode handoff (default 2)
+--verify-repeats N   # Incumbent/candidate ABBA repeat pairs (default 2)
+--verify-run-timeout S # Per evaluator run timeout inside ABBA verification (default 120)
+--min-improvement-pct PCT # Strict ABBA gain required for promotion (default >0%)
 --arch ARCH          # Override auto-detected runtime arch, e.g. sm_103 or gfx942
 ```
 
-Auto-dispatched main campaigns use flat framework/hardware suffixes; for example,
+Auto-dispatched main campaigns use flat framework/hardware suffixes. Leaderboard examples are
 `<workspace>/kernel_opt_<name>_triton_h20` and
-`<workspace>/kernel_opt_<name>_cutedsl_h20`. Each main workspace owns its full-workload `kernel.py`,
+`<workspace>/kernel_opt_<name>_cutedsl_h20`; production uses distinct paths such as
+`<workspace>/kernel_opt_<name>_triton_h20_production`. Each main workspace owns its full-workload `kernel.py`,
 bucket manifest, aggregation history, and ignored `workload_buckets/` directory containing the
-independent bucket Git workspaces. Each bucket receives its own full iteration and
+independent bucket Git workspaces. Each bucket receives its own full episode/version and
 token budgets. Explicit `--framework` campaigns use the same naming convention.
 
 `--optimization-mode leaderboard` preserves the existing permissive `CLAUDE.md` workflow: sessions may
@@ -136,10 +161,10 @@ use a different/mixed implementation or third-party kernel libraries when profil
 hardware-supported frameworks and binds every child campaign to its assigned framework. V0 may remain the
 PyTorch correctness baseline, but every accepted optimized candidate must be implemented directly and
 exclusively in that child's framework. Third-party kernel/operator imports, calls, and solution dependencies are forbidden. A mechanical
-post-session gate rejects and reverts non-compliant kernel commits, records a `production_policy_rejection`,
+post-episode gate rejects non-compliant candidates, records the rejection,
 and refuses to package a non-compliant final kernel. A production Triton campaign escalates to the same
 toolchain's Gluon DSL after three consecutive stalls. Once triggered, conversion is mandatory and retries
-immediately until correctness and performance parity pass; later iterations remain in Gluon.
+immediately until correctness and performance parity pass; later episodes remain in Gluon.
 
 ```bash
 python orchestrator/optimize.py \
@@ -152,8 +177,8 @@ orchestrator deliberately does not compare their names or reported GPU models be
 may be aliased or desensitized. Runtime architecture probing remains authoritative when an omitted
 `--framework` requires vendor-specific dispatch.
 
-All four backends run non-interactively with clean session state and the same workspace-local skills,
-prompts, sandbox constraints, and quality gates. Authenticate the selected CLI first with
+All four backends run non-interactively and start each episode with clean conversational state,
+using the same workspace-local skills, prompt, sandbox constraints, and quality gates. Authenticate the selected CLI first with
 `claude auth status`, `qodercli status`, `codex login status`, or `pi --list-models`. Provider-specific
 settings can be supplied through `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`,
 `ATREX_CODEX_SESSION_SETTINGS`, or `ATREX_PI_SESSION_SETTINGS`; `ATREX_SESSION_SETTINGS` remains the
@@ -182,17 +207,20 @@ that case `--token-budget` cannot be enforced and `--max-iters` remains the hard
 
 ```text
 .
-├── SKILL.md                         # Route 1: gpu-kernel-optimizer router manifest
-├── install.sh                       # Route 1 installer / uninstaller
-├── orchestrator/                    # Route 2: clean-session optimization orchestrator
-│   ├── optimize.py                  # Outer optimization loop driver
-│   └── prompts/                     # Per-session prompts (setup, framework baseline, iteration, convert)
-├── agents/                          # Subagent definitions used by both routes
+├── orchestrator/                    # Public optimization entry and shared policy
+│   ├── optimize.py                  # Long Horizon campaign driver
+│   ├── agent_runtime/               # Claude/Qoder/Codex/Pi backend adapters
+│   ├── telemetry/                   # Phase token aggregation
+│   └── prompts/                     # Setup, inspection, baseline, and episode prompts
+├── long_horizon/                    # Internal episode/worktree/ABBA engine
+├── agents/                          # Workspace-local baseline Agent definition
 ├── docs/                            # Detailed project design docs
-├── reference/                       # Workspace, plan, memory, and profiling templates
-├── skills/                          # Baseline, optimizer, restart, and output-contract modules
-├── tools/                           # Profiling, utilization, memory, and measurement tools
-└── gpu-wiki/                        # Local GPU knowledge base
+├── reference/                       # Workspace init, evaluator adapters, schemas, SOL packaging
+├── reference-projects/              # Optional source-search repositories used by episodes
+├── skills/                          # Workspace-local baseline skill used by Agent sessions
+├── tools/                           # Sandbox, local gateway, profiling, memory, and measurement tools
+├── gpu-wiki/                        # Architecture-scoped GPU knowledge base
+└── 3rdparty/                        # Runtime planning and profiler-analysis dependencies
 ```
 
 ## Acknowledgements

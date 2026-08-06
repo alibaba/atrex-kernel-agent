@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${ROCPROF_TRACE_DECODER_DIR:-}" ]]; then
     DECODER_DIR="$ROCPROF_TRACE_DECODER_DIR"
 elif [[ -d "$SCRIPT_DIR/rocprof-trace-decoder" ]]; then
-    # Prefer the repo cloned by install.sh into tools/rocprof-trace-decoder
+    # Prefer an optional local checkout under tools/rocprof-trace-decoder.
     if [[ -f "$SCRIPT_DIR/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so" ]]; then
         DECODER_DIR="$SCRIPT_DIR/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64"
     else

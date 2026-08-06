@@ -1,40 +1,34 @@
-# Long-horizon supervisor
+# Episode supervisor internals
 
-This package is a long-horizon entry point layered directly on the current main orchestrator. It
-deliberately leaves `orchestrator/optimize.py`, its prompts, `tools/sandbox.py`, reference files, and
-the memory manager unchanged.
+This package implements the native optimization engine used by
+`orchestrator/optimize.py`. It is not a separate command-line entry point.
 
-```bash
-python -m long_horizon \
-  --op-dir /path/to/operator \
-  --platform B200 \
-  --sandbox-hardware REMOTE_GPU \
-  --framework CuteDSL \
-  --max-iters 8 \
-  --iter-timeout 18000
-```
+Each canonical optimization version is explored in an isolated Git branch and worktree. A coding
+agent may run multiple related profile/research/edit/validate cycles, preserve private checkpoint
+commits, and finally publish one structured handoff: `candidate_ready`, `pivot`, or `blocked`.
 
-`python -m long_horizon` delegates argument parsing and orchestration to
-`orchestrator.optimize.main()`. Consequently it inherits main's operator resolution, framework
-auto-dispatch, V0 setup, framework baseline, production policy, workload bucketing and aggregation,
-layer decomposition and ROI scheduling, workspace naming, sandbox selection, and final packaging.
-Run `python -m long_horizon --help` for the exact current-main CLI plus four long-horizon options.
+The supervisor validates the journal and candidate commit, checks production policy, and evaluates
+incumbent and candidate in an exact same-allocation ABBA schedule. A strict correctness-passing
+improvement is squash-promoted to the incumbent; every other outcome records canonical
+`memory/vN.json` evidence without changing the incumbent kernel.
 
-Only the optimization-round mechanism changes. Each main iteration becomes one long coding-agent
-episode in an isolated Git worktree. The episode uses the current main iteration playbook but may run
-many related profile/research/edit/validate/benchmark cycles and private checkpoint commits before
-publishing `candidate_ready`, `pivot`, or `blocked`. Claude and Codex can resume the same session to
-repair an incomplete handoff; Qoder and Pi run a single long invocation because the long-horizon
-adapter does not expose a persistent resume seam for them.
+Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
+such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
+`--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
 
-The incumbent worktree is untouched during exploration. A candidate is promoted only after an exact
-same-allocation ABBA schedule passes correctness and beats the incumbent; promotion is a single squash
-commit with canonical `memory/vN.json` evidence. A rejected/pivoted/blocked episode commits only its
-failed `memory/vN.json` record, preserving main's version budgets, bucket v10 aggregation barrier, and
-layer plateau accounting without changing the incumbent kernel.
+## Module responsibilities
 
-Runtime state is stored below `.atrex_long_horizon/` in the generated campaign workspace and excluded
-through `.git/info/exclude`. Verification payloads live temporarily below
-`aggregate_kernels/.atrex_long_horizon_verify/`, which lets the current sandbox's evaluator payload
-route carry the ABBA driver without changing `tools/sandbox.py`. The verifier invokes main's
-`_sandbox_command`, so endpoint/profile, sync, queue-wait, and timeout behavior stay aligned with main.
+- `campaign.py`: episode budgets, recovery, terminal-state processing, and promotion decisions.
+- `git_episode.py`: private branch/worktree lifecycle, protected-path checks, squash promotion,
+  and canonical outcome commits.
+- `session.py`: one long coding-agent invocation plus bounded same-thread recovery for Claude and
+  Codex.
+- `journal.py` and `protocol.py`: atomic journal/handoff I/O and terminal validation.
+- `verifier.py` and `remote_abba.py`: one-allocation incumbent/candidate ABBA execution.
+- `store.py` and `telemetry.py`: restart state, archived attempts, and best-effort episode metrics.
+
+`.atrex_long_horizon/state.json` and `active_episode.json` are restart state, while each
+`episodes/eNNNN/` directory archives the prompt, journal-derived attempt, worktree snapshot,
+verification payload, and telemetry available for that episode. These files are intentionally
+excluded from campaign commits. Accepted evidence is also written to committed
+`memory/long_horizon_eNNNN.json` and the canonical `memory/v<N>.json`.

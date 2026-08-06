@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Clean-session orchestrator for atrex-kernel-agent.
+"""Long-horizon episode orchestrator for atrex-kernel-agent.
 
 Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
-Each iteration is a **fresh coding-agent session** (`claude` by default, or `qodercli` / `codex` /
-`pi` via `--agent-cli`) over the *same* git workspace. State crosses the session boundary only
-through disk — exactly the artifacts atrex already maintains: `memory/v<N>.json`, `plans/`,
-`profiles/`, and git. HEAD is always the best kernel (a regressing iteration reverts and is
-never committed).
+Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
+The coding agent may profile, research, edit, validate, benchmark, repair, and checkpoint as many
+times as needed before publishing one terminal handoff. The supervisor independently verifies a
+candidate against the incumbent with a same-allocation ABBA schedule and squash-promotes only a
+strict, correctness-passing improvement.
 
 Termination policy
 ------------------
-- Outer loop (this file):  HARD budget break = max iterations OR token budget,
+- Outer loop (this file):  HARD budget break = max versions/episodes OR token budget,
   plus a mechanical target short-circuit (peak utilization >= --target-util on a
-  committed, correctness-PASS iteration). No plateau ladder, no convergence judge.
-- Inner loop (one session): exactly one profile->edit->validate->bench cycle, bounded
-  by a hang-backstop timeout (SIGKILL of the process group). See prompts/iteration.md.
+  committed, correctness-PASS version). No convergence judge.
+- Inner loop (one episode): a persistent engineering direction with structured journal and
+  bounded handoff recovery, isolated from the incumbent branch.
 
-Per-iteration reasoning stays in markdown (the gpu-kernel-* skills + prompts/*.md);
+Episode reasoning stays in the self-contained prompt under ``prompts/``;
 this file only does mechanism: spawn, time-bound, token-account, read state, decide stop.
 
 For SOL and atrex-bench operators, a workload-inspection stage first partitions
@@ -31,7 +31,7 @@ Usage
 -----
     # single operator with an explicit framework:
     python orchestrator/optimize.py \
-        --name mla_decode --kernel-demo /path/to/demo.py \
+        --op-dir /path/to/operator \
         --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
         --agent-cli qodercli \
         --max-iters 20 --token-budget 8000000 --target-util 90
@@ -48,13 +48,6 @@ Usage
         --op-dir /path/to/op --platform H20 --framework Triton \
         --optimization-mode production
 
-    # whole LLM layer (optional decomposition overlay):
-    #   decompose -> N per-boundary workspaces (each a standard single-op campaign) ->
-    #   shared --max-iters budget scheduled by live ROI (no boundary dropped) -> recombine.
-    #   Σ (per-boundary optimization versions) == --max-iters.
-    python orchestrator/optimize.py --layer \
-        --name decoder_layer --kernel-demo /path/to/layer.py \
-        --platform H20 --framework CuteDSL --max-iters 40
 """
 from __future__ import annotations
 
@@ -63,7 +56,6 @@ import concurrent.futures
 import json
 import math
 import os
-import random
 import re
 import shlex
 import shutil
@@ -72,38 +64,42 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+# Direct script execution and package imports must share one module identity. The episode engine
+# imports ``orchestrator.optimize`` lazily; expose the repository root and bind this live module
+# into the namespace package so ``python orchestrator/optimize.py`` cannot load a second copy.
+if __name__ == "__main__":
+    _repo_import_root = str(Path(__file__).resolve().parent.parent)
+    if _repo_import_root not in sys.path:
+        sys.path.insert(0, _repo_import_root)
+    import orchestrator as _orchestrator_package
+
+    sys.modules["orchestrator.optimize"] = sys.modules[__name__]
+    setattr(_orchestrator_package, "optimize", sys.modules[__name__])
+
 try:
     from . import agent_runtime as _agent_runtime
     from .aggregate_dispatch import embed_bucket_sources
-    from .telemetry import IterationTelemetryRecorder, changed_paths_since
     from .optimization_policy import (
         OPTIMIZATION_MODE_CHOICES,
         install_workspace_policy,
         optimization_mode_directive,
         production_kernel_violations,
-        reject_production_commit,
         source_uses_gluon,
     )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
-    import agent_runtime as _agent_runtime  # type: ignore[no-redef]
-    from aggregate_dispatch import embed_bucket_sources  # type: ignore[no-redef]
-    from telemetry import (  # type: ignore[no-redef]
-        IterationTelemetryRecorder,
-        changed_paths_since,
-    )
-    from optimization_policy import (  # type: ignore[no-redef]
+    from orchestrator import agent_runtime as _agent_runtime  # type: ignore[no-redef]
+    from orchestrator.aggregate_dispatch import embed_bucket_sources  # type: ignore[no-redef]
+    from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
         install_workspace_policy,
         optimization_mode_directive,
         production_kernel_violations,
-        reject_production_commit,
         source_uses_gluon,
     )
 
@@ -116,11 +112,10 @@ SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
 CONVERT_PERF_TOL = 0.05   # triton->gluon is a direct translation: gluon must be within +5% of triton
-CONVERT_MIN_TOKENS = 200_000  # below this, flag a shallow attempt in the retry diagnostics
 DEFAULT_CONVERT_AFTER = 3     # mandatory Triton->Gluon escalation after three consecutive stalls
-MEMORY_MASK_INTERVAL = 100    # periodically drop half of active optimization history
-SALVAGE_TIMEOUT_S = 1200      # post-mortem session budget for an iteration killed mid-flight
-INTERRUPTED_CATEGORY = "interrupted_session"
+DEFAULT_HANDOFF_RESUMES = 2
+DEFAULT_VERIFY_REPEATS = 2
+DEFAULT_VERIFY_RUN_TIMEOUT = 120
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
 FRAMEWORK_BASELINE_VERSION = 1     # the framework baseline always occupies v1, retries overwrite it
 FRAMEWORK_BASELINE_TIMEOUT_S = 10800
@@ -276,7 +271,7 @@ def dispatch_framework_campaigns(
 
     Each child receives a flat framework/hardware suffix, so its eventual
     workspace is ``<workspace_base>/kernel_opt_<op>_<framework>_<platform>``
-    (or the equivalent layer paths). Budgets remain per campaign; a failed
+    (with ``_production`` appended in production mode). Budgets remain per campaign; a failed
     framework does not cancel the other independent campaigns.
     """
     common_argv = _without_cli_options(
@@ -459,7 +454,7 @@ def should_convert_to_gluon(
 
     Once the threshold is reached this remains true after a failed conversion because
     the stall counter is deliberately not reset.  Only a committed Gluon HEAD releases
-    the latch and returns the campaign to ordinary optimization.
+    the latch and returns the campaign to unconstrained optimization episodes.
     """
     return (
         convert_after > 0
@@ -817,7 +812,7 @@ def _sandbox_command(
 
 
 def _test_result_from_stdout(stdout: str) -> dict:
-    """Read the structured result emitted by reference/test_kernel.py."""
+    """Read the structured result emitted by the active sandbox harness."""
     for line in reversed(stdout.splitlines()):
         if line.startswith(TEST_RESULT_PREFIX):
             result = json.loads(line[len(TEST_RESULT_PREFIX):])
@@ -889,183 +884,6 @@ def read_memory(workspace: Path, n: int) -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-
-
-def memory_record_is_empty(memory: Optional[dict]) -> bool:
-    """Whether a record carries no findings at all.
-
-    `memory_manager create` writes an all-null template, so a session killed mid-round usually
-    leaves a file with no verdict, no measurement, and no lessons. Treating that as a real record
-    would silently skip recovery and hand the next session a blank round.
-    """
-    if not memory:
-        return True
-    gate = (memory.get("quality_gate") or {}).get("result")
-    status = (memory.get("correctness") or {}).get("status")
-    latency = (memory.get("performance") or {}).get("latency_us")
-    category = (memory.get("optimization") or {}).get("action_category")
-    lessons = memory.get("pitfalls_and_fixes") or memory.get("search_log") or memory.get("open_directions")
-    return not (gate or status or isinstance(latency, (int, float)) or category or lessons)
-
-
-def session_transcript_path(agent_cli: str, session_id: str) -> Optional[Path]:
-    """Locate a finished session's transcript so a post-mortem session can read what it tried.
-
-    Resolved by globbing for the session id rather than reconstructing each CLI's project-slug
-    encoding, which is an internal convention. Codex sessions are ephemeral and leave none.
-    """
-    if not session_id:
-        return None
-    if agent_cli == "pi":
-        configured = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
-        if configured:
-            session_root = Path(configured).expanduser()
-        else:
-            agent_root = Path(
-                os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent")
-            ).expanduser()
-            session_root = agent_root / "sessions"
-        for candidate in sorted(session_root.glob(f"**/*_{session_id}.jsonl")):
-            return candidate
-        return None
-    roots = {"claude": ".claude", "qodercli": ".qoder"}
-    root = roots.get(agent_cli)
-    if root is None:
-        return None
-    for candidate in sorted((Path.home() / root / "projects").glob(f"*/{session_id}.jsonl")):
-        return candidate
-    return None
-
-
-def record_interrupted_iteration(
-    workspace: Path,
-    n: int,
-    *,
-    kind: str,
-    exit_status: int,
-    timed_out: bool,
-    timeout_s: int,
-    stderr_tail: str = "",
-) -> Path:
-    """Mechanical fallback record for an iteration killed before it wrote its own memory.
-
-    Every version must leave a record: `latest_version` and the next session's history read are
-    both driven by `memory/v*.json`, so a hole makes the following sessions re-derive state from
-    scratch and re-run already-refuted experiments. Merges into a partial record instead of
-    overwriting it, and stays uncommitted so it survives the safety-net `git reset --hard`.
-    """
-    memory_path = workspace / "memory" / f"v{n}.json"
-    try:
-        memory = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        memory = {}
-    if not isinstance(memory, dict):
-        memory = {}
-
-    if timed_out:
-        cause = f"{kind} session killed by the {timeout_s}s hang backstop"
-        status = "TIMEOUT_FAIL"
-    else:
-        cause = f"{kind} session crashed with exit={exit_status}"
-        status = "FAIL"
-    tail = stderr_tail.strip()[:500]
-    failure_reason = f"{cause}; no result was recorded by the session" + (f". stderr: {tail}" if tail else "")
-
-    memory["version"] = f"v{n}"
-    memory["masked"] = False
-    memory.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
-    memory["git_commit_hash"] = None
-    memory["quality_gate"] = {"result": "FAIL", "failure_reason": failure_reason}
-    correctness = memory.setdefault("correctness", {})
-    if isinstance(correctness, dict):
-        correctness["status"] = status
-    else:
-        memory["correctness"] = {"status": status}
-    optimization = memory.setdefault("optimization", {})
-    if not isinstance(optimization, dict):
-        optimization = {}
-        memory["optimization"] = optimization
-    optimization["action_category"] = INTERRUPTED_CATEGORY
-    optimization["action_description"] = (
-        f"{cause}; whatever it was attempting is unvalidated and its conclusions are untrustworthy"
-    )
-    pitfalls = memory.setdefault("pitfalls_and_fixes", [])
-    if not isinstance(pitfalls, list):
-        pitfalls = []
-        memory["pitfalls_and_fixes"] = pitfalls
-    pitfalls.append({
-        "error_type": "infra",
-        "error_message": failure_reason,
-        "lesson": (
-            "This round was cut off by infrastructure, not by evidence. Do not treat its direction "
-            "as a refuted dead-end, and do not assume any measurement from it is valid."
-        ),
-    })
-
-    memory_path.parent.mkdir(parents=True, exist_ok=True)
-    memory_path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return memory_path
-
-
-def mask_half_memory(workspace: Path, iteration: int) -> list[str]:
-    """Randomly mask half of active optimization memory every 100 iterations.
-
-    The baseline and the latest record stay visible so the next iteration retains its
-    correctness anchor and can read v<PREV>. The latest recorded committed win is also
-    preserved when it can be identified from git.
-    """
-    if iteration <= 0 or iteration % MEMORY_MASK_INTERVAL != 0:
-        return []
-
-    active: list[tuple[int, Path, dict]] = []
-    for n in range(1, latest_version(workspace) + 1):
-        data = read_memory(workspace, n)
-        if data is not None and not data.get("masked", False):
-            active.append((n, workspace / "memory" / f"v{n}.json", data))
-    if not active:
-        return []
-
-    latest_n, latest_path, latest_data = active[-1]
-    pitfalls = latest_data.get("pitfalls_and_fixes")
-    if isinstance(pitfalls, list) and any(
-        item.get("error_type") == "periodic_memory_mask" and item.get("iteration") == iteration
-        for item in pitfalls if isinstance(item, dict)
-    ):
-        return []
-
-    protected = {latest_n}
-    committed_wins = [
-        n for n, _, data in active
-        if commit_changed_kernel(workspace, data.get("git_commit_hash"))
-    ]
-    if committed_wins:
-        protected.add(committed_wins[-1])
-
-    eligible = [(n, path, data) for n, path, data in active if n not in protected]
-    mask_count = min(len(active) // 2, len(eligible))
-    selected = random.sample(eligible, mask_count)
-    masked_versions = [f"v{n}" for n, _, _ in selected]
-    for _, path, data in selected:
-        data["masked"] = True
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    if not isinstance(pitfalls, list):
-        pitfalls = []
-        latest_data["pitfalls_and_fixes"] = pitfalls
-    pitfalls.append({
-        "error_type": "periodic_memory_mask",
-        "iteration": iteration,
-        "error_message": f"periodic memory refresh masked {', '.join(masked_versions)}",
-        "lesson": "Use the remaining history as hints and reconsider previously discarded directions.",
-    })
-    latest_path.write_text(
-        json.dumps(latest_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(
-        f"[orchestrator] iteration {iteration}: randomly masked {mask_count}/{len(active)} "
-        f"active memory records (kept v0, v{latest_n}, and latest committed win)",
-        flush=True,
-    )
-    return masked_versions
 
 
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────
@@ -1382,19 +1200,6 @@ def commit_changed_kernel(workspace: Path, ref: object) -> bool:
     return r.returncode == 0 and bool(r.stdout.strip())
 
 
-def kernel_won(workspace: Path, pre_head: str) -> bool:
-    """True iff the session produced a real win: kernel.py differs between pre_head and HEAD.
-    (A transition check across the session — the session may make several commits.)"""
-    if not pre_head:
-        return False
-    try:
-        r = subprocess.run(["git", "diff", "--quiet", pre_head, "HEAD", "--", "kernel.py"],
-                           cwd=str(workspace), capture_output=True)
-    except OSError:
-        return False
-    return r.returncode == 1  # 0 = identical, 1 = differs
-
-
 def read_stall(workspace: Path) -> Optional[int]:
     """Persisted live stall counter, or None when absent (caller reconstructs)."""
     p = workspace / STALL_STATE_FILE
@@ -1468,24 +1273,6 @@ def best_validated_latency_us(workspace: Path, *, from_version: Optional[int] = 
         latency = (memory.get("performance") or {}).get("latency_us")
         if isinstance(latency, (int, float)):
             best = float(latency) if best is None else min(best, float(latency))
-    return best
-
-
-def incumbent_latency(workspace: Path, upto_n: int) -> Optional[float]:
-    """Best committed geomean latency (performance.latency_us) over versions [0, upto_n): the min
-    among versions whose recorded commit git confirms was a real win (commit_changed_kernel). Git
-    is the arbiter, so a reverted dead-end is excluded even if it recorded a hash. Used only for a
-    convert session's performance-parity check — the revert TARGET is the pre-convert HEAD, which is
-    always the incumbent (wins commit, dead-ends don't touch kernel.py)."""
-    best: Optional[float] = None
-    for i in range(0, upto_n):
-        m = read_memory(workspace, i)
-        h = m.get("git_commit_hash") if m else None
-        if not commit_changed_kernel(workspace, h):
-            continue
-        lat = (m.get("performance") or {}).get("latency_us")
-        if isinstance(lat, (int, float)) and (best is None or lat < best):
-            best = float(lat)
     return best
 
 
@@ -1738,8 +1525,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
             dst = runtime_skills_dir / name
             if src.exists() and not dst.exists():
                 os.symlink(src, dst)
-        # The prompts reference these agent definitions by name (gpu-kernel-baseline,
-        # gpu-kernel-convert, gpu-kernel-profiler, gpu-kernel-research, kernel-optimize).
+        # Claude/Qoder setup prompts can launch the baseline agent by name.
         if agents_src.exists() and not runtime_agents_dir.exists():
             os.symlink(agents_src, runtime_agents_dir)
 
@@ -1799,20 +1585,23 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0          # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    iter_timeout: int = 5400       # 90 min hang-backstop per optimization session
+    iter_timeout: int = 5400       # 90 min wall-clock budget per optimization episode
     setup_timeout: int = 7200      # 120 min for the baseline session
-    salvage_timeout: int = SALVAGE_TIMEOUT_S  # 0 = skip the post-mortem agent, record mechanically
-    max_stall: int = 0             # 0 = disabled (budget-only); >0 = stop after N no-commit iters
+    max_stall: int = 0             # 0 = disabled; >0 = stop after N unpromoted episodes
     convert_after: int = DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     sandbox_hardware: str = ""     # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
     sandbox_profile: str = ""      # pre/prod; empty preserves normal agate URL resolution
     sandbox_url: str = ""          # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""      # native shapes route: canonical checkout owning run_eval.py
-    agent_cli: str = "claude"       # clean-session backend: claude, qodercli, codex, or pi
+    agent_cli: str = "claude"       # episode backend: claude, qodercli, codex, or pi
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     framework_baseline: str = "auto"        # auto = production only; always | never override it
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
+    handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
+    verify_repeats: int = DEFAULT_VERIFY_REPEATS
+    verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
+    min_improvement_pct: float = 0.0
     on_improvement: Optional[Callable[["Campaign", int, dict], None]] = field(
         default=None, repr=False, compare=False
     )
@@ -1837,78 +1626,6 @@ class Campaign:
               f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
         if res.exit_status != 0 or res.timed_out:
             print(f"[orchestrator] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
-
-    def _salvage_memory(self, n: int, res: SessionResult, kind: str) -> bool:
-        """Run a short record-only session that reconstructs the killed round into memory/v<N>.json."""
-        if self.salvage_timeout <= 0:
-            return False
-        if res.timed_out:
-            kill_reason = f"it hit the {self.iter_timeout}s hang backstop and was killed"
-        else:
-            kill_reason = (
-                f"it exited with status {res.exit_status} "
-                "(typically an API failure such as a provider rate limit, or a policy termination)"
-            )
-        transcript = session_transcript_path(self.agent_cli, res.session_id)
-        prompt = _render(
-            PROMPTS_DIR / "salvage.md",
-            WORKSPACE=str(self.workspace),
-            N=n,
-            PREV=n - 1,
-            KIND=kind,
-            KILL_REASON=kill_reason,
-            TRANSCRIPT=str(transcript) if transcript else "(no transcript was retained for this session)",
-            STDOUT_TAIL=res.stdout_tail or "(empty)",
-            MODE_POLICY=self._mode_directive(),
-        )
-        head_before = git_head(self.workspace)
-        salvage_res = run_session(
-            self.workspace, prompt, timeout=self.salvage_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
-            reasoning_effort="high",
-        )
-        self._account(salvage_res, f"salvage v{n}")
-        # A post-mortem session must not move HEAD. Undo with --soft: an unwanted commit disappears
-        # while the interrupted round's uncommitted kernel edits stay in the worktree for the next session.
-        if head_before and git_head(self.workspace) != head_before:
-            subprocess.run(
-                ["git", "reset", "--soft", head_before],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            print(
-                f"[orchestrator] salvage v{n} committed against policy; HEAD restored to {head_before[:8]}",
-                file=sys.stderr,
-                flush=True,
-            )
-        return not memory_record_is_empty(read_memory(self.workspace, n))
-
-    def _ensure_iteration_memory(self, n: int, res: SessionResult, kind: str) -> None:
-        """Guarantee every round leaves a memory record, even when its session never finished one."""
-        if not memory_record_is_empty(read_memory(self.workspace, n)):
-            return
-        salvaged = self._salvage_memory(n, res, kind)
-        if memory_record_is_empty(read_memory(self.workspace, n)):
-            record_interrupted_iteration(
-                self.workspace, n,
-                kind=kind,
-                exit_status=res.exit_status,
-                timed_out=res.timed_out,
-                timeout_s=self.iter_timeout,
-                stderr_tail=res.stderr_tail,
-            )
-            salvaged = False
-        print(
-            f"[orchestrator] v{n} memory: "
-            f"{'reconstructed by salvage session' if salvaged else 'mechanical interrupted-round record'}",
-            flush=True,
-        )
 
     def _link_runtime(self) -> None:
         native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
@@ -2121,8 +1838,7 @@ class Campaign:
         quirks. Buckets derive from the commit pinned here, so the bring-up cost is paid once.
 
         Idempotent and resume-safe: a pinned baseline is never rewritten, and a campaign that has
-        already progressed past V0 without a pin is left exactly as it is. Not wired into
-        LayerCampaign, which drives its own sessions.
+        already progressed past V0 without a pin is left exactly as it is.
         """
         action, reason = self._framework_baseline_decision()
         if action == "skip":
@@ -2507,27 +2223,6 @@ class Campaign:
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
 
-    def _record_failed_convert(self, n: int, reason: str) -> None:
-        """Persist a failed/reverted triton->gluon conversion as memory/v<N>.json so the NEXT convert
-        attempt reads it and avoids repeating the same lowering. Survives the safety-net git reset
-        (which would otherwise destroy a committed record)."""
-        mem_dir = self.workspace / "memory"
-        mem_dir.mkdir(parents=True, exist_ok=True)
-        (mem_dir / f"v{n}.json").write_text(json.dumps({
-            "version": f"v{n}", "masked": False,
-            "optimization": {"action_category": "triton_to_gluon_conversion",
-                             "action_description": "reverted defective conversion"},
-            "correctness": {"status": "FAIL"},
-            "quality_gate": {"result": "FAIL", "failure_reason": reason},
-            "pitfalls_and_fixes": [{"error_type": "performance", "error_message": reason,
-                                    "lesson": "this triton->gluon lowering was rejected; try a different "
-                                              "approach (check async/TMA copy, layouts, accumulator residency) next attempt"}],
-            "git_commit_hash": None,
-        }, indent=2), encoding="utf-8")
-
-    def budget_exhausted(self) -> bool:
-        return self.token_budget > 0 and self.tokens_spent >= self.token_budget
-
     def _notify_improvement(
         self, n: int, mem: Optional[dict], previous_latency: Optional[float]
     ) -> None:
@@ -2576,334 +2271,32 @@ class Campaign:
                 flush=True,
             )
 
-    def _begin_iteration_telemetry(
-        self, n: int, pre_head: str
-    ) -> Optional[IterationTelemetryRecorder]:
-        try:
-            recorder = IterationTelemetryRecorder(
-                workspace=self.workspace,
-                campaign_id=self.campaign_name,
-                version=n,
-                runtime_id=self.agent_cli,
-                base_head=pre_head,
-                base_kernel_blob=git_kernel_blob(self.workspace),
-                monotonic_clock=time.monotonic,
-                utc_clock=lambda: datetime.now(timezone.utc).isoformat(),
-                attempt_id=str(uuid.uuid4()),
-            )
-            recorder.agent_started()
-            return recorder
-        except Exception as exc:
-            print(
-                f"[orchestrator] WARNING: could not start telemetry for v{n}: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return None
-
-    def _finish_iteration_telemetry(
-        self,
-        recorder: Optional[IterationTelemetryRecorder],
-        n: int,
-        memory: Optional[dict],
-    ) -> None:
-        if recorder is None:
-            return
-        try:
-            recorder.finalize(
-                memory=memory,
-                post_head=git_head(self.workspace),
-                post_kernel_blob=git_kernel_blob(self.workspace),
-                changed_paths=changed_paths_since(self.workspace, recorder.base_head),
-            )
-        except Exception as exc:
-            print(
-                f"[orchestrator] WARNING: could not finalize telemetry for v{n}: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-
     def run(self) -> str:
-        if latest_version(self.workspace) < 0:
-            self.setup_baseline()
-        else:
-            if not git_head(self.workspace):
-                raise RuntimeError(
-                    "cannot resume: memory/v0.json exists but the workspace has no Git HEAD; "
-                    "recover and validate the V0 baseline before starting an optimization iteration"
-                )
-            print(f"[orchestrator] resuming: latest = v{latest_version(self.workspace)}", flush=True)
-            preserve_interrupted_tracked_changes(
-                self.workspace, f"resume {self.campaign_name}"
-            )
-            self._link_runtime()  # ensure runtime symlinks exist for iteration sessions
+        """Run the native long-horizon episode supervisor for this campaign."""
+        from long_horizon.campaign import LongHorizonCampaign
+        from long_horizon.session import LongSessionRunner
+        from long_horizon.verifier import GatewayABBAValidator
 
-        self.ensure_framework_baseline()
-
-        if self.optimization_mode == "production" and latest_version(self.workspace) > 0:
-            violations = production_kernel_violations(self.workspace, self.framework)
-            if violations and not head_kernel_is_initial_baseline(self.workspace):
-                raise RuntimeError(
-                    "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
-                )
-            if violations:
-                print(
-                    "[orchestrator] production resume: HEAD kernel is still the "
-                    "original V0 baseline; continuing until a framework-compliant "
-                    "candidate is accepted",
-                    flush=True,
-                )
-
-        stall = read_stall(self.workspace)   # persisted live counter (single source of truth)
-        if stall is None:
-            stall = reconstruct_stall(self.workspace)  # bootstrap from git when no state file yet
-            write_stall(self.workspace, stall)
-        if stall > 0:
-            print(f"[orchestrator] stall counter restored: {stall} rounds without progress", flush=True)
-        infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
-        n = latest_version(self.workspace)  # 0 after baseline
-        mask_half_memory(self.workspace, n)  # also covers resuming an unmasked v100/v200/...
-        while True:
-            conversion_pending = should_convert_to_gluon(
-                self.framework,
-                stall,
-                self.convert_after,
-                head_is_gluon=head_kernel_is_gluon(self.workspace),
-            )
-            if n >= self.max_iters:
-                if conversion_pending:
-                    raise RuntimeError(
-                        "mandatory Triton->Gluon conversion did not succeed before max-iters"
-                    )
-                return self._finish("budget: max-iters")
-            if self.budget_exhausted():
-                if conversion_pending:
-                    raise RuntimeError(
-                        "mandatory Triton->Gluon conversion did not succeed before token-budget"
-                    )
-                return self._finish("budget: token-budget")
-
-            n += 1
-            # Triton→Gluon escalation is a latch, not a periodic best-effort attempt. Once
-            # `convert_after` consecutive stalls are reached, every following session is a
-            # convert-only retry until a correctness- and parity-passing Gluon HEAD is committed.
-            do_convert = conversion_pending
-            if do_convert:
-                print(f"[orchestrator] triton stalled {stall} iters -> triton->gluon convert session v{n}", flush=True)
-                prompt = _render(PROMPTS_DIR / "convert.md",
-                                 WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
-                                 PLATFORM=self.platform, ARCH=self.arch or "the runtime GPU arch",
-                                 NOTES=self.notes,
-                                 HARDWARE=hardware_directive(self.platform, self.arch),
-                                 SANDBOX=self._sandbox_directive(),
-                                 EVALUATOR=self._evaluator_directive(),
-                                 MODE_POLICY=self._mode_directive())
-            else:
-                prompt = _render(PROMPTS_DIR / "iteration.md",
-                                 WORKSPACE=str(self.workspace), N=n, PREV=n - 1,
-                                 PLATFORM=self.platform, NOTES=self.notes,
-                                 AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
-                                 PLAN_GENERATOR=_plan_generator_directive(self.agent_cli, n),
-                                 HARDWARE=hardware_directive(self.platform, self.arch),
-                                 SANDBOX=self._sandbox_directive(),
-                                 EVALUATOR=self._evaluator_directive(),
-                                 MODE_POLICY=self._mode_directive())
-            previous_latency = incumbent_latency(self.workspace, n)
-            pre_head_was_gluon = head_kernel_is_gluon(self.workspace)
-            pre_head = git_head(self.workspace)  # win = a commit that changes kernel.py vs this
-            telemetry = (
-                None if do_convert else self._begin_iteration_telemetry(n, pre_head)
-            )
-            res = run_session(
-                self.workspace, prompt, timeout=self.iter_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
-                extra_environment=(telemetry.environment() if telemetry else None),
-            )
-            self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
-            if telemetry is not None:
-                try:
-                    telemetry.agent_completed(
-                        session_id=res.session_id,
-                        exit_status=res.exit_status,
-                        timed_out=res.timed_out,
-                        terminal_usage=res.terminal_usage,
-                        events=res.events,
-                        capabilities=res.capabilities,
-                        observation_errors=res.observation_errors,
-                    )
-                except Exception as exc:
-                    print(
-                        f"[orchestrator] WARNING: could not record telemetry attempt v{n}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    telemetry = None
-
-            # Robust infra-failure handling: distinguish crash vs timeout, retry up to 15
-            # consecutive failures with progressive backoff before giving up. A 2-fail
-            # cutoff was too aggressive — transient API rate-limits and short network blips
-            # regularly produced back-to-back non-zero exits with low tokens, killing the
-            # whole campaign for a recoverable hiccup. Backoff avoids hammering a
-            # rate-limited endpoint.
-            if res.exit_status != 0 or res.timed_out:
-                infra_fails += 1
-                if res.timed_out:
-                    backoff = min(60 * infra_fails, 300)
-                    notice = f"timeout #{infra_fails}"
-                else:
-                    backoff = min(30 * infra_fails, 180)
-                    notice = f"infra fail #{infra_fails} (exit={res.exit_status})"
-                if infra_fails < 15:
-                    # Back off before retrying to avoid hammering a rate-limited API
-                    print(f"[orchestrator] {notice}, backing off {backoff}s", flush=True)
-                    time.sleep(backoff)
-                # Recover this round's findings once the endpoint has cooled: a killed session wrote
-                # no memory, and an empty version forces the next session to re-derive everything.
-                self._ensure_iteration_memory(n, res, "convert" if do_convert else "iter")
-                if infra_fails >= 15:
-                    self._finish_iteration_telemetry(
-                        telemetry, n, read_memory(self.workspace, n)
-                    )
-                    if do_convert:
-                        raise RuntimeError(
-                            "mandatory Triton->Gluon conversion could not complete after "
-                            f"{infra_fails} consecutive failed sessions"
-                        )
-                    if res.timed_out:
-                        return self._finish(f"infra: {infra_fails} consecutive timeouts")
-                    return self._finish(
-                        f"infra: {infra_fails} consecutive sessions crashed (exit={res.exit_status}) "
-                        f"(likely API key / auth issue — {_agent_auth_hint(self.agent_cli)})"
-                    )
-            else:
-                infra_fails = 0
-
-            mem = read_memory(self.workspace, n)
-            won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
-            if won and self.optimization_mode == "production":
-                violations = production_kernel_violations(
-                    self.workspace,
-                    self.framework,
-                    require_gluon=pre_head_was_gluon,
-                )
-                if violations:
-                    reject_production_commit(self.workspace, n, pre_head, violations)
-                    print(
-                        "[orchestrator] production policy rejected v"
-                        f"{n}: {'; '.join(violations)}; reverted to {pre_head[:8]}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    mem = read_memory(self.workspace, n)
-                    won = False
-            if not do_convert:
-                self._finish_iteration_telemetry(telemetry, n, mem)
-            if do_convert:
-                # A direct triton->gluon translation must preserve BOTH correctness and performance.
-                # Accept only a committed gluon kernel whose geomean is within +CONVERT_PERF_TOL of the
-                # incumbent triton HEAD. Otherwise reject, keep triton, record WHY, and immediately
-                # retry conversion in the next clean session. Ordinary Triton optimization stays
-                # disabled until conversion succeeds.
-                # Accept only when the COMMITTED HEAD kernel is gluon, correctness PASSed, and geomean is
-                # within +CONVERT_PERF_TOL of the incumbent triton HEAD. Detect the committed gluon via git
-                # HEAD (not memory's git_commit_hash, which a session may leave unset even after committing).
-                conv_lat = (mem.get("performance") or {}).get("latency_us") if mem else None
-                gate_pass = bool(mem) and (mem.get("quality_gate") or {}).get("result") == "PASS"
-                head_gluon = head_kernel_is_gluon(self.workspace)
-                prev_best = incumbent_latency(self.workspace, n)
-                parity_ok = (prev_best is None or (isinstance(conv_lat, (int, float))
-                             and conv_lat <= prev_best * (1.0 + CONVERT_PERF_TOL)))
-                if head_gluon and gate_pass and isinstance(conv_lat, (int, float)) and parity_ok:
-                    stall = 0            # converted (correctness + <=5% perf parity) -> fresh Gluon phase
-                    write_stall(self.workspace, stall)
-                    print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
-                    self._notify_improvement(n, mem, previous_latency)
-                    self._notify_iteration(n, mem, True)
-                    if peak_util(mem) >= self.target_util:
-                        mask_half_memory(self.workspace, n)
-                        return self._finish(
-                            f"success: peak_util {peak_util(mem):.1f}% >= "
-                            f"{self.target_util:.0f}%"
-                        )
-                    mask_half_memory(self.workspace, n)
-                    continue
-                # Revert every rejected kernel-changing conversion commit, including a session that
-                # incorrectly committed another Triton kernel.  The next clean attempt must always
-                # start from the same accepted Triton incumbent until a Gluon candidate passes.
-                if won and pre_head:
-                    subprocess.run(["git", "reset", "--hard", pre_head], cwd=str(self.workspace),
-                                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if not head_gluon:
-                        reason = "convert session committed a non-Gluon kernel"
-                    elif isinstance(conv_lat, (int, float)) and prev_best and not parity_ok:
-                        reason = (
-                            f"regressed {conv_lat / prev_best - 1:+.1%} vs triton "
-                            f"(> {CONVERT_PERF_TOL:.0%})"
-                        )
-                    else:
-                        reason = "correctness gate not PASS"
-                    self._record_failed_convert(n, reason)
-                    print(f"[orchestrator] convert rejected ({reason}); reverted to triton HEAD {pre_head[:8]}", flush=True)
-                else:
-                    # A session may leave an uncommitted Gluon edit behind. Restore the committed
-                    # Triton/record HEAD before retrying so every attempt starts from auditable state.
-                    if kernel_is_gluon(self.workspace) and not head_gluon:
-                        subprocess.run(
-                            ["git", "reset", "--hard", "HEAD"],
-                            cwd=str(self.workspace),
-                            check=False,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    if read_memory(self.workspace, n) is None:
-                        self._record_failed_convert(n, "convert session produced no committed gluon kernel")
-                    print(
-                        "[orchestrator] convert produced no committed gluon kernel; "
-                        "mandatory conversion remains latched",
-                        flush=True,
-                    )
-                if res.tokens < CONVERT_MIN_TOKENS:
-                    print(
-                        f"[orchestrator] convert v{n} ended shallowly ({res.tokens} tokens, no gluon); "
-                        "retrying conversion next session",
-                        flush=True,
-                    )
-                # Preserve the reached threshold. This makes the next loop iteration another
-                # conversion attempt rather than returning to Triton optimization.
-                stall = max(stall, self.convert_after)
-                write_stall(self.workspace, stall)
-                self._notify_iteration(n, read_memory(self.workspace, n), False)
-                mask_half_memory(self.workspace, n)
-                continue
-
-            if won:                        # reuse the git-native win computed above
-                self._notify_improvement(n, mem, previous_latency)
-                self._notify_iteration(n, mem, True)
-                if peak_util(mem) >= self.target_util:
-                    mask_half_memory(self.workspace, n)
-                    return self._finish(
-                        f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%"
-                    )
-                stall = 0
-                write_stall(self.workspace, stall)
-            else:
-                stall += 1
-                write_stall(self.workspace, stall)
-                self._notify_iteration(n, mem, False)
-                conversion_now_required = should_convert_to_gluon(
-                    self.framework,
-                    stall,
-                    self.convert_after,
-                    head_is_gluon=head_kernel_is_gluon(self.workspace),
-                )
-                if self.max_stall > 0 and stall >= self.max_stall and not conversion_now_required:
-                    mask_half_memory(self.workspace, n)
-                    return self._finish(f"stall: {stall} iterations with no commit")
-            mask_half_memory(self.workspace, n)
+        verifier = GatewayABBAValidator(
+            hardware=self.sandbox_hardware,
+            profile=self.sandbox_profile,
+            url=self.sandbox_url,
+            timeout=self.sandbox_timeout,
+            repeats=self.verify_repeats,
+            per_run_timeout=self.verify_run_timeout,
+            min_improvement_pct=self.min_improvement_pct,
+        )
+        engine = LongHorizonCampaign(
+            base_campaign=self,
+            max_version=self.max_iters,
+            token_budget=self.token_budget,
+            session_timeout=self.iter_timeout,
+            handoff_resumes=self.handoff_resumes,
+            max_stall=self.max_stall,
+            verifier=verifier,
+            session_runner=LongSessionRunner(agent_cli=self.agent_cli),
+        )
+        return self._finish(engine.run())
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
@@ -4921,9 +4314,12 @@ class WorkloadBucketCoordinator:
             target_util=parent.target_util,
             iter_timeout=parent.iter_timeout,
             setup_timeout=parent.setup_timeout,
-            salvage_timeout=parent.salvage_timeout,
             framework_baseline="never",
             framework_baseline_timeout=parent.framework_baseline_timeout,
+            handoff_resumes=parent.handoff_resumes,
+            verify_repeats=parent.verify_repeats,
+            verify_run_timeout=parent.verify_run_timeout,
+            min_improvement_pct=parent.min_improvement_pct,
             max_stall=parent.max_stall,
             convert_after=parent.convert_after,
             sandbox_hardware=parent.sandbox_hardware,
@@ -5301,503 +4697,9 @@ class WorkloadBucketCoordinator:
         return summary
 
 
-# ── layer campaign (optional decomposition overlay) ─────────────────────────────
-
-# Default expected achievable %SOL per op class — the ROI ceiling ONLY (never a stop gate).
-# Overridden per-boundary by boundaries.json "ceiling"; see agents/gpu-kernel-decompose.md §5.
-DEFAULT_CEILING = {
-    "gemm": 0.85, "moe_gemm": 0.85,
-    "attention": 0.72,
-    "norm": 0.85, "elementwise": 0.85, "reduce": 0.85,
-    "sort": 0.70, "scatter": 0.70,
-}
-
-
-def best_latency_us(workspace: Path) -> Optional[float]:
-    """Best (min) recorded latency across all versions of a boundary workspace, or None."""
-    lv = latest_version(workspace)
-    best = None
-    for n in range(0, lv + 1):
-        mem = read_memory(workspace, n)
-        if not mem:
-            continue
-        lat = (mem.get("performance") or {}).get("latency_us")
-        if isinstance(lat, (int, float)):
-            best = lat if best is None else min(best, float(lat))
-    return best
-
-
-def best_perf_by_shape(workspace: Path) -> Optional[dict]:
-    """Per-shape best (min) latency_us across all versions, keyed by integer sid.
-
-    Reads ``performance.latency_us_by_shape`` from each memory/v<n>.json. Returns
-    None when no version records per-shape latencies (caller falls back to the
-    scalar path). SOL and latency MUST be aggregated over the same shape set, so
-    the sids here match those in the workspace roofline.json (see sol_ms_by_shape).
-    """
-    lv = latest_version(workspace)
-    best: dict[str, float] = {}
-    for n in range(0, lv + 1):
-        mem = read_memory(workspace, n)
-        if not mem:
-            continue
-        per = (mem.get("performance") or {}).get("latency_us_by_shape")
-        if not isinstance(per, dict):
-            continue
-        for sid, lat in per.items():
-            if isinstance(lat, (int, float)):
-                best[sid] = min(best.get(sid, float("inf")), float(lat))
-    return best or None
-
-
-def shape_sol_ms(entry: dict) -> Optional[float]:
-    """SOL (ms) for one roofline.json shape entry. A campaign targets ONE platform, so we do
-    NOT match a platform key — just take the SOL value however it's stored:
-      - flat:  entry["sol_time_ms"] = 0.123
-      - nested: entry["SOL_time_ms"] = {<anything>: 0.123}  -> take the value (any key)
-    This deliberately ignores the platform label so "B200" / "NVIDIA B200" / "NVIDIA B200
-    (SM100)" all just work — there is no key to get wrong.
-    """
-    if not isinstance(entry, dict):
-        return None
-    flat = entry.get("sol_time_ms")
-    if isinstance(flat, (int, float)):
-        return float(flat)
-    block = entry.get("SOL_time_ms")
-    if isinstance(block, (int, float)):
-        return float(block)
-    if isinstance(block, dict):
-        vals = [v for v in block.values() if isinstance(v, (int, float))]
-        if vals:
-            return float(vals[0])
-    return None
-
-
-def sol_ms_by_shape(workspace: Path) -> Optional[dict]:
-    """Per-shape SOL (ms) for a boundary, read from the workspace's ``roofline.json``
-    (``shapes[sid]`` -> SOL via shape_sol_ms). Keyed by the integer sid shared with
-    shapes.json and the memory latency_us_by_shape. None if roofline.json is absent.
-    """
-    rp = workspace / "roofline.json"
-    if not rp.exists():
-        return None
-    try:
-        shapes = (json.loads(rp.read_text(encoding="utf-8")).get("shapes") or {})
-    except (OSError, json.JSONDecodeError):
-        return None
-    out = {sid: shape_sol_ms(entry) for sid, entry in shapes.items()}
-    out = {sid: v for sid, v in out.items() if v is not None}
-    return out or None
-
-
-def plateau_rounds(workspace: Path, eps: float = 0.05) -> int:
-    """Trailing count of optimization versions (v1..) that did NOT reduce best latency by >= eps.
-
-    LAYER MODE ONLY: drives per-boundary priority decay and the all-boundaries-plateaued short-
-    circuit. Distinct from the single-op stall->convert counter (see kernel_won / read_stall),
-    which keys off committed kernel.py changes, not latency deltas. A reverted / no-latency
-    version counts as non-progress — a boundary is never dropped, its priority just shrinks.
-    """
-    lv = latest_version(workspace)
-    if lv < 1:
-        return 0
-    best = None
-    progressed: list[bool] = []
-    for n in range(0, lv + 1):
-        mem = read_memory(workspace, n)
-        lat = (mem.get("performance") or {}).get("latency_us") if mem else None
-        lat = float(lat) if isinstance(lat, (int, float)) else None
-        if n == 0:
-            best = lat
-            continue
-        made = bool(lat is not None and best is not None and lat < best * (1.0 - eps))
-        if lat is not None and (best is None or lat < best):
-            best = lat
-        progressed.append(made)
-    trailing = 0
-    for made in reversed(progressed):
-        if made:
-            break
-        trailing += 1
-    return trailing
-
-
-@dataclass
-class LayerCampaign:
-    """Whole-LLM-layer campaign: decompose -> N per-boundary workspaces -> shared-budget
-    scheduler -> recombine. Each boundary is a standard single-operator campaign; this class
-    only adds the decomposition, the live-ROI scheduler, and the recombine. The single-op path
-    (Campaign) is untouched.
-    """
-    name: str
-    layer_demo: str
-    platform: str
-    framework: str
-    notes: str = "none"
-    arch: str = ""
-    work_dir: str = ""             # explicit working directory; "" = Path.cwd() (backward compat)
-    workspace_suffix: str = ""     # internal auto-dispatch suffix, e.g. triton_h20
-    roofline_py: str = ""
-    op_dir: str = ""               # atrex-bench native op dir (shapes.json / roofline.json /
-                                   # metadata.json / input.py / reference.py) — the full shape
-                                   # set + SOL + anchor source. Passed in; never hardcoded.
-    max_iters: int = 20            # SHARED across boundaries: sum of per-boundary versions
-    token_budget: int = 0
-    plateau_k: int = 3             # all boundaries plateau_rounds >= k -> layer short-circuit
-    plateau_eps: float = 0.05
-    iter_timeout: int = 5400
-    setup_timeout: int = 7200
-    decompose_timeout: int = 5400
-    recombine_timeout: int = 5400
-    sandbox_hardware: str = ""
-    sandbox_profile: str = ""
-    sandbox_url: str = ""
-    sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
-    agent_cli: str = "claude"
-    optimization_mode: str = "leaderboard"
-    tokens_spent: int = field(default=0, init=False)
-
-    @property
-    def campaign_name(self) -> str:
-        suffix = f"_{self.workspace_suffix}" if self.workspace_suffix else ""
-        return f"{self.name}{suffix}"
-
-    @property
-    def layer_dir(self) -> Path:
-        base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        return base / f"layer_{self.campaign_name}"
-
-    def _boundary_ws(self, bname: str) -> Path:
-        base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        boundary_name = f"{self.name}__{bname}"
-        if self.workspace_suffix:
-            boundary_name += f"_{self.workspace_suffix}"
-        return base / f"kernel_opt_{boundary_name}"
-
-    def _account(self, res: SessionResult, label: str) -> None:
-        self.tokens_spent += res.tokens
-        print(f"[layer] {label}: exit={res.exit_status} timed_out={res.timed_out} "
-              f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
-        if res.exit_status != 0 or res.timed_out:
-            print(f"[layer] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
-
-    def budget_exhausted(self) -> bool:
-        return self.token_budget > 0 and self.tokens_spent >= self.token_budget
-
-    def _sandbox_directive(self) -> str:
-        return sandbox_directive(
-            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
-        )
-
-    def _mode_directive(self) -> str:
-        return optimization_mode_directive(self.optimization_mode, self.framework)
-
-    def _install_workspace_policy(self, workspace: Path) -> None:
-        install_workspace_policy(
-            workspace,
-            self.optimization_mode,
-            self.framework,
-            agent_runtime=self.agent_cli,
-        )
-
-    def _manifest_path(self) -> Path:
-        return self.layer_dir / "boundaries.json"
-
-    def _read_manifest(self) -> dict:
-        return json.loads(self._manifest_path().read_text(encoding="utf-8"))
-
-    # ── phase 1: decompose ────────────────────────────────────────────────────
-    def decompose(self) -> None:
-        self.layer_dir.mkdir(parents=True, exist_ok=True)
-        link_runtime(self.layer_dir)
-        self._install_workspace_policy(self.layer_dir)
-        prompt = _render(
-            PROMPTS_DIR / "decompose.md",
-            LAYER_DIR=str(self.layer_dir), LAYER_DEMO=self.layer_demo,
-            PLATFORM=self.platform, ROOFLINE_PY=self.roofline_py,
-            OP_DIR=self.op_dir, NOTES=self.notes,
-            DECOMPOSE_DOC=str(REPO_ROOT / "agents" / "gpu-kernel-decompose.md"),
-            HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._sandbox_directive(),
-            MODE_POLICY=self._mode_directive(),
-        )
-        res = run_session(
-            self.layer_dir, prompt, timeout=self.decompose_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
-        )
-        self._account(res, "decompose")
-        if not self._manifest_path().exists():
-            raise RuntimeError("decompose did not produce boundaries.json")
-
-    # ── phase 2: per-boundary baseline workspaces ─────────────────────────────
-    def setup_boundaries(self) -> list[dict]:
-        manifest = self._read_manifest()
-        boundaries = manifest.get("boundaries") or []
-        if not boundaries:
-            raise RuntimeError("boundaries.json lists no boundaries")
-        for b in boundaries:
-            ws = self._boundary_ws(b["name"])
-            b["workspace"] = str(ws)
-            if latest_version(ws) >= 0:
-                self._install_workspace_policy(ws)
-                continue  # already set up (resume)
-            demo = self.layer_dir / b["kernel_demo"]
-            boundary_name = f"{self.name}__{b['name']}"
-            if self.workspace_suffix:
-                boundary_name += f"_{self.workspace_suffix}"
-            subprocess.run(["bash", str(WORKSPACE_INIT), boundary_name, str(demo)],
-                           cwd=str(ws.parent), check=True)
-            link_runtime(ws)
-            self._install_workspace_policy(ws)
-            self._write_shape_frame(ws, b)
-            prompt = _render(
-                PROMPTS_DIR / "setup.md",
-                WORKSPACE=str(ws), PLATFORM=self.platform, FRAMEWORK=self.framework,
-                KERNEL_DEMO=str(demo), NOTES=self.notes,
-                AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
-                BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
-                HARDWARE=hardware_directive(self.platform, self.arch),
-                SANDBOX=self._sandbox_directive(),
-                EVALUATOR=(
-                    "## Evaluation route: derived layer boundary\n\n"
-                    "This boundary is not a complete Atrex-Bench operator directory. Build its "
-                    "V0 full-shape harness once, commit it, and keep it immutable afterwards."
-                ),
-                MODE_POLICY=self._mode_directive(),
-            )
-            res = run_session(
-                ws, prompt, timeout=self.setup_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
-                reasoning_effort="high",
-            )
-            self._account(res, f"baseline {b['name']}")
-            if read_memory(ws, 0) is None:
-                raise RuntimeError(f"baseline failed for boundary {b['name']} (no memory/v0.json)")
-        # persist workspace paths back into the manifest for the recombine session
-        self._manifest_path().write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        return boundaries
-
-    def _write_shape_frame(self, ws: Path, b: dict) -> None:
-        """Materialize the boundary's atrex-bench-format op files into its workspace so the
-        optimization session benches the SAME full shape set every round, keyed by integer sid:
-          - shapes.json  : {"0": {"init_kwargs": null, "input_kwargs": {...}}, ...}  (layer-shared)
-          - roofline.json: {"shapes": {"0": {"semantic_W_flops": {..}, "SOL_time_ms": {"<hw>": ms}}}}
-        sid is the atrex-bench integer id ("0","1",...) shared across shapes.json, roofline.json,
-        and the memory latency_us_by_shape — NOT a uuid hash and NOT a "BxS" string. This is the
-        ground-truth bench set (immutable per campaign); the session must NOT bench a single
-        hand-picked "representative" shape.
-        """
-        manifest = self._read_manifest()
-        shapes = manifest.get("shapes")            # atrex-bench shapes.json body: {sid: {...}}
-        roofline = b.get("roofline")               # {"shapes": {sid: {...SOL_time_ms...}}}
-        if isinstance(shapes, dict) and shapes:
-            (ws / "shapes.json").write_text(json.dumps(shapes, indent=2), encoding="utf-8")
-        if isinstance(roofline, dict) and roofline:
-            (ws / "roofline.json").write_text(json.dumps(roofline, indent=2), encoding="utf-8")
-
-    # ── scheduler helpers ─────────────────────────────────────────────────────
-    def _priority(self, b: dict) -> float:
-        """Live ROI = reachable savings toward the *single* layer SOL-score, decayed by stall.
-
-        The whole layer is scored ONCE (official SOL-ExecBench, recombined kernel); the
-        boundaries are not scored separately. Layer latency is additive over boundaries
-        (T_layer = Σ_b T_b), so a boundary's reachable savings is its gradient on the one
-        layer score. The official per-shape score is
-            S[s] = 1 / (1 + (Tk_layer[s]-SOL_layer[s]) / (Tb_layer[s]-SOL_layer[s]))
-        whose sensitivity to cutting a boundary at shape s is the per-shape weight
-            w[s] = 1 / (Tb_layer[s] - SOL_layer[s])        (boundary-independent; from setup)
-        so the score-consistent priority is
-
-            priority(b) = mean_over_shapes( w[s] * max(0, Tk[b,s] - SOL[b,s]) ) * 0.5**plateau_rounds
-
-        `w[s]` (manifest `shape_weights`) is measured once at setup by benching the optimized-
-        PyTorch anchor (`solution.py`) — see setup_anchor_weights(). Without it, w[s]=1 (raw
-        ms-gap ROI). The `0.5**plateau_rounds` decay is essential: when a boundary stops improving
-        for a few rounds it is deprioritized so the scheduler moves on to boundaries that can
-        still gain (no boundary is ever dropped — its priority just decays). SOL and latency are
-        BOTH aggregated over the full shape set — never one "representative" shape (attention
-        cost ∝ B·S², so a shape mismatch blows up the SOL and zeroes the boundary; that bug
-        starved gqa_attention). Falls back to the scalar path when per-shape data is absent;
-        a fresh boundary with no latency gets top priority.
-        """
-        ws = self._boundary_ws(b["name"])
-        decay = 0.5 ** plateau_rounds(ws, self.plateau_eps)
-
-        # ── per-shape path (preferred): score-weighted mean reachable ms over the shape set ──
-        # SOL from the workspace roofline.json (platform-agnostic); w[s] from manifest shape_weights.
-        sol_by_shape = sol_ms_by_shape(ws)
-        lat_by_shape = best_perf_by_shape(ws)
-        if sol_by_shape and lat_by_shape:
-            common = [sid for sid in sol_by_shape if sid in lat_by_shape]
-            if common:
-                weights = (self._read_manifest().get("shape_weights") or {})
-                gap = sum((float(weights.get(sid, 1.0))) * max(0.0, lat_by_shape[sid] / 1000.0 - sol_by_shape[sid])
-                          for sid in common) / len(common)
-                return gap * decay
-
-        # ── legacy scalar fallback ──
-        lat_us = best_latency_us(ws)
-        if lat_us is None:
-            return 1e12 * decay
-        sol_ms = float(b["sol_time_ms"]) if isinstance(b.get("sol_time_ms"), (int, float)) else 0.0
-        return max(0.0, lat_us / 1000.0 - sol_ms) * decay
-
-    def _total_versions(self, boundaries: list[dict]) -> int:
-        # optimization iterations spent = sum of per-boundary latest versions (v0 = baseline, not counted)
-        return sum(max(0, latest_version(self._boundary_ws(b["name"]))) for b in boundaries)
-
-    def _all_plateaued(self, boundaries: list[dict]) -> bool:
-        return all(plateau_rounds(self._boundary_ws(b["name"]), self.plateau_eps) >= self.plateau_k
-                   for b in boundaries)
-
-    # ── phase 3: shared-budget scheduler ──────────────────────────────────────
-    def schedule(self, boundaries: list[dict]) -> Optional[str]:
-        while True:
-            for b in boundaries:
-                ws = self._boundary_ws(b["name"])
-                mask_half_memory(ws, latest_version(ws))
-            spent = self._total_versions(boundaries)
-            if spent >= self.max_iters:
-                return "budget: max-iters (Σ versions)"
-            if self.budget_exhausted():
-                return "budget: token-budget"
-            if self._all_plateaued(boundaries):
-                return "all boundaries plateaued"
-
-            ranked = sorted(boundaries, key=self._priority, reverse=True)
-            target = ranked[0]
-            if self._priority(target) <= 0.0:
-                return "all boundaries at/above ceiling"
-
-            ws = self._boundary_ws(target["name"])
-            n = latest_version(ws) + 1
-            print(f"[layer] round {spent + 1}/{self.max_iters} -> {target['name']} v{n} "
-                  f"(priority={self._priority(target):.4g})", flush=True)
-            prompt = _render(PROMPTS_DIR / "iteration.md",
-                             WORKSPACE=str(ws), N=n, PREV=n - 1,
-                             PLATFORM=self.platform, NOTES=self.notes,
-                             AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
-                             PLAN_GENERATOR=_plan_generator_directive(self.agent_cli, n),
-                             HARDWARE=hardware_directive(self.platform, self.arch),
-                             SANDBOX=self._sandbox_directive(),
-                             EVALUATOR=(
-                                 "## Evaluation route: derived layer boundary\n\n"
-                                 "Keep using this boundary's committed full-shape harness."
-                             ),
-                             MODE_POLICY=self._mode_directive())
-            pre_head = git_head(ws)
-            res = run_session(
-                ws, prompt, timeout=self.iter_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
-            )
-            self._account(res, f"{target['name']} v{n}")
-
-            if (
-                self.optimization_mode == "production"
-                and kernel_won(ws, pre_head)
-            ):
-                violations = production_kernel_violations(ws, self.framework)
-                if violations:
-                    reject_production_commit(ws, n, pre_head, violations)
-                    print(
-                        f"[layer] production policy rejected {target['name']} v{n}: "
-                        + "; ".join(violations),
-                        file=sys.stderr,
-                        flush=True,
-                    )
-
-            # Guard: if the session exited without producing v<n>.json, write a
-            # minimal failed-iteration record so latest_version() advances.  Without
-            # this the scheduler would keep targeting the same v<N> forever (the
-            # spent count never increments and plateau_rounds never sees it).
-            if read_memory(ws, n) is None:
-                mem_dir = ws / "memory"
-                mem_dir.mkdir(parents=True, exist_ok=True)
-                failed = {
-                    "version": f"v{n}",
-                    "correctness": {"status": "FAIL", "details": "session did not produce v{n}.json"},
-                    "quality_gate": {"result": "FAIL"},
-                    "git_commit_hash": None,
-                    "optimization_category": "failed-iteration",
-                    "notes": "orchestrator: session exited without output; recorded to advance budget",
-                }
-                (mem_dir / f"v{n}.json").write_text(json.dumps(failed, indent=2), encoding="utf-8")
-                print(f"[layer] WARNING: {target['name']} v{n} session produced no memory — "
-                      f"wrote failed record to advance budget", flush=True)
-            mask_half_memory(ws, n)
-
-    # ── phase 2b: SOL-score weights (only if a real production baseline exists) ────
-    def setup_anchor_weights(self) -> None:
-        """Write per-shape SOL-score weights into the manifest from the op's production
-        baseline (metadata.production_performance). If that baseline is absent, no weights are
-        written and the scheduler uses the unweighted raw ms-gap priority. Pure JSON transform
-        (no bench); always re-run so stale weights are recomputed/cleared. Non-fatal.
-        """
-        if not self.op_dir:
-            print("[layer] no --op-dir; priority uses raw ms-gap (unweighted)", flush=True)
-            return
-        cmd = [sys.executable, str(Path(__file__).parent / "anchor_bench.py"),
-               "--op-dir", str(self.op_dir), "--manifest", str(self._manifest_path())]
-        print(f"[layer] SOL-score weights (from production baseline, if any): {' '.join(cmd)}", flush=True)
-        r = subprocess.run(cmd)
-        if r.returncode != 0:
-            print("[layer] WARNING: anchor step failed — priority falls back to raw ms-gap (unweighted)",
-                  file=sys.stderr, flush=True)
-
-    # ── phase 4: recombine ────────────────────────────────────────────────────
-    def recombine(self) -> None:
-        link_runtime(self.layer_dir)
-        self._install_workspace_policy(self.layer_dir)
-        prompt = _render(PROMPTS_DIR / "recombine.md",
-                         LAYER_DIR=str(self.layer_dir),
-                         HARDWARE=hardware_directive(self.platform, self.arch),
-                         SANDBOX=self._sandbox_directive(),
-                         MODE_POLICY=self._mode_directive())
-        res = run_session(
-            self.layer_dir, prompt, timeout=self.recombine_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
-        )
-        self._account(res, "recombine")
-        if self.optimization_mode == "production":
-            violations = production_kernel_violations(self.layer_dir, self.framework)
-            if violations:
-                raise RuntimeError(
-                    "recombined kernel violates production policy: " + "; ".join(violations)
-                )
-
-    def run(self) -> str:
-        if not self._manifest_path().exists():
-            self.decompose()
-        boundaries = self.setup_boundaries()
-        self.setup_anchor_weights()
-        reason = self.schedule(boundaries)
-        self.recombine()
-        print(f"\n[layer] STOP — {reason}", flush=True)
-        for b in boundaries:
-            ws = self._boundary_ws(b["name"])
-            print(f"[layer]   {b['name']}: v{latest_version(ws)} best_latency_us={best_latency_us(ws)}", flush=True)
-        return reason or "done"
-
-
 def _resolve_op(op_dir: str) -> dict:
     """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
-    --op-dir (+ the non-deducible --platform). Returns name / reference / roofline_py.
+    --op-dir (+ the non-deducible --platform).
     """
     d = Path(op_dir).resolve()
     if not d.is_dir():
@@ -5805,13 +4707,7 @@ def _resolve_op(op_dir: str) -> dict:
     ref = d / "reference.py"
     if not ref.is_file():
         raise SystemExit(f"--op-dir has no reference.py: {d}")
-    roofline_py = ""  # atrex-bench root is an ancestor of the op dir; find scripts/roofline.py
     atrex_bench_root = ""
-    for p in (d, *d.parents):
-        cand = p / "scripts" / "roofline.py"
-        if cand.is_file():
-            roofline_py = str(cand)
-            break
     if not is_sol_op(d) and (d / "shapes.json").is_file():
         native_root = find_atrex_bench_root(d)
         if native_root is None:
@@ -5823,20 +4719,19 @@ def _resolve_op(op_dir: str) -> dict:
     return {
         "name": d.name,
         "reference": str(ref),
-        "roofline_py": roofline_py,
         "op_dir": str(d),
         "atrex_bench_root": atrex_bench_root,
     }
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Clean-session orchestrator for atrex-kernel-agent.")
+    ap = argparse.ArgumentParser(description="Long-horizon episode orchestrator for atrex-kernel-agent.")
     ap.add_argument("--op-dir", required=True,
                     help="The operator dir (SOL definition.json / workload.jsonl / reference.py, or "
                          "atrex-bench shapes.json / roofline.json / metadata.json / input.py / reference.py). "
                          "EVERYTHING op-specific is read from here — the workspace "
-                         "name (dir basename), the kernel/layer to optimize (reference.py), the full shape set, "
-                         "per-shape SOL, and the priority anchor (metadata.production_performance). Never hardcoded.")
+                         "name (dir basename), kernel to optimize (reference.py), and the full shape set. "
+                         "Never hardcoded.")
     ap.add_argument("--platform", required=True, help="Target hardware, e.g. B200 / H20 / MI308X "
                                                       "(cannot be deduced from the op dir).")
     ap.add_argument(
@@ -5863,7 +4758,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     ap.add_argument(
         "--agent-cli", choices=AGENT_CLI_CHOICES, default="claude",
-        help="Coding CLI used for clean optimization sessions: claude, qodercli, codex, or pi "
+        help="Coding CLI used for optimization episodes: claude, qodercli, codex, or pi "
              "(default: claude).",
     )
     ap.add_argument(
@@ -5880,14 +4775,9 @@ def main(argv: Optional[list[str]] = None) -> int:
              "Triton/CuteDSL/Cuda, AMD uses Triton/FlyDSL, and unknown hardware uses Triton. "
              "Each auto-dispatched production child is bound to its assigned framework.",
     )
-    ap.add_argument("--layer", action="store_true",
-                    help="Decomposition overlay: treat the op's reference as a composite of more than one fused "
-                         "op (a whole LLM layer, or e.g. rope+attention / attention+moe), carve it into "
-                         "fused-operator boundaries (per agents/gpu-kernel-decompose.md), optimize each in its "
-                         "own workspace under one shared --max-iters budget, then recombine. Default off "
-                         "(single-op SOL path uses workload bucketing instead).")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
-    ap.add_argument("--max-iters", type=int, default=20, help="Hard cap on optimization iterations.")
+    ap.add_argument("--max-iters", type=int, default=20,
+                    help="Hard cap on canonical optimization versions/episodes.")
     ap.add_argument(
         "--max-workload-buckets",
         type=int,
@@ -5904,29 +4794,35 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--no-workload-bucketing",
         action="store_true",
-        help="Disable the default workload/shape inspector and bucket coordinator and run one legacy campaign.",
+        help="Disable the default workload/shape inspector and run one unbucketed episode campaign.",
     )
     ap.add_argument("--token-budget", type=int, default=0,
-                    help="Hard token cap across all sessions (0 = no cap; max-iters still bounds it).")
+                    help="Hard token cap across all episode turns (0 = no cap; max-iters still bounds it).")
     ap.add_argument("--target-util", type=float, default=90.0,
                     help="Peak-utilization %% short-circuit (default stop condition).")
-    ap.add_argument("--iter-timeout", type=int, default=5400, help="Per-iteration hang backstop (s).")
+    ap.add_argument("--iter-timeout", type=int, default=5400,
+                    help="Wall-clock budget for one complete long-horizon episode (s).")
     ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
-    ap.add_argument("--salvage-timeout", type=int, default=SALVAGE_TIMEOUT_S,
-                    help="Budget (s) for the post-mortem session that records an iteration killed by "
-                         "timeout or API failure (0 = write the mechanical record only).")
+    ap.add_argument("--handoff-resumes", type=int, default=DEFAULT_HANDOFF_RESUMES,
+                    help="Same-session recovery turns after an incomplete episode handoff (default: 2).")
+    ap.add_argument("--verify-repeats", type=int, default=DEFAULT_VERIFY_REPEATS,
+                    help="Incumbent/candidate ABBA repeat pairs in one gateway allocation (default: 2).")
+    ap.add_argument("--verify-run-timeout", type=int, default=DEFAULT_VERIFY_RUN_TIMEOUT,
+                    help="Timeout for each evaluator run inside ABBA verification (default: 120s).")
+    ap.add_argument("--min-improvement-pct", type=float, default=0.0,
+                    help="Minimum strict ABBA improvement required for promotion (default: >0%%).")
     ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",
                     help="Run one dedicated session between V0 setup and workload bucketing that "
                          "replaces the V0 PyTorch wrapper with the first self-contained framework "
-                         "kernel, recorded as v1 (so optimization rounds start at v2) and inherited "
+                         "kernel, recorded as v1 (so optimization episodes start at v2) and inherited "
                          "by every workload bucket. auto = production mode only; always = "
-                         "leaderboard too; never = legacy flow (buckets derive from the V0 kernel).")
+                         "leaderboard too; never = buckets derive directly from the V0 kernel.")
     ap.add_argument("--framework-baseline-timeout", type=int, default=FRAMEWORK_BASELINE_TIMEOUT_S,
                     help="Framework baseline session timeout (s).")
     ap.add_argument("--max-stall", type=int, default=0,
-                    help="Optional: stop after N consecutive no-commit iterations (0 = disabled).")
+                    help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).")
     ap.add_argument("--convert-after", type=int, default=DEFAULT_CONVERT_AFTER,
-                    help="Triton only: after N consecutive stalled iterations, require conversion "
+                    help="Triton only: after N consecutive stalled episodes, require conversion "
                          "to Gluon. Failed conversions retry immediately until one passes correctness "
                          "and performance parity, then optimization continues in Gluon. Default: 3; "
                          "0 disables conversion.")
@@ -5951,8 +4847,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("--max-workload-buckets must be at least 1")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
-    if args.salvage_timeout < 0:
-        ap.error("--salvage-timeout must be non-negative (0 disables the post-mortem session)")
+    if args.handoff_resumes < 0:
+        ap.error("--handoff-resumes must be non-negative")
+    if args.verify_repeats <= 0:
+        ap.error("--verify-repeats must be positive")
+    if args.verify_run_timeout <= 0:
+        ap.error("--verify-run-timeout must be positive")
+    if not 0.0 <= args.min_improvement_pct < 100.0:
+        ap.error("--min-improvement-pct must be in [0, 100)")
+    if args.verify_run_timeout * args.verify_repeats * 2 + 30 > args.sandbox_timeout:
+        ap.error(
+            "ABBA verification must fit one sandbox allocation: "
+            "2 * --verify-repeats * --verify-run-timeout + 30 <= --sandbox-timeout"
+        )
     if args.framework_baseline_timeout <= 0:
         ap.error("--framework-baseline-timeout must be positive")
     if not 0.0 <= args.aggregate_min_improvement_pct < 100.0:
@@ -6023,24 +4930,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.framework, args.platform, args.optimization_mode
     )
 
-    if args.layer:
-        layer = LayerCampaign(
-            name=op["name"], layer_demo=op["reference"], platform=args.platform,
-            framework=args.framework, notes=args.notes, arch=arch,
-            sandbox_hardware=sandbox_hardware, sandbox_profile=args.sandbox_profile,
-            sandbox_url=args.sandbox_url,
-            sandbox_timeout=args.sandbox_timeout,
-            agent_cli=args.agent_cli,
-            optimization_mode=args.optimization_mode,
-            work_dir=args.workspace,
-            workspace_suffix=workspace_suffix,
-            roofline_py=op["roofline_py"], op_dir=op["op_dir"],
-            max_iters=args.max_iters, token_budget=args.token_budget,
-            iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout,
-        )
-        layer.run()
-        return 0
-
     campaign = Campaign(
         name=op["name"], kernel_demo=op["reference"], platform=args.platform,
         framework=args.framework, notes=args.notes, arch=arch,
@@ -6054,9 +4943,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
         iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
-        salvage_timeout=args.salvage_timeout,
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
+        handoff_resumes=args.handoff_resumes,
+        verify_repeats=args.verify_repeats,
+        verify_run_timeout=args.verify_run_timeout,
+        min_improvement_pct=args.min_improvement_pct,
         convert_after=args.convert_after,
     )
     if is_bucketable_op(Path(op["op_dir"])) and not args.no_workload_bucketing:
@@ -6071,7 +4963,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not args.no_workload_bucketing:
             print(
                 "[orchestrator] workload bucketing requires workload.jsonl or shapes.json; "
-                "running the legacy single campaign",
+                "running one unbucketed episode campaign",
                 flush=True,
             )
         campaign.run()
