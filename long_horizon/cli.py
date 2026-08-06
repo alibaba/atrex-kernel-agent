@@ -186,11 +186,37 @@ def _run_layer_schedule(
         layer.tokens_spent += max(0, after_tokens - before_tokens)
 
 
+def _status_is_case_insensitive(
+    value: object,
+    expected: str,
+    original_status_is,
+) -> bool:
+    """Accept equivalent status spellings without changing main's policy."""
+    if original_status_is(value, expected):
+        return True
+    current = value
+    normalized_expected = expected.strip().casefold()
+    for _ in range(2):
+        if not isinstance(current, str):
+            return False
+        if current.strip().casefold() == normalized_expected:
+            return True
+        try:
+            decoded = json.loads(current)
+        except json.JSONDecodeError:
+            return False
+        if decoded == current:
+            return False
+        current = decoded
+    return isinstance(current, str) and current.strip().casefold() == normalized_expected
+
+
 @contextmanager
 def _install_main_integration(options: LongHorizonOptions) -> Iterator[None]:
     original_campaign_run = base.Campaign.run
     original_layer_schedule = base.LayerCampaign.schedule
     original_dispatch = base.dispatch_framework_campaigns
+    original_status_is = base._status_is
 
     def campaign_run(campaign: base.Campaign) -> str:
         return _run_campaign(campaign, options)
@@ -218,12 +244,18 @@ def _install_main_integration(options: LongHorizonOptions) -> Iterator[None]:
     base.Campaign.run = campaign_run
     base.LayerCampaign.schedule = layer_schedule
     base.dispatch_framework_campaigns = dispatch
+    base._status_is = lambda value, expected: _status_is_case_insensitive(
+        value,
+        expected,
+        original_status_is,
+    )
     try:
         yield
     finally:
         base.Campaign.run = original_campaign_run
         base.LayerCampaign.schedule = original_layer_schedule
         base.dispatch_framework_campaigns = original_dispatch
+        base._status_is = original_status_is
 
 
 def _print_long_help() -> None:

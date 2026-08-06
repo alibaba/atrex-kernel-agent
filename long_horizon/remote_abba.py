@@ -14,6 +14,7 @@ from typing import Any
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
+WORKSPACE_SNAPSHOT_SOURCE = "__ATREX_ABBA_WORKSPACE_SOURCE__"
 
 
 def _safe_relative(value: object) -> str:
@@ -50,6 +51,30 @@ def _apply_revision(root: Path, snapshot_root: Path, manifest: dict[str, object]
         shutil.copy2(source, target)
 
 
+def _capture_workspace_revision(
+    root: Path,
+    snapshot_root: Path,
+    manifest: dict[str, object],
+) -> dict[str, object]:
+    """Capture candidate files before the first incumbent is applied."""
+    captured: dict[str, object] = {}
+    capture_root = snapshot_root / ".candidate_workspace_snapshot"
+    for index, (raw_path, raw_source) in enumerate(manifest.items()):
+        relative = _safe_relative(raw_path)
+        if raw_source != WORKSPACE_SNAPSHOT_SOURCE:
+            captured[relative] = raw_source
+            continue
+        source = root / relative
+        if not source.is_file() or source.is_symlink():
+            raise FileNotFoundError(f"candidate workspace source is missing: {source}")
+        snapshot_relative = f".candidate_workspace_snapshot/{index:04d}.bin"
+        target = snapshot_root / snapshot_relative
+        capture_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        captured[relative] = snapshot_relative
+    return captured
+
+
 def _parse_result(stdout: str) -> dict[str, Any] | None:
     for line in reversed(stdout.splitlines()):
         if line.startswith(RESULT_PREFIX):
@@ -78,6 +103,14 @@ def run(request_path: Path, result_path: Path) -> int:
             raise ValueError("run timeout must be positive")
         root = Path.cwd()
         snapshot_root = request_path.parent
+        candidate_manifest = manifests.get("candidate")
+        if not isinstance(candidate_manifest, dict):
+            raise ValueError("missing candidate snapshot manifest")
+        # The uploaded workspace starts at the candidate revision. Preserve it
+        # locally before the ABBA schedule applies any incumbent files.
+        manifests["candidate"] = _capture_workspace_revision(
+            root, snapshot_root, candidate_manifest
+        )
         for step in schedule:
             if not isinstance(step, dict):
                 raise ValueError("ABBA schedule entries must be objects")

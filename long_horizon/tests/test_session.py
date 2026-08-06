@@ -31,8 +31,11 @@ class SessionRecoveryTests(unittest.TestCase):
             handoff = workspace / "handoff.json"
             commands: list[list[str]] = []
 
-            def execute(command, cwd, timeout, environment):
+            inputs: list[str | None] = []
+
+            def execute(command, cwd, timeout, environment, input_text):
                 commands.append(command)
+                inputs.append(input_text)
                 if len(commands) == 2:
                     atomic_write_json(handoff, {"status": "pivot"})
                 return "", "", 0, False
@@ -56,15 +59,21 @@ class SessionRecoveryTests(unittest.TestCase):
             self.assertEqual(result.handoff.status, "pivot")
             self.assertEqual(commands[0][2], commands[1][2])
             self.assertEqual(commands[1][1], "--resume")
+            self.assertEqual(inputs[0], "work")
+            self.assertIn("Continue the same long-horizon", inputs[1])
+            self.assertNotIn("work", commands[0])
 
     def test_nonzero_exit_does_not_resume(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp)
             with mock.patch("long_horizon.main_adapter.session_environment", return_value={}), mock.patch(
-                "long_horizon.main_adapter.fresh_session_command", return_value=["claude"]
+                "long_horizon.main_adapter.fresh_session_command",
+                side_effect=lambda prompt, sid, effort: ["claude", prompt],
             ):
                 result = LongSessionRunner(
-                    executor=lambda command, cwd, timeout, environment: ("", "boom", 2, False)
+                    executor=lambda command, cwd, timeout, environment, input_text: (
+                        "", "boom", 2, False
+                    )
                 ).run(
                     workspace,
                     "work",
@@ -82,7 +91,7 @@ class SessionRecoveryTests(unittest.TestCase):
             handoff = workspace / "handoff.json"
             commands: list[list[str]] = []
 
-            def execute(command, cwd, timeout, environment):
+            def execute(command, cwd, timeout, environment, input_text):
                 commands.append(command)
                 if len(commands) == 1:
                     return self._claude_terminated_event(), "", 1, False
@@ -117,7 +126,7 @@ class SessionRecoveryTests(unittest.TestCase):
             handoff = workspace / "handoff.json"
             commands: list[list[str]] = []
 
-            def execute(command, cwd, timeout, environment):
+            def execute(command, cwd, timeout, environment, input_text):
                 commands.append(command)
                 if len(commands) == 1:
                     return "", "", 128 + signal.SIGTERM, False
@@ -156,10 +165,11 @@ class SessionRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp)
             with mock.patch("long_horizon.main_adapter.session_environment", return_value={}), mock.patch(
-                "long_horizon.main_adapter.fresh_session_command", return_value=["claude"]
+                "long_horizon.main_adapter.fresh_session_command",
+                side_effect=lambda prompt, sid, effort: ["claude", prompt],
             ):
                 result = LongSessionRunner(
-                    executor=lambda command, cwd, timeout, environment: (
+                    executor=lambda command, cwd, timeout, environment, input_text: (
                         "API Error: terminated",
                         "",
                         1,
@@ -182,10 +192,11 @@ class SessionRecoveryTests(unittest.TestCase):
             workspace = Path(temp)
             stderr = "[orchestrator] dependency policy violation; terminated coding session"
             with mock.patch("long_horizon.main_adapter.session_environment", return_value={}), mock.patch(
-                "long_horizon.main_adapter.fresh_session_command", return_value=["claude"]
+                "long_horizon.main_adapter.fresh_session_command",
+                side_effect=lambda prompt, sid, effort: ["claude", prompt],
             ):
                 result = LongSessionRunner(
-                    executor=lambda command, cwd, timeout, environment: (
+                    executor=lambda command, cwd, timeout, environment, input_text: (
                         self._claude_terminated_event(),
                         stderr,
                         1,
@@ -210,7 +221,7 @@ class SessionRecoveryTests(unittest.TestCase):
             commands: list[list[str]] = []
             thread_id = "019c1234-5678-7abc-8def-0123456789ab"
 
-            def execute(command, cwd, timeout, environment):
+            def execute(command, cwd, timeout, environment, input_text):
                 commands.append(command)
                 if len(commands) == 1:
                     return json.dumps({"type": "thread.started", "thread_id": thread_id}), "", 0, False
@@ -241,7 +252,7 @@ class SessionRecoveryTests(unittest.TestCase):
             commands: list[list[str]] = []
             thread_id = "019c1234-5678-7abc-8def-0123456789ab"
 
-            def execute(command, cwd, timeout, environment):
+            def execute(command, cwd, timeout, environment, input_text):
                 commands.append(command)
                 if len(commands) == 1:
                     stdout = json.dumps({"type": "thread.started", "thread_id": thread_id})
@@ -272,7 +283,7 @@ class SessionRecoveryTests(unittest.TestCase):
             stderr = "[orchestrator] dependency policy violation; terminated coding session"
             with mock.patch("long_horizon.main_adapter.session_environment", return_value={}):
                 result = LongSessionRunner(
-                    executor=lambda command, cwd, timeout, environment: (
+                    executor=lambda command, cwd, timeout, environment, input_text: (
                         stdout,
                         stderr,
                         -signal.SIGTERM,

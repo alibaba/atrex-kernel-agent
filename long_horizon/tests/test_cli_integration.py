@@ -76,6 +76,21 @@ class MainCliIntegrationTests(unittest.TestCase):
             observed["argv"][observed["argv"].index("--verify-repeats") + 1], "4"
         )
 
+    def test_status_checks_are_case_insensitive_only_inside_long_horizon(self) -> None:
+        original_status_is = cli.base._status_is
+        self.assertFalse(original_status_is("pass", "PASS"))
+
+        with cli._install_main_integration(cli.LongHorizonOptions()):
+            self.assertTrue(cli.base._status_is("PASS", "PASS"))
+            self.assertTrue(cli.base._status_is("pass", "PASS"))
+            self.assertTrue(cli.base._status_is(" Pass ", "PASS"))
+            self.assertTrue(cli.base._status_is('"pass"', "PASS"))
+            self.assertFalse(cli.base._status_is("FAIL", "PASS"))
+            self.assertFalse(cli.base._status_is(None, "PASS"))
+
+        self.assertIs(cli.base._status_is, original_status_is)
+        self.assertFalse(cli.base._status_is("pass", "PASS"))
+
     def test_campaign_run_replaces_only_the_iteration_loop(self) -> None:
         campaign = cli.base.Campaign(
             name="op",
