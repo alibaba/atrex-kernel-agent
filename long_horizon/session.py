@@ -14,7 +14,8 @@ from .protocol import handoff_diagnosis, read_handoff
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 CommandExecutor = Callable[
-    [list[str], Path, int, dict[str, str]], tuple[str, str, int, bool]
+    [list[str], Path, int, dict[str, str], str | None],
+    tuple[str, str, int, bool],
 ]
 
 
@@ -132,8 +133,11 @@ class LongSessionRunner:
                         turn_prompt, active_session_id, reasoning_effort, self.agent_cli
                     )
                 )
+            command, input_text = main_adapter.session_prompt_transport(
+                self.agent_cli, command, turn_prompt
+            )
             stdout, stderr, exit_status, turn_timed_out = self.executor(
-                command, workspace, remaining, environment
+                command, workspace, remaining, environment, input_text
             )
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)

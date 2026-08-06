@@ -15,6 +15,7 @@ from long_horizon.tests.helpers import init_repo, run_git
 from long_horizon.verifier import (
     ABBA_RESULT_PREFIX,
     GatewayABBAValidator,
+    WORKSPACE_SNAPSHOT_SOURCE,
     _payload_from_stdout,
     score_verification_payload,
     verification_schedule,
@@ -95,9 +96,8 @@ class RemoteDriverTests(unittest.TestCase):
             root = Path(temp)
             request_dir = root / "request"
             (request_dir / "snapshots/incumbent").mkdir(parents=True)
-            (request_dir / "snapshots/candidate").mkdir(parents=True)
             (request_dir / "snapshots/incumbent/0000.bin").write_text("10\n", encoding="utf-8")
-            (request_dir / "snapshots/candidate/0000.bin").write_text("8\n", encoding="utf-8")
+            (root / "value.txt").write_text("8\n", encoding="utf-8")
             harness = root / "fake_eval.py"
             harness.write_text(
                 "from pathlib import Path\n"
@@ -111,7 +111,7 @@ class RemoteDriverTests(unittest.TestCase):
                 "schedule": verification_schedule(2),
                 "manifests": {
                     "incumbent": {"value.txt": "snapshots/incumbent/0000.bin"},
-                    "candidate": {"value.txt": "snapshots/candidate/0000.bin"},
+                    "candidate": {"value.txt": WORKSPACE_SNAPSHOT_SOURCE},
                 },
                 "command": ["python3", "fake_eval.py"],
                 "run_timeout_seconds": 10,
@@ -134,6 +134,77 @@ class RemoteDriverTests(unittest.TestCase):
 
 
 class GatewayCommandTests(unittest.TestCase):
+    def test_abba_snapshots_only_manifest_declared_runtime_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = Path(temp) / "campaign"
+            base = init_repo(workspace)
+            (workspace / "solution.json").write_text(
+                '{"sources": ["kernel.py", {"path": "cuda_helper.cu"}]}\n',
+                encoding="utf-8",
+            )
+            (workspace / "cuda_helper.cu").write_text("// base\n", encoding="utf-8")
+            run_git(workspace, "add", "solution.json", "cuda_helper.cu")
+            run_git(workspace, "commit", "-m", "declare runtime sources")
+            base = git_head(workspace)
+
+            (workspace / "kernel.py").write_text("VALUE = 8\n", encoding="utf-8")
+            (workspace / "cuda_helper.cu").write_text("// candidate\n", encoding="utf-8")
+            (workspace / "incumbent_measure_kernel.py").write_text(
+                "# evidence only\n" + "x = 'measurement'\n" * 20_000,
+                encoding="utf-8",
+            )
+            run_git(
+                workspace,
+                "add",
+                "kernel.py",
+                "cuda_helper.cu",
+                "incumbent_measure_kernel.py",
+            )
+            run_git(workspace, "commit", "-m", "candidate with large evidence")
+            candidate = git_head(workspace)
+            payload = {
+                "schema_version": 1,
+                "error": None,
+                "runs": [row("incumbent", 0, 10.0), row("candidate", 0, 8.0)],
+            }
+
+            def fake_run(*args, **kwargs):
+                command = args[5]
+                stdout = ABBA_RESULT_PREFIX + json.dumps(payload) + "\n"
+                return __import__("subprocess").CompletedProcess(command, 0, stdout, "")
+
+            validator = GatewayABBAValidator(
+                hardware="REMOTE_GPU", timeout=300, repeats=1, per_run_timeout=100
+            )
+            with mock.patch("long_horizon.main_adapter.run_sandbox", side_effect=fake_run):
+                result = validator.verify(
+                    workspace,
+                    base_commit=base,
+                    candidate_commit=candidate,
+                    changed_paths=[
+                        "incumbent_measure_kernel.py",
+                        "kernel.py",
+                        "cuda_helper.cu",
+                    ],
+                )
+
+            self.assertTrue(result.passed)
+            request_path = next(
+                workspace.glob("aggregate_kernels/.atrex_long_horizon_verify/*/request.json")
+            )
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            for manifest in request["manifests"].values():
+                self.assertEqual(set(manifest), {"kernel.py", "cuda_helper.cu"})
+                self.assertNotIn("incumbent_measure_kernel.py", manifest)
+            self.assertEqual(
+                set(request["manifests"]["candidate"].values()),
+                {WORKSPACE_SNAPSHOT_SOURCE},
+            )
+            candidate_snapshots = list(
+                request_path.parent.glob("snapshots/candidate/*.bin")
+            )
+            self.assertEqual(candidate_snapshots, [])
+
     def test_abba_driver_uses_existing_evaluator_payload_route(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp) / "campaign"
@@ -194,6 +265,17 @@ class GatewayCommandTests(unittest.TestCase):
             self.assertEqual(json.loads(artifact.read_text(encoding="utf-8")), payload)
             self.assertEqual(artifact.name, "result.json")
             self.assertFalse(result.artifact.startswith("remote:"))
+            request_paths = list(
+                workspace.glob(
+                    "aggregate_kernels/.atrex_long_horizon_verify/*/request.json"
+                )
+            )
+            self.assertEqual(len(request_paths), 1)
+            request = json.loads(request_paths[0].read_text(encoding="utf-8"))
+            self.assertEqual(request["run_timeout_seconds"], 100)
+            command = request["command"]
+            timeout_index = command.index("--candidate-timeout-s")
+            self.assertEqual(command[timeout_index + 1], "100")
             self.assertEqual(run_git(workspace, "status", "--porcelain"), "")
 
     def test_current_sandbox_dry_run_packages_abba_driver_as_evaluator_input(self) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from orchestrator import optimize as base
@@ -157,9 +159,55 @@ def session_id_from_stream(agent_cli: str, stdout: str, requested_session_id: st
 
 
 def run_bounded(
-    command: list[str], workspace: Path, timeout: int, environment: dict[str, str]
+    command: list[str],
+    workspace: Path,
+    timeout: int,
+    environment: dict[str, str],
+    input_text: str | None = None,
 ) -> tuple[str, str, int, bool]:
-    return base._run_bounded(command, workspace, timeout, environment)
+    if input_text is None:
+        return base._run_bounded(command, workspace, timeout, environment)
+
+    prompt_path = ""
+    try:
+        descriptor, prompt_path = tempfile.mkstemp(
+            prefix="atrex-long-horizon-prompt-",
+            suffix=".txt",
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(input_text)
+        # Keep the potentially large prompt out of argv while preserving main's
+        # process supervision unchanged. The static shell shim exists only in the
+        # long-horizon adapter and replaces itself with the actual agent CLI.
+        wrapped_command = [
+            "/bin/sh",
+            "-c",
+            'prompt_path=$1; shift; exec "$@" < "$prompt_path"',
+            "atrex-long-horizon-prompt",
+            prompt_path,
+            *command,
+        ]
+        return base._run_bounded(
+            wrapped_command, workspace, timeout, environment
+        )
+    finally:
+        if prompt_path:
+            Path(prompt_path).unlink(missing_ok=True)
+
+
+def session_prompt_transport(
+    agent_cli: str, command: list[str], prompt: str
+) -> tuple[list[str], str | None]:
+    if agent_cli not in {"claude", "codex"}:
+        return command, None
+    if not command or command[-1] != prompt:
+        raise RuntimeError(
+            f"current main {agent_cli} command has no compatible prompt transport seam"
+        )
+    transported = list(command[:-1])
+    if agent_cli == "codex":
+        transported.append("-")
+    return transported, prompt
 
 
 def tokens_from_stream(stdout: str) -> int:

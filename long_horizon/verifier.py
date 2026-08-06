@@ -16,6 +16,7 @@ from .store import VERIFY_DIR
 
 
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
+WORKSPACE_SNAPSHOT_SOURCE = "__ATREX_ABBA_WORKSPACE_SOURCE__"
 
 
 def _payload_from_stdout(stdout: str) -> dict[str, Any]:
@@ -128,6 +129,74 @@ def _git_blob(workspace: Path, revision: str, relative: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _safe_candidate_path(value: str) -> str:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.as_posix() in {"", "."}
+    ):
+        raise ValueError(f"unsafe candidate source path: {value!r}")
+    return path.as_posix()
+
+
+def _declared_sources(
+    workspace: Path,
+    revision: str,
+) -> set[str]:
+    """Return runtime sources authorized by a revision's solution manifest."""
+    raw = _git_blob(workspace, revision, "solution.json")
+    if raw is None:
+        return set()
+    try:
+        solution = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid solution.json at {revision}: {exc}") from exc
+    if not isinstance(solution, dict):
+        raise ValueError(f"solution.json at {revision} must contain a JSON object")
+    sources = solution.get("sources", [])
+    if not isinstance(sources, list):
+        raise ValueError(f"solution.json sources at {revision} must be a list")
+
+    declared: set[str] = set()
+    for source in sources:
+        if isinstance(source, str):
+            value = source
+        elif isinstance(source, dict) and isinstance(source.get("path"), str):
+            value = source["path"]
+        else:
+            raise ValueError(
+                f"solution.json source entries at {revision} must be paths or path objects"
+            )
+        relative = _safe_candidate_path(value)
+        if _git_blob(workspace, revision, relative) is None:
+            raise ValueError(
+                f"solution.json at {revision} declares missing source: {relative}"
+            )
+        declared.add(relative)
+    return declared
+
+
+def _authoritative_changed_paths(
+    workspace: Path,
+    base_commit: str,
+    candidate_commit: str,
+    changed_paths: list[str],
+) -> list[str]:
+    """Limit ABBA revision switching to candidate runtime inputs.
+
+    Optimizer episodes may commit plans, measurement helpers, and other evidence.
+    Those files are useful for the next episode but are not executable candidate
+    inputs and can be much larger than the gateway's payload allowance.
+    """
+    allowed = {"kernel.py", "solution.json"}
+    allowed.update(_declared_sources(workspace, base_commit))
+    allowed.update(_declared_sources(workspace, candidate_commit))
+    normalized = [_safe_candidate_path(relative) for relative in changed_paths]
+    return sorted(relative for relative in normalized if relative in allowed)
+
+
 def _snapshot_revision(
     workspace: Path,
     revision: str,
@@ -150,6 +219,22 @@ def _snapshot_revision(
         target.write_bytes(content)
         manifest[relative] = snapshot_relative
     return manifest
+
+
+def _workspace_revision_manifest(
+    workspace: Path,
+    revision: str,
+    changed_paths: list[str],
+) -> dict[str, str | None]:
+    """Describe the uploaded workspace revision without duplicating its bytes."""
+    return {
+        relative: (
+            WORKSPACE_SNAPSHOT_SOURCE
+            if _git_blob(workspace, revision, relative) is not None
+            else None
+        )
+        for relative in changed_paths
+    }
 
 
 class GatewayABBAValidator:
@@ -190,6 +275,23 @@ class GatewayABBAValidator:
             )
         verification_id = uuid.uuid4().hex
         relative_dir = f"{VERIFY_DIR}/{verification_id}"
+        try:
+            authoritative_paths = _authoritative_changed_paths(
+                workspace,
+                base_commit,
+                candidate_commit,
+                changed_paths,
+            )
+        except ValueError as exc:
+            return VerificationResult(
+                "ERROR", None, None, None,
+                error=f"invalid authoritative ABBA inputs: {exc}",
+            )
+        if "kernel.py" not in authoritative_paths:
+            return VerificationResult(
+                "ERROR", None, None, None,
+                error="authoritative ABBA revision does not change kernel.py",
+            )
         directory = workspace / relative_dir
         directory.mkdir(parents=True, exist_ok=False)
         # Naming the driver test_kernel.py deliberately selects the existing sandbox's
@@ -199,19 +301,34 @@ class GatewayABBAValidator:
         shutil.copy2(Path(__file__).with_name("remote_abba.py"), driver)
         manifests = {
             "incumbent": _snapshot_revision(
-                workspace, base_commit, changed_paths, directory, "incumbent"
+                workspace, base_commit, authoritative_paths, directory, "incumbent"
             ),
-            "candidate": _snapshot_revision(
-                workspace, candidate_commit, changed_paths, directory, "candidate"
+            # The sandbox workspace is already candidate_commit. The remote driver
+            # captures these files before applying the incumbent, avoiding a second
+            # uploaded copy of a potentially large kernel.
+            "candidate": _workspace_revision_manifest(
+                workspace, candidate_commit, authoritative_paths
             ),
         }
         request_relative = f"{relative_dir}/request.json"
         result_relative = f"{relative_dir}/result.json"
+        # The outer subprocess timeout alone does not relax the evaluator's own
+        # candidate/import watchdog.  Apply the same budget explicitly so a cold
+        # incumbent (for example, a load_inline CUDA kernel) remains verifiable.
+        evaluator_command = [
+            "python3",
+            "test_kernel.py",
+            "--version",
+            "vlong",
+            "--no-memory",
+            "--candidate-timeout-s",
+            str(self.per_run_timeout),
+        ]
         request = {
             "schema_version": 1,
             "schedule": schedule,
             "manifests": manifests,
-            "command": ["python3", "test_kernel.py", "--version", "vlong", "--no-memory"],
+            "command": evaluator_command,
             "run_timeout_seconds": self.per_run_timeout,
         }
         atomic_write_json(workspace / request_relative, request)
