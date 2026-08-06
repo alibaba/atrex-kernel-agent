@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atrex.local/schemas/teacher-evidence-v1.json",
+  "title": "Teacher distillation evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workspace_head", "evidence"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "workspace_head": {"type": "string"},
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "kind",
+          "scope",
+          "path",
+          "sha256",
+          "classification",
+          "citable_as_verified"
+        ],
+        "properties": {
+          "evidence_id": {"type": "string", "pattern": "^E-[A-Z0-9-]+$"},
+          "kind": {"type": "string"},
+          "scope": {"enum": ["candidate", "private"]},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "classification": {"type": "string"},
+          "citable_as_verified": {"type": "boolean"},
+          "version": {"type": "string"},
+          "git_commit_hash": {"type": ["string", "null"]},
+          "changed_paths": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

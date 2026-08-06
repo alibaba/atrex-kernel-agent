@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atrex.local/schemas/teacher-campaign-lock-v1.json",
+  "title": "Teacher distillation campaign lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "teacher_id",
+    "platform",
+    "architecture",
+    "framework",
+    "workload_hash",
+    "evaluator_hash",
+    "measurement_config_hash",
+    "knowledge_view_hash",
+    "geomean_ratio",
+    "shape_ratio"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "campaign_id": {"$ref": "#/$defs/identifier"},
+    "teacher_id": {"$ref": "#/$defs/identifier"},
+    "platform": {"type": "string", "minLength": 1},
+    "architecture": {"$ref": "#/$defs/identifier"},
+    "framework": {"type": "string", "minLength": 1},
+    "workload_hash": {"$ref": "#/$defs/sha256"},
+    "evaluator_hash": {"$ref": "#/$defs/sha256"},
+    "measurement_config_hash": {"$ref": "#/$defs/sha256"},
+    "knowledge_view_hash": {"$ref": "#/$defs/sha256"},
+    "geomean_ratio": {"type": "number", "minimum": 1.0},
+    "shape_ratio": {"type": "number", "minimum": 1.0}
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

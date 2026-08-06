@@ -69,6 +69,7 @@
     "result": "<PASS / FAIL / TIMEOUT_FAIL>",
     "failure_reason": null
   },
+  "teacher_progress": null,
   "open_directions": [
     {
       "direction": "<candidate optimization lever for the NEXT session to try, most-promising first; max 3>",

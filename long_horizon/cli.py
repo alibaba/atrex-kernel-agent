@@ -239,6 +239,19 @@ def _print_long_help() -> None:
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     options, main_argv = _extract_options(raw_argv)
+    if any(
+        value == "--campaign-mode=teacher-distill"
+        or (
+            value == "--campaign-mode"
+            and index + 1 < len(main_argv)
+            and main_argv[index + 1] == "teacher-distill"
+        )
+        for index, value in enumerate(main_argv)
+    ):
+        raise SystemExit(
+            "teacher-distill owns its bounded long-horizon escalation; "
+            "run orchestrator/optimize.py directly"
+        )
     wants_help = "-h" in main_argv or "--help" in main_argv
     try:
         with _install_main_integration(options):

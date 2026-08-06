@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
+
+if TYPE_CHECKING:
+    from .process import ProcessAccessPolicy
 
 
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
@@ -136,6 +139,7 @@ class AgentRunRequest:
     sandbox_timeout_s: int = 600
     session_id: str | None = None
     extra_environment: Mapping[str, str] | None = None
+    access_policy: ProcessAccessPolicy | None = None
 
 
 @dataclass(frozen=True)

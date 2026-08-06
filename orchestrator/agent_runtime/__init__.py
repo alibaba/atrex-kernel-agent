@@ -25,6 +25,7 @@ from .model import (
 from .process import (
     DEFAULT_PROTECTED_GATEWAY_SCREEN,
     DEFAULT_PROTECTED_GATEWAY_STATE_NAME,
+    ProcessAccessPolicy,
     ProcessRunner,
     dependency_process_violation,
     protected_gateway_identity,
@@ -66,6 +67,7 @@ __all__ = [
     "PYPI_MIRROR",
     "PiAdapter",
     "PiRuntime",
+    "ProcessAccessPolicy",
     "ProcessRunner",
     "QoderAdapter",
     "QoderRuntime",

@@ -16,9 +16,9 @@ VERIFY_DIR = "aggregate_kernels/.atrex_long_horizon_verify"
 
 
 class CampaignStore:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, root: Path | None = None):
         self.workspace = workspace.resolve()
-        self.root = self.workspace / RUNTIME_DIR
+        self.root = Path(root).resolve() if root is not None else self.workspace / RUNTIME_DIR
         self.root.mkdir(parents=True, exist_ok=True)
         self.ensure_excluded(self.workspace)
 

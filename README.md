@@ -37,6 +37,12 @@ See the [Quick Start guide](docs/quickstart.md) for prerequisites, installation,
 
 Both routes share the same knowledge base (`gpu-wiki/`), reference projects, tools (`tools/`), and structured memory format (`memory/v<N>.json`).
 
+### Offline Teacher Distillation (opt-in)
+
+The orchestrated route also provides a separate `--campaign-mode teacher-distill` workflow for internal/offline 1→10 trajectory generation. It keeps an expert same-framework Teacher hidden from optimization sessions, starts the Candidate from a PyTorch/reference V0 and Agent-authored naive framework V1, and stops only after full correctness plus same-allocation Teacher/Candidate ABBA parity. The mode uses a physically sanitized knowledge view and generates evidence-backed review drafts; it never modifies canonical `gpu-wiki/` automatically.
+
+This mode is intentionally restricted to one operator, one explicit framework, and one workspace in its first release. It is `hidden-audited`, not security-grade isolation. See [`docs/teacher-distill.md`](docs/teacher-distill.md) for the bundle contract, command, threat model, resume behavior, and terminal states.
+
 ## Route Details
 
 ### Route 1: Interactive Skill (`SKILL.md`)

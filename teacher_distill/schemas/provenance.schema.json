@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atrex.local/schemas/teacher-provenance-v1.json",
+  "title": "Teacher solution provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operator",
+    "source",
+    "target",
+    "knowledge_deny"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_id", "aliases"],
+      "properties": {
+        "canonical_id": {
+          "type": "string",
+          "minLength": 3
+        },
+        "aliases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "revision", "license"],
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 3
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "architecture"],
+      "properties": {
+        "framework": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    "knowledge_deny": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sources", "paths", "tags"],
+      "properties": {
+        "sources": {
+          "$ref": "#/$defs/uniqueStrings"
+        },
+        "paths": {
+          "$ref": "#/$defs/uniqueStrings"
+        },
+        "tags": {
+          "$ref": "#/$defs/uniqueStrings"
+        }
+      },
+      "anyOf": [
+        {"properties": {"sources": {"minItems": 1}}},
+        {"properties": {"paths": {"minItems": 1}}},
+        {"properties": {"tags": {"minItems": 1}}}
+      ]
+    }
+  },
+  "$defs": {
+    "uniqueStrings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -27,7 +27,14 @@ from .model import (
     TokenUsage,
     sum_token_usages,
 )
-from .process import ProcessRunner, protected_gateway_identity, run_bounded
+from .process import (
+    ACCESS_POLICY_ENV,
+    ProcessRunner,
+    protected_gateway_identity,
+    register_access_policy,
+    run_bounded,
+    unregister_access_policy,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +86,15 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
 def token_usage_from_stream(stdout: str) -> int:
     """Preserve the terminal-token compatibility contract for legacy callers."""
     return terminal_usage_from_stream(stdout).total_tokens or 0
+
+
+def restrict_network_tools(command: list[str], runtime_id: str) -> list[str]:
+    restricted = list(command)
+    if runtime_id == "claude":
+        restricted[-1:-1] = ["--disallowedTools", "WebSearch,WebFetch"]
+    elif runtime_id == "pi":
+        restricted[-1:-1] = ["--tools", "read,bash,edit,write"]
+    return restricted
 
 
 def build_session_environment(runtime_id: str) -> dict[str, str]:
@@ -144,6 +160,8 @@ class CliAgentRuntime:
         command = self.build_command(
             request.prompt, session_id, request.reasoning_effort
         )
+        if request.access_policy is not None and request.access_policy.network_disabled:
+            command = restrict_network_tools(command, self.id)
         environment = build_session_environment(self.id)
         environment["IS_SANDBOX"] = "1"
         if request.sandbox_hardware:
@@ -162,12 +180,21 @@ class CliAgentRuntime:
                     for key, value in request.extra_environment.items()
                 }
             )
-        stdout, stderr, exit_status, timed_out = self._process_runner(
-            command,
-            cwd=request.workspace,
-            timeout=request.timeout_s,
-            env=environment,
-        )
+        policy_id = ""
+        if request.access_policy is not None:
+            policy_id = register_access_policy(request.access_policy)
+            environment[ACCESS_POLICY_ENV] = policy_id
+            environment["ATREX_SESSION_WORKSPACE"] = str(request.workspace.resolve())
+        try:
+            stdout, stderr, exit_status, timed_out = self._process_runner(
+                command,
+                cwd=request.workspace,
+                timeout=request.timeout_s,
+                env=environment,
+            )
+        finally:
+            if policy_id:
+                unregister_access_policy(policy_id)
         observation_errors: tuple[str, ...] = ()
         try:
             events, terminal_usage = self._adapter.normalize_stream(stdout)

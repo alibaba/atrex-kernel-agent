@@ -1,0 +1,24 @@
+{
+  "name": "minimal_triton_copy_teacher",
+  "description": "Non-production structural example of a Teacher solution bundle.",
+  "spec": {
+    "languages": [
+      "pytorch",
+      "triton"
+    ],
+    "target_hardware": [
+      "H20"
+    ],
+    "entry_point": "kernel.py::run",
+    "dependencies": [
+      "torch",
+      "triton"
+    ],
+    "destination_passing_style": true
+  },
+  "sources": [
+    {
+      "path": "kernel.py"
+    }
+  ]
+}

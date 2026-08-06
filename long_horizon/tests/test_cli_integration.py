@@ -12,6 +12,19 @@ from long_horizon import cli
 
 
 class MainCliIntegrationTests(unittest.TestCase):
+    def test_teacher_distill_rejects_the_outer_long_horizon_wrapper(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "owns its bounded long-horizon escalation"):
+            cli.main(
+                [
+                    "--campaign-mode",
+                    "teacher-distill",
+                    "--op-dir",
+                    "/tmp/op",
+                    "--platform",
+                    "H20",
+                ]
+            )
+
     def test_help_inherits_every_current_main_option(self) -> None:
         root = Path(__file__).resolve().parents[2]
         main_help = subprocess.run(

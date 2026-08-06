@@ -99,6 +99,7 @@ SCHEMA_TEMPLATE = {
         "result": None,
         "failure_reason": None,
     },
+    "teacher_progress": None,
     "open_directions": [],
     "git_commit_hash": None,
 }
@@ -328,13 +329,21 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print("No iteration files found.", file=sys.stderr)
         sys.exit(1)
 
-    header = f"{'Version':<10} {'Masked':<8} {'TFLOPS':>10} {'BW(GB/s)':>12} {'TFLOPS%':>10} {'BW%':>10} {'Status':<14} {'Action'}"
+    rows = [(filepath, read_json(filepath)) for filepath in files]
+    teacher_mode = any(isinstance(data.get("teacher_progress"), dict) for _, data in rows)
+    if teacher_mode:
+        header = (
+            f"{'Version':<10} {'Masked':<8} {'TFLOPS':>10} {'BW(GB/s)':>12} "
+            f"{'TFLOPS%':>10} {'BW%':>10} {'Teacher×':>10} {'Worst×':>10} "
+            f"{'WorstShape':<16} {'ABBA':<12} {'Status':<14} {'Action'}"
+        )
+    else:
+        header = f"{'Version':<10} {'Masked':<8} {'TFLOPS':>10} {'BW(GB/s)':>12} {'TFLOPS%':>10} {'BW%':>10} {'Status':<14} {'Action'}"
     separator = "-" * len(header)
     print(header)
     print(separator)
 
-    for filepath in files:
-        data = read_json(filepath)
+    for filepath, data in rows:
         version = data.get("version", filepath.stem)
         masked = "YES" if data.get("masked", False) else ""
         perf = data.get("performance", {})
@@ -355,7 +364,25 @@ def cmd_summary(args: argparse.Namespace) -> None:
         tflops_pct_str = f"{tflops_pct:.1f}%" if tflops_pct is not None else "-"
         bw_pct_str = f"{bw_pct:.1f}%" if bw_pct is not None else "-"
 
-        print(f"{version:<10} {masked:<8} {tflops_str:>10} {bw_str:>12} {tflops_pct_str:>10} {bw_pct_str:>10} {combined_status:<14} {action}")
+        prefix = (
+            f"{version:<10} {masked:<8} {tflops_str:>10} {bw_str:>12} "
+            f"{tflops_pct_str:>10} {bw_pct_str:>10}"
+        )
+        if teacher_mode:
+            progress = data.get("teacher_progress")
+            if not isinstance(progress, dict):
+                progress = {}
+            teacher_ratio = progress.get("candidate_to_teacher_geomean_ratio")
+            worst_ratio = progress.get("worst_shape_ratio")
+            teacher_ratio_str = f"{teacher_ratio:.3f}" if isinstance(teacher_ratio, (int, float)) else "-"
+            worst_ratio_str = f"{worst_ratio:.3f}" if isinstance(worst_ratio, (int, float)) else "-"
+            worst_shape = str(progress.get("worst_shape_key") or "-")
+            abba_status = str(progress.get("abba_status") or "-")
+            prefix += (
+                f" {teacher_ratio_str:>10} {worst_ratio_str:>10} "
+                f"{worst_shape:<16} {abba_status:<12}"
+            )
+        print(f"{prefix} {combined_status:<14} {action}")
 
 
 def cmd_latest(args: argparse.Namespace) -> None:

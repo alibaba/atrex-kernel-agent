@@ -83,6 +83,7 @@ try:
     from . import agent_runtime as _agent_runtime
     from .aggregate_dispatch import embed_bucket_sources
     from .telemetry import IterationTelemetryRecorder, changed_paths_since
+    from .stop_policy import DefaultStopPolicy, StopDecision, StopDecisionStatus, StopPolicy
     from .optimization_policy import (
         OPTIMIZATION_MODE_CHOICES,
         install_workspace_policy,
@@ -97,6 +98,12 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from telemetry import (  # type: ignore[no-redef]
         IterationTelemetryRecorder,
         changed_paths_since,
+    )
+    from stop_policy import (  # type: ignore[no-redef]
+        DefaultStopPolicy,
+        StopDecision,
+        StopDecisionStatus,
+        StopPolicy,
     )
     from optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
@@ -672,6 +679,7 @@ def run_session(
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT,
     reasoning_effort: str = "max",
     extra_environment: Optional[dict[str, str]] = None,
+    access_policy: Optional[_agent_runtime.ProcessAccessPolicy] = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     session_id = str(uuid.uuid4())
@@ -692,6 +700,7 @@ def run_session(
             sandbox_timeout_s=sandbox_timeout,
             session_id=session_id,
             extra_environment=extra_environment,
+            access_policy=access_policy,
         )
     )
     return SessionResult(
@@ -1687,8 +1696,15 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
     )
 
 
-def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> None:
-    """Make the skill's `tools/`, `reference/`, `skills/`, `reference-projects/`, `gpu-wiki/` resolvable from cwd=workspace.
+def link_runtime(
+    workspace: Path,
+    atrex_bench_root: Optional[Path] = None,
+    *,
+    gpu_wiki_root: Optional[Path] = None,
+    include_reference_projects: bool = True,
+    include_kernel_wiki: bool = True,
+) -> None:
+    """Make the selected optimizer runtime resources resolvable from cwd=workspace.
 
     The gpu-kernel-* skills reference these by relative path; sessions run with cwd=workspace,
     so symlink them in (absolute targets, so the workspace can live anywhere). Idempotent.
@@ -1700,10 +1716,32 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     owns plan generation directly and does not load Humanize. Codex and Pi receive a
     repository-scoped, hydrated Humanize skill without changing global user state.
     """
-    for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
-        src, dst = REPO_ROOT / sub, workspace / sub
-        if src.exists() and not dst.exists():
-            os.symlink(src, dst)
+    strict_runtime_links = (
+        gpu_wiki_root is not None or not include_reference_projects or not include_kernel_wiki
+    )
+    runtime_sources = {
+        "tools": REPO_ROOT / "tools",
+        "reference": REPO_ROOT / "reference",
+        "skills": REPO_ROOT / "skills",
+        "gpu-wiki": (gpu_wiki_root or (REPO_ROOT / "gpu-wiki")).resolve(),
+    }
+    if include_reference_projects:
+        runtime_sources["reference-projects"] = REPO_ROOT / "reference-projects"
+    for sub, src in runtime_sources.items():
+        dst = workspace / sub
+        if not src.exists():
+            continue
+        if dst.is_symlink():
+            if dst.resolve() != src.resolve() and strict_runtime_links:
+                raise RuntimeError(
+                    f"workspace runtime link {dst} points at {dst.resolve()}, expected {src.resolve()}"
+                )
+            continue
+        if dst.exists():
+            if strict_runtime_links:
+                raise RuntimeError(f"workspace path blocks the runtime link: {dst}")
+            continue
+        os.symlink(src, dst)
     if atrex_bench_root is not None:
         evaluator = atrex_bench_root / "scripts" / "run_eval.py"
         package = atrex_bench_root / "src" / "atrex_bench"
@@ -1727,7 +1765,12 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
     # so selecting a different --agent-cli does not change the available optimization knowledge.
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
+    effective_wiki_root = runtime_sources["gpu-wiki"]
+    kw_src = (
+        effective_wiki_root / "3rdparty" / "KernelWiki"
+        if include_kernel_wiki
+        else Path("/__atrex_kernel_wiki_disabled__")
+    )
     agents_src = REPO_ROOT / "agents"
     for runtime_dir_name in (".claude", ".qoder"):
         runtime_dir = workspace / runtime_dir_name
@@ -1813,6 +1856,26 @@ class Campaign:
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     framework_baseline: str = "auto"        # auto = production only; always | never override it
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
+    stop_policy: Optional[StopPolicy] = field(default=None, repr=False, compare=False)
+    evaluate_initial_stop: bool = False
+    stop_policy_infra_retries: int = 0
+    abort_on_stop_policy_infra: bool = False
+    iteration_acceptance: Optional[
+        Callable[["Campaign", int, dict, Optional[float]], Optional[str]]
+    ] = field(default=None, repr=False, compare=False)
+    iteration_change_detector: Optional[
+        Callable[["Campaign", str, str], bool]
+    ] = field(default=None, repr=False, compare=False)
+    runtime_linker: Optional[Callable[["Campaign"], None]] = field(
+        default=None, repr=False, compare=False
+    )
+    session_directive: str = field(default="", repr=False, compare=False)
+    session_prompt_filter: Optional[Callable[[str], str]] = field(
+        default=None, repr=False, compare=False
+    )
+    session_access_policy: Optional[_agent_runtime.ProcessAccessPolicy] = field(
+        default=None, repr=False, compare=False
+    )
     on_improvement: Optional[Callable[["Campaign", int, dict], None]] = field(
         default=None, repr=False, compare=False
     )
@@ -1830,6 +1893,52 @@ class Campaign:
     def workspace(self) -> Path:
         base = Path(self.work_dir) if self.work_dir else Path.cwd()
         return base / f"kernel_opt_{self.campaign_name}"
+
+    def _accepted_stop_decision(self, version: int, memory: dict) -> StopDecision:
+        policy = self.stop_policy or DefaultStopPolicy()
+        decision = policy.evaluate_accepted_iteration(self, version, memory)
+        if not isinstance(decision, StopDecision):
+            raise TypeError("stop policy must return a StopDecision")
+        return decision
+
+    @staticmethod
+    def _report_stop_policy_infra_error(decision: StopDecision) -> None:
+        if decision.status == StopDecisionStatus.INFRA_ERROR:
+            print(
+                f"[orchestrator] stop-policy infrastructure error: {decision.reason}; continuing",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _run_agent_session(
+        self,
+        prompt: str,
+        *,
+        timeout: int,
+        reasoning_effort: str = "max",
+        extra_environment: Optional[dict[str, str]] = None,
+    ) -> SessionResult:
+        filtered = self.session_prompt_filter is not None
+        if self.session_prompt_filter is not None:
+            prompt = self.session_prompt_filter(prompt)
+        if self.session_directive:
+            directive = self.session_directive.rstrip()
+            prompt = directive + "\n\n" + prompt
+            if filtered:
+                prompt = prompt.rstrip() + "\n\n" + directive
+        return run_session(
+            self.workspace,
+            prompt,
+            timeout=timeout,
+            agent_cli=self.agent_cli,
+            sandbox_hardware=self.sandbox_hardware,
+            sandbox_profile=self.sandbox_profile,
+            sandbox_url=self.sandbox_url,
+            sandbox_timeout=self.sandbox_timeout,
+            reasoning_effort=reasoning_effort,
+            extra_environment=extra_environment,
+            access_policy=self.session_access_policy,
+        )
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -1862,13 +1971,9 @@ class Campaign:
             MODE_POLICY=self._mode_directive(),
         )
         head_before = git_head(self.workspace)
-        salvage_res = run_session(
-            self.workspace, prompt, timeout=self.salvage_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
+        salvage_res = self._run_agent_session(
+            prompt,
+            timeout=self.salvage_timeout,
             reasoning_effort="high",
         )
         self._account(salvage_res, f"salvage v{n}")
@@ -1911,8 +2016,11 @@ class Campaign:
         )
 
     def _link_runtime(self) -> None:
-        native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
-        link_runtime(self.workspace, native_root)
+        if self.runtime_linker is not None:
+            self.runtime_linker(self)
+        else:
+            native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
+            link_runtime(self.workspace, native_root)
         install_workspace_policy(
             self.workspace,
             self.optimization_mode,
@@ -1997,13 +2105,9 @@ class Campaign:
             EVALUATOR=self._evaluator_directive(),
             MODE_POLICY=self._mode_directive(),
         )
-        res = run_session(
-            self.workspace, prompt, timeout=self.setup_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
+        res = self._run_agent_session(
+            prompt,
+            timeout=self.setup_timeout,
             reasoning_effort="high",
         )
         self._account(res, "setup")
@@ -2040,15 +2144,9 @@ class Campaign:
                 + "\n\n"
                 + self._sandbox_directive()
             )
-            recovery = run_session(
-                self.workspace,
+            recovery = self._run_agent_session(
                 recovery_prompt,
                 timeout=self.setup_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="high",
             )
             self._account(recovery, "setup recovery")
@@ -2142,14 +2240,9 @@ class Campaign:
 
         if action == "run":
             self._link_runtime()
-            res = run_session(
-                self.workspace, self._framework_baseline_prompt(n),
+            res = self._run_agent_session(
+                self._framework_baseline_prompt(n),
                 timeout=self.framework_baseline_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="high",
             )
             self._account(res, f"framework baseline v{n}")
@@ -2386,13 +2479,9 @@ class Campaign:
             + "\n\n"
             + self._sandbox_directive()
         )
-        recovery = run_session(
-            self.workspace, recovery_prompt, timeout=self.framework_baseline_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
+        recovery = self._run_agent_session(
+            recovery_prompt,
+            timeout=self.framework_baseline_timeout,
             reasoning_effort="high",
         )
         self._account(recovery, f"framework baseline recovery v{FRAMEWORK_BASELINE_VERSION}")
@@ -2528,6 +2617,49 @@ class Campaign:
     def budget_exhausted(self) -> bool:
         return self.token_budget > 0 and self.tokens_spent >= self.token_budget
 
+    def _reject_iteration_candidate(self, n: int, pre_head: str, reason: str) -> None:
+        memory_path = self.workspace / "memory" / f"v{n}.json"
+        try:
+            memory = json.loads(memory_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            memory = {"version": f"v{n}"}
+        subprocess.run(
+            ["git", "reset", "--hard", pre_head],
+            cwd=str(self.workspace),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        memory_path.parent.mkdir(parents=True, exist_ok=True)
+        memory["version"] = f"v{n}"
+        memory["masked"] = False
+        memory["git_commit_hash"] = None
+        memory["quality_gate"] = {
+            "result": "FAIL",
+            "failure_reason": "iteration acceptance rejection: " + reason,
+        }
+        pitfalls = memory.setdefault("pitfalls_and_fixes", [])
+        pitfalls.append(
+            {
+                "error_type": "iteration_acceptance",
+                "error_message": reason,
+                "lesson": "a committed candidate must remain correct and improve the incumbent",
+            }
+        )
+        memory_path.write_text(
+            json.dumps(memory, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def _evaluate_stop_with_retries(self, version: int, memory: dict) -> StopDecision:
+        decision = StopDecision.continue_()
+        for _attempt in range(max(0, int(self.stop_policy_infra_retries)) + 1):
+            decision = self._accepted_stop_decision(version, memory)
+            if decision.status != StopDecisionStatus.INFRA_ERROR:
+                break
+            self._report_stop_policy_infra_error(decision)
+        return decision
+
     def _notify_improvement(
         self, n: int, mem: Optional[dict], previous_latency: Optional[float]
     ) -> None:
@@ -2662,8 +2794,27 @@ class Campaign:
             print(f"[orchestrator] stall counter restored: {stall} rounds without progress", flush=True)
         infra_fails = 0  # consecutive sessions that crashed with 0 tokens (auth/infra issue)
         n = latest_version(self.workspace)  # 0 after baseline
+        pending_stop_version: Optional[int] = n if self.evaluate_initial_stop else None
         mask_half_memory(self.workspace, n)  # also covers resuming an unmasked v100/v200/...
         while True:
+            if pending_stop_version is not None:
+                pending_memory = read_memory(self.workspace, pending_stop_version)
+                if pending_memory:
+                    pending_decision = self._evaluate_stop_with_retries(
+                        pending_stop_version,
+                        pending_memory,
+                    )
+                    if pending_decision.status == StopDecisionStatus.SUCCESS:
+                        return self._finish(pending_decision.reason)
+                    if pending_decision.status != StopDecisionStatus.INFRA_ERROR:
+                        pending_stop_version = None
+                    elif self.abort_on_stop_policy_infra:
+                        return self._finish(
+                            "infra: stop-policy verification failed after retries: "
+                            + pending_decision.reason
+                        )
+                else:
+                    pending_stop_version = None
             conversion_pending = should_convert_to_gluon(
                 self.framework,
                 stall,
@@ -2714,13 +2865,9 @@ class Campaign:
             telemetry = (
                 None if do_convert else self._begin_iteration_telemetry(n, pre_head)
             )
-            res = run_session(
-                self.workspace, prompt, timeout=self.iter_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
+            res = self._run_agent_session(
+                prompt,
+                timeout=self.iter_timeout,
                 extra_environment=(telemetry.environment() if telemetry else None),
             )
             self._account(res, f"{'convert' if do_convert else 'iter'} v{n}")
@@ -2742,6 +2889,19 @@ class Campaign:
                         flush=True,
                     )
                     telemetry = None
+
+            if (
+                self.session_access_policy is not None
+                and res.exit_status == 126
+                and (
+                    "teacher knowledge access policy violation" in res.stderr_tail.casefold()
+                    or "hidden-teacher network access" in res.stderr_tail.casefold()
+                    or "dependency policy violation" in res.stderr_tail.casefold()
+                )
+            ):
+                return self._finish(
+                    "TEACHER_LEAKAGE_VIOLATION: forbidden access was audited"
+                )
 
             # Robust infra-failure handling: distinguish crash vs timeout, retry up to 15
             # consecutive failures with progressive backoff before giving up. A 2-fail
@@ -2783,7 +2943,12 @@ class Campaign:
                 infra_fails = 0
 
             mem = read_memory(self.workspace, n)
-            won = kernel_won(self.workspace, pre_head)  # git-native "committed a kernel.py win" — reused below
+            post_head = git_head(self.workspace)
+            won = (
+                self.iteration_change_detector(self, pre_head, post_head)
+                if self.iteration_change_detector is not None
+                else kernel_won(self.workspace, pre_head)
+            )
             if won and self.optimization_mode == "production":
                 violations = production_kernel_violations(
                     self.workspace,
@@ -2795,6 +2960,18 @@ class Campaign:
                     print(
                         "[orchestrator] production policy rejected v"
                         f"{n}: {'; '.join(violations)}; reverted to {pre_head[:8]}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    mem = read_memory(self.workspace, n)
+                    won = False
+            if won and self.iteration_acceptance is not None:
+                rejection = self.iteration_acceptance(self, n, mem or {}, previous_latency)
+                if rejection:
+                    self._reject_iteration_candidate(n, pre_head, rejection)
+                    print(
+                        f"[orchestrator] iteration acceptance rejected v{n}: {rejection}; "
+                        f"reverted to {pre_head[:8]}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -2823,12 +3000,11 @@ class Campaign:
                     print("[orchestrator] converted triton->gluon (perf parity ok); optimizing gluon", flush=True)
                     self._notify_improvement(n, mem, previous_latency)
                     self._notify_iteration(n, mem, True)
-                    if peak_util(mem) >= self.target_util:
+                    decision = self._accepted_stop_decision(n, mem or {})
+                    if decision.status == StopDecisionStatus.SUCCESS:
                         mask_half_memory(self.workspace, n)
-                        return self._finish(
-                            f"success: peak_util {peak_util(mem):.1f}% >= "
-                            f"{self.target_util:.0f}%"
-                        )
+                        return self._finish(decision.reason)
+                    self._report_stop_policy_infra_error(decision)
                     mask_half_memory(self.workspace, n)
                     continue
                 # Revert every rejected kernel-changing conversion commit, including a session that
@@ -2883,11 +3059,14 @@ class Campaign:
             if won:                        # reuse the git-native win computed above
                 self._notify_improvement(n, mem, previous_latency)
                 self._notify_iteration(n, mem, True)
-                if peak_util(mem) >= self.target_util:
+                decision = self._accepted_stop_decision(n, mem or {})
+                if decision.status == StopDecisionStatus.SUCCESS:
                     mask_half_memory(self.workspace, n)
-                    return self._finish(
-                        f"success: peak_util {peak_util(mem):.1f}% >= {self.target_util:.0f}%"
-                    )
+                    return self._finish(decision.reason)
+                self._report_stop_policy_infra_error(decision)
+                pending_stop_version = (
+                    n if decision.status == StopDecisionStatus.INFRA_ERROR else None
+                )
                 stall = 0
                 write_stall(self.workspace, stall)
             else:
@@ -5874,6 +6053,13 @@ def main(argv: Optional[list[str]] = None) -> int:
              "third-party kernel/operator dependencies and mechanically enforces each campaign's framework.",
     )
     ap.add_argument(
+        "--campaign-mode",
+        choices=("standard", "teacher-distill"),
+        default="standard",
+        help="standard keeps the existing optimizer; teacher-distill runs the opt-in offline "
+             "hidden-Teacher 1-to-10 workflow.",
+    )
+    ap.add_argument(
         "--framework", default="",
         help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL. When omitted, launch all "
              "frameworks supported by the detected hardware in parallel: NVIDIA uses "
@@ -5887,6 +6073,40 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "own workspace under one shared --max-iters budget, then recombine. Default off "
                          "(single-op SOL path uses workload bucketing instead).")
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
+    ap.add_argument(
+        "--teacher-solution",
+        default="",
+        help="Self-contained same-framework Teacher solution bundle (teacher-distill only).",
+    )
+    ap.add_argument(
+        "--teacher-geomean-ratio",
+        type=float,
+        default=1.05,
+        help="Candidate/Teacher geomean acceptance ratio (teacher-distill; default 1.05).",
+    )
+    ap.add_argument(
+        "--teacher-shape-ratio",
+        type=float,
+        default=1.10,
+        help="Maximum per-shape Candidate/Teacher ratio (teacher-distill; default 1.10).",
+    )
+    ap.add_argument(
+        "--teacher-stall-before-episode",
+        type=int,
+        default=3,
+        help="Consecutive stalls before one isolated long-horizon episode (default 3).",
+    )
+    ap.add_argument(
+        "--teacher-partial-restarts",
+        type=int,
+        default=1,
+        help="Maximum partial-memory restarts after failed Teacher exploration (default 1).",
+    )
+    ap.add_argument(
+        "--teacher-private-root",
+        default="",
+        help="Private Teacher supervisor state root (default: <workspace>/.atrex_teacher_campaigns).",
+    )
     ap.add_argument("--max-iters", type=int, default=20, help="Hard cap on optimization iterations.")
     ap.add_argument(
         "--max-workload-buckets",
@@ -5940,6 +6160,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
+    teacher_cli = None
+    teacher_options_used = args.campaign_mode == "teacher-distill" or any(
+        value.startswith("--teacher-") for value in raw_argv
+    )
+    if teacher_options_used:
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from teacher_distill import cli as teacher_cli_module
+        teacher_cli = teacher_cli_module
+        teacher_cli.preflight_teacher_args(ap, args, raw_argv)
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(args.workspace_suffix):
         ap.error("--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix")
     if not 1 <= args.sandbox_timeout <= MAX_SANDBOX_TIMEOUT:
@@ -5998,6 +6228,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     op = _resolve_op(args.op_dir)
     ensure_submodules()
+    if args.campaign_mode == "teacher-distill":
+        if teacher_cli is None:
+            raise RuntimeError("teacher-distill CLI policy was not initialized")
+        request = teacher_cli.build_request(args, op, arch, sandbox_hardware)
+        return teacher_cli.run_teacher_distill(request)
     frameworks = (args.framework,) if args.framework else supported_frameworks(args.platform, arch)
     print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
           f"optimization_mode={args.optimization_mode} platform={args.platform} "

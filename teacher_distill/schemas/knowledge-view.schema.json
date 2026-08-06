@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atrex.local/schemas/teacher-knowledge-view-v1.json",
+  "title": "Hidden-audited knowledge view report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "integrity",
+    "architecture",
+    "framework",
+    "included_count",
+    "excluded_count",
+    "included",
+    "excluded"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "integrity": {"const": "hidden-audited"},
+    "architecture": {"type": "string", "minLength": 1},
+    "framework": {"type": "string", "minLength": 1},
+    "included_count": {"type": "integer", "minimum": 0},
+    "excluded_count": {"type": "integer", "minimum": 0},
+    "included": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "excluded": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "reason"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "reason": {
+            "enum": [
+              "architecture-scope",
+              "vendor-scope",
+              "dsl-scope",
+              "explicit-path",
+              "teacher-source",
+              "operator-metadata",
+              "operator-identity"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

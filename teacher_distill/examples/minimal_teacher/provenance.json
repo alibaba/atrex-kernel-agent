@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "operator": {
+    "canonical_id": "elementwise_copy",
+    "aliases": [
+      "copy",
+      "vector_copy"
+    ]
+  },
+  "source": {
+    "project": "atrex-example",
+    "revision": "bundled-v1",
+    "license": "Apache-2.0"
+  },
+  "target": {
+    "framework": "Triton",
+    "architecture": "sm90"
+  },
+  "knowledge_deny": {
+    "sources": [
+      "atrex-example"
+    ],
+    "paths": [],
+    "tags": [
+      "copy",
+      "elementwise_copy",
+      "vector_copy"
+    ]
+  }
+}

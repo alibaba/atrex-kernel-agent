@@ -164,6 +164,26 @@ and Git remain workspace-local. `--platform` and the gateway's hardware selector
 inventory data may be aliased or desensitized, so runtime architecture probing drives automatic framework
 selection.
 
+## 2C. Run Offline Teacher Distillation
+
+Use this opt-in mode to generate a 1→10 optimization trajectory against an independently measured, same-framework expert implementation. It is not the default online optimization route.
+
+```bash
+python3 orchestrator/optimize.py \
+    --campaign-mode teacher-distill \
+    --op-dir /path/to/operator \
+    --teacher-solution /path/to/teacher_solution \
+    --platform H20 --arch sm_90 --framework CuteDSL \
+    --no-workload-bucketing \
+    --sandbox-hardware REMOTE_GPU \
+    --agent-cli pi \
+    --max-iters 30 --max-stall 5
+```
+
+The Teacher bundle must contain `kernel.py`, `solution.json`, and `provenance.json`; it must use the same framework and architecture and pass full correctness before Candidate setup. V0 remains the reference implementation, V1 is an Agent-authored naive framework kernel, and V2+ follows the normal profile-driven loop. Success requires both aggregate and per-shape parity followed by same-allocation A-B-B-A verification.
+
+Teacher mode is `hidden-audited`, not security-grade isolation. It disables workload bucketing, layer decomposition, automatic framework dispatch, reference-project access, and public-web fallback. It writes evidence-backed drafts under private campaign state but never modifies canonical `gpu-wiki/`. See [teacher-distill.md](teacher-distill.md) for the complete contract and threat model.
+
 ## 3. Inspect Outputs
 
 Each optimization workspace records the full optimization trail:

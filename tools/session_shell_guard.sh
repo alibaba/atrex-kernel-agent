@@ -3,10 +3,101 @@
 
 _atrex_gateway_screen="${ATREX_PROTECTED_GATEWAY_SCREEN:-}"
 _atrex_gateway_state="${ATREX_PROTECTED_GATEWAY_STATE_DIR:-}"
+_atrex_access_policy_id="${ATREX_ACCESS_POLICY_ID:-}"
+_atrex_access_violation_file="${ATREX_ACCESS_VIOLATION_FILE:-}"
+_atrex_session_workspace="${ATREX_SESSION_WORKSPACE:-}"
 
 _atrex_deny_gateway_action() {
     echo "atrex policy: shared localhost gateway lifecycle/state is orchestrator-owned" >&2
     return 126
+}
+
+_atrex_deny_teacher_network() {
+    echo "atrex policy: hidden-Teacher network access is forbidden" >&2
+    if [[ -n "${_atrex_access_violation_file}" ]]; then
+        printf '%s\n' "teacher knowledge access policy violation: network access disabled" \
+            >> "${_atrex_access_violation_file}"
+    fi
+    return 126
+}
+
+_atrex_teacher_policy_active() {
+    [[ -n "${_atrex_access_policy_id}" ]]
+}
+
+_atrex_deny_teacher_path() {
+    echo "atrex policy: hidden-Teacher access outside the workspace is forbidden" >&2
+    if [[ -n "${_atrex_access_violation_file}" ]]; then
+        printf '%s\n' "teacher knowledge access policy violation: forbidden path" \
+            >> "${_atrex_access_violation_file}"
+    fi
+    return 126
+}
+
+_atrex_check_read_paths() {
+    local value
+    _atrex_teacher_policy_active || return 0
+    for value in "$@"; do
+        case "$value" in
+            ""|-*) continue ;;
+            /*)
+                case "$value" in
+                    "${_atrex_session_workspace}"|"${_atrex_session_workspace}"/*) ;;
+                    *) _atrex_deny_teacher_path; return $? ;;
+                esac
+                ;;
+            ..|../*|*/../*|~|~/*) _atrex_deny_teacher_path; return $? ;;
+        esac
+    done
+    return 0
+}
+
+cat() { _atrex_check_read_paths "$@" || return $?; command cat "$@"; }
+rg() { _atrex_check_read_paths "$@" || return $?; command rg "$@"; }
+grep() { _atrex_check_read_paths "$@" || return $?; command grep "$@"; }
+find() { _atrex_check_read_paths "$@" || return $?; command find "$@"; }
+head() { _atrex_check_read_paths "$@" || return $?; command head "$@"; }
+tail() { _atrex_check_read_paths "$@" || return $?; command tail "$@"; }
+sed() { _atrex_check_read_paths "$@" || return $?; command sed "$@"; }
+
+curl() {
+    if _atrex_teacher_policy_active; then _atrex_deny_teacher_network; return $?; fi
+    command curl "$@"
+}
+
+wget() {
+    if _atrex_teacher_policy_active; then _atrex_deny_teacher_network; return $?; fi
+    command wget "$@"
+}
+
+ssh() {
+    if _atrex_teacher_policy_active; then _atrex_deny_teacher_network; return $?; fi
+    command ssh "$@"
+}
+
+scp() {
+    if _atrex_teacher_policy_active; then _atrex_deny_teacher_network; return $?; fi
+    command scp "$@"
+}
+
+sftp() {
+    if _atrex_teacher_policy_active; then _atrex_deny_teacher_network; return $?; fi
+    command sftp "$@"
+}
+
+git() {
+    local value
+    if _atrex_teacher_policy_active; then
+        for value in "$@"; do
+            case "$value" in
+                clone|fetch|pull|push|ls-remote|submodule)
+                    _atrex_deny_teacher_network
+                    return $?
+                    ;;
+            esac
+        done
+    fi
+    command git "$@"
 }
 
 _atrex_is_gateway_path() {
@@ -250,7 +341,9 @@ python3.10() {
 }
 
 readonly -f _atrex_deny_gateway_action _atrex_is_gateway_path
+readonly -f _atrex_deny_teacher_network _atrex_teacher_policy_active
 readonly -f _atrex_is_tracked_workspace_path _atrex_deny_tracked_delete
+readonly -f curl wget ssh scp sftp git
 readonly -f screen rm rmdir mv truncate pkill killall
 readonly -f _atrex_python_code_imports_blocked_module
 readonly -f _atrex_guarded_python python python3 python3.10
