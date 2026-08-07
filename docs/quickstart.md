@@ -64,10 +64,16 @@ python orchestrator/optimize.py \
 ```
 
 Each Codex episode starts with `codex exec --json`; bounded handoff recovery resumes that same thread.
-The orchestrator installs the required
-optimization and Humanize skills into the campaign's repository-scoped `.agents/skills/` tree; it does
-not modify `${CODEX_HOME}`. Optional Codex config overrides use a JSON object or an array of literal
-`key=value` values:
+Its native rollout is read incrementally for token and marker accounting. Non-episode Codex
+orchestrator phases use a fresh thread in an isolated temporary `CODEX_HOME` that links existing auth,
+config, and skills; newly written rollout and state files stay there, and the directory is removed
+after normalization or terminal-only fallback. The orchestrator uses `session_meta` only to recover
+the exact workspace or thread when stdout omits it, verifies every available usage component against
+`turn.completed.usage`, and records ledger or cleanup errors without failing the Agent run. If ledger
+observation fails during an episode resume, consecutive cumulative stdout totals still provide a
+non-duplicated invocation total while phase attribution is disabled. Optimization and Humanize skills
+stay in the campaign-scoped `.agents/skills/` tree, so the user's global Codex installation is not
+modified. Optional Codex config overrides use a JSON object or an array of literal `key=value` values:
 
 ```bash
 export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_effort":"xhigh"}'

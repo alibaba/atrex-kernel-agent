@@ -8,6 +8,18 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Callable
 
+from orchestrator.agent_runtime.codex_ledger import (
+    CodexSessionLedgerObserver,
+    codex_home,
+)
+from orchestrator.agent_runtime.model import (
+    NormalizedAgentEvent,
+    TokenUsage,
+    resequence_agent_events,
+    subtract_token_usage,
+    token_usage_exceeds,
+)
+
 from . import main_adapter
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
@@ -21,6 +33,30 @@ CommandExecutor = Callable[
 
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
 _MAX_HANDOFF_GRACE_SECONDS = 600
+
+
+def _codex_invocation_usage(
+    session_usage: TokenUsage, previous_session_usage: TokenUsage | None
+) -> TokenUsage:
+    if session_usage.total_tokens is None:
+        return TokenUsage.unavailable()
+    previous = previous_session_usage or TokenUsage.zero()
+    if token_usage_exceeds(previous, session_usage):
+        return TokenUsage.unavailable()
+    return subtract_token_usage(session_usage, previous)
+
+
+def _replace_terminal_usage(
+    events: tuple[NormalizedAgentEvent, ...], usage: TokenUsage
+) -> tuple[NormalizedAgentEvent, ...]:
+    retained = [event for event in events if event.kind != "terminal_usage"]
+    if usage.total_tokens is not None:
+        retained.append(
+            NormalizedAgentEvent(
+                sequence=len(retained), kind="terminal_usage", usage=usage
+            )
+        )
+    return resequence_agent_events(retained)
 
 
 def _claude_transient_api_error(stdout: str) -> str:
@@ -69,7 +105,8 @@ class LongSessionRunner:
         telemetry_environment: Mapping[str, str] | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
-        active_session_id = session_id if self.agent_cli != "codex" else ""
+        is_codex = self.agent_cli == "codex"
+        active_session_id = "" if is_codex else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         deadline = time.monotonic() + timeout
@@ -95,6 +132,19 @@ class LongSessionRunner:
                 {str(key): str(value) for key, value in telemetry_environment.items()}
             )
         telemetry_attempt_prefix = environment.get("ATREX_TELEMETRY_ATTEMPT_ID")
+        codex_observer = None
+        codex_setup_errors: tuple[str, ...] = ()
+        if is_codex:
+            try:
+                codex_observer = CodexSessionLedgerObserver(
+                    codex_home(environment)
+                )
+            except Exception as exc:
+                codex_setup_errors = (
+                    f"codex_ledger_setup_failed:{type(exc).__name__}",
+                )
+        codex_stdout_session_usage: TokenUsage | None = None
+        codex_ledger_usable = codex_observer is not None
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
         total_tokens = 0
@@ -174,13 +224,72 @@ class LongSessionRunner:
             )
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
-            events, terminal_usage, capabilities, observation_errors = (
-                main_adapter.normalize_stream(self.agent_cli, stdout)
+            observed_session_id = main_adapter.session_id_from_stream(
+                self.agent_cli, stdout, session_id
             )
+            if observed_session_id:
+                active_session_id = observed_session_id
+            stream_session_usage = (
+                main_adapter.terminal_usage_from_stream(stdout)
+                if is_codex
+                else None
+            )
+            events, terminal_usage, capabilities, observation_errors = (
+                main_adapter.normalize_stream(
+                    self.agent_cli,
+                    stdout,
+                    session_id=active_session_id,
+                    codex_observer=(
+                        codex_observer if codex_ledger_usable else None
+                    ),
+                )
+            )
+            if attempt == 0 and codex_setup_errors:
+                observation_errors = codex_setup_errors + observation_errors
+            ledger_failed = any(
+                value.startswith("codex_ledger_unavailable:")
+                for value in observation_errors
+            )
+            if ledger_failed:
+                codex_ledger_usable = False
+            resume_usage_qualified = bool(
+                is_codex
+                and capabilities.usage_delta_observed
+                and not ledger_failed
+            )
+            if is_codex and not resume_usage_qualified:
+                fallback_usage = _codex_invocation_usage(
+                    stream_session_usage or TokenUsage.unavailable(),
+                    codex_stdout_session_usage,
+                )
+                if fallback_usage.total_tokens is not None:
+                    terminal_usage = fallback_usage
+                    events = _replace_terminal_usage(events, fallback_usage)
+                else:
+                    terminal_usage = TokenUsage.unavailable()
+                    events = _replace_terminal_usage(events, terminal_usage)
+                    observation_errors += (
+                        "codex_cumulative_fallback_unavailable",
+                    )
+            if (
+                stream_session_usage is not None
+                and stream_session_usage.total_tokens is not None
+                and (
+                    codex_stdout_session_usage is None
+                    or not token_usage_exceeds(
+                        codex_stdout_session_usage, stream_session_usage
+                    )
+                )
+            ):
+                codex_stdout_session_usage = stream_session_usage
             total_tokens += (
                 terminal_usage.total_tokens
                 if terminal_usage.total_tokens is not None
-                else main_adapter.tokens_from_stream(stdout)
+                else (
+                    0
+                    if is_codex
+                    else main_adapter.tokens_from_stream(stdout)
+                )
             )
             invocations.append(
                 InvocationObservation(
@@ -188,13 +297,9 @@ class LongSessionRunner:
                     events=events,
                     capabilities=capabilities,
                     observation_errors=observation_errors,
+                    resume_usage_qualified=resume_usage_qualified,
                 )
             )
-            observed_session_id = main_adapter.session_id_from_stream(
-                self.agent_cli, stdout, session_id
-            )
-            if observed_session_id:
-                active_session_id = observed_session_id
             timed_out = turn_timed_out
             observed = read_handoff(handoff_path)
             if observed is not None:

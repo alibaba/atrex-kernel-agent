@@ -198,8 +198,16 @@ export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}
 python orchestrator/optimize.py ... --agent-cli pi
 ```
 
-Codex JSONL `turn.completed.usage` is included in token-budget accounting. Cache and reasoning
-sub-counters are not double-counted. Pi finalized message usage, including cache read/write counters,
+Codex JSONL `turn.completed.usage` remains the cumulative session total, while per-turn deltas come
+from the matching native rollout. Non-episode Codex phases use a fresh thread in an isolated temporary
+`CODEX_HOME` that links existing auth, config, and skills while containing new rollout and state
+files; the temporary home is removed after normalization or terminal-only fallback. `session_meta` is
+consulted only when stdout omits the workspace or thread identity. Every available
+input/output/cache/total component must reconcile before phase attribution, and ledger or cleanup
+observation errors do not change the Agent result. Long-horizon rollouts remain available for bounded
+same-thread resume and are read incrementally. A resume-time ledger failure derives the invocation
+budget delta from consecutive cumulative stdout totals instead of double-counting the session. Cache
+and reasoning sub-counters are not double-counted. Pi finalized message usage, including cache read/write counters,
 is aggregated after `agent_settled`. Some Qoder models report zero token usage in stream JSON; in
 that case `--token-budget` cannot be enforced and `--max-iters` remains the hard campaign bound.
 

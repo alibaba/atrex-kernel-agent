@@ -8,15 +8,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from .markers import phase_marker_receipts
 from .model import (
     AgentRuntimeCapabilities,
     NormalizedAgentEvent,
     TokenUsage,
     sum_token_usages,
 )
-
-
-PHASE_MARKER_PREFIX = "ATREX_TRACE_EVENT="
 
 
 def _counter(usage: Mapping[str, object], *names: str) -> int | None:
@@ -230,43 +228,8 @@ def _phase_marker_receipts(event: Mapping[str, object]):
         ):
             roots.append(item.get("aggregated_output"))
 
-    def strings(value: object):
-        if isinstance(value, str):
-            yield value
-        elif isinstance(value, Mapping):
-            for nested in value.values():
-                yield from strings(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                yield from strings(nested)
-
     for root in roots:
-        for text in strings(root):
-            for line in text.splitlines():
-                if not line.startswith(PHASE_MARKER_PREFIX):
-                    continue
-                try:
-                    receipt = json.loads(line[len(PHASE_MARKER_PREFIX) :])
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(receipt, dict):
-                    continue
-                if (
-                    receipt.get("schema") != "atrex.iteration_trace.v1"
-                    or receipt.get("kind") != "phase_marker"
-                ):
-                    continue
-                action = receipt.get("action")
-                phase = receipt.get("phase")
-                marker_id = receipt.get("marker_id")
-                if (
-                    action in {"start", "end"}
-                    and isinstance(phase, str)
-                    and phase
-                    and isinstance(marker_id, str)
-                    and marker_id
-                ):
-                    yield action, phase, marker_id
+        yield from phase_marker_receipts(root)
 
 
 def _json_events(stdout: str):
@@ -575,7 +538,6 @@ class CodexAdapter(AgentBackendAdapter):
             "codex",
             "exec",
             "--json",
-            "--ephemeral",
             "--color",
             "never",
             "--dangerously-bypass-approvals-and-sandbox",
@@ -630,7 +592,7 @@ class CodexAdapter(AgentBackendAdapter):
         return tuple(normalized), terminal
 
     def auth_hint(self) -> str:
-        return 'run `codex login status` and `codex exec --ephemeral "reply ok"` to diagnose'
+        return 'run `codex login status` and `codex exec "reply ok"` to diagnose'
 
 
 AdapterFactory = Callable[[Path], AgentBackendAdapter]

@@ -16,6 +16,13 @@ Runtime state lives under `.atrex_long_horizon/` in generated campaign workspace
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
 `--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
 
+Claude and Codex can resume the same session to repair an incomplete handoff; Qoder and Pi use a
+single long invocation. Codex token deltas and marker ordering are read incrementally from the
+resumable native rollout. Available invocation components must reconcile with cumulative rollout and
+`turn.completed` totals before attribution. Reconciled events may form one phase interval across a
+resume boundary. If ledger observation fails, consecutive cumulative stdout usage still supplies a
+non-duplicated invocation total while phase attribution degrades fail-closed.
+
 ## Module responsibilities
 
 - `campaign.py`: episode budgets, recovery, terminal-state processing, and promotion decisions.

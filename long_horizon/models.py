@@ -29,6 +29,7 @@ class InvocationObservation:
     events: tuple[NormalizedAgentEvent, ...]
     capabilities: AgentRuntimeCapabilities
     observation_errors: tuple[str, ...] = ()
+    resume_usage_qualified: bool = False
 
 
 @dataclass

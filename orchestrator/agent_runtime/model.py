@@ -116,6 +116,22 @@ class NormalizedAgentEvent:
     marker_id: str | None = None
 
 
+def resequence_agent_events(
+    events: Sequence[NormalizedAgentEvent],
+) -> tuple[NormalizedAgentEvent, ...]:
+    return tuple(
+        NormalizedAgentEvent(
+            sequence=index,
+            kind=event.kind,
+            usage=event.usage,
+            phase=event.phase,
+            action=event.action,
+            marker_id=event.marker_id,
+        )
+        for index, event in enumerate(events)
+    )
+
+
 @dataclass(frozen=True)
 class AgentRuntimeCapabilities:
     terminal_usage: bool

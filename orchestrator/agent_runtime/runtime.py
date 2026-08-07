@@ -20,6 +20,13 @@ from .adapter import (
     token_usage_from_model_usage,
     toml_config_value,
 )
+from .codex_ledger import (
+    CodexSessionLedgerObserver,
+    CodexTemporaryHome,
+    codex_home,
+    codex_thread_id_from_stream,
+    normalized_codex_ledger,
+)
 from .model import (
     AgentRunRequest,
     AgentRunResult,
@@ -162,13 +169,48 @@ class CliAgentRuntime:
                     for key, value in request.extra_environment.items()
                 }
             )
-        stdout, stderr, exit_status, timed_out = self._process_runner(
-            command,
-            cwd=request.workspace,
-            timeout=request.timeout_s,
-            env=environment,
-        )
-        observation_errors: tuple[str, ...] = ()
+        codex_observer = None
+        codex_temporary_home = None
+        pre_observation_errors: tuple[str, ...] = ()
+        original_codex_home = environment.get("CODEX_HOME")
+        isolated_home_ready = False
+        if self.id == "codex":
+            try:
+                codex_temporary_home = CodexTemporaryHome(codex_home(environment))
+                isolated_home = codex_temporary_home.open()
+                isolated_home_ready = True
+                environment["CODEX_HOME"] = str(isolated_home)
+                codex_observer = CodexSessionLedgerObserver(isolated_home)
+            except Exception as exc:
+                pre_observation_errors = (
+                    f"codex_ledger_setup_failed:{type(exc).__name__}",
+                )
+                if not isolated_home_ready:
+                    if codex_temporary_home is not None:
+                        cleanup_error = codex_temporary_home.close()
+                        if cleanup_error:
+                            pre_observation_errors += (cleanup_error,)
+                    codex_temporary_home = None
+                    if original_codex_home is None:
+                        environment.pop("CODEX_HOME", None)
+                    else:
+                        environment["CODEX_HOME"] = original_codex_home
+                try:
+                    command.insert(command.index("--json") + 1, "--ephemeral")
+                except ValueError:
+                    pass
+        try:
+            stdout, stderr, exit_status, timed_out = self._process_runner(
+                command,
+                cwd=request.workspace,
+                timeout=request.timeout_s,
+                env=environment,
+            )
+        except BaseException:
+            if codex_temporary_home is not None:
+                codex_temporary_home.close()
+            raise
+        observation_errors: tuple[str, ...] = pre_observation_errors
         try:
             events, terminal_usage = self._adapter.normalize_stream(stdout)
         except Exception as exc:
@@ -185,6 +227,25 @@ class CliAgentRuntime:
                 event.kind == "usage_delta" for event in events
             ),
         )
+        if codex_observer is not None:
+            observed_session_id = codex_thread_id_from_stream(stdout)
+            try:
+                if not observed_session_id:
+                    observed_session_id = codex_observer.identify_new_thread(
+                        request.workspace
+                    )
+                session_id = observed_session_id
+                events, terminal_usage, capabilities = normalized_codex_ledger(
+                    codex_observer, observed_session_id, terminal_usage
+                )
+            except Exception as exc:
+                observation_errors += (
+                    f"codex_ledger_unavailable:{type(exc).__name__}",
+                )
+        if codex_temporary_home is not None:
+            cleanup_error = codex_temporary_home.close()
+            if cleanup_error:
+                observation_errors += (cleanup_error,)
         return AgentRunResult(
             runtime_id=self.id,
             exit_status=exit_status,

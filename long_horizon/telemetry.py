@@ -6,6 +6,8 @@ from typing import Any
 from orchestrator.agent_runtime.model import (
     AgentRuntimeCapabilities,
     TokenUsage,
+    resequence_agent_events,
+    sum_token_usages,
 )
 from orchestrator.telemetry.phase_tokens import (
     PHASES,
@@ -67,15 +69,60 @@ def summarize_episode(
             }
         )
 
-    phase_tokens = (
-        aggregate_attempt_tokens(invocation_summaries)
-        if invocation_summaries
-        else _fallback_phase_tokens(control_tokens)
+    qualified_resume = bool(
+        len(invocations) > 1
+        and all(observation.resume_usage_qualified for observation in invocations)
     )
+    if qualified_resume:
+        combined_events = []
+        for observation in invocations:
+            combined_events.extend(
+                event for event in observation.events if event.kind != "terminal_usage"
+            )
+        combined_events = list(resequence_agent_events(combined_events))
+        combined_terminal = sum_token_usages(
+            [observation.terminal_usage for observation in invocations]
+        )
+        phase_tokens = summarize_phase_tokens(
+            events=combined_events,
+            terminal_usage=combined_terminal,
+            capabilities=AgentRuntimeCapabilities(
+                terminal_usage=True,
+                usage_delta=True,
+                phase_marker_receipt=True,
+                usage_delta_observed=True,
+            ),
+            observation_errors=tuple(
+                error
+                for observation in invocations
+                for error in observation.observation_errors
+            ),
+        )
+    else:
+        phase_tokens = (
+            aggregate_attempt_tokens(invocation_summaries)
+            if invocation_summaries
+            else _fallback_phase_tokens(control_tokens)
+        )
     phase_intervals: dict[str, list[dict[str, Any]]] = {
         phase: [] for phase in PHASES
     }
-    for invocation_summary in invocation_summaries:
+    if qualified_resume:
+        for phase in PHASES:
+            phase_payload = phase_tokens.get("phases", {}).get(phase, {})
+            for interval in phase_payload.get("intervals") or []:
+                interval_usage = interval.get("usage")
+                if isinstance(interval_usage, Mapping) and isinstance(
+                    interval_usage.get("total_tokens"), int
+                ):
+                    phase_intervals[phase].append(
+                        {
+                            "invocation": "episode",
+                            "index": interval.get("index"),
+                            "usage": interval_usage,
+                        }
+                    )
+    for invocation_summary in (() if qualified_resume else invocation_summaries):
         invocation_number = int(invocation_summary["invocation"])
         invocation_tokens = invocation_summary.get("phase_tokens")
         invocation_tokens = (
@@ -107,7 +154,10 @@ def summarize_episode(
     reasons = set(str(value) for value in phase_tokens.get("reason_codes", []))
     if not invocation_summaries:
         reasons.add("structured_usage_unavailable")
-    if resume_count > 0 or len(invocation_summaries) > 1:
+    if (
+        (resume_count > 0 or len(invocation_summaries) > 1)
+        and not qualified_resume
+    ):
         reasons.add("same_session_resume_usage_semantics_unqualified")
     structured_total = (phase_tokens.get("terminal_usage") or {}).get("total_tokens")
     if (
