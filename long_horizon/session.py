@@ -20,6 +20,7 @@ CommandExecutor = Callable[
 
 
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
+_MAX_HANDOFF_GRACE_SECONDS = 600
 
 
 def _claude_transient_api_error(stdout: str) -> str:
@@ -72,6 +73,17 @@ class LongSessionRunner:
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         deadline = time.monotonic() + timeout
+        # Keep a small part of the episode budget for a same-session terminal
+        # handoff.  Otherwise the first coding turn can consume the complete
+        # deadline and get SIGKILLed with no opportunity to commit or publish
+        # the work it already finished.
+        handoff_grace = (
+            min(_MAX_HANDOFF_GRACE_SECONDS, max(1, timeout // 10))
+            if timeout >= 10
+            and handoff_resumes > 0
+            and main_adapter.supports_same_session_resume(self.agent_cli)
+            else 0
+        )
         environment = (
             main_adapter.session_environment()
             if self.agent_cli == "claude"
@@ -99,6 +111,9 @@ class LongSessionRunner:
                 timed_out = True
                 exit_status = -1
                 break
+            turn_timeout = remaining
+            if attempt == 0 and handoff_grace:
+                turn_timeout = max(1, remaining - handoff_grace)
             if attempt == 0:
                 turn_prompt = prompt
                 command = (
@@ -125,12 +140,22 @@ class LongSessionRunner:
                     break
                 resume_count += 1
                 diagnosis = completion_diagnosis or handoff_diagnosis(handoff_path)
-                turn_prompt = (
-                    "Continue the same long-horizon optimization episode. The previous turn did "
-                    f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
-                    "work from the current Git worktree. Do not merely explain the problem. Before "
-                    "stopping, finalize the episode journal and atomically publish a valid handoff."
-                )
+                if completion_diagnosis.startswith("engineering budget expired"):
+                    turn_prompt = (
+                        "The engineering budget for this long-horizon episode has expired. Stop "
+                        "further exploration, profiling, and evaluation. Preserve the completed "
+                        "work now: inspect the current Git worktree, commit a coherent candidate "
+                        "when one is ready, finalize the episode journal, and atomically publish a "
+                        "valid handoff. If there is no coherent candidate, publish an honest pivot "
+                        "or blocked handoff instead of continuing to optimize."
+                    )
+                else:
+                    turn_prompt = (
+                        "Continue the same long-horizon optimization episode. The previous turn did "
+                        f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
+                        "work from the current Git worktree. Do not merely explain the problem. Before "
+                        "stopping, finalize the episode journal and atomically publish a valid handoff."
+                    )
                 command = (
                     main_adapter.resume_session_command(
                         turn_prompt, active_session_id, reasoning_effort
@@ -145,7 +170,7 @@ class LongSessionRunner:
                     f"{telemetry_attempt_prefix}-{attempt + 1}"
                 )
             stdout, stderr, exit_status, turn_timed_out = self.executor(
-                command, workspace, remaining, environment
+                command, workspace, turn_timeout, environment
             )
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
@@ -170,16 +195,31 @@ class LongSessionRunner:
             )
             if observed_session_id:
                 active_session_id = observed_session_id
-            timed_out = timed_out or turn_timed_out
+            timed_out = turn_timed_out
             observed = read_handoff(handoff_path)
             if observed is not None:
                 completion_diagnosis = completion_check(observed)
                 if not completion_diagnosis:
                     handoff = observed
+                    # A valid, committed terminal handoff is authoritative even
+                    # when the CLI lingered until its turn timeout afterward.
+                    exit_status = 0
+                    timed_out = False
                     break
             else:
                 completion_diagnosis = handoff_diagnosis(handoff_path)
             if timed_out:
+                can_resume = (
+                    bool(active_session_id)
+                    and main_adapter.supports_same_session_resume(self.agent_cli)
+                    and attempt < max(0, handoff_resumes)
+                    and int(deadline - time.monotonic()) > 0
+                )
+                if can_resume:
+                    completion_diagnosis = (
+                        "engineering budget expired before a valid terminal handoff"
+                    )
+                    continue
                 break
             if exit_status != 0:
                 externally_terminated = exit_status in {

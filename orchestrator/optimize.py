@@ -295,7 +295,7 @@ def dispatch_framework_campaigns(
                 process_groups.add(os.getpgid(proc.pid))
             except ProcessLookupError:
                 continue
-            for pid, _argv in _descendant_process_commands(proc.pid):
+            for pid, _argv in _agent_runtime.descendant_process_commands(proc.pid):
                 try:
                     process_groups.add(os.getpgid(pid))
                 except ProcessLookupError:
@@ -4808,7 +4808,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--verify-repeats", type=int, default=DEFAULT_VERIFY_REPEATS,
                     help="Incumbent/candidate ABBA repeat pairs in one gateway allocation (default: 2).")
     ap.add_argument("--verify-run-timeout", type=int, default=DEFAULT_VERIFY_RUN_TIMEOUT,
-                    help="Timeout for each evaluator run inside ABBA verification (default: 120s).")
+                    help="Evaluator budget for each ABBA run (default: 120s; the remote driver "
+                         "allows up to 60s cold-start/finalization grace within the unchanged "
+                         "whole-allocation timeout).")
     ap.add_argument("--min-improvement-pct", type=float, default=0.0,
                     help="Minimum strict ABBA improvement required for promotion (default: >0%%).")
     ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",

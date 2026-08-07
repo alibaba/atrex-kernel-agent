@@ -14,6 +14,7 @@ from typing import Any
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
+RUN_TIMEOUT_GRACE_SECONDS = 60
 
 
 def _safe_relative(value: object) -> str:
@@ -67,7 +68,11 @@ def run(request_path: Path, result_path: Path) -> int:
         schedule = request.get("schedule")
         manifests = request.get("manifests")
         command = request.get("command")
-        timeout = int(request.get("run_timeout_seconds", 120))
+        # The requested budget covers evaluator work.  Leave a small fixed
+        # allowance for first-run compiler/cache startup and process teardown;
+        # otherwise large shape buckets can time out only on the cold A/B
+        # passes while the identical warm passes succeed moments later.
+        timeout = int(request.get("run_timeout_seconds", 120)) + RUN_TIMEOUT_GRACE_SECONDS
         if not isinstance(schedule, list) or not schedule:
             raise ValueError("ABBA schedule must be a non-empty list")
         if not isinstance(manifests, dict):
