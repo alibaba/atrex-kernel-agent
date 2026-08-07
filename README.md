@@ -7,8 +7,6 @@ not a second CLI.
 
 ![Atrex architecture](assets/atrex-architecture.png)
 
-![Atrex optimization loop](assets/atrex-optimization-loop.png)
-
 ## News
 
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
