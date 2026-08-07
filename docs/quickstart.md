@@ -48,13 +48,29 @@ python orchestrator/optimize.py \
 The orchestrator initializes its required submodules on first run, creates a flat
 leaderboard workspace named `kernel_opt_<name>_<framework>_<platform>/` under `--workspace` or
 the current directory, and runs each canonical version as an isolated Long Horizon episode. One
-episode may contain many related
-profile/edit/validate cycles; its candidate is promoted only after independent same-allocation ABBA
-verification. GPU evaluations and profiles run through `tools/sandbox.py` on `--sandbox-hardware`; `memory/`,
-episode journals, worktrees, and Git stay local. It finalizes a directly submittable SOL-ExecBench output
-after a passing run. Omit `--agent-cli` to use Claude, or pass `--agent-cli qodercli` after authenticating
-with `qodercli status`. To use Codex, authenticate with `codex login status` and pass
-`--agent-cli codex`:
+episode may contain many related profile/edit/validate cycles; its candidate is promoted only after
+independent same-allocation ABBA verification. GPU evaluations and profiles run through
+`tools/sandbox.py` on `--sandbox-hardware`; `memory/`, episode journals, worktrees, and Git stay
+local. It finalizes a directly submittable SOL-ExecBench output after a passing run. `--platform` is
+required and names the logical optimization target.
+
+### Agent backends
+
+Authenticate the selected coding runtime before starting a campaign:
+
+```bash
+claude auth status
+qodercli status
+codex login status
+pi --list-models
+```
+
+Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied through
+`ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`,
+`ATREX_CODEX_SESSION_SETTINGS`, or `ATREX_PI_SESSION_SETTINGS`;
+`ATREX_SESSION_SETTINGS` remains the generic fallback.
+
+To use Codex, pass `--agent-cli codex`:
 
 ```bash
 python orchestrator/optimize.py \
@@ -82,10 +98,9 @@ export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_eff
 These entries become repeatable `codex exec -c key=value` arguments. The default Codex reasoning effort
 is `max`; a value supplied through `ATREX_CODEX_SESSION_SETTINGS` appears later and overrides it.
 
-To use Pi, authenticate/configure a model with Pi first, then select it as the backend:
+To use Pi, select it as the backend and optionally configure its provider and model:
 
 ```bash
-pi --list-models
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
 python orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
@@ -97,6 +112,8 @@ Pi runs in JSON mode with one unique session per optimization episode. The orche
 the generated campaign workspace for that run so Pi can load repository-scoped `.agents/skills`, while
 leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION_SETTINGS` accepts only
 `provider` and `model`; API keys are never added to process arguments.
+
+### Multi-framework campaigns
 
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
@@ -112,6 +129,10 @@ Cuda; AMD dispatches Triton and FlyDSL; unknown hardware dispatches Triton. Lead
 flat names such as `/path/to/runs/kernel_opt_<name>_triton_h20`; production workspaces append
 `_production`. `--max-iters` and `--token-budget` apply independently to each framework campaign.
 Passing `--framework` selects one campaign but keeps the same mode-specific naming convention.
+When workload bucketing is active, isolated bucket workspaces live under `workload_buckets/`, and
+each bucket receives its own episode/version and token budgets.
+
+### Production mode
 
 The default `--optimization-mode leaderboard` retains the existing permissive workflow: third-party kernel
 libraries and evidence-backed framework changes are allowed. Use production mode for a deployable,
@@ -137,7 +158,45 @@ leaderboard campaign.
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
 session after V0. It validates the base seed plus five additional seeds and pins the resulting V1
 for all workload buckets. Use `--framework-baseline=always` to enable the same stage in leaderboard
-mode, or `never` to seed optimization directly from V0.
+mode, or `never` to seed optimization directly from V0. A production Triton campaign escalates to
+Gluon after three consecutive stalls; once triggered, conversion retries until correctness and
+performance parity pass, and later episodes remain in Gluon.
+
+### Common options
+
+```text
+--max-iters N                    Hard cap on canonical versions/episodes
+--max-workload-buckets N         Inspector bucket cap (default: 8)
+--aggregate-min-improvement-pct PCT
+                                 Full-workload gain required for aggregate acceptance
+--no-workload-bucketing          Run one unbucketed episode campaign
+--token-budget N                 Hard token cap across episode turns (0 = no cap)
+--agent-cli CLI                  claude (default), qodercli, codex, or pi
+--optimization-mode MODE         leaderboard (default) or production
+--framework DSL                  Explicit DSL; omit for automatic parallel dispatch
+--framework-baseline MODE        auto (production only), always, or never
+--target-util PCT                Peak-utilization short-circuit (default: 90)
+--iter-timeout S                 Wall-clock budget for one episode (default: 5400)
+--setup-timeout S                V0 setup session timeout (default: 7200)
+--sandbox-hardware GPU           Gateway selector or alias
+--sandbox-profile PROFILE        Optional pre/prod endpoint profile
+--sandbox-url URL                Explicit endpoint URL
+--sandbox-timeout S              Remote command timeout, at most 600 seconds
+--workspace DIR                  Campaign parent directory (default: current directory)
+--max-stall N                    Stop after N unpromoted episodes (0 = disabled)
+--convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
+--handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
+--verify-repeats N               ABBA repeat pairs (default: 2)
+--verify-run-timeout S           Evaluator budget per ABBA run (default: 120)
+--min-improvement-pct PCT        Strict ABBA gain required for promotion
+--arch ARCH                      Override runtime architecture detection
+```
+
+Run `python orchestrator/optimize.py --help` for the complete current interface. Some Qoder models
+report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
+`--max-iters` remains the hard campaign bound.
+
+### Local gateway
 
 To use the same gateway interface on a local GPU, start the bundled community scheduler. It has no
 third-party Python dependencies:
@@ -174,6 +233,23 @@ and Git remain workspace-local. `--platform` and the gateway's hardware selector
 inventory data may be aliased or desensitized, so runtime architecture probing drives automatic framework
 selection.
 
+### Direct sandbox and profiling
+
+The gateway transport can also be used directly for validation and profiling:
+
+```bash
+python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
+  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+
+# Same interface through the bundled local gateway
+python tools/sandbox.py --hardware local --url http://127.0.0.1:8000 \
+  --no-sync -- python test_kernel.py --no-memory
+```
+
+The gateway receives code and evaluator/profile inputs only. Optimization memory, plans, edits, and
+Git state remain on the coordinator.
+
 ## 3. Inspect Outputs
 
 Each optimization workspace records the full optimization trail:
@@ -184,6 +260,7 @@ Each optimization workspace records the full optimization trail:
 - `plans/`: evidence-based optimization plans
 - `profiles/`: profiler artifacts and extracted bottleneck evidence
 - `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
+- `workload_buckets/`: isolated per-bucket campaign workspaces when bucketing is enabled
 - `dispatch_signatures.json`, `workload_buckets.json`, `aggregate_dispatch.json`, and
   `aggregation_state.json`: workload coordination provenance when bucketing is enabled
 - `submission.json`: SOL-ExecBench submission output for SOL campaigns
