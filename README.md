@@ -22,8 +22,9 @@ not a second CLI.
   leaderboard and production optimization.
 - Establishes a correctness-passing V0 and, by default in production mode, a self-contained
   framework-native V1 before optimization begins.
-- When workload bucketing is enabled, collects evaluator-faithful structural signatures,
+- In production mode, workload bucketing collects evaluator-faithful structural signatures,
   partitions distinguishable workloads, and runs one independent Long Horizon campaign per bucket.
+- Leaderboard mode always runs one unbucketed Long Horizon campaign over the complete workload set.
 - Lets each episode perform multiple profile/research/plan/edit/repair cycles, while the
   supervisor alone owns budgets, terminal validation, same-allocation ABBA verification, and
   squash promotion.
@@ -53,7 +54,7 @@ operator inputs
   -> structural workload inspection
   -> parallel bucket campaigns (or one unbucketed campaign)
   -> Long Horizon episode worktree
-  -> journal + terminal handoff
+  -> live memory + journal + terminal handoff
   -> policy/protected-path checks + ABBA verification
   -> squash promotion
   -> deterministic full-workload aggregation when bucketed
@@ -65,6 +66,9 @@ Codex, or Pi session owns one Long Horizon episode and may execute multiple engi
 publishing a structured terminal handoff. The supervisor validates the journal and candidate, runs
 incumbent/candidate ABBA verification in one gateway allocation, and squash-promotes only a strict
 correctness-passing improvement.
+
+The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
+experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.
 
 For SOL and native Atrex-Bench campaigns, the orchestrator can derive production-visible structural
 signatures and partition distinguishable workloads into independent bucket campaigns. Aggregation is

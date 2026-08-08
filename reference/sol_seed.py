@@ -119,8 +119,11 @@ def _render_kernel(defn: dict, reference_src: str) -> str:
 
 def _solution_json(defn: dict, name: str, framework: str, platform: str) -> dict:
     hw = []
-    if platform and platform.upper() != "LOCAL":
-        hw.append(platform.upper())
+    # SOL-ExecBench's schema only accepts B200 or LOCAL here.  The optimizer's
+    # logical platform may be an inventory alias (for example pro5000); actual
+    # remote scheduling is selected independently by --sandbox-hardware.
+    if platform.upper() == "B200":
+        hw.append("B200")
     hw.append("LOCAL")
     # V0 is always a pure-PyTorch wrapper (guaranteed correct + submittable).
     # The loop migrates the body to `framework` and updates languages/dependencies then.
@@ -181,6 +184,8 @@ profiles/*/att/*.otf2
 /tools
 /reference
 /skills
+/reference-projects
+/gpu-wiki
 """
 
 

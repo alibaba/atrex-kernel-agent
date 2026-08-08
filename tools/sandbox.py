@@ -1737,7 +1737,20 @@ def _main(argv: list[str] | None = None) -> int:
                 )
                 runtime_part_paths.append(part_path)
 
-        agate = [agate_executable or "agate", "dev"]
+        if args.kind == "profile":
+            dev_intent = "profile_adhoc"
+        elif args.kind == "run":
+            dev_intent = "custom_harness"
+        else:
+            dev_intent = "other"
+        agate = [
+            agate_executable or "agate",
+            "dev",
+            "--intent",
+            dev_intent,
+            "--note",
+            f"tools/sandbox.py {args.kind} compatibility path",
+        ]
         if args.url:
             agate += ["--url", args.url]
         elif args.gateway_profile:

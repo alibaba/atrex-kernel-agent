@@ -19,6 +19,7 @@ from .git_episode import (
 )
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
+from .journal import sync_live_memory
 from .journal import validate_terminal
 from .models import EpisodeHandoff, SupervisorState, VerificationResult
 from .session import LongSessionRunner
@@ -154,11 +155,15 @@ class LongHorizonCampaign:
         worktree: EpisodeWorktree,
         journal_path: Path,
         handoff_path: Path,
+        live_memory_path: Path,
         state: SupervisorState,
         conversion_pending: bool,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign, version)
-        journal_command = f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal"
+        journal_command = (
+            f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
+            f"--live-path {json.dumps(str(live_memory_path))}"
+        )
         return _render(
             PROMPT_PATH.read_text(encoding="utf-8"),
             {
@@ -716,7 +721,12 @@ class LongHorizonCampaign:
             journal_path = runtime / "journal.json"
             handoff_path = runtime / "handoff.json"
             initialize_journal(
-                journal_path, episode=episode, base_commit=base_commit, branch=worktree.branch
+                journal_path,
+                episode=episode,
+                memory_version=memory_version,
+                base_commit=base_commit,
+                branch=worktree.branch,
+                live_path=store.live_memory_path,
             )
             prompt = self._prompt(
                 episode=episode,
@@ -724,6 +734,7 @@ class LongHorizonCampaign:
                 worktree=worktree,
                 journal_path=journal_path,
                 handoff_path=handoff_path,
+                live_memory_path=store.live_memory_path,
                 state=state,
                 conversion_pending=conversion_pending,
             )
@@ -936,6 +947,22 @@ class LongHorizonCampaign:
                 accepted,
                 verification.incumbent_latency_us if verification else None,
             )
+            try:
+                sync_live_memory(
+                    store.live_memory_path,
+                    journal,
+                    phase="recorded",
+                    canonical_memory=f"memory/v{memory_version}.json",
+                    accepted=accepted,
+                    memory_version=memory_version,
+                    episode=episode,
+                )
+            except OSError as exc:
+                print(
+                    "[long-horizon] WARNING: could not update memory/live.json: "
+                    f"{type(exc).__name__}",
+                    flush=True,
+                )
             store.archive_attempt(episode, attempt)
             state.attempts.append(attempt)
             store.save_state(state)
