@@ -27,7 +27,11 @@ them without a device synchronization or extra undocumented input.
 Workloads with identical `init` + `call` signatures are indistinguishable to the
 dispatcher and must remain in the same bucket. Every bucket boundary and rationale
 must be expressible solely as a predicate over fields present in these sanitized
-signatures.
+signatures. Buckets are generalized runtime regimes, not sets of benchmark points:
+the coordinator fits monotonic range predicates over tensor dimensions/strides and
+explicit integer arguments. It will reject an exact-shape island unless that bucket
+also owns at least one unseen input one primitive lattice step away while preserving
+the observed relationships between varying dimensions.
 For `workload.jsonl`, an index is the zero-based position among non-empty lines.
 For `shapes.json`, an index is the zero-based position after sorting numeric
 shape IDs numerically (then non-numeric IDs lexically). Group workloads that
@@ -62,6 +66,12 @@ Rules:
 - Produce at most {{MAX_BUCKETS}} buckets. A single-workload operator may have
   one bucket; otherwise prefer multiple meaningful buckets when regimes differ.
 - Never split identical runtime signatures across different buckets.
+- Prefer contiguous ranges with stable structural/type/layout fields. Do not create
+  singleton shape buckets, alternating per-shape ownership, exact-shape lookup
+  groups, or boundaries whose only purpose is one observed benchmark point.
+- Every bucket must describe a strategy that remains valid between its observed
+  points and for at least one adjacent, previously unseen shape step. State those
+  range fields and boundaries explicitly in the rationale.
 - Use no information other than `dispatch_signatures.json`; each rationale must cite
   concrete production-visible signature fields.
 - Bucket names must be unique and filesystem-safe.

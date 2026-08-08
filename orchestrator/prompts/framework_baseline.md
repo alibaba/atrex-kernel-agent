@@ -29,10 +29,16 @@ Hard rules for this session:
   modify `test_kernel.py`, `reference.py`, `input.py`, `shapes.json`, `metadata.json`, `roofline.json`,
   `valid.py`, `workload.jsonl`, or `memory/v0.json` — the orchestrator restores any of them you edit, so
   changing them only wastes your session. Never create `framework_baseline.json`; the orchestrator owns it.
-- **Do not name third-party kernel libraries in `kernel.py` at all** — not in code, and not in comments or
-  docstrings. Describe the algorithm itself ("paged KV-cache causal GQA attention"), never as
-  "vLLM-style" / "like FlashInfer" / "a flash_attn port". A reader of the production candidate must not have
-  to decide whether a library reference is prose or a dependency.
+- **CUDA campaigns must keep the executable candidate in `kernel.py`.** The workload coordinator versions
+  and embeds `kernel.py` when it combines independently optimized buckets. A standalone `kernel.cu` with a
+  `solution.json` entry such as `kernel.cu::run` may pass an isolated SOL evaluation, but it cannot be
+  versioned or composed by that coordinator and will be mechanically rejected. Embed the self-authored CUDA
+  source in `kernel.py` and use an in-process loader supported by the sandbox; prefer
+  `cuda.bindings`/NVRTC because SOL GPU workers block `torch.utils.cpp_extension.load_inline`.
+- **Do not delegate computation to a third-party kernel/operator library.** An independent policy agent
+  reviews non-standard imports, declared dependencies, and library references by inspecting their actual
+  use. Compiler/header/ABI/launch plumbing for the self-authored kernel may be accepted; prebuilt compute,
+  alternate frameworks, hidden dispatch, and external implementation loading are rejected.
 - **Do NOT profile.** Do not run a profile wrapper and do not write `profiles/`. There is no bottleneck
   evidence to gather yet: the only "bottleneck" is that the kernel is not a `{{FRAMEWORK}}` kernel.
 - **Do NOT generate a plan.** Do not invoke a plan skill, planning subagent, or slash command.
@@ -118,8 +124,11 @@ evaluator-facing entry point (`Model` / `run`) exactly as the harness expects. P
 - No `torch` compute calls (`matmul`, `mm`, `bmm`, `softmax`, `exp`, `sum`, `mean`, `layer_norm`,
   `scaled_dot_product_attention`, the `@` operator, …), no `torch.nn.functional`, no `torch.ops`,
   no `torch.linalg`, no `_scaled_mm`.
-- No third-party kernel/operator libraries (`flashinfer`, `flash_attn`, `xformers`, `vllm`, `sglang`,
-  `bitsandbytes`, cuBLAS/cuDNN wrappers, CUTLASS C++ headers).
+- No delegation to third-party kernel/operator implementations (`flashinfer`, `flash_attn`, `xformers`,
+  `vllm`, `sglang`, `bitsandbytes`, cuBLAS/cuDNN wrappers, or prebuilt CUTLASS kernels). Non-compute
+  toolchain/plumbing dependencies must have a clear, inspectable purpose for the independent reviewer.
+- For CUDA, `kernel.py` itself must contain both the self-authored `__global__` source and its in-process
+  loader. Do not redirect the evaluated entry point to a separately compiled `kernel.cu` source.
 - Update `solution.json` so its languages and dependencies list only PyTorch/evaluator plumbing plus
   `{{FRAMEWORK}}`.
 

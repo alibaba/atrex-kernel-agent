@@ -27,9 +27,9 @@ Examples::
 
     python tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
     python tools/sandbox.py --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
-        bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+        bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
     python tools/sandbox.py --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
-        bash tools/profile_kernel.sh kernel.py --output-dir profiles/v1
+        bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v1
 
 ``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``, and
 ``ATREX_SANDBOX_TIMEOUT`` provide defaults for the corresponding flags.  A

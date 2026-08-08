@@ -17,19 +17,19 @@ The recommended entry point for AMD profiling:
 
 ```bash
 # Full profile (ATT + PMC + ASM)
-bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N>
+bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
 
 # PMC only (hardware counters)
-bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N> --pmc-only
+bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --pmc-only
 
 # ATT only (instruction-level trace)
-bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N> --att-only
+bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --att-only
 
 # ASM only (assembly extraction)
-bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N> --asm-only
+bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --asm-only
 
 # Filter specific kernel
-bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N> \
+bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> \
     --kernel-regex "<kernel_name>" --iteration-range 0-0
 ```
 
@@ -75,7 +75,7 @@ rocprofv3 --att \
     --output-format csv json \
     --kernel-iteration-range "[1]" \
     -d <output-dir>/att \
-    -- python <kernel.py>
+    -- python profile_driver.py
 ```
 
 | Parameter | Value | Description |
@@ -108,7 +108,7 @@ env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
     --output-format csv json \
     --kernel-iteration-range "[1]" \
     -d <output-dir>/att \
-    -- python <kernel.py>
+    -- python profile_driver.py
 ```
 
 #### Locating the Target Kernel
@@ -163,21 +163,21 @@ rocprofv3 --pmc \
     SQ_LDS_BANK_CONFLICT,SQ_INSTS_VMEM_RD,SQ_INSTS_VMEM_WR,SQ_INSTS_LDS \
     --output-format csv \
     -d <output-dir>/pmc/batch1 \
-    -- python kernel.py || echo "Warning: batch 1 counter collection failed"
+    -- python profile_driver.py || echo "Warning: batch 1 counter collection failed"
 
 # Batch 2: SPI counters
 rocprofv3 --pmc \
     SPI_RA_VGPR_SGPR_FULL_CSN,SPI_RA_LDS_CU_FULL_CSN,SPI_RA_WAVE_SIMD_FULL_CSN \
     --output-format csv \
     -d <output-dir>/pmc/batch2 \
-    -- python kernel.py || echo "Warning: batch 2 counter collection failed"
+    -- python profile_driver.py || echo "Warning: batch 2 counter collection failed"
 
 # Batch 3: TCP counters
 rocprofv3 --pmc \
     TCP_TOTAL_READ,TCP_TCC_MISS \
     --output-format csv \
     -d <output-dir>/pmc/batch3 \
-    -- python kernel.py || echo "Warning: batch 3 counter collection failed"
+    -- python profile_driver.py || echo "Warning: batch 3 counter collection failed"
 ```
 
 > **Note**: Each batch failure produces a Warning but does not terminate the script. Partial PMC results are still usable.
@@ -242,7 +242,7 @@ Key patterns to check:
 > Blindly using `--launch-skip 10` will likely profile a wrong kernel.
 
 ```bash
-ncu --print-summary per-kernel python <kernel.py>
+ncu --print-summary per-kernel python profile_driver.py
 ```
 
 Find the target Gluon kernel name and its launch index (e.g., index 23).
@@ -255,7 +255,7 @@ Find the target Gluon kernel name and its launch index (e.g., index 23).
 ncu --set full \
     --launch-skip <N> --launch-count 1 \
     -o profiles/v<N>/ncu \
-    python kernel.py
+    python profile_driver.py
 ```
 
 | Parameter | Description | Recommended |
@@ -272,7 +272,7 @@ ncu --set full \
     --kernel-name "chunk_gated_delta_rule_fwd" \
     --launch-count 1 \
     -o profiles/v<N>/ncu \
-    python kernel.py
+    python profile_driver.py
 ```
 
 #### Quick Metrics Only (Faster)
@@ -284,7 +284,7 @@ ncu --metrics \
     l1tex__throughput.avg.pct_of_peak_sustained_elapsed,\
     launch__occupancy \
     --launch-skip <N> --launch-count 1 \
-    python kernel.py
+    python profile_driver.py
 ```
 
 ### Viewing Profile Data (CLI)
@@ -390,7 +390,7 @@ Step 2: Compute utilization
        --flops-expr '<expr>' --bytes-expr '<expr>' --time-ms <ms>
 
 Step 3: If utilization < 90%, run full profile (default: ASM + ATT + PMC)
-  └─ bash tools/profile_kernel.sh kernel.py --output-dir profiles/v<N>
+  └─ bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
   └─ Script auto-executes: Step 0 (ASM) → Step 1 (ATT) → Step 2 (PMC)
 
 Step 4: Locate target kernel (auto-done by script, or manually)

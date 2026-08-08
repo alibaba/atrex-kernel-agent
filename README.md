@@ -23,7 +23,8 @@ not a second CLI.
 - Establishes a correctness-passing V0 and, by default in production mode, a self-contained
   framework-native V1 before optimization begins.
 - In production mode, workload bucketing collects evaluator-faithful structural signatures,
-  partitions distinguishable workloads, and runs one independent Long Horizon campaign per bucket.
+  partitions distinguishable workloads into generalized shape regimes, and rejects exact-shape
+  islands that do not cover an unseen one-step neighbor.
 - Leaderboard mode always runs one unbucketed Long Horizon campaign over the complete workload set.
 - Lets each episode perform multiple profile/research/plan/edit/repair cycles, while the
   supervisor alone owns budgets, terminal validation, same-allocation ABBA verification, and
@@ -72,8 +73,9 @@ experiment. It is an observability view, not promotion evidence; only `memory/v<
 
 For SOL and native Atrex-Bench campaigns, the orchestrator can derive production-visible structural
 signatures and partition distinguishable workloads into independent bucket campaigns. Aggregation is
-built mechanically from committed bucket kernels, without Agent-generated dispatch code, and is
-accepted only after full-workload correctness and geomean improvement checks.
+built mechanically from committed bucket kernels with structural range trees instead of exact-signature
+lookup tables, without Agent-generated dispatch code, and is accepted only after full-workload
+correctness and geomean improvement checks.
 
 GPU validation and profiling execute through the configured gateway, while optimization memory,
 plans, edits, episode state, and Git history remain local. Repository-scoped skills are prepared

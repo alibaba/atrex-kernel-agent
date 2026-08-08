@@ -33,7 +33,7 @@ Usage:
     python tools/extract_nvidia_asm.py --asm-file kernel.sass --check-all
 
 Recommended workflow for CuteDSL:
-    1. bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1
+    1. bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1
     2. python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
 
     Reason: CuteDSL compiles via NVRTC, and the cubin cache location is not fixed.
@@ -279,7 +279,7 @@ def extract_sass_cutedsl(kernel_file):
             "\n"
             "Recommended approach:\n"
             "  1. First collect .ncu-rep with profile_nvidia.sh:\n"
-            "       bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1\n"
+            "       bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1\n"
             "     Then extract SASS from .ncu-rep:\n"
             "       python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all\n"
             "\n"

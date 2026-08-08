@@ -43,7 +43,7 @@ Usage
     python orchestrator/optimize.py \
         --op-dir /path/to/op --platform H20 --workspace /path/to/runs
 
-    # production: exact framework, no third-party kernel/operator dependencies:
+    # production: exact framework, independently reviewed external dependencies:
     python orchestrator/optimize.py \
         --op-dir /path/to/op --platform H20 --framework Triton \
         --optimization-mode production
@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import math
 import os
@@ -86,6 +87,7 @@ try:
     from . import agent_runtime as _agent_runtime
     from .aggregate_dispatch import embed_bucket_sources
     from .optimization_policy import (
+        DependencyReviewSignal,
         OPTIMIZATION_MODE_CHOICES,
         install_workspace_policy,
         optimization_mode_directive,
@@ -96,6 +98,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator import agent_runtime as _agent_runtime  # type: ignore[no-redef]
     from orchestrator.aggregate_dispatch import embed_bucket_sources  # type: ignore[no-redef]
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
+        DependencyReviewSignal,
         OPTIMIZATION_MODE_CHOICES,
         install_workspace_policy,
         optimization_mode_directive,
@@ -108,6 +111,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
+PROFILE_DRIVER = REPO_ROOT / "reference" / "profile_driver.py"
 SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
@@ -121,9 +125,17 @@ FRAMEWORK_BASELINE_VERSION = 1     # the framework baseline always occupies v1, 
 FRAMEWORK_BASELINE_TIMEOUT_S = 10800
 FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
+DEPENDENCY_REVIEW_SCHEMA_VERSION = 1
+DEPENDENCY_REVIEW_TIMEOUT_S = 600
+DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
+WORKLOAD_BUCKET_CONTRACT_FILE = "workload_bucket_contract.json"
 IMMUTABLE_BASELINE_PATHS = (
     "test_kernel.py", "reference.py", "input.py", "shapes.json", "metadata.json",
-    "roofline.json", "workload.jsonl", "definition.json", "valid.py", "memory/v0.json",
+    "roofline.json", "workload.jsonl", "definition.json", "valid.py",
+    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
+    # remove the ability to profile; it is ground truth like the evaluator harness.
+    "profile_driver.py",
+    WORKLOAD_BUCKET_CONTRACT_FILE, "memory/v0.json",
 )
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
@@ -136,7 +148,7 @@ DISPATCH_SIGNATURES_FILE = "dispatch_signatures.json"
 DISPATCH_VISIBILITY_POLICY = "host_no_sync_structural_v1"
 AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
 AGGREGATE_KERNELS_DIR = "aggregate_kernels"
-AGGREGATE_DISPATCH_SCHEMA_VERSION = 2
+AGGREGATE_DISPATCH_SCHEMA_VERSION = 3
 AGGREGATE_SOURCE_LAYOUT = "embedded_single_file"
 DISPATCH_SIGNATURE_RESULT_PREFIX = "[dispatch-signatures] RESULT_JSON="
 BUCKETS_DIR = "workload_buckets"
@@ -667,13 +679,18 @@ def run_session(
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT,
     reasoning_effort: str = "max",
     extra_environment: Optional[dict[str, str]] = None,
+    agent_plugins: bool = True,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     session_id = str(uuid.uuid4())
     runtime = _agent_runtime.build_agent_runtime(
         agent_cli,
         process_runner=_run_bounded,
-        humanize_dir=HUMANIZE_DIR,
+        humanize_dir=(
+            HUMANIZE_DIR
+            if agent_plugins
+            else workspace / ".atrex-disabled-agent-plugins"
+        ),
     )
     result = runtime.run(
         _agent_runtime.AgentRunRequest(
@@ -701,6 +718,132 @@ def run_session(
         capabilities=result.capabilities,
         observation_errors=result.observation_errors,
     )
+
+
+_DEPENDENCY_ALLOW_CATEGORIES = {
+    "toolchain_plumbing",
+    "framework_runtime",
+    "support_utility",
+}
+_DEPENDENCY_REJECT_CATEGORIES = {
+    "prebuilt_compute",
+    "alternate_framework",
+    "hidden_dispatch",
+    "external_code",
+    "unresolved",
+}
+
+
+def _dependency_review_candidate_paths(workspace: Path) -> list[Path]:
+    """Return the complete, bounded source set shown to the dependency reviewer."""
+    paths = [
+        workspace / "kernel.py",
+        workspace / "solution.json",
+        workspace / AGGREGATE_DISPATCH_FILE,
+    ]
+    aggregate_dir = workspace / AGGREGATE_KERNELS_DIR
+    if aggregate_dir.is_dir():
+        paths.extend(sorted(aggregate_dir.glob("*.py")))
+    return [path for path in paths if path.is_file()]
+
+
+def _dependency_review_digest(
+    workspace: Path,
+    framework: str,
+    signals: tuple[DependencyReviewSignal, ...],
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(f"dependency-review-v{DEPENDENCY_REVIEW_SCHEMA_VERSION}\0".encode())
+    digest.update(framework.encode("utf-8", errors="replace"))
+    for review_signal in signals:
+        digest.update(
+            json.dumps(
+                {
+                    "id": review_signal.id,
+                    "kind": review_signal.kind,
+                    "value": review_signal.value,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+    for path in _dependency_review_candidate_paths(workspace):
+        relative = path.relative_to(workspace).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _validate_dependency_review(
+    payload: object,
+    signals: tuple[DependencyReviewSignal, ...],
+) -> tuple[list[str], str]:
+    """Validate an agent verdict and translate rejected items into policy errors."""
+    if not isinstance(payload, dict):
+        raise ValueError("dependency review must be a JSON object")
+    if payload.get("schema_version") != DEPENDENCY_REVIEW_SCHEMA_VERSION:
+        raise ValueError("dependency review has an unsupported schema_version")
+    verdict = payload.get("verdict")
+    if verdict not in {"allow", "reject"}:
+        raise ValueError("dependency review verdict must be allow or reject")
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("dependency review summary must be non-empty")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ValueError("dependency review items must be a list")
+
+    expected = {review_signal.id for review_signal in signals}
+    reviewed: dict[str, dict] = {}
+    rejected: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("dependency review item must be an object")
+        signal_id = item.get("id")
+        if not isinstance(signal_id, str) or signal_id not in expected:
+            raise ValueError(f"dependency review returned unexpected signal id: {signal_id!r}")
+        if signal_id in reviewed:
+            raise ValueError(f"dependency review duplicated signal id: {signal_id}")
+        decision = item.get("decision")
+        category = item.get("category")
+        reason = item.get("reason")
+        evidence = item.get("evidence")
+        if decision not in {"allow", "reject"}:
+            raise ValueError(f"dependency review decision is invalid for {signal_id}")
+        categories = (
+            _DEPENDENCY_ALLOW_CATEGORIES
+            if decision == "allow"
+            else _DEPENDENCY_REJECT_CATEGORIES
+        )
+        if category not in categories:
+            raise ValueError(
+                f"dependency review category {category!r} is inconsistent with "
+                f"decision {decision!r} for {signal_id}"
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"dependency review reason is empty for {signal_id}")
+        if not isinstance(evidence, list) or not evidence or not all(
+            isinstance(value, str) and value.strip() for value in evidence
+        ):
+            raise ValueError(f"dependency review evidence is invalid for {signal_id}")
+        reviewed[signal_id] = item
+        if decision == "reject":
+            rejected.append(
+                "third-party dependency rejected by independent agent: "
+                f"{signal_id}: {reason.strip()}"
+            )
+
+    missing = sorted(expected - set(reviewed))
+    if missing:
+        raise ValueError(
+            "dependency review omitted signal ids: " + ", ".join(missing)
+        )
+    expected_verdict = "reject" if rejected else "allow"
+    if verdict != expected_verdict:
+        raise ValueError(
+            f"dependency review verdict {verdict!r} disagrees with item decisions"
+        )
+    return rejected, summary.strip()
 
 
 def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
@@ -1408,8 +1551,8 @@ def _agent_runtime_directive(agent_cli: str) -> str:
         syntax = "Codex's `$skill-name` syntax" if agent_cli == "codex" else "Pi's `/skill:name` syntax"
         return (
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
-            "`gpu-kernel-baseline`, `ncu-report-skill`, `KernelWiki`, and "
-            f"`humanize-gen-plan`. Invoke a named skill with {syntax}."
+            "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, `ncu-report-skill`, "
+            f"`KernelWiki`, and `humanize-gen-plan`. Invoke a named skill with {syntax}."
         )
     return (
         "- `.claude/skills/ncu-report-skill/` — NVIDIA profiling skill.\n"
@@ -1622,6 +1765,9 @@ class Campaign:
         Callable[["Campaign", int, Optional[dict], bool], None]
     ] = field(default=None, repr=False, compare=False)
     tokens_spent: int = field(default=0, init=False)
+    _dependency_review_cache: dict[str, tuple[str, ...]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     @property
     def campaign_name(self) -> str:
@@ -1639,6 +1785,117 @@ class Campaign:
               f"tokens={res.tokens} cum_tokens={self.tokens_spent}", flush=True)
         if res.exit_status != 0 or res.timed_out:
             print(f"[orchestrator] stderr tail:\n{res.stderr_tail}", file=sys.stderr, flush=True)
+
+    def _review_third_party_dependencies(
+        self,
+        workspace: Path,
+        framework: str,
+        signals: tuple[DependencyReviewSignal, ...],
+    ) -> list[str]:
+        """Delegate ambiguous dependency provenance to a fresh, isolated agent."""
+        cache_key = (
+            _dependency_review_digest(workspace, framework, signals)
+            + ":"
+            + self.agent_cli
+        )
+        cached = self._dependency_review_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
+        errors: list[str]
+        with tempfile.TemporaryDirectory(prefix="atrex-dependency-review-") as directory:
+            review_workspace = Path(directory)
+            candidate_root = review_workspace / "candidate"
+            source_hashes: dict[str, str] = {}
+            for source in _dependency_review_candidate_paths(workspace):
+                relative = source.relative_to(workspace)
+                destination = candidate_root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                source_hashes[relative.as_posix()] = hashlib.sha256(
+                    destination.read_bytes()
+                ).hexdigest()
+
+            request = {
+                "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
+                "framework": framework,
+                "optimization_mode": "production",
+                "signals": [
+                    {
+                        "id": review_signal.id,
+                        "kind": review_signal.kind,
+                        "value": review_signal.value,
+                    }
+                    for review_signal in signals
+                ],
+                "candidate_files": sorted(source_hashes),
+            }
+            (review_workspace / "review_request.json").write_text(
+                json.dumps(request, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            result = run_session(
+                review_workspace,
+                DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
+                timeout=DEPENDENCY_REVIEW_TIMEOUT_S,
+                agent_cli=self.agent_cli,
+                reasoning_effort="low",
+                agent_plugins=False,
+            )
+            self._account(result, "independent dependency review")
+            if result.exit_status != 0 or result.timed_out:
+                errors = [
+                    "independent dependency review agent failed "
+                    f"(exit={result.exit_status}, timeout={result.timed_out})"
+                ]
+            else:
+                changed = []
+                for relative, expected_hash in source_hashes.items():
+                    candidate_path = candidate_root / relative
+                    if (
+                        not candidate_path.is_file()
+                        or hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                        != expected_hash
+                    ):
+                        changed.append(relative)
+                if changed:
+                    errors = [
+                        "independent dependency review modified candidate evidence: "
+                        + ", ".join(sorted(changed))
+                    ]
+                else:
+                    review_path = review_workspace / "dependency_review.json"
+                    try:
+                        payload = json.loads(review_path.read_text(encoding="utf-8"))
+                        errors, summary = _validate_dependency_review(payload, signals)
+                    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                        errors = [
+                            "independent dependency review produced no valid verdict: "
+                            f"{type(exc).__name__}: {exc}"
+                        ]
+                    else:
+                        status = "accepted" if not errors else "rejected"
+                        print(
+                            f"[production-policy] independent dependency review {status}: "
+                            f"{summary}",
+                            flush=True,
+                        )
+
+        self._dependency_review_cache[cache_key] = tuple(errors)
+        return list(errors)
+
+    def _production_kernel_violations(
+        self,
+        workspace: Path | None = None,
+        *,
+        require_gluon: bool = False,
+    ) -> list[str]:
+        return production_kernel_violations(
+            workspace or self.workspace,
+            self.framework,
+            require_gluon=require_gluon,
+            dependency_reviewer=self._review_third_party_dependencies,
+        )
 
     def _link_runtime(self) -> None:
         native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
@@ -1683,6 +1940,27 @@ class Campaign:
             raise FileNotFoundError(f"missing {ATREX_BENCH_HARNESS}")
         shutil.copy2(ATREX_BENCH_HARNESS, self.workspace / "test_kernel.py")
 
+    def _install_profile_driver(self) -> None:
+        """Seed the immutable external profiling entry for every campaign layout.
+
+        Both profiler wrappers run ``python <file>``, so profiling needs a runnable script.
+        Keeping it out of ``kernel.py`` means a session that rewrites ``run()``/``Model``
+        cannot silently destroy profiling: an in-kernel ``__main__`` block would vanish with
+        the rewrite and the profiler would still exit 0 having captured nothing.
+        """
+        if not PROFILE_DRIVER.is_file():
+            raise FileNotFoundError(f"missing {PROFILE_DRIVER}")
+        shutil.copy2(PROFILE_DRIVER, self.workspace / "profile_driver.py")
+        # Stage it when a repository already exists so the baseline commit tracks it without
+        # depending on how the setup session stages files; restoring an immutable path needs
+        # a blob in the root commit.
+        if (self.workspace / ".git").exists():
+            subprocess.run(
+                ["git", "add", "profile_driver.py"],
+                cwd=str(self.workspace), check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
             self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
@@ -1715,6 +1993,7 @@ class Campaign:
                 shutil.copy2(source, self.workspace / name)
         self._link_runtime()
         self._install_native_evaluator()
+        self._install_profile_driver()
         prompt = _render(
             PROMPTS_DIR / "setup.md",
             WORKSPACE=str(self.workspace), PLATFORM=self.platform,
@@ -1994,7 +2273,7 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        violations = production_kernel_violations(self.workspace, self.framework)
+        violations = self._production_kernel_violations()
         progressed = not head_kernel_is_initial_baseline(self.workspace)
         if not violations and not progressed:
             return "pin", "the V0 kernel is already a compliant framework implementation"
@@ -2069,7 +2348,7 @@ class Campaign:
         candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = production_kernel_violations(self.workspace, self.framework)
+        violations = self._production_kernel_violations()
         if violations:
             return (
                 f"the candidate is not a self-contained {self.framework} implementation: "
@@ -2391,9 +2670,9 @@ class Campaign:
         except OSError:
             pass
         # Production output is fail-closed: do not package a PyTorch baseline,
-        # alternate DSL, or third-party-backed kernel as a production candidate.
+        # alternate DSL, or independently rejected dependency as a production candidate.
         if self.optimization_mode == "production":
-            violations = production_kernel_violations(self.workspace, self.framework)
+            violations = self._production_kernel_violations()
             if violations:
                 raise RuntimeError(
                     "no production-compliant final kernel: " + "; ".join(violations)
@@ -2598,6 +2877,7 @@ def _materialize_bucket_op(
     destination: Path,
     bucket: WorkloadBucket,
     workload_source: WorkloadSource,
+    generalization_evidence: dict,
 ) -> None:
     """Create a derived op dir whose evaluator sees exactly one bucket."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -2611,6 +2891,25 @@ def _materialize_bucket_op(
         # created aggregate/bucket repositories.
         if source.is_file():
             shutil.copy2(source, target)
+    (destination / WORKLOAD_BUCKET_CONTRACT_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "bucket": bucket.name,
+                "dispatch_strategy": "structural_range_tree_v1",
+                "requirement": (
+                    "The kernel must support the whole routed shape regime, including the "
+                    "recorded unseen one-step neighbor. Exact benchmark-shape lookup tables "
+                    "or equality-only dispatch are forbidden."
+                ),
+                "generalization_evidence": generalization_evidence,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     if workload_source.kind == "sol":
         selected = [workload_source.raw_lines[index] for index in bucket.workload_indices]
         (destination / "workload.jsonl").write_text(
@@ -2947,10 +3246,282 @@ def validate_dispatch_signatures(
     return normalized
 
 
+def _dispatch_schema_and_features(
+    init_signature: object,
+    call_signature: object,
+) -> tuple[object, tuple[int, ...], tuple[str, ...]]:
+    """Split a runtime signature into categorical structure and integer features.
+
+    Exact-signature dispatch makes every observed shape an isolated point.  The
+    generalized dispatcher instead keeps ABI/type/layout structure categorical
+    while treating tensor dimensions, tensor strides, and explicit integer
+    arguments as coordinates.  A decision tree can then describe shape regimes
+    with interval boundaries and extrapolate to nearby, unseen inputs.
+    """
+
+    features: list[int] = []
+    descriptors: list[str] = []
+
+    def visit(value: object, path: str) -> object:
+        if not isinstance(value, (list, tuple)) or not value:
+            return _freeze_dispatch_signature(value)
+        tag = value[0]
+        if tag == "tensor" and len(value) == 6:
+            shape, stride, dtype, layout, requires_grad = value[1:]
+            if not isinstance(shape, (list, tuple)) or not isinstance(
+                stride, (list, tuple)
+            ):
+                return _freeze_dispatch_signature(value)
+            for index, item in enumerate(shape):
+                features.append(int(item))
+                descriptors.append(f"{path}.shape[{index}]")
+            for index, item in enumerate(stride):
+                features.append(int(item))
+                descriptors.append(f"{path}.stride[{index}]")
+            return (
+                "tensor",
+                len(shape),
+                len(stride),
+                str(dtype),
+                str(layout),
+                bool(requires_grad),
+            )
+        if tag == "int" and len(value) == 2:
+            features.append(int(value[1]))
+            descriptors.append(f"{path}.value")
+            return ("int",)
+        if tag == "invocation" and len(value) == 3:
+            args, kwargs = value[1], value[2]
+            return (
+                "invocation",
+                tuple(
+                    visit(item, f"{path}.args[{index}]")
+                    for index, item in enumerate(args)
+                ),
+                tuple(
+                    (str(item[0]), visit(item[1], f"{path}.kwargs.{item[0]}"))
+                    for item in kwargs
+                ),
+            )
+        if tag in {"tuple", "list"} and len(value) == 2:
+            return (
+                str(tag),
+                tuple(
+                    visit(item, f"{path}[{index}]")
+                    for index, item in enumerate(value[1])
+                ),
+            )
+        if tag == "dict" and len(value) == 2:
+            return (
+                "dict",
+                tuple(
+                    (str(item[0]), visit(item[1], f"{path}.{item[0]}"))
+                    for item in value[1]
+                ),
+            )
+        return _freeze_dispatch_signature(value)
+
+    schema = (visit(init_signature, "init"), visit(call_signature, "call"))
+    return schema, tuple(features), tuple(descriptors)
+
+
+def _dispatch_tree_bucket(tree: object, features: tuple[int, ...]) -> object:
+    """Evaluate one host-side generalized dispatch tree."""
+    node = tree
+    while isinstance(node, tuple) and node and node[0] == "split":
+        _, feature_index, boundary_sum, left, right = node
+        node = left if 2 * features[int(feature_index)] <= int(boundary_sum) else right
+    if not isinstance(node, tuple) or len(node) != 2 or node[0] != "leaf":
+        raise ValueError("invalid generalized dispatch tree")
+    return node[1]
+
+
+def _build_dispatch_tree(
+    samples: list[tuple[tuple[int, ...], object]],
+    descriptors: tuple[str, ...],
+) -> object:
+    """Build a deterministic axis-aligned tree that exactly fits observed owners."""
+    owners_by_features: dict[tuple[int, ...], object] = {}
+    for features, owner in samples:
+        previous = owners_by_features.setdefault(features, owner)
+        if previous != owner:
+            raise ValueError(
+                "workloads with the same generalized runtime features cannot be split "
+                f"across buckets: {previous!r} and {owner!r}"
+            )
+    deduplicated = list(owners_by_features.items())
+
+    def impurity(rows: list[tuple[tuple[int, ...], object]]) -> int:
+        counts: dict[object, int] = {}
+        for _features, owner in rows:
+            counts[owner] = counts.get(owner, 0) + 1
+        return len(rows) - max(counts.values())
+
+    def build(rows: list[tuple[tuple[int, ...], object]]) -> object:
+        owners = {owner for _features, owner in rows}
+        if len(owners) == 1:
+            return ("leaf", next(iter(owners)))
+        if not rows or not rows[0][0]:
+            raise ValueError("bucket partition has no numeric runtime feature to generalize")
+
+        candidates: list[tuple[tuple[int, int, int, int], int, int, list, list]] = []
+        for feature_index in range(len(rows[0][0])):
+            values = sorted({features[feature_index] for features, _owner in rows})
+            for lower, upper in zip(values, values[1:]):
+                boundary_sum = lower + upper
+                left = [
+                    row for row in rows if 2 * row[0][feature_index] <= boundary_sum
+                ]
+                right = [
+                    row for row in rows if 2 * row[0][feature_index] > boundary_sum
+                ]
+                if not left or not right:
+                    continue
+                descriptor = descriptors[feature_index]
+                feature_priority = (
+                    0 if ".shape[" in descriptor else 1 if descriptor.endswith(".value") else 2
+                )
+                score = (
+                    impurity(left) + impurity(right),
+                    abs(len(left) - len(right)),
+                    feature_priority,
+                    feature_index,
+                )
+                candidates.append((score, feature_index, boundary_sum, left, right))
+        if not candidates:
+            raise ValueError("bucket partition cannot be represented by generalized ranges")
+        _score, feature_index, boundary_sum, left, right = min(
+            candidates, key=lambda item: (item[0], item[2])
+        )
+        return (
+            "split",
+            feature_index,
+            boundary_sum,
+            build(left),
+            build(right),
+        )
+
+    return build(deduplicated)
+
+
+def _primitive_dispatch_directions(
+    feature_rows: list[tuple[int, ...]],
+) -> list[tuple[int, ...]]:
+    """Infer primitive lattice steps while preserving observed shape relationships."""
+    directions: set[tuple[int, ...]] = set()
+    for position, left in enumerate(feature_rows):
+        for right in feature_rows[position + 1 :]:
+            delta = tuple(b - a for a, b in zip(left, right))
+            divisor = 0
+            for item in delta:
+                divisor = math.gcd(divisor, abs(item))
+            if divisor == 0:
+                continue
+            primitive = tuple(item // divisor for item in delta)
+            first = next((item for item in primitive if item), 1)
+            if first < 0:
+                primitive = tuple(-item for item in primitive)
+            directions.add(primitive)
+    return sorted(directions, key=lambda value: (sum(abs(item) for item in value), value))
+
+
+def build_generalized_dispatch_plan(
+    signature_records: list[dict],
+    bucket_by_index: dict[int, object],
+) -> tuple[dict[object, object], dict[object, dict]]:
+    """Fit range-based dispatch and certify one unseen lattice step per bucket.
+
+    The returned evidence is also written into each bucket workspace.  It gives
+    the optimizer a concrete neighboring input that its implementation must
+    support instead of permitting a table of benchmark-only shape special cases.
+    """
+    grouped: dict[object, list[tuple[int, tuple[int, ...], object]]] = {}
+    descriptors_by_schema: dict[object, tuple[str, ...]] = {}
+    for record in signature_records:
+        index = int(record["index"])
+        schema, features, descriptors = _dispatch_schema_and_features(
+            record["init"], record["call"]
+        )
+        previous = descriptors_by_schema.setdefault(schema, descriptors)
+        if previous != descriptors:
+            raise ValueError("inconsistent generalized dispatch feature schema")
+        grouped.setdefault(schema, []).append(
+            (index, features, bucket_by_index[index])
+        )
+
+    plan: dict[object, object] = {}
+    evidence: dict[object, dict] = {}
+    all_owners = set(bucket_by_index.values())
+    for schema, rows in grouped.items():
+        descriptors = descriptors_by_schema[schema]
+        tree = _build_dispatch_tree(
+            [(features, owner) for _index, features, owner in rows], descriptors
+        )
+        for index, features, owner in rows:
+            if _dispatch_tree_bucket(tree, features) != owner:
+                raise AssertionError(f"generalized dispatcher misclassified workload {index}")
+        plan[schema] = tree
+
+        observed = {features for _index, features, _owner in rows}
+        directions = _primitive_dispatch_directions([features for _i, features, _o in rows])
+        if not directions and descriptors:
+            preferred = [
+                index for index, name in enumerate(descriptors) if ".shape[" in name
+            ] or list(range(len(descriptors)))
+            directions = [
+                tuple(1 if index == feature_index else 0 for index in range(len(descriptors)))
+                for feature_index in preferred
+            ]
+
+        for workload_index, features, owner in rows:
+            if owner in evidence:
+                continue
+            for direction in directions:
+                for sign in (1, -1):
+                    candidate = tuple(
+                        value + sign * step for value, step in zip(features, direction)
+                    )
+                    if candidate in observed:
+                        continue
+                    if any(
+                        value < 0
+                        for value, descriptor in zip(candidate, descriptors)
+                        if ".shape[" in descriptor or ".stride[" in descriptor
+                    ):
+                        continue
+                    if _dispatch_tree_bucket(tree, candidate) != owner:
+                        continue
+                    changed = {
+                        descriptor: {
+                            "from": features[position],
+                            "to": candidate[position],
+                            "step": candidate[position] - features[position],
+                        }
+                        for position, descriptor in enumerate(descriptors)
+                        if candidate[position] != features[position]
+                    }
+                    evidence[owner] = {
+                        "anchor_workload_index": workload_index,
+                        "unseen_one_step_neighbor": changed,
+                    }
+                    break
+                if owner in evidence:
+                    break
+
+    missing = sorted(str(owner) for owner in all_owners - set(evidence))
+    if missing:
+        raise ValueError(
+            "buckets have no unseen one-step generalized input region: "
+            + ", ".join(missing)
+            + "; merge singleton/exact-shape islands into a neighboring regime"
+        )
+    return plan, evidence
+
+
 def validate_dispatch_bucket_compatibility(
     buckets: list[WorkloadBucket], signature_records: list[dict]
 ) -> None:
-    """Reject partitions that cannot be distinguished from runtime arguments."""
+    """Reject partitions that are ambiguous or only recognize exact shapes."""
     owner = {
         index: bucket.name
         for bucket in buckets
@@ -2976,6 +3547,7 @@ def validate_dispatch_bucket_compatibility(
                 f"{previous_bucket!r} and {bucket_name!r}"
             )
         indices.append(index)
+    build_generalized_dispatch_plan(signature_records, owner)
 
 
 def _git_head_file(workspace: Path, relative_path: str) -> str:
@@ -3069,6 +3641,52 @@ def _invocation_signature(args, kwargs):
     )
 
 
+def _dispatch_schema_features(init_signature, call_signature):
+    features = []
+
+    def visit(value):
+        if not isinstance(value, (tuple, list)) or not value:
+            return value
+        tag = value[0]
+        if tag == "tensor" and len(value) == 6:
+            shape, stride, dtype, layout, requires_grad = value[1:]
+            features.extend(int(item) for item in shape)
+            features.extend(int(item) for item in stride)
+            return (
+                "tensor", len(shape), len(stride), str(dtype), str(layout),
+                bool(requires_grad),
+            )
+        if tag == "int" and len(value) == 2:
+            features.append(int(value[1]))
+            return ("int",)
+        if tag == "invocation" and len(value) == 3:
+            return (
+                "invocation",
+                tuple(visit(item) for item in value[1]),
+                tuple((str(item[0]), visit(item[1])) for item in value[2]),
+            )
+        if tag in {"tuple", "list"} and len(value) == 2:
+            return (str(tag), tuple(visit(item) for item in value[1]))
+        if tag == "dict" and len(value) == 2:
+            return (
+                "dict",
+                tuple((str(item[0]), visit(item[1])) for item in value[1]),
+            )
+        return tuple(value)
+
+    return (visit(init_signature), visit(call_signature)), tuple(features)
+
+
+def _dispatch_tree_bucket(tree, features):
+    node = tree
+    while node[0] == "split":
+        _, feature_index, boundary_sum, left, right = node
+        node = left if 2 * features[feature_index] <= boundary_sum else right
+    if node[0] != "leaf":
+        raise RuntimeError("invalid generalized workload dispatch tree")
+    return node[1]
+
+
 def _first_tensor(value):
     if isinstance(value, torch.Tensor):
         return value
@@ -3099,13 +3717,13 @@ def build_deterministic_dispatcher(
     if set(module_sources) != set(bucket_names):
         raise ValueError("embedded aggregate source set does not match module records")
     bucket_indices = {name: index for index, name in enumerate(bucket_names)}
-    signature_map: dict[object, int] = {}
-    for record in signature_records:
-        key = (
-            _freeze_dispatch_signature(record["init"]),
-            _freeze_dispatch_signature(record["call"]),
-        )
-        signature_map[key] = bucket_indices[bucket_by_index[int(record["index"])]]
+    generalized_plan, _evidence = build_generalized_dispatch_plan(
+        signature_records,
+        {
+            index: bucket_indices[name]
+            for index, name in bucket_by_index.items()
+        },
+    )
 
     entry_name = "Model" if kind == "shapes" else "run" if kind == "sol" else ""
     if not entry_name:
@@ -3117,7 +3735,7 @@ def build_deterministic_dispatcher(
     }
     header = (
         "# Generated by orchestrator/optimize.py. Do not edit.\n"
-        "# Self-contained deterministic dispatcher over independently validated bucket kernels.\n"
+        "# Self-contained range dispatcher over independently validated bucket kernels.\n"
         f"from __future__ import {', '.join(embedded.future_features)}\n\n"
         "import math\n"
         "import torch\n\n"
@@ -3126,13 +3744,14 @@ def build_deterministic_dispatcher(
         + _generated_dispatch_runtime()
         + "\n\n"
         + f"_BUCKET_KERNEL_BLOBS = {blob_map!r}\n"
-        + f"_SIGNATURE_TO_BUCKET = {signature_map!r}\n"
+        + f"_SCHEMA_TO_DISPATCH_TREE = {generalized_plan!r}\n"
         + "def _select_bucket(init_signature, args, kwargs):\n"
         + "    signature = (init_signature, _invocation_signature(args, kwargs))\n"
-        + "    index = _SIGNATURE_TO_BUCKET.get(signature)\n"
-        + "    if index is None:\n"
-        + "        raise RuntimeError(f'no deterministic workload bucket for signature: {signature!r}')\n"
-        + "    return index\n\n"
+        + "    schema, features = _dispatch_schema_features(*signature)\n"
+        + "    tree = _SCHEMA_TO_DISPATCH_TREE.get(schema)\n"
+        + "    if tree is None:\n"
+        + "        raise RuntimeError(f'no compatible workload bucket schema for signature: {signature!r}')\n"
+        + "    return _dispatch_tree_bucket(tree, features)\n\n"
     )
     if kind == "shapes":
         models = ", ".join(embedded.entry_symbols)
@@ -3786,7 +4405,7 @@ class WorkloadBucketCoordinator:
                 raise RuntimeError(f"invalid accepted dispatcher manifest: {exc}") from exc
             if existing_manifest.get("mode") != "deterministic_dispatch":
                 raise RuntimeError("accepted aggregate is not a deterministic dispatcher")
-            if existing_manifest.get("schema_version") not in {1, 2}:
+            if existing_manifest.get("schema_version") not in {1, 2, 3}:
                 raise RuntimeError("accepted dispatcher has an unsupported schema")
             raw_modules = existing_manifest.get("modules")
             if not isinstance(raw_modules, dict):
@@ -3856,6 +4475,7 @@ class WorkloadBucketCoordinator:
         dispatch_manifest = {
             "schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
             "mode": "deterministic_dispatch",
+            "dispatch_strategy": "structural_range_tree_v1",
             "source_layout": AGGREGATE_SOURCE_LAYOUT,
             "dispatch_visibility_policy": DISPATCH_VISIBILITY_POLICY,
             "kind": workload_source.kind,
@@ -4124,8 +4744,8 @@ class WorkloadBucketCoordinator:
                     rejection = "deterministic aggregation did not change aggregate sources"
 
             if not rejection and self.aggregate_campaign.optimization_mode == "production":
-                violations = production_kernel_violations(
-                    self.workspace, self.aggregate_campaign.framework
+                violations = self.aggregate_campaign._production_kernel_violations(
+                    self.workspace
                 )
                 if violations:
                     rejection = "production policy: " + "; ".join(violations)
@@ -4359,7 +4979,10 @@ class WorkloadBucketCoordinator:
             return True
 
     def _make_bucket_campaign(
-        self, bucket: WorkloadBucket, workload_source: WorkloadSource
+        self,
+        bucket: WorkloadBucket,
+        workload_source: WorkloadSource,
+        generalization_evidence: dict,
     ) -> Campaign:
         bucket_root = self.workspace / BUCKETS_DIR
         bucket_op = bucket_root / "ops" / bucket.name
@@ -4368,7 +4991,13 @@ class WorkloadBucketCoordinator:
         # its cwd.  Materialize this shared parent before any bucket threads
         # start so every campaign sees a valid cwd.
         bucket_runs.mkdir(parents=True, exist_ok=True)
-        _materialize_bucket_op(self.op_dir, bucket_op, bucket, workload_source)
+        _materialize_bucket_op(
+            self.op_dir,
+            bucket_op,
+            bucket,
+            workload_source,
+            generalization_evidence,
+        )
         parent = self.aggregate_campaign
 
         def on_improvement(campaign: Campaign, version: int, memory: dict) -> None:
@@ -4386,7 +5015,11 @@ class WorkloadBucketCoordinator:
             framework=parent.framework,
             notes=(
                 f"Workload bucket {bucket.name}: {bucket.rationale or 'inspector-grouped workloads'}. "
-                "Optimize every workload in this bucket; the coordinator owns full-kernel aggregation."
+                f"The immutable {WORKLOAD_BUCKET_CONTRACT_FILE} records an unseen one-step "
+                "neighbor that this bucket must support. Optimize the complete routed shape "
+                "regime, not an enumeration of benchmark shapes; retain bounds-safe dynamic "
+                "launch/grid logic and a generic in-regime path. The coordinator owns "
+                "full-kernel aggregation."
             ),
             arch=parent.arch,
             work_dir=str(bucket_runs),
@@ -4511,16 +5144,17 @@ class WorkloadBucketCoordinator:
             "kernel.py",
             "solution.json",
             "test_kernel.py",
+            "profile_driver.py",
             "config.json",
             ".gitignore",
             "CLAUDE.md",
         ):
             content = baseline_file(name, required=name == "kernel.py")
-            if content is None and name == "test_kernel.py":
+            if content is None and name in {"test_kernel.py", "profile_driver.py"}:
                 aggregate_harness = self.workspace / name
                 if aggregate_harness.is_file():
                     content = aggregate_harness.read_text(encoding="utf-8")
-                else:
+                elif name == "test_kernel.py":
                     raise RuntimeError("aggregate workspace has no immutable test_kernel.py")
             if content is not None:
                 (workspace / name).write_text(content, encoding="utf-8")
@@ -4612,6 +5246,33 @@ class WorkloadBucketCoordinator:
             flush=True,
         )
 
+    def _ensure_bucket_generalization_contract(
+        self, bucket: WorkloadBucket, campaign: Campaign
+    ) -> None:
+        """Install the current immutable range contract into new and resumed buckets."""
+        source = Path(campaign.kernel_demo).resolve().parent / WORKLOAD_BUCKET_CONTRACT_FILE
+        destination = campaign.workspace / WORKLOAD_BUCKET_CONTRACT_FILE
+        content = source.read_text(encoding="utf-8")
+        if destination.is_file() and destination.read_text(encoding="utf-8") == content:
+            return
+        destination.write_text(content, encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "--", WORKLOAD_BUCKET_CONTRACT_FILE],
+            cwd=str(campaign.workspace),
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "commit",
+                "-m",
+                f"workload coordinator: certify generalized bucket {bucket.name}",
+            ],
+            cwd=str(campaign.workspace),
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
     def _assert_bucket_baseline_provenance(
         self, bucket: WorkloadBucket, campaign: Campaign, baseline_commit: str
     ) -> None:
@@ -4695,29 +5356,45 @@ class WorkloadBucketCoordinator:
     def run(self) -> str:
         self._ensure_main_workspace()
         buckets = self.inspect_workloads()
-        workload_source = _read_workload_source(self.op_dir)
+        workload_source, validated_buckets, signatures = self._dispatch_inputs()
+        if validated_buckets != buckets:
+            raise RuntimeError("workload bucket manifest changed during inspection")
+        bucket_by_index = {
+            index: bucket.name
+            for bucket in buckets
+            for index in bucket.workload_indices
+        }
+        _dispatch_plan, generalization_evidence = build_generalized_dispatch_plan(
+            signatures, bucket_by_index
+        )
         if sum(len(bucket.workload_indices) for bucket in buckets) != len(workload_source.entries):
             raise RuntimeError(
                 f"validated workload buckets no longer match {workload_source.filename}"
             )
         self._bucket_campaigns = {
-            bucket.name: self._make_bucket_campaign(bucket, workload_source)
+            bucket.name: self._make_bucket_campaign(
+                bucket,
+                workload_source,
+                generalization_evidence[bucket.name],
+            )
             for bucket in buckets
         }
-        for bucket in buckets:
-            self._seed_bucket_baseline_from_aggregate(
-                bucket, self._bucket_campaigns[bucket.name], workload_source
-            )
-        # Reconciliation prompts read bucket files from the worktree, while
-        # aggregation provenance is the committed HEAD.  Clean interrupted
-        # tracked edits before either reconciling or launching new iterations
-        # so those two views cannot disagree.
+        # A resumed bucket may contain staged work left by an interrupted
+        # episode. Restore its committed boundary before installing the
+        # coordinator-owned contract so that commit cannot absorb agent edits.
         for bucket in buckets:
             campaign = self._bucket_campaigns[bucket.name]
             if latest_version(campaign.workspace) >= 0:
                 preserve_interrupted_tracked_changes(
                     campaign.workspace, f"resume bucket {bucket.name}"
                 )
+        for bucket in buckets:
+            self._seed_bucket_baseline_from_aggregate(
+                bucket, self._bucket_campaigns[bucket.name], workload_source
+            )
+            self._ensure_bucket_generalization_contract(
+                bucket, self._bucket_campaigns[bucket.name]
+            )
         for bucket in buckets:
             self._reconcile_resumed_bucket(bucket, self._bucket_campaigns[bucket.name])
         print(
@@ -4756,8 +5433,8 @@ class WorkloadBucketCoordinator:
             flush=True,
         )
         if self.aggregate_campaign.optimization_mode == "production":
-            violations = production_kernel_violations(
-                self.workspace, self.aggregate_campaign.framework
+            violations = self.aggregate_campaign._production_kernel_violations(
+                self.workspace
             )
             if violations:
                 raise RuntimeError(
@@ -4847,8 +5524,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
         default="leaderboard",
-        help="leaderboard preserves the permissive current CLAUDE.md flow; production forbids "
-             "third-party kernel/operator dependencies and mechanically enforces each campaign's framework.",
+        help="leaderboard preserves the permissive current CLAUDE.md flow; production mechanically "
+             "enforces each campaign's framework and delegates ambiguous third-party dependency "
+             "provenance to an independent fail-closed Agent review.",
     )
     ap.add_argument(
         "--framework", default="",

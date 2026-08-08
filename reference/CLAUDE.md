@@ -21,6 +21,7 @@ The full multi-cycle workflow and terminal handoff are defined in `orchestrator/
 - **Validate + bench ONLY via `python test_kernel.py`** — it runs the real `sol-execbench` evaluator over EVERY workload in `workload.jsonl` (the full ground-truth shape set) with each workload's own tolerance. Never hand-roll a correctness test, bench a single "representative" shape, or edit the harness. A PASS here == a directly submittable solution.
 - **The optimization goal is to minimize the GEOMEAN of per-workload kernel latency** (`performance.latency_us`, recorded by the harness). Per-workload latency is kept in `performance.latency_us_by_shape` (keyed by workload `uuid`). A version is committable only if ALL workloads pass AND the geomean drops vs HEAD beyond noise.
 - **The SOL ground-truth files are immutable**: never edit `definition.json`, `reference.py`, or `workload.jsonl`. Edit `kernel.py` (DPS `run()`; args = definition.inputs then definition.outputs); update `solution.json` only when languages/dependencies/entry_point change.
+- **`profile_driver.py` is the immutable profiling entry point** — profilers run `python <file>`, and `kernel.py` is import-only, so profile `profile_driver.py`, never `kernel.py`. It is a protected path: choose what it drives with `PROFILE_ITERS` / `PROFILE_WARMUP` / `PROFILE_WORKLOAD_IDX` / `PROFILE_SHAPE_ID` instead of editing it, and do NOT add a `__main__` profiling block to `kernel.py` — an in-kernel entry is silently lost the next time `run()` is rewritten, leaving the profiler to capture nothing while still exiting 0. When it genuinely cannot express the case, add a fallback driver under `profiles/<dir>/harness/` and profile that file.
 
 ### Real-submission input model (don't overfit to the local bench)
 
@@ -58,7 +59,8 @@ python test_kernel.py --version v<N> --multi-seed 5
 
 This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds
 pass. If any seed fails correctness, the kernel is BROKEN — revert with `git reset --hard HEAD`
-and try a different lever. See `orchestrator/prompts/episode.md` for the full procedure.
+and try a different lever. See `orchestrator/prompts/episode.md` and
+`skills/gpu-kernel-episode-loop/SKILL.md` for the full procedure.
 
 Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass;
 do not repeat warmup/timing/reference benchmarking for extra seeds. The public gateway caps
@@ -121,6 +123,7 @@ library primitives — are unaffected.
 
 - Optimization loop orchestrator: `orchestrator/optimize.py`
 - Multi-cycle episode prompt and handoff contract: `orchestrator/prompts/episode.md`
+- Episode evidence loop (profile/research/plan/implement/validate/record): `skills/gpu-kernel-episode-loop/SKILL.md`
 - Baseline setup session: `orchestrator/prompts/setup.md`
 - Triton→Gluon conversion: latched directive inside the episode prompt
 - NVIDIA profiling skill (Stage 1): `.claude/skills/ncu-report-skill/SKILL.md`

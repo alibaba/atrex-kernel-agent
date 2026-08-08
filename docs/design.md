@@ -28,7 +28,8 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 - **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
   edits or partial-shape wins from becoming accepted results.
 - **Production provenance**: production mode mechanically enforces the selected framework and
-  rejects third-party operator dependencies and PyTorch compute fallbacks.
+  PyTorch compute rules, while an isolated policy Agent reviews ambiguous third-party dependency
+  use from a read-only candidate snapshot.
 - **Backend portability**: one Agent Runtime interface normalizes commands, events, usage, and
   process policy across supported coding CLIs.
 
@@ -178,9 +179,13 @@ reads tensor contents to choose a bucket.
 third-party libraries. `optimization_mode=production` is fail-closed:
 
 - the selected framework is a hard constraint;
-- third-party kernel/operator dependencies are forbidden;
+- non-standard imports, declared dependencies, and library references are reviewed by an
+  independent Agent according to their actual use; toolchain/launch plumbing may be accepted,
+  while prebuilt compute, alternate frameworks, hidden dispatch, and external code are rejected;
 - PyTorch compute fallbacks and dynamic external-code loading are rejected;
-- `kernel.py`, embedded aggregate sources, and `solution.json` are checked mechanically;
+- `kernel.py`, embedded aggregate sources, and `solution.json` are first checked mechanically,
+  then copied into a bounded temporary workspace for dependency review when needed;
+- a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
 - violating episode candidates are rejected before promotion and recorded as failed memory.
 
 Production Triton campaigns enter a mandatory Triton-to-Gluon episode after the configured stall
@@ -227,8 +232,11 @@ seeding. `always` enables this stage in leaderboard mode; `never` seeds buckets 
 ### 4. Inspect and partition workloads
 
 In production mode, when `workload.jsonl` or `shapes.json` is present, the coordinator collects structural
-signatures, validates the Agent-produced bucket manifest, derives filtered operator inputs, and creates
-bucket campaigns. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
+signatures, validates the Agent-produced bucket manifest, and fits monotonic range trees over tensor
+dimensions, strides, and explicit integer inputs. Every bucket must own at least one previously unseen
+primitive shape step; singleton/exact-shape islands are rejected. Each bucket workspace receives an
+immutable `workload_bucket_contract.json` describing that neighboring input, then optimizes the complete
+routed regime. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
 always runs one unbucketed episode campaign over the complete workload set.
 
 ### 5. Explore one episode per version
@@ -253,8 +261,10 @@ independent verification.
 
 ### 6. Aggregate and finalize
 
-Bucket improvements are serialized through an aggregate lock. A deterministic dispatcher is
-generated from exact committed Git blobs and accepted only after complete evaluator validation.
+Bucket improvements are serialized through an aggregate lock. A deterministic structural range
+dispatcher is generated from exact committed Git blobs; it preserves categorical ABI/type/layout
+boundaries while routing unseen compatible dimensions through generalized interval decisions. The
+aggregate is accepted only after complete evaluator validation.
 At termination, production mode rechecks policy and SOL campaigns emit a directly submittable
 output.
 

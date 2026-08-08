@@ -39,9 +39,7 @@ def prepare_campaign(campaign: base.Campaign) -> None:
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
     if campaign.optimization_mode == "production" and base.latest_version(campaign.workspace) > 0:
-        violations = base.production_kernel_violations(
-            campaign.workspace, campaign.framework
-        )
+        violations = campaign._production_kernel_violations()
         if violations and not base.head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
                 "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
@@ -247,7 +245,7 @@ def run_sandbox(
 def candidate_policy_violations(campaign: base.Campaign, workspace: Path) -> list[str]:
     if campaign.optimization_mode != "production":
         return []
-    return base.production_kernel_violations(workspace, campaign.framework)
+    return campaign._production_kernel_violations(workspace)
 
 
 def notify_iteration(
