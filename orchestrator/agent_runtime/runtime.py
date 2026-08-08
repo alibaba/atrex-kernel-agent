@@ -25,7 +25,7 @@ from .codex_ledger import (
     CodexTemporaryHome,
     codex_home,
     codex_thread_id_from_stream,
-    normalized_codex_ledger,
+    observe_codex_usage,
 )
 from .model import (
     AgentRunRequest,
@@ -235,9 +235,15 @@ class CliAgentRuntime:
                         request.workspace
                     )
                 session_id = observed_session_id
-                events, terminal_usage, capabilities = normalized_codex_ledger(
+                (
+                    events,
+                    terminal_usage,
+                    capabilities,
+                    ledger_errors,
+                ) = observe_codex_usage(
                     codex_observer, observed_session_id, terminal_usage
                 )
+                observation_errors += ledger_errors
             except Exception as exc:
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",

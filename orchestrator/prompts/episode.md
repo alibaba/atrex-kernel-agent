@@ -80,9 +80,9 @@ Telemetry is best-effort and must not block engineering work. Mark phase boundar
 commands and keep at most one phase active:
 
 ```bash
-python tools/iteration_trace.py phase-start <profile|research|planning|implementation|correctness|benchmark|recording>
-python tools/iteration_trace.py phase-end <profile|research|planning|implementation|correctness|benchmark|recording>
-python tools/iteration_trace.py source-read <gpu_wiki|reference_projects|workspace|public_web> <safe-relative-reference>
+python3 tools/iteration_trace.py phase-start <profile|research|planning|implementation|correctness|benchmark|recording>
+python3 tools/iteration_trace.py phase-end <profile|research|planning|implementation|correctness|benchmark|recording>
+python3 tools/iteration_trace.py source-read <gpu_wiki|reference_projects|workspace|public_web> <safe-relative-reference>
 ```
 
 Never put credentials, private URL parameters, absolute user paths, raw tool output, or transcript

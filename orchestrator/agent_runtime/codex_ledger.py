@@ -6,7 +6,7 @@ import re
 import tempfile
 import time
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +96,7 @@ CODEX_LEDGER_CAPABILITIES = AgentRuntimeCapabilities(
 )
 
 
-def normalized_codex_ledger(
+def observe_codex_usage(
     observer: "CodexSessionLedgerObserver",
     thread_id: str,
     stream_terminal: TokenUsage,
@@ -104,12 +104,34 @@ def normalized_codex_ledger(
     tuple[NormalizedAgentEvent, ...],
     TokenUsage,
     AgentRuntimeCapabilities,
+    tuple[str, ...],
 ]:
-    observation = observer.observe_reconciled(thread_id, stream_terminal)
+    if stream_terminal.total_tokens is not None:
+        observation = observer.observe_reconciled(thread_id, stream_terminal)
+        return (
+            observation.events,
+            observation.terminal_usage,
+            CODEX_LEDGER_CAPABILITIES,
+            (),
+        )
+    observation = observer.observe(thread_id)
+    terminal = replace(observation.terminal_usage, measurement="partial")
+    events = tuple(
+        replace(
+            event,
+            usage=(
+                replace(event.usage, measurement="partial")
+                if event.usage is not None
+                else None
+            ),
+        )
+        for event in observation.events
+    )
     return (
-        observation.events,
-        observation.terminal_usage,
+        events,
+        terminal,
         CODEX_LEDGER_CAPABILITIES,
+        ("codex_stdout_terminal_unavailable",),
     )
 
 

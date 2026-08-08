@@ -8,7 +8,7 @@ from orchestrator.agent_runtime.adapter import DEFAULT_BACKEND_REGISTRY
 from orchestrator.agent_runtime.codex_ledger import (
     CodexSessionLedgerObserver,
     codex_thread_id_from_stream,
-    normalized_codex_ledger,
+    observe_codex_usage,
 )
 from orchestrator.agent_runtime.model import (
     AgentRuntimeCapabilities,
@@ -184,9 +184,15 @@ def normalize_stream(
     )
     if agent_cli == "codex" and codex_observer is not None and session_id:
         try:
-            events, terminal_usage, capabilities = normalized_codex_ledger(
+            (
+                events,
+                terminal_usage,
+                capabilities,
+                ledger_errors,
+            ) = observe_codex_usage(
                 codex_observer, session_id, terminal_usage
             )
+            observation_errors += ledger_errors
         except Exception as exc:
             observation_errors += (
                 f"codex_ledger_unavailable:{type(exc).__name__}",

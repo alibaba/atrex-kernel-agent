@@ -252,12 +252,19 @@ class LongSessionRunner:
             )
             if ledger_failed:
                 codex_ledger_usable = False
-            resume_usage_qualified = bool(
+            ledger_usage_observed = bool(
                 is_codex
                 and capabilities.usage_delta_observed
                 and not ledger_failed
             )
-            if is_codex and not resume_usage_qualified:
+            resume_usage_qualified = bool(
+                ledger_usage_observed
+                and not any(
+                    value.startswith("codex_")
+                    for value in observation_errors
+                )
+            )
+            if is_codex and not ledger_usage_observed:
                 fallback_usage = _codex_invocation_usage(
                     stream_session_usage or TokenUsage.unavailable(),
                     codex_stdout_session_usage,
