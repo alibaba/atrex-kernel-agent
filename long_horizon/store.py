@@ -13,6 +13,7 @@ from .telemetry import render_episode_brief
 
 RUNTIME_DIR = ".atrex_long_horizon"
 VERIFY_DIR = "aggregate_kernels/.atrex_long_horizon_verify"
+LIVE_MEMORY_FILE = "memory/live.json"
 
 
 class CampaignStore:
@@ -39,6 +40,7 @@ class CampaignStore:
             f"/{RUNTIME_DIR}/",
             f"/{VERIFY_DIR}/",
             f"/{main_adapter.STALL_STATE_FILE}",
+            f"/{LIVE_MEMORY_FILE}",
         )
         missing = [rule for rule in rules if rule not in text.splitlines()]
         if missing:
@@ -53,6 +55,11 @@ class CampaignStore:
     @property
     def active_path(self) -> Path:
         return self.root / "active_episode.json"
+
+    @property
+    def live_memory_path(self) -> Path:
+        """Uncommitted, best-effort progress for the currently active episode."""
+        return self.workspace / LIVE_MEMORY_FILE
 
     def episode_dir(self, episode: int) -> Path:
         path = self.root / "episodes" / f"e{episode:04d}"

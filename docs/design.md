@@ -226,9 +226,10 @@ seeding. `always` enables this stage in leaderboard mode; `never` seeds buckets 
 
 ### 4. Inspect and partition workloads
 
-When `workload.jsonl` or `shapes.json` is present, the coordinator collects structural signatures,
-validates the Agent-produced bucket manifest, derives filtered operator inputs, and creates bucket
-campaigns. `--no-workload-bucketing` selects one unbucketed episode campaign.
+In production mode, when `workload.jsonl` or `shapes.json` is present, the coordinator collects structural
+signatures, validates the Agent-produced bucket manifest, derives filtered operator inputs, and creates
+bucket campaigns. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
+always runs one unbucketed episode campaign over the complete workload set.
 
 ### 5. Explore one episode per version
 
@@ -244,6 +245,11 @@ GPU commands run remotely while plans, source edits, journals, and Git remain lo
 clean worktree state, and the exact candidate commit, then runs incumbent/candidate ABBA in one
 gateway allocation. A rejected candidate, `pivot`, or `blocked` outcome advances canonical memory
 without changing the incumbent. Active episode state is restart-safe.
+
+For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
+journal command refreshes it after every decisive experiment. This live view is explicitly
+non-canonical; a numbered `memory/v<N>.json` is written only after terminal handoff processing and
+independent verification.
 
 ### 6. Aggregate and finalize
 

@@ -129,7 +129,8 @@ Cuda; AMD dispatches Triton and FlyDSL; unknown hardware dispatches Triton. Lead
 flat names such as `/path/to/runs/kernel_opt_<name>_triton_h20`; production workspaces append
 `_production`. `--max-iters` and `--token-budget` apply independently to each framework campaign.
 Passing `--framework` selects one campaign but keeps the same mode-specific naming convention.
-When workload bucketing is active, isolated bucket workspaces live under `workload_buckets/`, and
+Leaderboard campaigns always run one unbucketed optimization line over the complete workload set.
+When production workload bucketing is active, isolated bucket workspaces live under `workload_buckets/`, and
 each bucket receives its own episode/version and token budgets.
 
 ### Production mode
@@ -169,14 +170,16 @@ performance parity pass, and later episodes remain in Gluon.
 --max-workload-buckets N         Inspector bucket cap (default: 8)
 --aggregate-min-improvement-pct PCT
                                  Full-workload gain required for aggregate acceptance
---no-workload-bucketing          Run one unbucketed episode campaign
+--no-workload-bucketing          Disable production bucketing (leaderboard is always unbucketed)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never
+--framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---iter-timeout S                 Wall-clock budget for one episode (default: 5400)
+--iter-timeout S                 Wall-clock budget and worst-case handoff cadence for one episode
+                                 (default: 5400)
 --setup-timeout S                V0 setup session timeout (default: 7200)
 --sandbox-hardware GPU           Gateway selector or alias
 --sandbox-profile PROFILE        Optional pre/prod endpoint profile
@@ -195,6 +198,10 @@ performance parity pass, and later episodes remain in Gluon.
 Run `python orchestrator/optimize.py --help` for the complete current interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
+
+Lowering `--iter-timeout` makes numbered canonical memory arrive more frequently, but it also pays
+terminal-handoff and ABBA verification overhead more often. `memory/live.json` is independent of
+that tradeoff and refreshes within an active episode.
 
 ### Local gateway
 
@@ -255,6 +262,7 @@ Git state remain on the coordinator.
 Each optimization workspace records the full optimization trail:
 
 - `kernel.py`: current best kernel at Git `HEAD`
+- `memory/live.json`: ignored, non-canonical progress for the active Long Horizon episode
 - `memory/v<N>.json`: canonical episode/version records
 - `memory/long_horizon_e<NNNN>.json`: promoted-episode evidence
 - `plans/`: evidence-based optimization plans

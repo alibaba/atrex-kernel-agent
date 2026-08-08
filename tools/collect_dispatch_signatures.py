@@ -135,9 +135,15 @@ def _sol_signatures(workspace: Path) -> list[dict[str, Any]]:
         Workload,
     )
 
-    definition = Definition(
-        **json.loads((workspace / "definition.json").read_text(encoding="utf-8"))
+    definition_data = json.loads(
+        (workspace / "definition.json").read_text(encoding="utf-8")
     )
+    # FlashInfer-Bench publishes an empty provenance ID, while the current SOL
+    # model accepts a non-empty string or null.  Normalize only the in-memory
+    # model input and leave the immutable definition file unchanged.
+    if definition_data.get("hf_id") == "":
+        definition_data["hf_id"] = None
+    definition = Definition(**definition_data)
     lines = [
         line
         for line in (workspace / "workload.jsonl").read_text(encoding="utf-8").splitlines()

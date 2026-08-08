@@ -91,6 +91,9 @@ text into telemetry.
 ## Engineering loop
 
 Repeat the following evidence loop until the direction yields a mature candidate or is exhausted.
+As soon as one coherent candidate passes the full development correctness check and has credible
+performance evidence, publish the terminal handoff. Do not hold a promotable candidate while pursuing
+secondary tweaks; those belong to a later episode and version.
 
 ### 1. Reconstruct the incumbent and choose a hypothesis
 
@@ -163,9 +166,11 @@ cached outputs, evaluator ordering, or hidden workload IDs. Shape/dtype/layout d
 Repeated development measurements are not promotion authority; the supervisor reruns incumbent and
 candidate in one ABBA allocation.
 
-### 7. Record every decisive experiment
+### 7. Record every decisive experiment immediately
 
-Before the terminal handoff, append each decisive experiment to the single episode journal:
+Immediately after each decisive experiment, append it to the single episode journal. Do not batch
+these writes at the end of the episode: every append refreshes the non-canonical `memory/live.json`
+progress view in the incumbent workspace.
 
 ```bash
 {{JOURNAL_COMMAND}} append --path {{JOURNAL_PATH_SHELL}} \

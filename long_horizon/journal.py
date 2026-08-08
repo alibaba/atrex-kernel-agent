@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,120 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def initialize(path: Path, *, episode: int, base_commit: str, branch: str) -> dict[str, Any]:
+def infer_live_memory_path(path: Path) -> Path | None:
+    """Resolve the incumbent workspace from a regular or linked Git worktree."""
+    worktree = path.resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=str(worktree), capture_output=True, text=True,
+        )
+    except OSError:
+        return None
+    if result.returncode:
+        return None
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (worktree / common_dir).resolve()
+    if common_dir.name != ".git":
+        return None
+    return common_dir.parent / "memory" / "live.json"
+
+
+def sync_live_memory(
+    path: Path,
+    value: dict[str, Any],
+    *,
+    phase: str = "",
+    canonical_memory: str = "",
+    accepted: bool | None = None,
+    memory_version: int | None = None,
+    episode: int | None = None,
+) -> dict[str, Any]:
+    """Write a non-canonical progress view without changing version history."""
+    experiments = value.get("experiments")
+    if not isinstance(experiments, list):
+        experiments = []
+    journal_state = str(value.get("state", "in_progress"))
+    effective_phase = phase or (
+        "exploring" if journal_state == "in_progress" else "awaiting_verification"
+    )
+    raw_version = value.get("memory_version") if memory_version is None else memory_version
+    version = (
+        int(raw_version)
+        if isinstance(raw_version, int) and not isinstance(raw_version, bool)
+        else None
+    )
+    raw_episode = value.get("episode") if episode is None else episode
+    live = {
+        "schema_version": "atrex_long_horizon_live_v1",
+        "canonical": False,
+        "canonical_memory_recorded": effective_phase == "recorded",
+        "note": (
+            "Live optimization progress only; memory/vN.json is authoritative after supervisor verification."
+        ),
+        "version": f"v{version}" if version is not None else None,
+        "episode": raw_episode,
+        "phase": effective_phase,
+        "journal_state": journal_state,
+        "experiment_count": len(experiments),
+        "latest_experiment": experiments[-1] if experiments else None,
+        "outcome": value.get("outcome"),
+        "candidate_commit": value.get("candidate_commit"),
+        "base_commit": value.get("base_commit"),
+        "episode_branch": value.get("episode_branch"),
+        "created_at": value.get("created_at"),
+        "updated_at": utc_now(),
+        "canonical_memory": canonical_memory or None,
+        "accepted": accepted,
+    }
+    atomic_write_json(path, live)
+    return live
+
+
+def _sync_live_best_effort(
+    journal_path: Path,
+    value: dict[str, Any],
+    live_path: Path | None,
+) -> None:
+    destination = live_path or infer_live_memory_path(journal_path)
+    if destination is None:
+        return
+    overrides: dict[str, Any] = {}
+    if not isinstance(value.get("memory_version"), int):
+        active_path = destination.parent.parent / ".atrex_long_horizon" / "active_episode.json"
+        try:
+            active = json.loads(active_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            active = None
+        if (
+            isinstance(active, dict)
+            and active.get("episode") == value.get("episode")
+            and isinstance(active.get("memory_version"), int)
+        ):
+            overrides["memory_version"] = active["memory_version"]
+            overrides["episode"] = active["episode"]
+            overrides["phase"] = str(active.get("phase", "exploring"))
+    try:
+        sync_live_memory(destination, value, **overrides)
+    except OSError:
+        # A diagnostic mirror must never invalidate the authoritative journal.
+        pass
+
+
+def initialize(
+    path: Path,
+    *,
+    episode: int,
+    base_commit: str,
+    branch: str,
+    memory_version: int | None = None,
+    live_path: Path | None = None,
+) -> dict[str, Any]:
     value = {
         "schema_version": 1,
         "episode": episode,
+        "memory_version": memory_version,
         "base_commit": base_commit,
         "episode_branch": branch,
         "state": "in_progress",
@@ -27,6 +138,7 @@ def initialize(path: Path, *, episode: int, base_commit: str, branch: str) -> di
         "finalized_at": None,
     }
     atomic_write_json(path, value)
+    _sync_live_best_effort(path, value, live_path)
     return value
 
 
@@ -37,7 +149,12 @@ def load(path: Path) -> dict[str, Any]:
     return value
 
 
-def append_experiment(path: Path, experiment: dict[str, Any]) -> dict[str, Any]:
+def append_experiment(
+    path: Path,
+    experiment: dict[str, Any],
+    *,
+    live_path: Path | None = None,
+) -> dict[str, Any]:
     value = load(path)
     if value.get("state") != "in_progress":
         raise ValueError("cannot append to a finalized episode journal")
@@ -50,6 +167,7 @@ def append_experiment(path: Path, experiment: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("journal experiments must be a list")
     experiments.append(entry)
     atomic_write_json(path, value)
+    _sync_live_best_effort(path, value, live_path)
     return value
 
 
@@ -59,6 +177,7 @@ def finalize(
     state: str,
     outcome: dict[str, Any],
     candidate_commit: str = "",
+    live_path: Path | None = None,
 ) -> dict[str, Any]:
     value = load(path)
     if state not in TERMINAL_STATUSES:
@@ -80,6 +199,7 @@ def finalize(
     value["candidate_commit"] = candidate_commit.strip() or None
     value["finalized_at"] = utc_now()
     atomic_write_json(path, value)
+    _sync_live_best_effort(path, value, live_path)
     return value
 
 
@@ -127,6 +247,11 @@ def _json_object(raw: str, label: str) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Manage one long-horizon episode journal.")
+    parser.add_argument(
+        "--live-path",
+        default="",
+        help="Optional non-canonical memory/live.json progress mirror.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     append = sub.add_parser("append")
     append.add_argument("--path", required=True)
@@ -140,7 +265,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "append":
             value = append_experiment(
-                Path(args.path), _json_object(args.experiment_json, "--experiment-json")
+                Path(args.path),
+                _json_object(args.experiment_json, "--experiment-json"),
+                live_path=Path(args.live_path) if args.live_path else None,
             )
         else:
             value = finalize(
@@ -148,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=args.state,
                 outcome=_json_object(args.outcome_json, "--outcome-json"),
                 candidate_commit=args.candidate_commit,
+                live_path=Path(args.live_path) if args.live_path else None,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))

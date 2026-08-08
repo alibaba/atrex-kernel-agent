@@ -1550,9 +1550,22 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     _install_agent_humanize_skill(agent_skills_dir)
     gi = workspace / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+    existing_lines = set(existing.splitlines())
     add = ""
-    if "/tools" not in existing:
-        add += "\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n"
+    runtime_ignores = [
+        "/tools",
+        "/reference",
+        "/skills",
+        "/reference-projects",
+        "/gpu-wiki",
+    ]
+    missing_runtime_ignores = [
+        entry for entry in runtime_ignores if entry not in existing_lines
+    ]
+    if missing_runtime_ignores:
+        if "# orchestrator runtime symlinks (not part of the workspace)" not in existing_lines:
+            add += "\n# orchestrator runtime symlinks (not part of the workspace)\n"
+        add += "".join(f"{entry}\n" for entry in missing_runtime_ignores)
     if "/.claude" not in existing:
         add += "/.claude\n"
     if "/.qoder" not in existing:
@@ -1858,6 +1871,7 @@ class Campaign:
 
         if action == "run":
             self._link_runtime()
+            self._sync_framework_baseline_live(phase="framework_baseline")
             res = run_session(
                 self.workspace, self._framework_baseline_prompt(n),
                 timeout=self.framework_baseline_timeout,
@@ -1881,6 +1895,7 @@ class Campaign:
                 self._warn_restored_baseline_paths(root_commit)
                 problem = self._framework_baseline_problem(v0_blob, root_commit)
         else:  # adopt: our own interrupted run already committed the kernel
+            self._sync_framework_baseline_live(phase="framework_baseline")
             self._warn_restored_baseline_paths(root_commit)
             problem = self._framework_baseline_problem(v0_blob, root_commit)
         result: Optional[dict] = None
@@ -1888,18 +1903,85 @@ class Campaign:
             result, problem = self._validate_framework_baseline(n)
         if problem:
             self._record_framework_baseline_failure(problem)
+            self._sync_framework_baseline_live(
+                phase="failed",
+                state="blocked",
+                accepted=False,
+                outcome={"summary": problem, "next_directions": []},
+            )
             if pre_head:
                 subprocess.run(["git", "reset", "--hard", pre_head], cwd=str(self.workspace),
                                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
+        self._sync_framework_baseline_live(
+            phase="recorded",
+            state="candidate_ready",
+            accepted=True,
+            canonical_memory=f"memory/v{n}.json",
+            candidate_commit=commit,
+            outcome={
+                "summary": f"accepted self-contained {self.framework} framework baseline",
+                "next_directions": [],
+            },
+        )
         latency = ((read_memory(self.workspace, n) or {}).get("performance") or {}).get("latency_us")
         print(
             f"[orchestrator] framework baseline v{n} accepted: {self.framework} "
             f"@ {commit[:8]} ({latency} us geomean)",
             flush=True,
         )
+
+    def _sync_framework_baseline_live(
+        self,
+        *,
+        phase: str,
+        state: str = "in_progress",
+        accepted: bool | None = None,
+        canonical_memory: str = "",
+        candidate_commit: str = "",
+        outcome: dict | None = None,
+    ) -> None:
+        """Best-effort live progress before the Long Horizon supervisor starts."""
+        try:
+            from long_horizon.journal import sync_live_memory
+            from long_horizon.store import CampaignStore
+
+            store = CampaignStore(self.workspace)
+            created_at = datetime.now(timezone.utc).isoformat()
+            try:
+                existing = json.loads(store.live_memory_path.read_text(encoding="utf-8"))
+                if isinstance(existing, dict) and existing.get("created_at"):
+                    created_at = str(existing["created_at"])
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                pass
+            value = {
+                "schema_version": 1,
+                "episode": 0,
+                "memory_version": FRAMEWORK_BASELINE_VERSION,
+                "base_commit": git_head(self.workspace),
+                "episode_branch": "framework-baseline",
+                "state": state,
+                "experiments": [],
+                "outcome": outcome,
+                "candidate_commit": candidate_commit or None,
+                "created_at": created_at,
+            }
+            sync_live_memory(
+                store.live_memory_path,
+                value,
+                phase=phase,
+                canonical_memory=canonical_memory,
+                accepted=accepted,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(
+                "[orchestrator] WARNING: could not update framework-baseline "
+                f"memory/live.json: {type(exc).__name__}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _framework_baseline_decision(self) -> tuple[str, str]:
         """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
@@ -4794,14 +4876,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--no-workload-bucketing",
         action="store_true",
-        help="Disable the default workload/shape inspector and run one unbucketed episode campaign.",
+        help="Disable production-mode workload/shape bucketing. Leaderboard mode is always unbucketed.",
     )
     ap.add_argument("--token-budget", type=int, default=0,
                     help="Hard token cap across all episode turns (0 = no cap; max-iters still bounds it).")
     ap.add_argument("--target-util", type=float, default=90.0,
                     help="Peak-utilization %% short-circuit (default stop condition).")
     ap.add_argument("--iter-timeout", type=int, default=5400,
-                    help="Wall-clock budget for one complete long-horizon episode (s).")
+                    help="Wall-clock budget and worst-case terminal-handoff cadence for one "
+                         "complete long-horizon episode (s).")
     ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
     ap.add_argument("--handoff-resumes", type=int, default=DEFAULT_HANDOFF_RESUMES,
                     help="Same-session recovery turns after an incomplete episode handoff (default: 2).")
@@ -4816,9 +4899,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",
                     help="Run one dedicated session between V0 setup and workload bucketing that "
                          "replaces the V0 PyTorch wrapper with the first self-contained framework "
-                         "kernel, recorded as v1 (so optimization episodes start at v2) and inherited "
-                         "by every workload bucket. auto = production mode only; always = "
-                         "leaderboard too; never = buckets derive directly from the V0 kernel.")
+                         "kernel, recorded as v1 (so optimization episodes start at v2). Production "
+                         "buckets inherit it. auto = production mode only; always = leaderboard too; "
+                         "never = optimize directly from the V0 kernel.")
     ap.add_argument("--framework-baseline-timeout", type=int, default=FRAMEWORK_BASELINE_TIMEOUT_S,
                     help="Framework baseline session timeout (s).")
     ap.add_argument("--max-stall", type=int, default=0,
@@ -4953,7 +5036,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         min_improvement_pct=args.min_improvement_pct,
         convert_after=args.convert_after,
     )
-    if is_bucketable_op(Path(op["op_dir"])) and not args.no_workload_bucketing:
+    bucketable = is_bucketable_op(Path(op["op_dir"]))
+    bucketing_enabled = (
+        args.optimization_mode == "production"
+        and bucketable
+        and not args.no_workload_bucketing
+    )
+    if bucketing_enabled:
         coordinator = WorkloadBucketCoordinator(
             aggregate_campaign=campaign,
             op_dir=Path(op["op_dir"]).resolve(),
@@ -4962,12 +5051,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         coordinator.run()
     else:
-        if not args.no_workload_bucketing:
+        if args.optimization_mode == "leaderboard" and bucketable:
+            print(
+                "[orchestrator] leaderboard mode runs one unbucketed episode campaign",
+                flush=True,
+            )
+        elif not bucketable and not args.no_workload_bucketing:
             print(
                 "[orchestrator] workload bucketing requires workload.jsonl or shapes.json; "
                 "running one unbucketed episode campaign",
                 flush=True,
             )
+        if latest_version(campaign.workspace) < 0:
+            campaign.setup_baseline()
+        else:
+            print(
+                f"[orchestrator] resuming unbucketed workspace at "
+                f"v{latest_version(campaign.workspace)}",
+                flush=True,
+            )
+            preserve_interrupted_tracked_changes(
+                campaign.workspace, "resume unbucketed workspace"
+            )
+            campaign._link_runtime()
+        campaign.ensure_framework_baseline()
         campaign.run()
     return 0
 

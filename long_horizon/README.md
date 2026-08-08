@@ -16,6 +16,10 @@ Runtime state lives under `.atrex_long_horizon/` in generated campaign workspace
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
 `--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
 
+Each active episode also exposes ignored `memory/live.json`. It is initialized immediately and
+atomically refreshed after every journal append, but it never participates in version selection or
+promotion; `memory/vN.json` remains the canonical supervisor-owned record.
+
 Claude and Codex can resume the same session to repair an incomplete handoff; Qoder and Pi use a
 single long invocation. Codex token deltas and marker ordering are read incrementally from the
 resumable native rollout. Available invocation components must reconcile with cumulative rollout and
