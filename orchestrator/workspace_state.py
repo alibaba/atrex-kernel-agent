@@ -97,6 +97,24 @@ def git_worktree_blob(workspace: Path, path: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def v0_baseline_commit(workspace: Path) -> str:
+    """The commit that introduced ``kernel.py`` — the campaign's V0 baseline.
+
+    A setup session may commit campaign scaffolding (README, profile driver) before V0, so the
+    repository root commit is not necessarily V0 and may carry no kernel at all.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    commits = result.stdout.split()
+    return commits[0] if commits else ""
+
+
 def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     """Whether committed HEAD still uses the repository's original V0 kernel.
 
@@ -110,17 +128,11 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     accepted framework kernel is a real kernel change.  The framework baseline
     is tracked by ``framework_baseline.json``, not by this predicate.
     """
-    roots = subprocess.run(
-        ["git", "rev-list", "--max-parents=0", "HEAD"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    root_commits = roots.stdout.split() if roots.returncode == 0 else []
-    if len(root_commits) != 1:
+    baseline_commit = v0_baseline_commit(workspace)
+    if not baseline_commit:
         return False
     baseline_blob = subprocess.run(
-        ["git", "rev-parse", f"{root_commits[0]}:kernel.py"],
+        ["git", "rev-parse", f"{baseline_commit}:kernel.py"],
         cwd=str(workspace),
         capture_output=True,
         text=True,

@@ -70,6 +70,7 @@ from .workspace_state import (
     latest_version,
     read_memory,
     resolve_framework_baseline_commit,
+    v0_baseline_commit,
     write_stall,
 )
 
@@ -485,13 +486,13 @@ class Campaign:
             return
         print(f"[orchestrator] framework baseline: {action} ({reason})", flush=True)
         if action == "pin":
-            root_commit = self._single_root_commit()
-            self._pin_framework_baseline(root_commit, version=0)
+            baseline_commit = self._v0_baseline_commit()
+            self._pin_framework_baseline(baseline_commit, version=0)
             return
 
         n = FRAMEWORK_BASELINE_VERSION
-        root_commit = self._single_root_commit()
-        v0_blob = git_path_blob(self.workspace, root_commit, "kernel.py")
+        baseline_commit = self._v0_baseline_commit()
+        v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
         pre_head = git_head(self.workspace)
 
         if action == "run":
@@ -513,16 +514,16 @@ class Campaign:
                     "framework baseline session produced no output "
                     f"(likely API key / auth issue — {_agent_runtime.auth_hint(self.agent_cli)})"
                 )
-            self._warn_restored_baseline_paths(root_commit)
-            problem = self._framework_baseline_problem(v0_blob, root_commit)
+            self._warn_restored_baseline_paths(baseline_commit)
+            problem = self._framework_baseline_problem(v0_blob, baseline_commit)
             if problem:
-                self._recover_framework_baseline(problem, v0_blob, root_commit, pre_head)
-                self._warn_restored_baseline_paths(root_commit)
-                problem = self._framework_baseline_problem(v0_blob, root_commit)
+                self._recover_framework_baseline(problem, v0_blob, baseline_commit, pre_head)
+                self._warn_restored_baseline_paths(baseline_commit)
+                problem = self._framework_baseline_problem(v0_blob, baseline_commit)
         else:  # adopt: our own interrupted run already committed the kernel
             self._sync_framework_baseline_live(phase="framework_baseline")
-            self._warn_restored_baseline_paths(root_commit)
-            problem = self._framework_baseline_problem(v0_blob, root_commit)
+            self._warn_restored_baseline_paths(baseline_commit)
+            problem = self._framework_baseline_problem(v0_blob, baseline_commit)
         result: Optional[dict] = None
         if not problem:
             result, problem = self._validate_framework_baseline(n)
@@ -640,15 +641,11 @@ class Campaign:
             "leaving this campaign on its existing baseline"
         )
 
-    def _single_root_commit(self) -> str:
-        roots = subprocess.run(
-            ["git", "rev-list", "--max-parents=0", "HEAD"],
-            cwd=str(self.workspace), capture_output=True, text=True,
-        )
-        root_commits = roots.stdout.split() if roots.returncode == 0 else []
-        if len(root_commits) != 1:
-            raise RuntimeError("framework baseline requires exactly one V0 root commit")
-        return root_commits[0]
+    def _v0_baseline_commit(self) -> str:
+        commit = v0_baseline_commit(self.workspace)
+        if not commit:
+            raise RuntimeError("framework baseline requires a committed V0 kernel.py")
+        return commit
 
     def _framework_baseline_prompt(self, n: int) -> str:
         return _render(
@@ -664,7 +661,7 @@ class Campaign:
             MODE_POLICY=self._mode_directive(),
         )
 
-    def _restore_immutable_baseline_paths(self, root_commit: str) -> list[str]:
+    def _restore_immutable_baseline_paths(self, baseline_commit: str) -> list[str]:
         """Put back any ground-truth file the session edited, and report what was restored.
 
         A session that "fixes" the harness or memory/v0.json is a compliance problem, but a
@@ -673,11 +670,11 @@ class Campaign:
         """
         restored: list[str] = []
         for path in IMMUTABLE_BASELINE_PATHS:
-            original = git_path_blob(self.workspace, root_commit, path)
+            original = git_path_blob(self.workspace, baseline_commit, path)
             if not original or original == git_worktree_blob(self.workspace, path):
                 continue
             checkout = subprocess.run(
-                ["git", "checkout", root_commit, "--", path],
+                ["git", "checkout", baseline_commit, "--", path],
                 cwd=str(self.workspace), check=False,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -685,7 +682,7 @@ class Campaign:
                 restored.append(path)
         return restored
 
-    def _framework_baseline_problem(self, v0_blob: str, root_commit: str) -> str:
+    def _framework_baseline_problem(self, v0_blob: str, baseline_commit: str) -> str:
         """Static acceptance checks on the candidate about to be validated and committed.
 
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
@@ -705,8 +702,8 @@ class Campaign:
             return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
         mutated = [
             path for path in IMMUTABLE_BASELINE_PATHS
-            if git_path_blob(self.workspace, root_commit, path)
-            and git_path_blob(self.workspace, root_commit, path)
+            if git_path_blob(self.workspace, baseline_commit, path)
+            and git_path_blob(self.workspace, baseline_commit, path)
             != git_worktree_blob(self.workspace, path)
         ]
         if mutated:
@@ -768,8 +765,8 @@ class Campaign:
             )
         return result, ""
 
-    def _warn_restored_baseline_paths(self, root_commit: str) -> None:
-        restored = self._restore_immutable_baseline_paths(root_commit)
+    def _warn_restored_baseline_paths(self, baseline_commit: str) -> None:
+        restored = self._restore_immutable_baseline_paths(baseline_commit)
         if restored:
             print(
                 "[orchestrator] framework baseline session edited immutable ground truth; "
@@ -779,7 +776,7 @@ class Campaign:
             )
 
     def _recover_framework_baseline(
-        self, problem: str, v0_blob: str, root_commit: str, pre_head: str
+        self, problem: str, v0_blob: str, baseline_commit: str, pre_head: str
     ) -> None:
         """Run one clean recovery session for a rejected candidate."""
         print(

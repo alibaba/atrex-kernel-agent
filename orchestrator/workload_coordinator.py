@@ -69,6 +69,7 @@ from .workspace_state import (
     preserve_interrupted_tracked_changes,
     read_memory,
     resolve_framework_baseline_commit,
+    v0_baseline_commit,
 )
 
 
@@ -1362,16 +1363,9 @@ class WorkloadBucketCoordinator:
                 f"cannot seed bucket baseline from a non-passing aggregate v{baseline_version}"
             )
 
-        roots = subprocess.run(
-            ["git", "rev-list", "--max-parents=0", "HEAD"],
-            cwd=str(self.workspace),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.split()
-        if len(roots) != 1:
-            raise RuntimeError("aggregate workspace must have exactly one V0 root commit")
-        aggregate_baseline_commit = baseline_commit or roots[0]
+        aggregate_baseline_commit = baseline_commit or v0_baseline_commit(self.workspace)
+        if not aggregate_baseline_commit:
+            raise RuntimeError("aggregate workspace has no committed V0 kernel.py")
 
         def baseline_file(name: str, *, required: bool = False) -> Optional[str]:
             result = subprocess.run(
