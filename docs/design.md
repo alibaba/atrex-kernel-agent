@@ -38,11 +38,22 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 ```text
 .
 ├── orchestrator/
-│   ├── optimize.py                    # CLI, Campaign, workload coordination
+│   ├── optimize.py                    # CLI entry point: arguments, framework dispatch, run wiring
+│   ├── campaign.py                    # Single-operator campaign: baseline, episodes, promotion
+│   ├── workload_coordinator.py        # Concurrent bucket campaigns and the aggregation gate
+│   ├── workload_buckets.py            # Operator layout detection and bucket partitioning
+│   ├── dispatch_signatures.py         # Dispatch signature validation and plan construction
+│   ├── dispatch_codegen.py            # Deterministic aggregate dispatcher generation
+│   ├── session_io.py                  # Coding-agent sessions, dependency review, sandbox I/O
+│   ├── workspace_state.py             # Canonical memory, git facts, stall counter
+│   ├── workspace_runtime.py           # Workspace runtime links, agent skills, directives
+│   ├── hardware.py                    # Vendor/framework identity and Gluon escalation
+│   ├── constants.py                   # Shared paths, policy defaults, state filenames
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
 │   ├── telemetry/                     # Phase timing and token telemetry
 │   ├── aggregate_dispatch.py          # Static single-file bucket embedding
 │   ├── optimization_policy.py         # leaderboard/production policy gates
+│   ├── templates/                     # Generated-code templates embedded into candidates
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
@@ -66,7 +77,7 @@ points.
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
-| Campaign control | `orchestrator/optimize.py` | Workspace Git history, canonical memory, aggregate state |
+| Campaign control | `orchestrator/campaign.py` | Workspace Git history, canonical memory, aggregate state |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
 | GPU execution | `tools/sandbox.py` plus gateway | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
@@ -101,7 +112,7 @@ runtime-detected GPU vendor.
 
 ### Campaign lifecycle
 
-`Campaign` in `orchestrator/optimize.py` is the single-operator state machine:
+`Campaign` in `orchestrator/campaign.py` is the single-operator state machine:
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
@@ -195,7 +206,7 @@ performance-parity gates.
 
 ### Long Horizon episode engine
 
-`Campaign.run()` in `orchestrator/optimize.py` invokes the internal Long Horizon engine. It creates
+`Campaign.run()` in `orchestrator/campaign.py` invokes the internal Long Horizon engine. It creates
 an isolated branch and Git worktree from the incumbent for each episode. The Agent records
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.

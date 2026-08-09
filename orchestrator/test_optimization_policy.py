@@ -10,7 +10,8 @@ from orchestrator.optimization_policy import (
     DependencyReviewSignal,
     production_kernel_violations,
 )
-from orchestrator.optimize import Campaign, SessionResult, _validate_dependency_review
+from orchestrator.campaign import Campaign
+from orchestrator.session_io import SessionResult, _validate_dependency_review
 
 
 _CUDA_KERNEL = '''
@@ -291,7 +292,7 @@ class IndependentDependencyReviewTests(unittest.TestCase):
                 )
                 return SessionResult(0, False, 42, "", "")
 
-            with patch("orchestrator.optimize.run_session", side_effect=fake_session) as runner:
+            with patch("orchestrator.campaign.run_session", side_effect=fake_session) as runner:
                 self.assertEqual(
                     campaign._production_kernel_violations(workspace),
                     [],
@@ -323,7 +324,7 @@ class IndependentDependencyReviewTests(unittest.TestCase):
             )
 
             with patch(
-                "orchestrator.optimize.run_session",
+                "orchestrator.campaign.run_session",
                 return_value=SessionResult(1, False, 7, "", "review failed"),
             ):
                 violations = campaign._production_kernel_violations(workspace)

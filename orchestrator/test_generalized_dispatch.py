@@ -5,14 +5,14 @@ import types
 import unittest
 from unittest import mock
 
-from orchestrator.optimize import (
-    WorkloadBucket,
+from orchestrator.dispatch_codegen import build_deterministic_dispatcher
+from orchestrator.dispatch_signatures import (
     _dispatch_schema_and_features,
     _dispatch_tree_bucket,
-    build_deterministic_dispatcher,
     build_generalized_dispatch_plan,
     validate_dispatch_bucket_compatibility,
 )
+from orchestrator.workload_buckets import WorkloadBucket
 
 
 def _invocation(*values: list[object]) -> list[object]:

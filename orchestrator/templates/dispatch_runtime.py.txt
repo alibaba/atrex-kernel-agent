@@ -1,0 +1,113 @@
+def _value_signature(value):
+    if isinstance(value, torch.Tensor):
+        return (
+            "tensor",
+            tuple(int(item) for item in value.shape),
+            tuple(int(item) for item in value.stride()),
+            str(value.dtype),
+            str(value.layout),
+            bool(value.requires_grad),
+        )
+    if value is None:
+        return ("none",)
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            rendered = "nan"
+        elif math.isinf(value):
+            rendered = "inf" if value > 0 else "-inf"
+        else:
+            rendered = value.hex()
+        return ("float", rendered)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, torch.dtype):
+        return ("torch.dtype", str(value))
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_value_signature(item) for item in value))
+    if isinstance(value, list):
+        return ("list", tuple(_value_signature(item) for item in value))
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("dispatch dictionaries must have string keys")
+        return (
+            "dict",
+            tuple((key, _value_signature(value[key])) for key in sorted(value)),
+        )
+    raise TypeError(
+        "unsupported dispatch input type: "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
+def _invocation_signature(args, kwargs):
+    return (
+        "invocation",
+        tuple(_value_signature(value) for value in args),
+        tuple((key, _value_signature(kwargs[key])) for key in sorted(kwargs)),
+    )
+
+
+def _dispatch_schema_features(init_signature, call_signature):
+    features = []
+
+    def visit(value):
+        if not isinstance(value, (tuple, list)) or not value:
+            return value
+        tag = value[0]
+        if tag == "tensor" and len(value) == 6:
+            shape, stride, dtype, layout, requires_grad = value[1:]
+            features.extend(int(item) for item in shape)
+            features.extend(int(item) for item in stride)
+            return (
+                "tensor", len(shape), len(stride), str(dtype), str(layout),
+                bool(requires_grad),
+            )
+        if tag == "int" and len(value) == 2:
+            features.append(int(value[1]))
+            return ("int",)
+        if tag == "invocation" and len(value) == 3:
+            return (
+                "invocation",
+                tuple(visit(item) for item in value[1]),
+                tuple((str(item[0]), visit(item[1])) for item in value[2]),
+            )
+        if tag in {"tuple", "list"} and len(value) == 2:
+            return (str(tag), tuple(visit(item) for item in value[1]))
+        if tag == "dict" and len(value) == 2:
+            return (
+                "dict",
+                tuple((str(item[0]), visit(item[1])) for item in value[1]),
+            )
+        return tuple(value)
+
+    return (visit(init_signature), visit(call_signature)), tuple(features)
+
+
+def _dispatch_tree_bucket(tree, features):
+    node = tree
+    while node[0] == "split":
+        _, feature_index, boundary_sum, left, right = node
+        node = left if 2 * features[feature_index] <= boundary_sum else right
+    if node[0] != "leaf":
+        raise RuntimeError("invalid generalized workload dispatch tree")
+    return node[1]
+
+
+def _first_tensor(value):
+    if isinstance(value, torch.Tensor):
+        return value
+    if isinstance(value, (tuple, list)):
+        for item in value:
+            found = _first_tensor(item)
+            if found is not None:
+                return found
+    if isinstance(value, dict):
+        for key in sorted(value):
+            found = _first_tensor(value[key])
+            if found is not None:
+                return found
+    return None
