@@ -131,7 +131,9 @@ flat names such as `/path/to/runs/kernel_opt_<name>_triton_h20`; production work
 Passing `--framework` selects one campaign but keeps the same mode-specific naming convention.
 Leaderboard campaigns always run one unbucketed optimization line over the complete workload set.
 When production workload bucketing is active, isolated bucket workspaces live under `workload_buckets/`, and
-each bucket receives its own episode/version and token budgets.
+each bucket receives its own episode/version and token budgets. Buckets are generalized shape regimes:
+the coordinator rejects exact-shape islands, records an unseen one-step neighbor in
+`workload_bucket_contract.json`, and aggregates bucket kernels with structural range dispatch.
 
 ### Production mode
 
@@ -150,8 +152,11 @@ python orchestrator/optimize.py \
 Production mode may omit `--framework`; like leaderboard mode, it auto-dispatches all frameworks supported
 by the detected hardware. Every child receives one explicit framework constraint. V0 remains a PyTorch
 correctness baseline, while every accepted optimization commit must implement the GPU computation exclusively
-in that child's framework and must not call or depend on third-party kernel/operator libraries. The orchestrator writes the policy into
-the workspace, injects it into every episode, rejects violating candidates, and refuses to
+in that child's framework. Non-standard imports, declared dependencies, and library references are
+reviewed by a separate read-only policy Agent: build/ABI/launch plumbing for a self-authored kernel may
+be accepted, while prebuilt compute, alternate frameworks, hidden dispatch, and external implementation
+loading are rejected. The orchestrator writes the policy into the workspace, injects it into every episode,
+rejects violating candidates, and refuses to
 package a non-compliant final candidate. Production runs use a separate
 `kernel_opt_<name>_<framework>_<platform>_production` workspace and cannot accidentally resume a
 leaderboard campaign.
@@ -271,4 +276,5 @@ Each optimization workspace records the full optimization trail:
 - `workload_buckets/`: isolated per-bucket campaign workspaces when bucketing is enabled
 - `dispatch_signatures.json`, `workload_buckets.json`, `aggregate_dispatch.json`, and
   `aggregation_state.json`: workload coordination provenance when bucketing is enabled
+- `workload_bucket_contract.json`: immutable generalized-shape contract inside each bucket workspace
 - `submission.json`: SOL-ExecBench submission output for SOL campaigns

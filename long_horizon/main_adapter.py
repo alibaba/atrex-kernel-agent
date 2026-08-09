@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from orchestrator import optimize as base
+from orchestrator import constants as _constants
+from orchestrator import workspace_state as _workspace_state
+from orchestrator.agent_runtime import process as _agent_process
 from orchestrator.agent_runtime.adapter import DEFAULT_BACKEND_REGISTRY
 from orchestrator.agent_runtime.codex_ledger import (
     CodexSessionLedgerObserver,
@@ -17,32 +19,58 @@ from orchestrator.agent_runtime.model import (
 )
 from orchestrator.agent_runtime.runtime import (
     DEFAULT_HUMANIZE_DIR,
+    build_session_command,
+    build_session_environment,
     terminal_usage_from_stream,
+    token_usage_from_stream,
+)
+from orchestrator.campaign import Campaign
+from orchestrator.constants import (
+    DEFAULT_CONVERT_AFTER,
+    INITIAL_AGGREGATION_MIN_ITERATIONS,
+)
+from orchestrator.hardware import (
+    hardware_directive,
+    head_kernel_is_gluon,
+    should_convert_to_gluon,
 )
 from orchestrator.optimization_policy import install_workspace_policy
+from orchestrator.session_io import _sandbox_command
+from orchestrator.workspace_runtime import (
+    _agent_runtime_directive,
+    _plan_generator_directive,
+    link_runtime,
+)
+from orchestrator.workspace_state import (
+    git_head,
+    head_kernel_is_initial_baseline,
+    latest_version,
+    preserve_interrupted_tracked_changes,
+    read_stall,
+    reconstruct_stall,
+    write_stall,
+)
 
 
-def prepare_campaign(campaign: base.Campaign) -> None:
+def prepare_campaign(campaign: Campaign) -> None:
     """Run current main's complete setup/resume prelude, excluding only its loop."""
-    if base.latest_version(campaign.workspace) < 0:
+    if latest_version(campaign.workspace) < 0:
         campaign.setup_baseline()
     else:
-        if not base.git_head(campaign.workspace):
+        if not git_head(campaign.workspace):
             raise RuntimeError("existing campaign workspace has no Git HEAD")
         print(
-            f"[orchestrator] resuming: latest = v{base.latest_version(campaign.workspace)}",
+            f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        base.preserve_interrupted_tracked_changes(
+        preserve_interrupted_tracked_changes(
             campaign.workspace, f"resume {campaign.campaign_name}"
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
-    if campaign.optimization_mode == "production" and base.latest_version(campaign.workspace) > 0:
-        violations = base.production_kernel_violations(
-            campaign.workspace, campaign.framework
-        )
-        if violations and not base.head_kernel_is_initial_baseline(campaign.workspace):
+    if campaign.optimization_mode == "production" and latest_version(campaign.workspace) > 0:
+        violations = campaign._production_kernel_violations()
+        if violations and not head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
                 "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
             )
@@ -54,21 +82,21 @@ def prepare_campaign(campaign: base.Campaign) -> None:
             )
 
 
-def link_episode_runtime(campaign: base.Campaign, workspace: Path) -> None:
+def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     native = Path(campaign.atrex_bench_root) if campaign.atrex_bench_root else None
-    base.link_runtime(workspace, native)
+    link_runtime(workspace, native)
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
-def episode_directives(campaign: base.Campaign, version: int) -> dict[str, str]:
+def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
     return {
-        "hardware": base.hardware_directive(campaign.platform, campaign.arch),
+        "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
-        "agent_runtime": base._agent_runtime_directive(agent_cli),
-        "plan_generator": base._plan_generator_directive(agent_cli, version),
+        "agent_runtime": _agent_runtime_directive(agent_cli),
+        "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 
 
@@ -78,7 +106,7 @@ def fresh_session_command(
     reasoning_effort: str,
     agent_cli: str = "claude",
 ) -> list[str]:
-    command = base._session_command(agent_cli, prompt, session_id, reasoning_effort)
+    command = build_session_command(agent_cli, prompt, session_id, reasoning_effort)
     if agent_cli == "codex":
         if command[:2] != ["codex", "exec"] or command[-1] != prompt:
             raise RuntimeError("current main Codex command has no compatible exec seam")
@@ -126,7 +154,7 @@ def resume_session_command(
 
 
 def session_environment(agent_cli: str = "claude") -> dict[str, str]:
-    return base._session_env(agent_cli)
+    return build_session_environment(agent_cli)
 
 
 def supports_same_session_resume(agent_cli: str) -> bool:
@@ -145,14 +173,8 @@ def session_id_from_stream(agent_cli: str, stdout: str, requested_session_id: st
     return codex_thread_id_from_stream(stdout)
 
 
-def run_bounded(
-    command: list[str], workspace: Path, timeout: int, environment: dict[str, str]
-) -> tuple[str, str, int, bool]:
-    return base._run_bounded(command, workspace, timeout, environment)
-
-
 def tokens_from_stream(stdout: str) -> int:
-    return base._tokens_from_stream(stdout)
+    return token_usage_from_stream(stdout)
 
 
 def normalize_stream(
@@ -200,22 +222,18 @@ def normalize_stream(
     return events, terminal_usage, capabilities, observation_errors
 
 
-def latest_version(workspace: Path) -> int:
-    return base.latest_version(workspace)
-
-
-def initial_aggregation_padding_target(campaign: base.Campaign) -> int | None:
+def initial_aggregation_padding_target(campaign: Campaign) -> int | None:
     """Return main's bootstrap barrier only for coordinator-owned bucket campaigns."""
     if not callable(getattr(campaign, "on_improvement", None)):
         return None
     if not callable(getattr(campaign, "on_iteration", None)):
         return None
-    return int(base.INITIAL_AGGREGATION_MIN_ITERATIONS)
+    return int(INITIAL_AGGREGATION_MIN_ITERATIONS)
 
 
-def has_accepted_bucket_kernel(campaign: base.Campaign) -> bool:
+def has_accepted_bucket_kernel(campaign: Campaign) -> bool:
     """Use main's kernel-provenance predicate instead of trusting counters or memory."""
-    return not base.head_kernel_is_initial_baseline(campaign.workspace)
+    return not head_kernel_is_initial_baseline(campaign.workspace)
 
 
 def run_sandbox(
@@ -231,7 +249,7 @@ def run_sandbox(
     gateway_kind: str = "auto",
 ):
     """Use main's sandbox command builder and queue/timeout semantics verbatim."""
-    return base._sandbox_command(
+    return _sandbox_command(
         workspace,
         hardware,
         profile,
@@ -244,14 +262,14 @@ def run_sandbox(
     )
 
 
-def candidate_policy_violations(campaign: base.Campaign, workspace: Path) -> list[str]:
+def candidate_policy_violations(campaign: Campaign, workspace: Path) -> list[str]:
     if campaign.optimization_mode != "production":
         return []
-    return base.production_kernel_violations(workspace, campaign.framework)
+    return campaign._production_kernel_violations(workspace)
 
 
 def notify_iteration(
-    campaign: base.Campaign,
+    campaign: Campaign,
     version: int,
     memory: dict | None,
     won: bool,
@@ -263,33 +281,31 @@ def notify_iteration(
         campaign._notify_iteration(version, memory, won)
 
 
-def peak_util(memory: dict | None) -> float:
-    return base.peak_util(memory)
-
-
-def conversion_required(campaign: base.Campaign, stall: int, workspace: Path) -> bool:
-    return base.should_convert_to_gluon(
+def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:
+    return should_convert_to_gluon(
         campaign.framework,
         stall,
-        int(getattr(campaign, "convert_after", base.DEFAULT_CONVERT_AFTER)),
-        head_is_gluon=base.head_kernel_is_gluon(workspace),
+        int(getattr(campaign, "convert_after", DEFAULT_CONVERT_AFTER)),
+        head_is_gluon=head_kernel_is_gluon(workspace),
     )
 
 
 def candidate_is_gluon(workspace: Path) -> bool:
-    return base.head_kernel_is_gluon(workspace)
+    return head_kernel_is_gluon(workspace)
 
 
 def restored_stall(workspace: Path) -> int:
-    value = base.read_stall(workspace)
-    return int(value if value is not None else base.reconstruct_stall(workspace))
+    value = read_stall(workspace)
+    return int(value if value is not None else reconstruct_stall(workspace))
 
 
 def save_stall(workspace: Path, value: int) -> None:
-    base.write_stall(workspace, value)
+    write_stall(workspace, value)
 
 
-Campaign = base.Campaign
-IMMUTABLE_BASELINE_PATHS = base.IMMUTABLE_BASELINE_PATHS
-CONVERT_PERF_TOL = base.CONVERT_PERF_TOL
-STALL_STATE_FILE = base.STALL_STATE_FILE
+# Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
+run_bounded = _agent_process.run_bounded
+peak_util = _workspace_state.peak_util
+CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
+IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
+STALL_STATE_FILE = _constants.STALL_STATE_FILE

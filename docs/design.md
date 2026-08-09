@@ -28,7 +28,8 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 - **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
   edits or partial-shape wins from becoming accepted results.
 - **Production provenance**: production mode mechanically enforces the selected framework and
-  rejects third-party operator dependencies and PyTorch compute fallbacks.
+  PyTorch compute rules, while an isolated policy Agent reviews ambiguous third-party dependency
+  use from a read-only candidate snapshot.
 - **Backend portability**: one Agent Runtime interface normalizes commands, events, usage, and
   process policy across supported coding CLIs.
 
@@ -37,11 +38,22 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 ```text
 .
 ├── orchestrator/
-│   ├── optimize.py                    # CLI, Campaign, workload coordination
+│   ├── optimize.py                    # CLI entry point: arguments, framework dispatch, run wiring
+│   ├── campaign.py                    # Single-operator campaign: baseline, episodes, promotion
+│   ├── workload_coordinator.py        # Concurrent bucket campaigns and the aggregation gate
+│   ├── workload_buckets.py            # Operator layout detection and bucket partitioning
+│   ├── dispatch_signatures.py         # Dispatch signature validation and plan construction
+│   ├── dispatch_codegen.py            # Deterministic aggregate dispatcher generation
+│   ├── session_io.py                  # Coding-agent sessions, dependency review, sandbox I/O
+│   ├── workspace_state.py             # Canonical memory, git facts, stall counter
+│   ├── workspace_runtime.py           # Workspace runtime links, agent skills, directives
+│   ├── hardware.py                    # Vendor/framework identity and Gluon escalation
+│   ├── constants.py                   # Shared paths, policy defaults, state filenames
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
 │   ├── telemetry/                     # Phase timing and token telemetry
 │   ├── aggregate_dispatch.py          # Static single-file bucket embedding
 │   ├── optimization_policy.py         # leaderboard/production policy gates
+│   ├── templates/                     # Generated-code templates embedded into candidates
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
@@ -65,7 +77,7 @@ points.
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
-| Campaign control | `orchestrator/optimize.py` | Workspace Git history, canonical memory, aggregate state |
+| Campaign control | `orchestrator/campaign.py` | Workspace Git history, canonical memory, aggregate state |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
 | GPU execution | `tools/sandbox.py` plus gateway | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
@@ -100,7 +112,7 @@ runtime-detected GPU vendor.
 
 ### Campaign lifecycle
 
-`Campaign` in `orchestrator/optimize.py` is the single-operator state machine:
+`Campaign` in `orchestrator/campaign.py` is the single-operator state machine:
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
@@ -178,9 +190,13 @@ reads tensor contents to choose a bucket.
 third-party libraries. `optimization_mode=production` is fail-closed:
 
 - the selected framework is a hard constraint;
-- third-party kernel/operator dependencies are forbidden;
+- non-standard imports, declared dependencies, and library references are reviewed by an
+  independent Agent according to their actual use; toolchain/launch plumbing may be accepted,
+  while prebuilt compute, alternate frameworks, hidden dispatch, and external code are rejected;
 - PyTorch compute fallbacks and dynamic external-code loading are rejected;
-- `kernel.py`, embedded aggregate sources, and `solution.json` are checked mechanically;
+- `kernel.py`, embedded aggregate sources, and `solution.json` are first checked mechanically,
+  then copied into a bounded temporary workspace for dependency review when needed;
+- a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
 - violating episode candidates are rejected before promotion and recorded as failed memory.
 
 Production Triton campaigns enter a mandatory Triton-to-Gluon episode after the configured stall
@@ -190,7 +206,7 @@ performance-parity gates.
 
 ### Long Horizon episode engine
 
-`Campaign.run()` in `orchestrator/optimize.py` invokes the internal Long Horizon engine. It creates
+`Campaign.run()` in `orchestrator/campaign.py` invokes the internal Long Horizon engine. It creates
 an isolated branch and Git worktree from the incumbent for each episode. The Agent records
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
@@ -227,8 +243,11 @@ seeding. `always` enables this stage in leaderboard mode; `never` seeds buckets 
 ### 4. Inspect and partition workloads
 
 In production mode, when `workload.jsonl` or `shapes.json` is present, the coordinator collects structural
-signatures, validates the Agent-produced bucket manifest, derives filtered operator inputs, and creates
-bucket campaigns. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
+signatures, validates the Agent-produced bucket manifest, and fits monotonic range trees over tensor
+dimensions, strides, and explicit integer inputs. Every bucket must own at least one previously unseen
+primitive shape step; singleton/exact-shape islands are rejected. Each bucket workspace receives an
+immutable `workload_bucket_contract.json` describing that neighboring input, then optimizes the complete
+routed regime. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
 always runs one unbucketed episode campaign over the complete workload set.
 
 ### 5. Explore one episode per version
@@ -253,8 +272,10 @@ independent verification.
 
 ### 6. Aggregate and finalize
 
-Bucket improvements are serialized through an aggregate lock. A deterministic dispatcher is
-generated from exact committed Git blobs and accepted only after complete evaluator validation.
+Bucket improvements are serialized through an aggregate lock. A deterministic structural range
+dispatcher is generated from exact committed Git blobs; it preserves categorical ABI/type/layout
+boundaries while routing unseen compatible dimensions through generalized interval decisions. The
+aggregate is accepted only after complete evaluator validation.
 At termination, production mode rechecks policy and SOL campaigns emit a directly submittable
 output.
 

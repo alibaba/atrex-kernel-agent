@@ -24,9 +24,9 @@ final squash promotion. You own only this episode branch and its structured evid
 
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
 branch are allowed. Never edit evaluator or ground-truth files, including `test_kernel.py`,
-`definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`, `metadata.json`,
-`roofline.json`, `CLAUDE.md`, or `README.md`. Do not write canonical `memory/vN.json`; the supervisor
-creates it after terminal validation.
+`profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
+`metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. Do not write canonical `memory/vN.json`;
+the supervisor creates it after terminal validation.
 
 {{MODE_POLICY}}
 
@@ -74,108 +74,31 @@ When conversion is mandatory, treat the whole episode as a Triton-to-Gluon lower
 Historical attempts are evidence, not orders. Do not repeat a rejected direction unless new evidence
 or a materially different implementation changes the expected result.
 
-## Structured telemetry
-
-Telemetry is best-effort and must not block engineering work. Mark phase boundaries with standalone
-commands and keep at most one phase active:
-
-```bash
-python3 tools/iteration_trace.py phase-start <profile|research|planning|implementation|correctness|benchmark|recording>
-python3 tools/iteration_trace.py phase-end <profile|research|planning|implementation|correctness|benchmark|recording>
-python3 tools/iteration_trace.py source-read <gpu_wiki|reference_projects|workspace|public_web> <safe-relative-reference>
-```
-
-Never put credentials, private URL parameters, absolute user paths, raw tool output, or transcript
-text into telemetry.
-
 ## Engineering loop
 
-Repeat the following evidence loop until the direction yields a mature candidate or is exhausted.
-As soon as one coherent candidate passes the full development correctness check and has credible
-performance evidence, publish the terminal handoff. Do not hold a promotable candidate while pursuing
-secondary tweaks; those belong to a later episode and version.
+`skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
+reconstruct the incumbent, profile and localize, research progressively, plan one coherent direction,
+implement and repair, validate development correctness and performance, record every decisive
+experiment, and mark the phase telemetry. **Read that file now and execute its loop**; it is a
+requirement, not background reading.
 
-### 1. Reconstruct the incumbent and choose a hypothesis
+Bind its placeholders to this episode:
 
-Read the workspace goal, unmasked `memory/v*.json`, prior plans/profiles, and the prior episode
-evidence above. Identify attempted dead ends and open directions. Start with one falsifiable
-hypothesis tied to the current bottleneck.
+| Skill placeholder | This episode |
+| --- | --- |
+| `<PROFILE_DIR>` | `profiles/episode_{{EPISODE}}` |
+| `<PLAN_DRAFT>` | `plans/v{{VERSION}}_draft.md` |
+| `<PLAN_FILE>` | `plans/v{{VERSION}}_plan.md` |
+| `<JOURNAL_CLI>` | `{{JOURNAL_COMMAND}}` |
+| `<JOURNAL_PATH>` | `{{JOURNAL_PATH_SHELL}}` |
 
-### 2. Profile and localize
-
-Reuse a profile only when it matches the current committed kernel. Otherwise profile through the
-sandbox using the vendor-appropriate tooling:
-
-```bash
-# NVIDIA
-python tools/sandbox.py --kind profile --sync profiles/episode_{{EPISODE}} -- \
-  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/episode_{{EPISODE}} --source
-
-# AMD
-python tools/sandbox.py --kind profile --sync profiles/episode_{{EPISODE}} -- \
-  bash tools/profile_kernel.sh kernel.py --output-dir profiles/episode_{{EPISODE}}
-```
-
-Extract a concrete bottleneck and source-level target. Use PTX/SASS/TTGIR inspection when compiler
-lowering or instruction selection is part of the hypothesis. Do not make speculative optimization
-changes before obtaining usable evidence.
-
-### 3. Research progressively
-
-Search in this order and stop when one actionable direction is supported:
-
-1. `gpu-wiki/docs/` and `gpu-wiki/reference-kernels/`, filtered by real architecture, vendor, DSL,
-   operator, and profiler symptom.
-2. `reference-projects/` only when the local wiki is insufficient.
-3. Public primary sources only when local sources do not answer the question.
-
-After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
-repeating local parameter tweaks. Record source paths and the evidence-to-action chain.
-
-### 4. Plan a coherent direction
-
-Write or update `plans/v{{VERSION}}_draft.md` with profile evidence, research findings, concrete
-edits, risks, rollback points, and measurable acceptance criteria. Then use the backend-native plan
-generator:
+`<PLAN_GENERATOR>` is the backend-native plan generator for this session:
 
 {{PLAN_GENERATOR}}
 
-The episode may contain multiple related experiments, but they must advance one coherent engineering
-direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
-the whole direction.
-
-### 5. Implement and repair
-
-Modify only candidate source/metadata files allowed by policy. Compile and probe through the sandbox.
-On compile or correctness failure, diagnose and repair while the direction remains viable. Do not
-publish an intermediate checkpoint as a candidate.
-
-### 6. Development correctness and performance
-
-Use the immutable evaluator for development measurements:
-
-```bash
-python tools/sandbox.py --kind run --no-sync -- \
-  python test_kernel.py --version vlong --no-memory
-python tools/sandbox.py --kind run --no-sync -- \
-  python test_kernel.py --version vlong --multi-seed 5 --no-memory
-```
-
-All workloads and all additional seeds must pass. Never depend on tensor values, pointer identity,
-cached outputs, evaluator ordering, or hidden workload IDs. Shape/dtype/layout dispatch is allowed.
-Repeated development measurements are not promotion authority; the supervisor reruns incumbent and
-candidate in one ABBA allocation.
-
-### 7. Record every decisive experiment immediately
-
-Immediately after each decisive experiment, append it to the single episode journal. Do not batch
-these writes at the end of the episode: every append refreshes the non-canonical `memory/live.json`
-progress view in the incumbent workspace.
-
-```bash
-{{JOURNAL_COMMAND}} append --path {{JOURNAL_PATH_SHELL}} \
-  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","decision":"continue|revert|pivot"}'
-```
+As soon as one coherent candidate passes the full development correctness check and has credible
+performance evidence, publish the terminal handoff. Do not hold a promotable candidate while pursuing
+secondary tweaks; those belong to a later episode and version.
 
 ## Terminal contract
 

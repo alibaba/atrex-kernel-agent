@@ -29,6 +29,7 @@ Produces (under `kernel_opt_<name>/`):
     kernel.py           # V0: self-contained DPS wrapper around the reference
     solution.json       # SOL solution (sources reference kernel.py by path)
     test_kernel.py      # the immutable SOL harness (copied from reference/)
+    profile_driver.py   # the immutable external profiling entry (copied from reference/)
     CLAUDE.md           # agent constraints (copied from reference/)
     README.md, .gitignore
     memory/v0.json      # baseline metrics (written by test_kernel.py)  [unless --no-bench]
@@ -76,40 +77,14 @@ def _build_kernel(defn: dict) -> str:
         "{REF}\n\n"
         f"def run({params}):\n"
         f"    _out = _ref({call})\n"
-        f"{assign}\n"
-        + _PROFILE_MAIN
+        f"{assign}"
     )
     return header
 
 
-# Standalone profiling entry: makes `python kernel.py` launch the real kernel under a
-# profiler (ncu / rocprofv3, which run `python <kernel_file>`). NOT used by the SOL
-# evaluator — it imports run() and never executes this block. Keep it when editing run().
-_PROFILE_MAIN = '''
-if __name__ == "__main__":
-    # Profiling harness (profiler-only): build real inputs via SOL's own gen_inputs and
-    # launch run() in a loop so ncu/rocprofv3 capture the kernel. Select the workload with
-    # PROFILE_WORKLOAD_IDX (default 0) and iteration count with PROFILE_ITERS (default 10).
-    import json as _json, os as _os
-    from pathlib import Path as _Path
-    import torch as _torch
-    from sol_execbench.core.data import Definition as _Def, Workload as _Wl
-    from sol_execbench.core.bench.io import gen_inputs as _gen, allocate_outputs as _alloc
-
-    _here = _Path(__file__).resolve().parent
-    _defn = _Def(**_json.loads((_here / "definition.json").read_text()))
-    _wls = [_Wl(**_json.loads(_l)) for _l in (_here / "workload.jsonl").read_text().splitlines() if _l.strip()]
-    _wl = _wls[int(_os.environ.get("PROFILE_WORKLOAD_IDX", "0"))]
-    _dev = "cuda:0"
-    _inputs = _gen(_defn, _wl, device=_dev)
-    _outs = _alloc(_defn, _defn.get_resolved_axes_values(_wl.axes), _dev)
-    for _ in range(3):
-        run(*_inputs, *_outs)
-    _torch.cuda.synchronize()
-    for _ in range(int(_os.environ.get("PROFILE_ITERS", "10"))):
-        run(*_inputs, *_outs)
-    _torch.cuda.synchronize()
-'''
+# Profiling is driven by the external `profile_driver.py` seeded next to kernel.py.
+# It is deliberately NOT injected into kernel.py: ncu/rocprofv3 run `python <file>`, and an
+# in-kernel `__main__` block is silently lost the first time a session rewrites run().
 
 
 def _render_kernel(defn: dict, reference_src: str) -> str:
@@ -232,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # 4) harness + constraints + docs (copied from reference/)
     (ws / "test_kernel.py").write_text((SCRIPT_DIR / "test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
+    (ws / "profile_driver.py").write_text(
+        (SCRIPT_DIR / "profile_driver.py").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     claude = SCRIPT_DIR / "CLAUDE.md"
     if claude.exists():
         (ws / "CLAUDE.md").write_text(claude.read_text(encoding="utf-8"), encoding="utf-8")
