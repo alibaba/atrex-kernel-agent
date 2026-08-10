@@ -258,10 +258,35 @@ class _GlobalRenamer(ast.NodeTransformer):
         return node
 
     def _visit_comprehension(self, node: ast.AST, name: str) -> ast.AST:
+        if not isinstance(
+            node,
+            (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp),
+        ):
+            raise TypeError(f"unsupported comprehension node: {type(node).__name__}")
+
+        # Python evaluates the outermost iterable in the enclosing scope before
+        # entering the implicit function scope used by a comprehension.  Visit
+        # it while the parent symbol table is active so module globals receive
+        # their aggregate prefix.  Everything else belongs to the child scope.
+        first_generator = node.generators[0]
+        first_generator.iter = self.visit(first_generator.iter)
+
         parent = self.table
         self.table = self._child_table(name, node.lineno, "function")
         try:
-            return self.generic_visit(node)
+            first_generator.target = self.visit(first_generator.target)
+            first_generator.ifs = [self.visit(item) for item in first_generator.ifs]
+            for generator in node.generators[1:]:
+                generator.iter = self.visit(generator.iter)
+                generator.target = self.visit(generator.target)
+                generator.ifs = [self.visit(item) for item in generator.ifs]
+
+            if isinstance(node, ast.DictComp):
+                node.key = self.visit(node.key)
+                node.value = self.visit(node.value)
+            else:
+                node.elt = self.visit(node.elt)
+            return node
         finally:
             self.table = parent
 
