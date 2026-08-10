@@ -16,6 +16,7 @@ from typing import Optional
 
 from .campaign import Campaign
 from .constants import (
+    AGGREGATE_CODEGEN_VERSION,
     AGGREGATE_DISPATCH_FILE,
     AGGREGATE_DISPATCH_SCHEMA_VERSION,
     AGGREGATE_KERNELS_DIR,
@@ -540,6 +541,7 @@ class WorkloadBucketCoordinator:
         if (
             bootstrap.get("status") == "REJECTED"
             and bootstrap.get("source_kernel_blobs") == fingerprint
+            and bootstrap.get("codegen_version") == AGGREGATE_CODEGEN_VERSION
             and bootstrap.get("dispatch_schema_version")
             == AGGREGATE_DISPATCH_SCHEMA_VERSION
             and bootstrap.get("source_layout") == AGGREGATE_SOURCE_LAYOUT
@@ -752,6 +754,7 @@ class WorkloadBucketCoordinator:
         (self.workspace / "kernel.py").write_text(dispatcher, encoding="utf-8")
         dispatch_manifest = {
             "schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
+            "codegen_version": AGGREGATE_CODEGEN_VERSION,
             "mode": "deterministic_dispatch",
             "dispatch_strategy": "structural_range_tree_v1",
             "source_layout": AGGREGATE_SOURCE_LAYOUT,
@@ -970,6 +973,7 @@ class WorkloadBucketCoordinator:
                         "status": "REJECTED",
                         "minimum_iterations": INITIAL_AGGREGATION_MIN_ITERATIONS,
                         "source_kernel_blobs": source_kernel_blobs,
+                        "codegen_version": AGGREGATE_CODEGEN_VERSION,
                         "dispatch_schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
                         "source_layout": AGGREGATE_SOURCE_LAYOUT,
                         "reason": reason,
@@ -1132,6 +1136,7 @@ class WorkloadBucketCoordinator:
                         "status": "REJECTED",
                         "minimum_iterations": INITIAL_AGGREGATION_MIN_ITERATIONS,
                         "source_kernel_blobs": source_kernel_blobs,
+                        "codegen_version": AGGREGATE_CODEGEN_VERSION,
                         "dispatch_schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
                         "source_layout": AGGREGATE_SOURCE_LAYOUT,
                         "reason": rejection,
@@ -1209,6 +1214,7 @@ class WorkloadBucketCoordinator:
                     "status": "ACCEPTED",
                     "minimum_iterations": INITIAL_AGGREGATION_MIN_ITERATIONS,
                     "source_kernel_blobs": source_kernel_blobs,
+                    "codegen_version": AGGREGATE_CODEGEN_VERSION,
                     "dispatch_mode": "deterministic_dispatch",
                     "dispatch_schema_version": AGGREGATE_DISPATCH_SCHEMA_VERSION,
                     "source_layout": AGGREGATE_SOURCE_LAYOUT,

@@ -54,6 +54,7 @@ DISPATCH_VISIBILITY_POLICY = "host_no_sync_structural_v1"
 AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
 AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 AGGREGATE_DISPATCH_SCHEMA_VERSION = 3
+AGGREGATE_CODEGEN_VERSION = 2
 AGGREGATE_SOURCE_LAYOUT = "embedded_single_file"
 DISPATCH_SIGNATURE_RESULT_PREFIX = "[dispatch-signatures] RESULT_JSON="
 BUCKETS_DIR = "workload_buckets"

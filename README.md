@@ -40,6 +40,13 @@ For the full architecture and workflow design, see [`docs/design.md`](docs/desig
 
 See the [Quick Start guide](docs/quickstart.md) for prerequisites and complete runnable examples of the orchestrated optimization loop.
 
+Or start a coding agent such as Claude Code, Codex, or Qoder in this repository and ask it to
+launch an AKA optimization task. We recommend the following prompt:
+
+```text
+Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+```
+
 ## Orchestrated Optimization
 
 `orchestrator/optimize.py` is the repository's only supported optimization entry point. It owns
