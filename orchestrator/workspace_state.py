@@ -148,8 +148,8 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
 def read_framework_baseline(workspace: Path) -> Optional[dict]:
     """Read the framework-baseline marker from committed HEAD, never from the worktree.
 
-    An interrupted session can leave an unstaged marker behind; trusting it would pin bucket
-    baselines to a kernel that was never validated.
+    An interrupted session can leave an unstaged marker behind; trusting it would pin a kernel
+    that was never validated.
     """
     show = subprocess.run(
         ["git", "show", f"HEAD:{FRAMEWORK_BASELINE_FILE}"],
@@ -172,9 +172,8 @@ def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
     """Return the pinned (commit, version) of the framework baseline, or ("", 0) when unpinned.
 
     Verification is fail-closed and never consults HEAD's tree, so the pin survives HEAD
-    advancing to an aggregated dispatcher kernel. A broken marker is an error rather than a
-    silent fallback to the root commit: falling back would mix PyTorch and framework
-    provenance across buckets, which is exactly what pinning exists to prevent.
+    advancing through later optimization versions. A broken marker is an error rather than a
+    silent fallback to the root commit.
     """
     marker = read_framework_baseline(workspace)
     if marker is None:
@@ -370,38 +369,3 @@ def best_validated_latency_us(workspace: Path, *, from_version: Optional[int] = 
         if isinstance(latency, (int, float)):
             best = float(latency) if best is None else min(best, float(latency))
     return best
-
-
-def _git_head_file(workspace: Path, relative_path: str) -> str:
-    """Read a file from a bucket's committed HEAD, never from dirty worktree state."""
-    result = subprocess.run(
-        ["git", "show", f"HEAD:{relative_path}"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"could not read committed {relative_path} from {workspace}: "
-            f"{result.stderr.strip()}"
-        )
-    return result.stdout
-
-
-def _git_blob_file(workspace: Path, blob_hash: object) -> str:
-    """Read an exact previously recorded bucket kernel blob."""
-    value = str(blob_hash or "").strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", value):
-        raise RuntimeError(f"invalid recorded kernel blob: {blob_hash!r}")
-    result = subprocess.run(
-        ["git", "cat-file", "blob", value],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"could not read recorded kernel blob {value} from {workspace}: "
-            f"{result.stderr.strip()}"
-        )
-    return result.stdout

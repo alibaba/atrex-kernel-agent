@@ -22,15 +22,10 @@ not a second CLI.
   leaderboard and production optimization.
 - Establishes a correctness-passing V0 and, by default in production mode, a self-contained
   framework-native V1 before optimization begins.
-- In production mode, workload bucketing collects evaluator-faithful structural signatures,
-  partitions distinguishable workloads into generalized shape regimes, and rejects exact-shape
-  islands that do not cover an unseen one-step neighbor.
-- Leaderboard mode always runs one unbucketed Long Horizon campaign over the complete workload set.
+- Runs one Long Horizon campaign over the complete workload set in both modes.
 - Lets each episode perform multiple profile/research/plan/edit/repair cycles, while the
   supervisor alone owns budgets, terminal validation, same-allocation ABBA verification, and
   squash promotion.
-- Builds workload aggregation mechanically from committed bucket kernels and accepts it only
-  after full-workload correctness and geomean improvement checks.
 - Preserves Git history, canonical `memory/v<N>.json`, plans, profiler evidence, episode journals,
   verification artifacts, and aggregation provenance for recovery and audit.
 
@@ -59,13 +54,10 @@ coordination, and final packaging.
 operator inputs
   -> V0 correctness baseline
   -> optional framework-native V1
-  -> structural workload inspection
-  -> parallel bucket campaigns (or one unbucketed campaign)
   -> Long Horizon episode worktree
   -> live memory + journal + terminal handoff
   -> policy/protected-path checks + ABBA verification
   -> squash promotion
-  -> deterministic full-workload aggregation when bucketed
   -> finalization
 ```
 
@@ -78,11 +70,7 @@ correctness-passing improvement.
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
 experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.
 
-For SOL and native Atrex-Bench campaigns, the orchestrator can derive production-visible structural
-signatures and partition distinguishable workloads into independent bucket campaigns. Aggregation is
-built mechanically from committed bucket kernels with structural range trees instead of exact-signature
-lookup tables, without Agent-generated dispatch code, and is accepted only after full-workload
-correctness and geomean improvement checks.
+SOL and native Atrex-Bench campaigns optimize and validate the complete workload set together.
 
 GPU validation and profiling execute through the configured gateway, while optimization memory,
 plans, edits, episode state, and Git history remain local. Repository-scoped skills are prepared

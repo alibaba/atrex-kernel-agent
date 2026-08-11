@@ -2,8 +2,8 @@
 
 You are the **framework baseline session**. The campaign's V0 is a PyTorch reference wrapper; your job is
 to replace it with the **first self-contained `{{FRAMEWORK}}` implementation** of the whole operator,
-recorded as **v{{N}}**, and then stop. Every workload bucket of this campaign inherits your kernel, so the
-framework bring-up happens once — here — instead of once per bucket.
+recorded as **v{{N}}**, and then stop. The optimization campaign inherits your kernel, so the
+framework bring-up happens once, before optimization begins.
 
 This is an authorized, non-interactive job. **Never ask the user whether to continue and never stop for
 confirmation.** Work autonomously until `memory/v{{N}}.json` and the kernel commit both exist, or report a
@@ -29,10 +29,8 @@ Hard rules for this session:
   modify `test_kernel.py`, `reference.py`, `input.py`, `shapes.json`, `metadata.json`, `roofline.json`,
   `valid.py`, `workload.jsonl`, or `memory/v0.json` — the orchestrator restores any of them you edit, so
   changing them only wastes your session. Never create `framework_baseline.json`; the orchestrator owns it.
-- **CUDA campaigns must keep the executable candidate in `kernel.py`.** The workload coordinator versions
-  and embeds `kernel.py` when it combines independently optimized buckets. A standalone `kernel.cu` with a
-  `solution.json` entry such as `kernel.cu::run` may pass an isolated SOL evaluation, but it cannot be
-  versioned or composed by that coordinator and will be mechanically rejected. Embed the self-authored CUDA
+- **CUDA campaigns must keep the executable candidate in `kernel.py`.** A standalone `kernel.cu` with a
+  `solution.json` entry such as `kernel.cu::run` cannot be versioned by the campaign. Embed the self-authored CUDA
   source in `kernel.py` and use an in-process loader supported by the sandbox; prefer
   `cuda.bindings`/NVRTC because SOL GPU workers block `torch.utils.cpp_extension.load_inline`.
 - **Do not delegate computation to a third-party kernel/operator library.** An independent policy agent
@@ -74,8 +72,7 @@ through `tools/sandbox.py`.
 5. Single-seed correctness passes over the full workload set.
 6. `--multi-seed 5` correctness passes over the full workload set.
 7. `memory/v{{N}}.json` records a positive `performance.latency_us` geomean and a
-   `performance.latency_us_by_shape` map covering **exactly the same workload keys as `memory/v0.json`** —
-   the bucket coordinator derives every per-bucket baseline from that map.
+   `performance.latency_us_by_shape` map covering **exactly the same workload keys as `memory/v0.json`**.
 
 ## Step A — Read the baseline
 

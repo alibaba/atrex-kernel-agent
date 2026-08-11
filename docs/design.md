@@ -40,10 +40,7 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 ├── orchestrator/
 │   ├── optimize.py                    # CLI entry point: arguments, framework dispatch, run wiring
 │   ├── campaign.py                    # Single-operator campaign: baseline, episodes, promotion
-│   ├── workload_coordinator.py        # Concurrent bucket campaigns and the aggregation gate
-│   ├── workload_buckets.py            # Operator layout detection and bucket partitioning
-│   ├── dispatch_signatures.py         # Dispatch signature validation and plan construction
-│   ├── dispatch_codegen.py            # Deterministic aggregate dispatcher generation
+│   ├── operator_layout.py             # Supported operator layout detection
 │   ├── session_io.py                  # Coding-agent sessions, dependency review, sandbox I/O
 │   ├── workspace_state.py             # Canonical memory, git facts, stall counter
 │   ├── workspace_runtime.py           # Workspace runtime links, agent skills, directives
@@ -51,7 +48,6 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 │   ├── constants.py                   # Shared paths, policy defaults, state filenames
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
 │   ├── telemetry/                     # Phase timing and token telemetry
-│   ├── aggregate_dispatch.py          # Static single-file bucket embedding
 │   ├── optimization_policy.py         # leaderboard/production policy gates
 │   ├── templates/                     # Generated-code templates embedded into candidates
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
@@ -77,15 +73,15 @@ points.
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
-| Campaign control | `orchestrator/campaign.py` | Workspace Git history, canonical memory, aggregate state |
+| Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
 | GPU execution | `tools/sandbox.py` plus gateway | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
 incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
-supervisor does not generate optimization code: it validates, measures, records, promotes, and
-aggregates exact committed sources.
+supervisor does not generate optimization code: it validates, measures, records, and promotes
+exact committed sources.
 
 ## Supported Entry Point
 
@@ -156,33 +152,19 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 ### Sandbox and gateway
 
-All correctness, benchmark, signature-collection, and profiling work crosses
+All correctness, benchmark, and profiling work crosses
 `tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
 submits a typed `run`/`profile` job when representable, and falls back to a self-contained `dev`
-job for SOL, aggregate, or custom commands.
+job for SOL or custom commands.
 
 Execution may target an external atrex-gpu-gateway or `tools/local_gateway.py`. The localhost
 gateway persists jobs in SQLite and consumes them FIFO with one worker by default. It is a
 transport-compatible trusted-code executor, not a security boundary.
 
-### Workload-aware optimization
+### Full-workload optimization
 
-SOL and native Atrex-Bench operators use workload coordination by default:
-
-1. Collect evaluator-faithful runtime signatures in the sandbox.
-2. Retain only explicit scalar values and tensor shape/stride/dtype/layout metadata.
-3. Run the workload inspector in a data-minimized temporary workspace.
-4. Mechanically validate exact, disjoint coverage and reject partitions that split identical
-   runtime signatures.
-5. Materialize one independent Git campaign per bucket and optimize buckets concurrently.
-6. Hold aggregate edits during the first ten bucket versions.
-7. Statically embed exact committed bucket blobs into one deterministic, self-contained
-   `kernel.py`; no Agent generates dispatcher code.
-8. Accept the aggregate only after full-workload single-seed and five-additional-seed correctness
-   plus the configured strict geomean improvement over the incumbent.
-
-The generated dispatcher performs exact structural signature matching and never synchronizes or
-reads tensor contents to choose a bucket.
+SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every
+candidate is validated for full-workload correctness and compared by its full-workload geomean.
 
 ### Production policy
 
@@ -194,7 +176,7 @@ third-party libraries. `optimization_mode=production` is fail-closed:
   independent Agent according to their actual use; toolchain/launch plumbing may be accepted,
   while prebuilt compute, alternate frameworks, hidden dispatch, and external code are rejected;
 - PyTorch compute fallbacks and dynamic external-code loading are rejected;
-- `kernel.py`, embedded aggregate sources, and `solution.json` are first checked mechanically,
+- `kernel.py` and `solution.json` are first checked mechanically,
   then copied into a bounded temporary workspace for dependency review when needed;
 - a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
 - violating episode candidates are rejected before promotion and recorded as failed memory.
@@ -237,20 +219,10 @@ workload result, `memory/v0.json`, and a Git root commit.
 
 Production mode runs a dedicated framework-baseline session by default
 (`--framework-baseline=auto`). The orchestrator restores immutable inputs, checks framework
-purity, validates the base seed plus five additional seeds, commits the result as V1, and pins its commit for later bucket
-seeding. `always` enables this stage in leaderboard mode; `never` seeds buckets from V0.
+purity, validates the base seed plus five additional seeds, commits the result as V1, and pins its
+commit for optimization. `always` enables this stage in leaderboard mode; `never` starts from V0.
 
-### 4. Inspect and partition workloads
-
-In production mode, when `workload.jsonl` or `shapes.json` is present, the coordinator collects structural
-signatures, validates the Agent-produced bucket manifest, and fits monotonic range trees over tensor
-dimensions, strides, and explicit integer inputs. Every bucket must own at least one previously unseen
-primitive shape step; singleton/exact-shape islands are rejected. Each bucket workspace receives an
-immutable `workload_bucket_contract.json` describing that neighboring input, then optimizes the complete
-routed regime. `--no-workload-bucketing` disables this production-only partitioning. Leaderboard mode
-always runs one unbucketed episode campaign over the complete workload set.
-
-### 5. Explore one episode per version
+### 4. Explore one episode per version
 
 Each version repeats a coherent evidence loop as many times as needed within its episode:
 
@@ -270,12 +242,8 @@ journal command refreshes it after every decisive experiment. This live view is 
 non-canonical; a numbered `memory/v<N>.json` is written only after terminal handoff processing and
 independent verification.
 
-### 6. Aggregate and finalize
+### 5. Finalize
 
-Bucket improvements are serialized through an aggregate lock. A deterministic structural range
-dispatcher is generated from exact committed Git blobs; it preserves categorical ABI/type/layout
-boundaries while routing unseen compatible dimensions through generalized interval decisions. The
-aggregate is accepted only after complete evaluator validation.
 At termination, production mode rechecks policy and SOL campaigns emit a directly submittable
 output.
 
@@ -291,17 +259,12 @@ kernel_opt_<name>_<framework>_<platform>[_production]/
 ├── plans/
 ├── profiles/
 ├── framework_baseline.json
-├── dispatch_signatures.json
-├── workload_buckets.json
-├── aggregate_dispatch.json
-├── aggregation_state.json
-├── workload_buckets/                 # Independent bucket Git workspaces
 └── .atrex_long_horizon/               # Episode state, journals, telemetry, verification
 ```
 
 Not every campaign uses every artifact. Git plus unmasked `memory/v<N>.json` files are the durable
-optimization history. `.atrex_long_horizon/`, temporary verification payloads, and bucket
-workspaces are excluded from main-workspace commits; their recoverable local state remains on disk.
+optimization history. `.atrex_long_horizon/` and temporary verification payloads are excluded
+from main-workspace commits; their recoverable local state remains on disk.
 
 ## Profiling and Telemetry
 

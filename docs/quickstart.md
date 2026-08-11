@@ -129,11 +129,7 @@ Cuda; AMD dispatches Triton and FlyDSL; unknown hardware dispatches Triton. Lead
 flat names such as `/path/to/runs/kernel_opt_<name>_triton_h20`; production workspaces append
 `_production`. `--max-iters` and `--token-budget` apply independently to each framework campaign.
 Passing `--framework` selects one campaign but keeps the same mode-specific naming convention.
-Leaderboard campaigns always run one unbucketed optimization line over the complete workload set.
-When production workload bucketing is active, isolated bucket workspaces live under `workload_buckets/`, and
-each bucket receives its own episode/version and token budgets. Buckets are generalized shape regimes:
-the coordinator rejects exact-shape islands, records an unseen one-step neighbor in
-`workload_bucket_contract.json`, and aggregates bucket kernels with structural range dispatch.
+Every campaign optimizes the complete workload set in one version line.
 
 ### Production mode
 
@@ -162,8 +158,8 @@ package a non-compliant final candidate. Production runs use a separate
 leaderboard campaign.
 
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
-session after V0. It validates the base seed plus five additional seeds and pins the resulting V1
-for all workload buckets. Use `--framework-baseline=always` to enable the same stage in leaderboard
+session after V0. It validates the base seed plus five additional seeds and pins the resulting V1.
+Use `--framework-baseline=always` to enable the same stage in leaderboard
 mode, or `never` to seed optimization directly from V0. A production Triton campaign escalates to
 Gluon after three consecutive stalls; once triggered, conversion retries until correctness and
 performance parity pass, and later episodes remain in Gluon.
@@ -172,10 +168,6 @@ performance parity pass, and later episodes remain in Gluon.
 
 ```text
 --max-iters N                    Hard cap on canonical versions/episodes
---max-workload-buckets N         Inspector bucket cap (default: 8)
---aggregate-min-improvement-pct PCT
-                                 Full-workload gain required for aggregate acceptance
---no-workload-bucketing          Disable production bucketing (leaderboard is always unbucketed)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --optimization-mode MODE         leaderboard (default) or production
@@ -273,8 +265,4 @@ Each optimization workspace records the full optimization trail:
 - `plans/`: evidence-based optimization plans
 - `profiles/`: profiler artifacts and extracted bottleneck evidence
 - `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
-- `workload_buckets/`: isolated per-bucket campaign workspaces when bucketing is enabled
-- `dispatch_signatures.json`, `workload_buckets.json`, `aggregate_dispatch.json`, and
-  `aggregation_state.json`: workload coordination provenance when bucketing is enabled
-- `workload_bucket_contract.json`: immutable generalized-shape contract inside each bucket workspace
 - `submission.json`: SOL-ExecBench submission output for SOL campaigns

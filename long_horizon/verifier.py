@@ -192,9 +192,9 @@ class GatewayABBAValidator:
         relative_dir = f"{VERIFY_DIR}/{verification_id}"
         directory = workspace / relative_dir
         directory.mkdir(parents=True, exist_ok=False)
-        # Naming the driver test_kernel.py deliberately selects the existing sandbox's
-        # immutable-evaluator payload route. Keeping it below aggregate_kernels makes the
-        # current runtime bundler include the driver and snapshots without modifying sandbox.py.
+        # Naming the driver test_kernel.py deliberately selects the sandbox's
+        # immutable-evaluator payload route. The runtime bundler includes the verification
+        # driver and snapshots from their dedicated artifact directory.
         driver = directory / "test_kernel.py"
         shutil.copy2(Path(__file__).with_name("remote_abba.py"), driver)
         manifests = {

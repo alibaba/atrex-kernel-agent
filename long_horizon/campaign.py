@@ -353,54 +353,6 @@ class LongHorizonCampaign:
             },
         }
 
-    def _terminal_padding_memory_record(
-        self,
-        *,
-        version: int,
-        source_attempt: dict[str, Any],
-        incumbent_commit: str,
-    ) -> dict[str, Any]:
-        source_version = int(source_attempt.get("version", 0) or 0)
-        source_episode = int(source_attempt.get("episode", 0) or 0)
-        reason = (
-            "terminal padding after a repeated blocked episode; the incumbent kernel is "
-            "unchanged and this record exists only to satisfy main's initial aggregation barrier"
-        )
-        return {
-            "version": f"v{version}",
-            "masked": False,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "performance": {
-                "latency_us": None,
-                "latency_us_geomean": None,
-                "latency_us_by_shape": {},
-            },
-            "optimization": {
-                "action_category": "long_horizon_terminal_padding",
-                "action_description": reason,
-                "expected_impact": "no kernel or performance change",
-                "risks_and_rollback": "metadata-only commit; incumbent kernel is preserved",
-            },
-            "profile_evidence": {
-                "tool_used": "none",
-                "evidence_summary": "no agent, sandbox, or GPU execution",
-                "bottleneck_type": "aggregation compatibility",
-                "evidence_chain": "repeated blocked episode -> terminal metadata padding",
-            },
-            "correctness": {"status": "UNKNOWN"},
-            "quality_gate": {"result": "FAIL", "failure_reason": reason},
-            "open_directions": [],
-            "git_commit_hash": None,
-            "long_horizon": {
-                "status": "terminal_padding",
-                "terminal_padding": True,
-                "source_blocked_version": source_version,
-                "source_blocked_episode": source_episode,
-                "incumbent_commit": incumbent_commit,
-                "incumbent_preserved": True,
-                "reason": "initial aggregation compatibility",
-            },
-        }
 
     @staticmethod
     def _valid_blocked_attempt(attempt: object) -> bool:
@@ -431,51 +383,6 @@ class LongHorizonCampaign:
             return attempt
         return None
 
-    def _pad_terminal_block_for_aggregation(
-        self, source_attempt: dict[str, Any]
-    ) -> list[int]:
-        target = main_adapter.initial_aggregation_padding_target(self.base_campaign)
-        current = main_adapter.latest_version(self.workspace)
-        if target is None or current >= target:
-            return []
-        if not main_adapter.has_accepted_bucket_kernel(self.base_campaign):
-            print(
-                "[long-horizon] terminal block is below the initial aggregation barrier, "
-                "but this bucket has no accepted kernel; refusing to pad",
-                flush=True,
-            )
-            return []
-
-        incumbent_commit = git_head(self.workspace)
-        source_episode = int(source_attempt.get("episode", 0) or 0)
-        padded: list[int] = []
-        for version in range(current + 1, target + 1):
-            memory = self._terminal_padding_memory_record(
-                version=version,
-                source_attempt=source_attempt,
-                incumbent_commit=incumbent_commit,
-            )
-            record_episode_outcome(
-                self.workspace,
-                base_commit=git_head(self.workspace),
-                version=version,
-                episode=source_episode,
-                status="terminal-padding",
-                memory_record=memory,
-            )
-            main_adapter.notify_iteration(
-                self.base_campaign,
-                version,
-                memory,
-                False,
-            )
-            padded.append(version)
-            print(
-                f"[long-horizon] terminal padding v{version}/v{target}; "
-                "incumbent kernel unchanged",
-                flush=True,
-            )
-        return padded
 
     def _recover_interrupted(self, store: CampaignStore, state: SupervisorState) -> None:
         active = store.load_active()
@@ -627,7 +534,6 @@ class LongHorizonCampaign:
             )
         terminal_block = self._terminal_blocked_attempt(state)
         if terminal_block is not None:
-            self._pad_terminal_block_for_aggregation(terminal_block)
             reason = "blocked"
             print(
                 f"[long-horizon] STOP {reason}; episodes={state.episodes} "
@@ -940,13 +846,6 @@ class LongHorizonCampaign:
                     state.protocol_failures += 1
                 else:
                     state.rejected += 1
-            main_adapter.notify_iteration(
-                self.base_campaign,
-                memory_version,
-                memory,
-                accepted,
-                verification.incumbent_latency_us if verification else None,
-            )
             try:
                 sync_live_memory(
                     store.live_memory_path,
@@ -990,7 +889,6 @@ class LongHorizonCampaign:
                         flush=True,
                     )
                     continue
-                self._pad_terminal_block_for_aggregation(attempt)
                 reason = "blocked"
                 break
             if (

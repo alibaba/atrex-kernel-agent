@@ -21,8 +21,6 @@ from typing import Optional
 
 from . import agent_runtime as _agent_runtime
 from .constants import (
-    AGGREGATE_DISPATCH_FILE,
-    AGGREGATE_KERNELS_DIR,
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     HUMANIZE_DIR,
@@ -256,11 +254,7 @@ def _dependency_review_candidate_paths(workspace: Path) -> list[Path]:
     paths = [
         workspace / "kernel.py",
         workspace / "solution.json",
-        workspace / AGGREGATE_DISPATCH_FILE,
     ]
-    aggregate_dir = workspace / AGGREGATE_KERNELS_DIR
-    if aggregate_dir.is_dir():
-        paths.extend(sorted(aggregate_dir.glob("*.py")))
     return [path for path in paths if path.is_file()]
 
 
@@ -386,7 +380,6 @@ def _sandbox_command(
     *,
     sync: tuple[str, ...] = (),
     wall_timeout: Optional[int] = None,
-    dispatch_signatures: bool = False,
     gateway_kind: str = "auto",
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
@@ -401,8 +394,6 @@ def _sandbox_command(
         cmd += ["--url", url]
     elif profile:
         cmd += ["--gateway-profile", profile]
-    if dispatch_signatures:
-        cmd.append("--dispatch-signatures")
     if sync:
         for path in sync:
             cmd += ["--sync", path]

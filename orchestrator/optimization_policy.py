@@ -18,8 +18,6 @@ OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
 MODE_STATE_FILE = ".orchestrator_mode.json"
 POLICY_BEGIN = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_BEGIN -->"
 POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
-AGGREGATE_DISPATCH_FILE = "aggregate_dispatch.json"
-AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 
 
 @dataclass(frozen=True)
@@ -378,90 +376,21 @@ def production_kernel_violations(
     except SyntaxError as exc:
         return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
 
-    policy_sources = [source]
-    policy_trees = [tree]
-    aggregate_dispatch = workspace / AGGREGATE_DISPATCH_FILE
-    aggregate_mode = aggregate_dispatch.is_file()
-    legacy_aggregate_modules = False
-    if aggregate_mode:
-        try:
-            dispatch = json.loads(aggregate_dispatch.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            errors.append(f"{AGGREGATE_DISPATCH_FILE} is invalid: {exc}")
-            dispatch = {}
-        schema_version = dispatch.get("schema_version")
-        if schema_version not in {1, 2, 3} or dispatch.get("mode") != "deterministic_dispatch":
-            errors.append("aggregate dispatcher manifest is not deterministic schema v1/v2/v3")
-        modules = dispatch.get("modules")
-        if not isinstance(modules, dict) or not modules:
-            errors.append("aggregate dispatcher manifest has no bucket modules")
-            modules = {}
-        if schema_version == 1:
-            legacy_aggregate_modules = True
-            for bucket, record in sorted(modules.items()):
-                relative = record.get("path") if isinstance(record, dict) else None
-                if not isinstance(relative, str):
-                    errors.append(f"aggregate bucket {bucket} has no source path")
-                    continue
-                relative_path = Path(relative)
-                if (
-                    relative_path.is_absolute()
-                    or ".." in relative_path.parts
-                    or len(relative_path.parts) != 2
-                    or relative_path.parts[0] != AGGREGATE_KERNELS_DIR
-                    or relative_path.suffix != ".py"
-                ):
-                    errors.append(f"invalid aggregate bucket source path: {relative}")
-                    continue
-                module_path = workspace / relative_path
-                if not module_path.is_file():
-                    errors.append(f"aggregate bucket source is missing: {relative}")
-                    continue
-                module_source = module_path.read_text(encoding="utf-8", errors="replace")
-                try:
-                    module_tree = ast.parse(module_source, filename=str(module_path))
-                except SyntaxError as exc:
-                    errors.append(
-                        f"aggregate bucket {bucket} is not valid Python: "
-                        f"{exc.msg} (line {exc.lineno})"
-                    )
-                    continue
-                policy_sources.append(module_source)
-                policy_trees.append(module_tree)
-        elif schema_version in {2, 3}:
-            if dispatch.get("source_layout") != "embedded_single_file":
-                errors.append(
-                    f"schema-v{schema_version} aggregate source layout is not "
-                    "embedded_single_file"
-                )
-            for bucket, record in sorted(modules.items()):
-                if not isinstance(record, dict) or record.get("embedded") is not True:
-                    errors.append(f"aggregate bucket {bucket} is not marked as embedded")
-                elif record.get("path"):
-                    errors.append(f"embedded aggregate bucket {bucket} declares an external path")
-
-    roots: set[str] = set()
-    has_relative_import = False
-    for policy_tree in policy_trees:
-        tree_roots, tree_relative = _import_roots(policy_tree)
-        roots.update(tree_roots)
-        has_relative_import = has_relative_import or tree_relative
+    roots, has_relative_import = _import_roots(tree)
     if has_relative_import:
         errors.append("relative/local-module imports are not self-contained")
-    policy_source = "\n".join(_code_without_prose(source) for source in policy_sources)
+    policy_source = _code_without_prose(source)
     # A production Triton campaign may enter the orchestrator-controlled Gluon phase.
     # Once a Gluon marker is present, validate the candidate as Gluon (which necessarily
     # imports the Triton package) rather than rejecting it as an alternate framework.
     effective_key = key
-    has_gluon_import = any(source_uses_gluon(source) for source in policy_sources)
+    has_gluon_import = source_uses_gluon(source)
     if key == "triton" and has_gluon_import:
         effective_key = "gluon"
     if require_gluon and effective_key != "gluon":
         errors.append("switching back from the accepted Gluon phase to Triton is forbidden")
 
     allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[effective_key]
-    if legacy_aggregate_modules:
-        allowed = allowed | {AGGREGATE_KERNELS_DIR}
     dependency_signals: list[DependencyReviewSignal] = [
         DependencyReviewSignal(
             id=f"import:{root}",
@@ -472,8 +401,7 @@ def production_kernel_violations(
     ]
     for root in sorted(roots & {"ctypes", "importlib", "pkgutil", "runpy", "subprocess"}):
         errors.append(f"dynamic external-code loading is forbidden in production candidate: {root}")
-    for policy_tree in policy_trees:
-        errors.extend(_torch_compute_violations(policy_tree))
+    errors.extend(_torch_compute_violations(tree))
 
     marker_checks = {
         "triton": (
@@ -486,9 +414,8 @@ def production_kernel_violations(
             "__global__" in policy_source
             and bool(re.search(r"load_inline|cpp_extension|CUDAExtension|nvrtc|cuda\.bindings", policy_source)),
             (
-                "missing self-authored CUDA kernel/loader in kernel.py; native kernel.cu "
-                "solution entries cannot be versioned or embedded by workload-bucket "
-                "dispatch, so use an in-process loader such as cuda.bindings/NVRTC"
+                "missing self-authored CUDA kernel/loader in kernel.py; use an in-process "
+                "loader such as cuda.bindings/NVRTC"
             ),
         ),
         "flydsl": (bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)), "missing FlyDSL implementation"),

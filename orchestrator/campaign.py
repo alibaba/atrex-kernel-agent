@@ -10,11 +10,10 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from . import agent_runtime as _agent_runtime
 from .constants import (
-    AGGREGATE_DISPATCH_FILE,
     ATREX_BENCH_HARNESS,
     DEFAULT_CONVERT_AFTER,
     DEFAULT_HANDOFF_RESUMES,
@@ -55,7 +54,7 @@ from .session_io import (
     run_session,
     sandbox_directive,
 )
-from .workload_buckets import is_sol_op
+from .operator_layout import is_sol_op
 from .workspace_runtime import (
     _agent_runtime_directive,
     _baseline_driver_directive,
@@ -105,12 +104,6 @@ class Campaign:
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
-    on_improvement: Optional[Callable[["Campaign", int, dict], None]] = field(
-        default=None, repr=False, compare=False
-    )
-    on_iteration: Optional[
-        Callable[["Campaign", int, Optional[dict], bool], None]
-    ] = field(default=None, repr=False, compare=False)
     tokens_spent: int = field(default=0, init=False)
     _dependency_review_cache: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
@@ -472,9 +465,8 @@ class Campaign:
     def ensure_framework_baseline(self) -> None:
         """Land the campaign's first real framework kernel as v1, exactly once.
 
-        V0 is a PyTorch reference wrapper. Without this stage every workload bucket repeats the
-        same framework bring-up from scratch, which is where whole days get lost on toolchain
-        quirks. Buckets derive from the commit pinned here, so the bring-up cost is paid once.
+        V0 is a PyTorch reference wrapper. This stage pays the framework bring-up cost once
+        before optimization starts from a self-contained implementation.
 
         Idempotent and resume-safe: a pinned baseline is never rewritten, and a campaign that has
         already progressed past V0 without a pin is left exactly as it is.
@@ -633,7 +625,6 @@ class Campaign:
         if (
             latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION
             and not violations
-            and not (self.workspace / AGGREGATE_DISPATCH_FILE).is_file()
         ):
             return "adopt", "an interrupted framework baseline is already committed"
         return "skip", (
@@ -749,8 +740,7 @@ class Campaign:
         latency = result.get("latency_us_geomean")
         if not isinstance(latency, (int, float)) or latency <= 0:
             return None, "validation reported no usable latency_us_geomean"
-        # Bucket baselines are derived from this map, so a missing or re-keyed shape here would
-        # otherwise surface hours later as a hard failure in bucket seeding.
+        # Require the framework baseline to preserve full-workload measurement coverage.
         baseline_shapes = set(
             ((read_memory(self.workspace, 0) or {}).get("performance") or {}).get(
                 "latency_us_by_shape", {}
@@ -895,7 +885,7 @@ class Campaign:
         return kernel_commit
 
     def _pin_framework_baseline(self, commit: str, *, version: int) -> None:
-        """Write and commit the marker that bucket seeding resolves.
+        """Write and commit the framework-baseline marker.
 
         Deliberately a separate commit rather than an amend: amending would rewrite the very
         commit whose sha the marker records, leaving a dangling pointer. This commit does not
@@ -927,53 +917,6 @@ class Campaign:
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
 
-    def _notify_improvement(
-        self, n: int, mem: Optional[dict], previous_latency: Optional[float]
-    ) -> None:
-        """Notify the outer coordinator after a mechanically accepted bucket win.
-
-        A kernel-changing commit is necessary but not sufficient: conversion commits
-        may intentionally allow small parity regressions, and malformed memory must not
-        trigger an aggregate rebuild.  The callback therefore fires only for a
-        correctness-passing, strictly faster measured version.
-        """
-        if self.on_improvement is None or not mem:
-            return
-        gate_pass = _status_is((mem.get("quality_gate") or {}).get("result"), "PASS")
-        latency = (mem.get("performance") or {}).get("latency_us")
-        if not gate_pass or not isinstance(latency, (int, float)):
-            return
-        if previous_latency is not None and float(latency) >= previous_latency:
-            return
-        try:
-            self.on_improvement(self, n, mem)
-        except Exception as exc:
-            # Aggregation is an independent quality gate.  A failed aggregate
-            # attempt must not discard the valid improvement in this bucket.
-            print(
-                f"[orchestrator] WARNING: improvement callback for v{n} failed: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    def _notify_iteration(self, n: int, mem: Optional[dict], won: bool) -> None:
-        """Notify a workload coordinator that one bucket round has completed.
-
-        The initial aggregation barrier depends on every bucket reaching ten
-        completed versioned rounds, even when the tenth round itself is not a
-        win.  Callback failures must not discard the bucket's optimization
-        result, matching the improvement callback's isolation semantics.
-        """
-        if self.on_iteration is None:
-            return
-        try:
-            self.on_iteration(self, n, mem, won)
-        except Exception as exc:
-            print(
-                f"[orchestrator] WARNING: iteration callback for v{n} failed: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
 
     def run(self) -> str:
         """Run the native long-horizon episode supervisor for this campaign."""

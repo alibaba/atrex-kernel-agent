@@ -12,7 +12,7 @@ from .telemetry import render_episode_brief
 
 
 RUNTIME_DIR = ".atrex_long_horizon"
-VERIFY_DIR = "aggregate_kernels/.atrex_long_horizon_verify"
+VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
 LIVE_MEMORY_FILE = "memory/live.json"
 
 

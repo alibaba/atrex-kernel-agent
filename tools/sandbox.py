@@ -18,7 +18,7 @@
 Native Atrex-Bench correctness/performance commands use ``agate run`` and profiling
 commands use ``profile``.  ``dev`` remains the compatibility escape hatch for
 workloads those typed interfaces cannot represent (for example SOL-ExecBench,
-multi-file aggregate candidates, source-correlated custom profiling, or a
+source-correlated custom profiling or a
 community gateway that explicitly returns ``kind_not_supported``).  A new pod
 may be selected for every invocation; callers must not rely on remote filesystem
 persistence.
@@ -89,11 +89,6 @@ INPUT_SKIP_DIRS = {
     # single uploaded-file argument past Linux MAX_ARG_STRLEN.
     "plans",
     ".humanize",
-    # The aggregate workspace can contain multiple independent bucket
-    # workspaces.  A full-kernel validation needs only the aggregate sources;
-    # recursively uploading every bucket would duplicate repositories and can
-    # exceed the gateway request-size limit.
-    "workload_buckets",
 }
 INPUT_SKIP_PATHS = {
     # A pod must not recursively submit another sandbox job, and memory updates
@@ -103,8 +98,8 @@ INPUT_SKIP_PATHS = {
     "tools/local_gateway.py",
     "tools/memory_manager.py",
     # The durable host-side monitor is never invoked inside a GPU worker.  It
-    # grew the materialized tools bundle enough to push large aggregate kernels
-    # over agate's per-argument limit despite being unrelated to validation.
+    # can grow the materialized tools bundle enough to exceed agate's
+    # per-argument limit despite being unrelated to validation.
     "tools/monitor_optimize_tasks.py",
     # Duplicate of kernel.py from a prior session — not a runtime input.
     "_cute_fa_kernel.py",
@@ -133,16 +128,6 @@ RUNTIME_CHUNK_BYTES = 20 * 1024
 # below Linux MAX_ARG_STRLEN (128 KiB).
 WORKSPACE_CHUNK_BYTES = 20 * 1024
 SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
-DISPATCH_SIGNATURE_INPUT_PATHS = frozenset(
-    {
-        "definition.json",
-        "input.py",
-        "reference.py",
-        "shapes.json",
-        "tools/collect_dispatch_signatures.py",
-        "workload.jsonl",
-    }
-)
 EVALUATION_INPUT_PATHS = frozenset(
     {
         "definition.json",
@@ -178,7 +163,6 @@ OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
-AGGREGATE_KERNELS_DIR = "aggregate_kernels"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -272,7 +256,7 @@ def _make_input_bundle(
 
 
 def _declared_candidate_sources(workspace: Path) -> set[str]:
-    """Return candidate sources declared by solution.json and aggregate dispatch."""
+    """Return candidate sources declared by solution.json plus verification artifacts."""
     selected: set[str] = set()
     solution_path = workspace / "solution.json"
     if solution_path.is_file():
@@ -294,10 +278,11 @@ def _declared_candidate_sources(workspace: Path) -> set[str]:
                 )
             selected.add(_safe_relative(source_path))
 
-    aggregate_sources = workspace / "aggregate_kernels"
-    if aggregate_sources.is_dir():
-        for path in _walk_files(aggregate_sources):
+    verification_sources = workspace / "verification_artifacts"
+    if verification_sources.is_dir():
+        for path in _walk_files(verification_sources):
             selected.add(path.relative_to(workspace).as_posix())
+
     return selected
 
 
@@ -488,8 +473,6 @@ def _typed_workspace_limitation(workspace: Path, command: list[str]) -> str | No
         return "missing " + ", ".join(missing)
     if (workspace / "workload.jsonl").is_file():
         return "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
-    if (workspace / AGGREGATE_KERNELS_DIR).is_dir():
-        return "legacy aggregate multi-file candidate is not supported by the single-file typed API"
 
     solution = _json_object(workspace / "solution.json")
     if solution is not None:
@@ -648,7 +631,7 @@ def _typed_request(
 
 
 def _make_atrex_bench_runtime_bundle(
-    workspace: Path, *, minimal: bool = False, evaluator_only: bool = False
+    workspace: Path, *, evaluator_only: bool = False
 ) -> str | None:
     """Package the canonical native evaluator separately from workspace state.
 
@@ -661,26 +644,18 @@ def _make_atrex_bench_runtime_bundle(
     runtime_root = runtime_link.resolve()
     run_eval = runtime_root / "scripts" / "run_eval.py"
     package = runtime_root / "src" / "atrex_bench"
-    runtime_module = package / "eval" / "_runtime.py"
     utils_module = package / "utils.py"
     sdk_module = package / "sdk.py"
     if (
         not package.is_dir()
-        or (minimal and not runtime_module.is_file())
-        or (not minimal and not run_eval.is_file())
+        or not run_eval.is_file()
         or (evaluator_only and not utils_module.is_file())
     ):
         raise RuntimeError(f"invalid workspace Atrex-Bench runtime link: {runtime_link}")
 
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
-        if minimal:
-            tf.add(
-                runtime_module,
-                arcname="atrex-bench/src/atrex_bench/eval/_runtime.py",
-                recursive=False,
-            )
-        elif evaluator_only:
+        if evaluator_only:
             evaluator_files = [package / "__init__.py", utils_module]
             # Newer Atrex-Bench releases re-export the Python evaluation API
             # from ``atrex_bench.__init__``.  Keep the file optional so the
@@ -913,14 +888,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--top-kernels", type=int, default=None,
         help="Limit the typed profile result to the N hottest kernels.",
-    )
-    parser.add_argument(
-        "--dispatch-signatures",
-        action="store_true",
-        help=(
-            "Upload only evaluator input generators and the minimal native "
-            "runtime needed to collect deterministic dispatch signatures."
-        ),
     )
     parser.add_argument(
         "--input", action="append", default=[], metavar="PATH",
@@ -1595,9 +1562,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
     typed_limitation: str | None = None
-    if args.dispatch_signatures:
-        gateway_kind = "dev"
-    elif gateway_kind in TYPED_KINDS:
+    if gateway_kind in TYPED_KINDS:
         if gateway_kind == "profile" and args.profile_level == "deep" and not args.kernel_regex:
             raise SystemExit("sandbox: --profile-level deep requires --kernel-regex")
         if args.keep_pod:
@@ -1630,9 +1595,7 @@ def _main(argv: list[str] | None = None) -> int:
         gateway_kind = "dev"
 
     evaluator_command = _is_test_kernel_command(args.command)
-    if args.dispatch_signatures:
-        selected_inputs: Iterable[str] = DISPATCH_SIGNATURE_INPUT_PATHS
-    elif evaluator_command:
+    if evaluator_command:
         selected_inputs = _evaluation_input_paths(workspace)
     else:
         try:
@@ -1648,10 +1611,9 @@ def _main(argv: list[str] | None = None) -> int:
         args.max_input_file_mb * 1024 * 1024,
         selected_inputs,
     )
-    if evaluator_command or args.dispatch_signatures:
+    if evaluator_command:
         runtime_bundle = _make_atrex_bench_runtime_bundle(
             workspace,
-            minimal=args.dispatch_signatures,
             evaluator_only=evaluator_command,
         )
     else:

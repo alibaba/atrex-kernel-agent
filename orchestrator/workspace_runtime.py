@@ -85,8 +85,7 @@ def _baseline_driver_directive(agent_cli: str) -> str:
     if agent_cli == "qodercli":
         return (
             "Complete the baseline workflow directly in this Qoder session. Do not launch an "
-            "Agent/subagent: nested workload-bucket repositories can otherwise be resolved as the "
-            "aggregate parent workspace. Treat the current working directory as the only writable "
+            "Agent/subagent. Treat the current working directory as the only writable "
             "workspace and use relative paths for every campaign file"
         )
     return (

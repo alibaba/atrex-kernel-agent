@@ -21,11 +21,7 @@ Termination policy
 Episode reasoning stays in the self-contained prompt under ``prompts/``;
 this file only does mechanism: spawn, time-bound, token-account, read state, decide stop.
 
-For SOL and atrex-bench operators, a workload-inspection stage first partitions
-workload.jsonl or shapes.json into disjoint optimization buckets. Each bucket runs the
-same loop below concurrently in its own Git workspace. A serialized aggregation gate
-maintains the full-workload kernel.py in the main workspace and accepts it only after
-independent full correctness and performance validation.
+SOL and Atrex-Bench operators run the same loop over their complete workload set.
 
 Usage
 -----
@@ -93,8 +89,7 @@ try:
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
     from .session_io import detect_arch, ensure_submodules
-    from .workload_buckets import find_atrex_bench_root, is_bucketable_op, is_sol_op
-    from .workload_coordinator import WorkloadBucketCoordinator
+    from .operator_layout import find_atrex_bench_root, is_sol_op
     from .workspace_state import latest_version, preserve_interrupted_tracked_changes
 except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator import agent_runtime as _agent_runtime  # type: ignore[no-redef]
@@ -122,13 +117,9 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         detect_arch,
         ensure_submodules,
     )
-    from orchestrator.workload_buckets import (  # type: ignore[no-redef]
+    from orchestrator.operator_layout import (  # type: ignore[no-redef]
         find_atrex_bench_root,
-        is_bucketable_op,
         is_sol_op,
-    )
-    from orchestrator.workload_coordinator import (  # type: ignore[no-redef]
-        WorkloadBucketCoordinator,
     )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
@@ -373,24 +364,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
     ap.add_argument("--max-iters", type=int, default=20,
                     help="Hard cap on canonical optimization versions/episodes.")
-    ap.add_argument(
-        "--max-workload-buckets",
-        type=int,
-        default=8,
-        help="Maximum number of inspector-created workload buckets (default: 8).",
-    )
-    ap.add_argument(
-        "--aggregate-min-improvement-pct",
-        type=float,
-        default=0.0,
-        help="Minimum full-workload geomean improvement required to accept an aggregate candidate "
-             "(percent; default: any strict improvement).",
-    )
-    ap.add_argument(
-        "--no-workload-bucketing",
-        action="store_true",
-        help="Disable production-mode workload/shape bucketing. Leaderboard mode is always unbucketed.",
-    )
     ap.add_argument("--token-budget", type=int, default=0,
                     help="Hard token cap across all episode turns (0 = no cap; max-iters still bounds it).")
     ap.add_argument("--target-util", type=float, default=90.0,
@@ -410,10 +383,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--min-improvement-pct", type=float, default=0.0,
                     help="Minimum strict ABBA improvement required for promotion (default: >0%%).")
     ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",
-                    help="Run one dedicated session between V0 setup and workload bucketing that "
+                    help="Run one dedicated session after V0 setup that "
                          "replaces the V0 PyTorch wrapper with the first self-contained framework "
                          "kernel, recorded as v1 (so optimization episodes start at v2). Production "
-                         "buckets inherit it. auto = production mode only; always = leaderboard too; "
+                         "auto = production mode only; always = leaderboard too; "
                          "never = optimize directly from the V0 kernel.")
     ap.add_argument("--framework-baseline-timeout", type=int, default=FRAMEWORK_BASELINE_TIMEOUT_S,
                     help="Framework baseline session timeout (s).")
@@ -441,8 +414,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             "--sandbox-timeout must be in the gateway-supported range "
             f"1..{MAX_SANDBOX_TIMEOUT}"
         )
-    if args.max_workload_buckets < 1:
-        ap.error("--max-workload-buckets must be at least 1")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
     if args.handoff_resumes < 0:
@@ -460,8 +431,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     if args.framework_baseline_timeout <= 0:
         ap.error("--framework-baseline-timeout must be positive")
-    if not 0.0 <= args.aggregate_min_improvement_pct < 100.0:
-        ap.error("--aggregate-min-improvement-pct must be in [0, 100)")
     if args.sandbox_url and args.sandbox_profile:
         ap.error("--sandbox-url and --sandbox-profile are mutually exclusive")
     if shutil.which(args.agent_cli) is None:
@@ -549,46 +518,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         min_improvement_pct=args.min_improvement_pct,
         convert_after=args.convert_after,
     )
-    bucketable = is_bucketable_op(Path(op["op_dir"]))
-    bucketing_enabled = (
-        args.optimization_mode == "production"
-        and bucketable
-        and not args.no_workload_bucketing
-    )
-    if bucketing_enabled:
-        coordinator = WorkloadBucketCoordinator(
-            aggregate_campaign=campaign,
-            op_dir=Path(op["op_dir"]).resolve(),
-            max_buckets=args.max_workload_buckets,
-            aggregate_min_improvement=args.aggregate_min_improvement_pct / 100.0,
-        )
-        coordinator.run()
+    if latest_version(campaign.workspace) < 0:
+        campaign.setup_baseline()
     else:
-        if args.optimization_mode == "leaderboard" and bucketable:
-            print(
-                "[orchestrator] leaderboard mode runs one unbucketed episode campaign",
-                flush=True,
-            )
-        elif not bucketable and not args.no_workload_bucketing:
-            print(
-                "[orchestrator] workload bucketing requires workload.jsonl or shapes.json; "
-                "running one unbucketed episode campaign",
-                flush=True,
-            )
-        if latest_version(campaign.workspace) < 0:
-            campaign.setup_baseline()
-        else:
-            print(
-                f"[orchestrator] resuming unbucketed workspace at "
-                f"v{latest_version(campaign.workspace)}",
-                flush=True,
-            )
-            preserve_interrupted_tracked_changes(
-                campaign.workspace, "resume unbucketed workspace"
-            )
-            campaign._link_runtime()
-        campaign.ensure_framework_baseline()
-        campaign.run()
+        print(
+            f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
+            flush=True,
+        )
+        preserve_interrupted_tracked_changes(campaign.workspace, "resume workspace")
+        campaign._link_runtime()
+    campaign.ensure_framework_baseline()
+    campaign.run()
     return 0
 
 

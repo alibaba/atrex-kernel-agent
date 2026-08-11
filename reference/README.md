@@ -30,7 +30,7 @@ workspace template.
 - The orchestrator installs an immutable workspace `test_kernel.py` adapter. Agent sessions must
   not replace it or edit evaluator/ground-truth files.
 - V0 is a correctness-passing baseline. Production normally creates and pins a framework-native
-  V1 before workload buckets are derived.
+  V1 before optimization episodes begin.
 
 ## State Ownership
 

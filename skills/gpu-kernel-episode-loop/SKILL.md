@@ -196,13 +196,6 @@ on the same sandbox hardware and compare. GPU selection belongs to the gateway; 
 `CUDA_VISIBLE_DEVICES` to steer it. Repeated development measurements are not promotion authority;
 the supervisor reruns incumbent and candidate in one ABBA allocation.
 
-If `workload_bucket_contract.json` exists, it is an immutable production contract. Read it before
-editing the kernel. The bucket represents a shape regime, not a list of benchmark shapes: launch
-geometry, bounds checks, and algorithm selection must remain valid for the recorded unseen one-step
-neighbor and other inputs routed into the same range. Do not enumerate observed dimensions, build an
-exact-shape lookup table, or omit a generic in-regime path merely because the current evaluator lists
-only sampled points.
-
 ### 7. Record every decisive experiment immediately
 
 Immediately after each decisive experiment, append it to the single episode journal. Do not batch

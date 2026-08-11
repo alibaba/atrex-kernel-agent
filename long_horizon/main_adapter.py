@@ -25,10 +25,7 @@ from orchestrator.agent_runtime.runtime import (
     token_usage_from_stream,
 )
 from orchestrator.campaign import Campaign
-from orchestrator.constants import (
-    DEFAULT_CONVERT_AFTER,
-    INITIAL_AGGREGATION_MIN_ITERATIONS,
-)
+from orchestrator.constants import DEFAULT_CONVERT_AFTER
 from orchestrator.hardware import (
     hardware_directive,
     head_kernel_is_gluon,
@@ -222,20 +219,6 @@ def normalize_stream(
     return events, terminal_usage, capabilities, observation_errors
 
 
-def initial_aggregation_padding_target(campaign: Campaign) -> int | None:
-    """Return main's bootstrap barrier only for coordinator-owned bucket campaigns."""
-    if not callable(getattr(campaign, "on_improvement", None)):
-        return None
-    if not callable(getattr(campaign, "on_iteration", None)):
-        return None
-    return int(INITIAL_AGGREGATION_MIN_ITERATIONS)
-
-
-def has_accepted_bucket_kernel(campaign: Campaign) -> bool:
-    """Use main's kernel-provenance predicate instead of trusting counters or memory."""
-    return not head_kernel_is_initial_baseline(campaign.workspace)
-
-
 def run_sandbox(
     workspace: Path,
     hardware: str,
@@ -266,19 +249,6 @@ def candidate_policy_violations(campaign: Campaign, workspace: Path) -> list[str
     if campaign.optimization_mode != "production":
         return []
     return campaign._production_kernel_violations(workspace)
-
-
-def notify_iteration(
-    campaign: Campaign,
-    version: int,
-    memory: dict | None,
-    won: bool,
-    previous_latency: float | None = None,
-) -> None:
-    if won and hasattr(campaign, "_notify_improvement"):
-        campaign._notify_improvement(version, memory, previous_latency)
-    if hasattr(campaign, "_notify_iteration"):
-        campaign._notify_iteration(version, memory, won)
 
 
 def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:
