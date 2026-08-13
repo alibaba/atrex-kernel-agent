@@ -95,7 +95,9 @@ try:
         find_atrex_bench_root,
         has_agent_problem,
         is_sol_op,
+        should_use_generalized_problem,
         validate_agent_problem,
+        validate_private_shapes,
     )
     from .workspace_state import (
         latest_version,
@@ -133,7 +135,9 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         find_atrex_bench_root,
         has_agent_problem,
         is_sol_op,
+        should_use_generalized_problem,
         validate_agent_problem,
+        validate_private_shapes,
     )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
@@ -308,7 +312,7 @@ def dispatch_framework_campaigns(
     return 0
 
 
-def _resolve_op(op_dir: str) -> dict:
+def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
     """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
     --op-dir (+ the non-deducible --platform).
     """
@@ -319,18 +323,27 @@ def _resolve_op(op_dir: str) -> dict:
     if not ref.is_file():
         raise SystemExit(f"--op-dir has no reference.py: {d}")
     atrex_bench_root = ""
-    generalized = has_agent_problem(d)
-    if generalized:
-        try:
-            validate_agent_problem(d / AGENT_PROBLEM_FILENAME)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        if not (d / "shapes.json").is_file():
+    provided_problem = has_agent_problem(d)
+    shapes_path = d / "shapes.json"
+    generalized = should_use_generalized_problem(d, optimization_mode)
+    if generalized and provided_problem:
+        if not shapes_path.is_file():
             raise SystemExit(
                 "generalized Atrex-Bench operator requires private evaluator shapes.json: "
                 f"{d}"
             )
-    if not is_sol_op(d) and (d / "shapes.json").is_file():
+        try:
+            validate_agent_problem(
+                d / AGENT_PROBLEM_FILENAME,
+                private_shapes_path=shapes_path,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    if not is_sol_op(d) and shapes_path.is_file():
+        try:
+            validate_private_shapes(shapes_path)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         native_root = find_atrex_bench_root(d)
         if native_root is None:
             raise SystemExit(
@@ -343,7 +356,14 @@ def _resolve_op(op_dir: str) -> dict:
         "reference": str(ref),
         "op_dir": str(d),
         "atrex_bench_root": atrex_bench_root,
-        "agent_problem": str(d / AGENT_PROBLEM_FILENAME) if generalized else "",
+        "agent_problem": (
+            str(d / AGENT_PROBLEM_FILENAME) if generalized and provided_problem else ""
+        ),
+        "agent_problem_source": (
+            "provided"
+            if generalized and provided_problem
+            else ("auto" if generalized else "none")
+        ),
     }
 
 
@@ -357,8 +377,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         help=(
             "The operator dir (SOL definition.json/workload.jsonl/reference.py, or native "
             "Atrex-Bench reference.py/input.py/shapes.json with optional agent_problem.json). "
-            "When agent_problem.json exists it is the public optimization contract and exact "
-            "shapes.json remains evaluator-only."
+            "Production always optimizes from a generalized public contract: a provided "
+            "agent_problem.json is used directly, otherwise AKA derives one from the detailed "
+            "shapes before hiding them from optimization sessions."
         ),
     )
     ap.add_argument(
@@ -589,7 +610,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     arch = args.arch or detect_arch(
         sandbox_hardware, args.sandbox_profile, args.sandbox_url
     )
-    op = _resolve_op(args.op_dir)
+    op = _resolve_op(args.op_dir, args.optimization_mode)
     ensure_submodules()
     frameworks = (
         (args.framework,)
@@ -599,6 +620,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(
         f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
         f"optimization_mode={args.optimization_mode} platform={args.platform} "
+        f"agent_problem={op.get('agent_problem_source', 'none')} "
         f"sandbox_hardware={sandbox_hardware} "
         f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
         f"frameworks={','.join(frameworks)} "

@@ -17,8 +17,8 @@ not a second CLI.
 
 ## Current Design
 
-- Accepts SOL-ExecBench operators plus legacy exact-shape and generalized private-case native
-  Atrex-Bench operators.
+- Accepts SOL-ExecBench and native Atrex-Bench operators. Production native campaigns always expose
+  a generalized public problem: AKA uses a user-provided contract or derives one before optimization.
 - Creates one isolated Git workspace per framework and target, with separate campaign state for
   leaderboard and production optimization.
 - Establishes a correctness-passing V0 and, by default in production mode, a self-contained
@@ -53,6 +53,7 @@ coordination, and final packaging.
 
 ```text
 operator inputs
+  -> production public-problem derivation when needed
   -> V0 correctness baseline
   -> optional framework-native V1
   -> Long Horizon episode worktree
@@ -71,10 +72,14 @@ correctness-passing improvement.
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
 experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.
 
-SOL and native Atrex-Bench campaigns validate the complete workload set together. Generalized
-Atrex-Bench tasks optimize against `agent_problem.json` while keeping exact evaluator shapes hidden.
-Their canonical `memory/v<N>.json` records real evaluator latency for every opaque shape id, and
-profiling privately injects the selected real `PROFILE_SHAPE_ID` without exposing the full shape set.
+SOL and native Atrex-Bench campaigns validate the complete workload set together. In production,
+native Atrex-Bench optimization always uses `agent_problem.json` while exact evaluator shapes remain
+hidden. A user-provided problem is used directly; when only detailed `shapes.json` exists, a separate
+clean AKA preprocessing session derives and validates the public problem before baseline or optimization
+sessions start. Canonical `memory/v<N>.json` records real evaluator latency for every opaque shape id,
+and profiling privately injects the selected real `PROFILE_SHAPE_ID` without exposing the full shape set.
+This private injection and result-masking path is production-only; leaderboard keeps detailed shapes
+inside its workspace and uses the ordinary public evaluator path.
 
 GPU validation and profiling execute through the configured gateway, while optimization memory,
 plans, edits, episode state, and Git history remain local. Repository-scoped skills are prepared

@@ -186,6 +186,7 @@ TYPED_FALLBACK_REASONS = (
     "http 501",
 )
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
+MODE_STATE_FILENAME = ".orchestrator_mode.json"
 PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
@@ -520,11 +521,16 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
 
 
 def _is_generalized_workspace(workspace: Path) -> bool:
-    return (workspace / AGENT_PROBLEM_FILENAME).is_file()
+    """Return whether production policy enables private exact-case handling."""
+    state = _json_object(workspace / MODE_STATE_FILENAME) or {}
+    return (
+        state.get("mode") == "production"
+        and (workspace / AGENT_PROBLEM_FILENAME).is_file()
+    )
 
 
 def _private_reference_dir(workspace: Path) -> Path | None:
-    """Resolve private evaluator inputs only for an opt-in generalized workspace."""
+    """Resolve private evaluator inputs only for a generalized production workspace."""
     if not _is_generalized_workspace(workspace):
         return None
     raw = os.environ.get(PRIVATE_REFERENCE_ENV, "")
@@ -537,9 +543,11 @@ def _private_reference_dir(workspace: Path) -> Path | None:
         raise ValueError("configured private Atrex-Bench reference directory is missing")
     private_problem = private_dir / AGENT_PROBLEM_FILENAME
     public_problem = workspace / AGENT_PROBLEM_FILENAME
-    if (
-        not private_problem.is_file()
-        or private_problem.read_bytes() != public_problem.read_bytes()
+    # A user-provided contract remains evaluator-owned and must match byte-for-byte.
+    # An automatically authored production contract intentionally exists only in the
+    # campaign workspace, so absence from the detailed-shape source is valid.
+    if private_problem.is_file() and (
+        private_problem.read_bytes() != public_problem.read_bytes()
     ):
         raise ValueError(
             "workspace agent_problem.json does not match the evaluator-owned public contract"

@@ -34,16 +34,23 @@ cd atrex-kernel-agent
 `--op-dir` supports two evaluator-owned layouts:
 
 - SOL-ExecBench: `reference.py`, `definition.json`, and `workload.jsonl`.
-- Native Atrex-Bench legacy: `reference.py`, `input.py`, and `shapes.json`, inside a checkout
-  containing `scripts/run_eval.py` and `src/atrex_bench`.
-- Native Atrex-Bench generalized: the same evaluator inputs plus `agent_problem.json` using schema
-  `atrex.agent_problem.v1`. Only `reference.py`, `input.py`, and `agent_problem.json` enter the agent
-  workspace; exact shapes and evaluator metadata are injected privately during sandbox evaluation.
-  Canonical memory retains real per-shape latency under opaque ids. Set `PROFILE_SHAPE_ID` to one of
-  those ids to profile that real shape; the sandbox privately injects only the selected case remotely.
+- Native Atrex-Bench: `reference.py`, `input.py`, and detailed `shapes.json`, inside a checkout
+  containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
+  the generalized public contract using schema `atrex.agent_problem.v1`.
 
-The orchestrator never treats operator inputs as editable candidate files. Start a fresh workspace
-when switching an existing campaign from legacy exact-shape exposure to a generalized problem.
+Production native campaigns never expose detailed shapes to baseline or optimization sessions. If
+`agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
+preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
+`reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public
+`agent_problem.json`, validates that its development cases do not duplicate evaluator cases, and
+persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
+injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
+opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape privately.
+
+Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
+contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are
+production-only. The orchestrator never treats operator inputs as editable candidate files. Start a
+fresh workspace when resuming an older production campaign that exposed exact shapes.
 
 ## 2. Run the Orchestrated Loop
 

@@ -15,6 +15,7 @@ from typing import Optional
 
 from . import agent_runtime as _agent_runtime
 from .constants import (
+    AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_PRIVATE_REFERENCE_ENV,
     ATREX_BENCH_HARNESS,
     DEFAULT_CONVERT_AFTER,
@@ -61,6 +62,8 @@ from .operator_layout import (
     has_agent_problem,
     is_sol_op,
     validate_agent_problem,
+    validate_generated_agent_problem,
+    validate_private_shapes,
 )
 from .workspace_runtime import (
     _agent_runtime_directive,
@@ -123,6 +126,9 @@ class Campaign:
     _dependency_review_cache: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    _generated_agent_problem_digest: str = field(
+        default="", init=False, repr=False, compare=False
+    )
 
     @property
     def campaign_name(self) -> str:
@@ -131,12 +137,123 @@ class Campaign:
 
     @property
     def private_reference_dir(self) -> Path | None:
-        """Return evaluator-only native inputs for a generalized public problem."""
+        """Return evaluator-only native inputs behind a generalized public problem."""
         op_dir = Path(self.kernel_demo).resolve().parent
-        if not self.atrex_bench_root or not has_agent_problem(op_dir):
+        use_generalized = (
+            self.optimization_mode == "production"
+            and not is_sol_op(op_dir)
+            and (op_dir / "shapes.json").is_file()
+        )
+        if not self.atrex_bench_root or not use_generalized:
             return None
-        validate_agent_problem(op_dir / AGENT_PROBLEM_FILENAME)
+        shapes_path = op_dir / "shapes.json"
+        validate_private_shapes(shapes_path)
+        if has_agent_problem(op_dir):
+            validate_agent_problem(
+                op_dir / AGENT_PROBLEM_FILENAME,
+                private_shapes_path=shapes_path,
+            )
         return op_dir
+
+    def _ensure_agent_problem(self) -> None:
+        """Materialize the public contract before any production optimization session.
+
+        A user-authored contract is copied verbatim. When production receives only detailed
+        evaluator shapes, a dedicated clean AKA session derives the public contract in a temporary
+        directory; the later baseline/optimization sessions never receive ``shapes.json``.
+        """
+        private_dir = self.private_reference_dir
+        if private_dir is None:
+            return
+        destination = self.workspace / AGENT_PROBLEM_FILENAME
+        shapes_path = private_dir / "shapes.json"
+        provided = private_dir / AGENT_PROBLEM_FILENAME
+        if provided.is_file():
+            validate_agent_problem(provided, private_shapes_path=shapes_path)
+            shutil.copy2(provided, destination)
+            print(
+                f"[orchestrator] generalized problem: using user-provided {provided}",
+                flush=True,
+            )
+            return
+        if destination.is_file():
+            validate_generated_agent_problem(
+                destination,
+                private_shapes_path=shapes_path,
+            )
+            self._generated_agent_problem_digest = hashlib.sha256(
+                destination.read_bytes()
+            ).hexdigest()
+            print(
+                "[orchestrator] generalized problem: reusing workspace-generated "
+                f"{destination}",
+                flush=True,
+            )
+            return
+        if self.optimization_mode != "production":
+            raise RuntimeError(
+                "a generalized non-production campaign requires a user-provided "
+                f"{AGENT_PROBLEM_FILENAME}"
+            )
+
+        print(
+            "[orchestrator] generalized problem: production received detailed shapes only; "
+            "starting AKA problem-authoring session",
+            flush=True,
+        )
+        validation_error = ""
+        with tempfile.TemporaryDirectory(
+            prefix="aka-generalize-problem-"
+        ) as raw_staging:
+            staging = Path(raw_staging)
+            for name in ("reference.py", "input.py", "shapes.json", "metadata.json"):
+                source = private_dir / name
+                if source.is_file():
+                    shutil.copy2(source, staging / name)
+            for attempt in range(2):
+                repair_context = (
+                    "The current agent_problem.json failed orchestrator validation. Replace it "
+                    f"with a corrected file. Validation error: {validation_error}"
+                    if validation_error
+                    else "Create agent_problem.json now."
+                )
+                prompt = _render(
+                    AGENT_PROBLEM_GENERATION_PROMPT,
+                    REPAIR_CONTEXT=repair_context,
+                )
+                result = run_session(
+                    staging,
+                    prompt,
+                    timeout=min(self.setup_timeout, 1_800),
+                    agent_cli=self.agent_cli,
+                    reasoning_effort="max",
+                )
+                self._account(result, f"agent problem generation attempt {attempt + 1}")
+                generated = staging / AGENT_PROBLEM_FILENAME
+                try:
+                    validate_generated_agent_problem(
+                        generated,
+                        private_shapes_path=shapes_path,
+                    )
+                except ValueError as exc:
+                    validation_error = str(exc)
+                    if attempt == 0:
+                        continue
+                    detail = result.stderr_tail or result.stdout_tail
+                    raise RuntimeError(
+                        "AKA could not generate a valid generalized production problem after "
+                        f"two attempts: {validation_error}"
+                        + (f"; agent output: {detail}" if detail else "")
+                    ) from exc
+                shutil.copy2(generated, destination)
+                self._generated_agent_problem_digest = hashlib.sha256(
+                    destination.read_bytes()
+                ).hexdigest()
+                print(
+                    f"[orchestrator] generalized problem: generated {destination}",
+                    flush=True,
+                )
+                return
 
     def agent_environment(self) -> dict[str, str]:
         private_dir = self.private_reference_dir
@@ -152,11 +269,9 @@ class Campaign:
         if private_dir is None or memory is None:
             return ""
         try:
-            shapes = json.loads((private_dir / "shapes.json").read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            shapes = validate_private_shapes(private_dir / "shapes.json")
+        except ValueError as exc:
             return f"cannot read private evaluator shape ids: {type(exc).__name__}"
-        if not isinstance(shapes, dict) or not shapes:
-            return "private evaluator shapes.json must contain a non-empty object"
         performance = memory.get("performance")
         performance = performance if isinstance(performance, dict) else {}
         measured = performance.get("latency_us_by_shape")
@@ -170,10 +285,55 @@ class Campaign:
             )
         return ""
 
+    def _generalized_contract_commit_problem(self) -> str:
+        """Require the public problem to be part of the immutable V0 history."""
+        if self.private_reference_dir is None:
+            return ""
+        head = git_head(self.workspace)
+        if head and not git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
+            return "agent_problem.json is not tracked by the V0 baseline commit"
+        return ""
+
     def _assert_generalized_inputs_are_private(self) -> None:
         """Fail closed if exact evaluator artifacts appear in the agent workspace."""
-        if self.private_reference_dir is None:
+        private_dir = self.private_reference_dir
+        if private_dir is None:
             return
+        public_problem = self.workspace / AGENT_PROBLEM_FILENAME
+        if not public_problem.is_file():
+            raise RuntimeError(
+                "generalized Atrex-Bench workspace is missing agent_problem.json; "
+                "start a fresh workspace"
+            )
+        try:
+            provided_problem = private_dir / AGENT_PROBLEM_FILENAME
+            if provided_problem.is_file():
+                validate_agent_problem(
+                    public_problem,
+                    private_shapes_path=private_dir / "shapes.json",
+                )
+                if public_problem.read_bytes() != provided_problem.read_bytes():
+                    raise ValueError(
+                        "workspace agent_problem.json differs from the user-provided contract"
+                    )
+            else:
+                validate_generated_agent_problem(
+                    public_problem,
+                    private_shapes_path=private_dir / "shapes.json",
+                )
+                if (
+                    self._generated_agent_problem_digest
+                    and hashlib.sha256(public_problem.read_bytes()).hexdigest()
+                    != self._generated_agent_problem_digest
+                ):
+                    raise ValueError(
+                        "workspace agent_problem.json was modified after automatic generation"
+                    )
+        except ValueError as exc:
+            raise RuntimeError(
+                f"generalized Atrex-Bench workspace has an invalid public problem: {exc}; "
+                "start a fresh workspace"
+            ) from exc
         leaked = [
             name
             for name in ("shapes.json", "metadata.json", "roofline.json", "valid.py")
@@ -432,12 +592,23 @@ class Campaign:
             cwd=str(self.workspace.parent),
             check=True,
         )
-        # Generalized tasks expose only their public contract. Exact shapes and release metadata
-        # remain in the source operator directory and are injected at the sandbox boundary.
-        for name in agent_visible_operator_files(op_dir):
+        # Production native tasks always expose a generalized public contract. Exact shapes and
+        # release metadata remain in the source operator directory and are injected only at the
+        # sandbox boundary. A missing public contract is authored before the baseline session.
+        generalized = self.private_reference_dir is not None
+        for name in agent_visible_operator_files(op_dir, generalized=generalized):
             source = op_dir / name
             if source.is_file():
                 shutil.copy2(source, self.workspace / name)
+        self._ensure_agent_problem()
+        if generalized:
+            # Seed the immutable public contract into the eventual V0 commit even when the
+            # baseline agent stages only its own implementation files.
+            subprocess.run(
+                ["git", "add", AGENT_PROBLEM_FILENAME],
+                cwd=str(self.workspace),
+                check=True,
+            )
         self._link_runtime()
         self._install_native_evaluator()
         self._install_profile_driver()
@@ -480,7 +651,11 @@ class Campaign:
         if baseline_memory is not None and not git_head(self.workspace):
             baseline_problem = "memory/v0.json exists but the workspace has no Git HEAD"
         if not baseline_problem:
-            baseline_problem = self._generalized_memory_coverage_problem(baseline_memory)
+            baseline_problem = self._generalized_memory_coverage_problem(
+                baseline_memory
+            )
+        if not baseline_problem:
+            baseline_problem = self._generalized_contract_commit_problem()
         if baseline_problem:
             print(
                 f"[orchestrator] WARNING: incomplete setup ({baseline_problem}); "
@@ -535,6 +710,8 @@ class Campaign:
                 recovery_problem = self._generalized_memory_coverage_problem(
                     recovered_memory
                 )
+            if not recovery_problem:
+                recovery_problem = self._generalized_contract_commit_problem()
             if recovery_problem:
                 detail = recovery.stderr_tail or recovery.stdout_tail
                 raise RuntimeError(

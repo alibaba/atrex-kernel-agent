@@ -168,14 +168,22 @@ transport-compatible trusted-code executor, not a security boundary.
 
 SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every
 candidate is validated for full-workload correctness and compared by its full-workload geomean.
-When a native operator provides `agent_problem.json`, agent sessions see its generalized domain,
-invariants, aggregate distribution, and synthetic development cases instead of exact `shapes.json`.
+Production makes generalized input handling a mode policy rather than an operator opt-in. A native
+operator's user-provided `agent_problem.json` is validated and used directly. When only detailed
+`shapes.json` exists, a dedicated clean problem-authoring session reads the evaluator inputs in an
+ephemeral directory and derives the public contract before any baseline or optimization session runs.
+Only the resulting generalized domain, invariants, safe aggregate distribution, and synthetic
+development cases enter the campaign workspace.
+
 The sandbox injects exact shapes and evaluator metadata only at the official remote evaluation
 boundary. Profiling selects an opaque id from canonical memory and injects only that real shape into
-the ephemeral remote profile job; the complete hidden shape table never enters the workspace. Optimization
-feedback retains aggregate results plus real per-shape latency keyed by opaque shape id, while
-withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
-runtime is copied into the workspace without linking its checkout-level `data/` tree.
+the ephemeral remote profile job; the complete hidden shape table never enters the workspace.
+Optimization feedback retains aggregate results plus real per-shape latency keyed by opaque shape id,
+while withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
+runtime is copied into the workspace without linking its checkout-level `data/` tree. Sandbox private
+shape injection, opaque-shape profiling, and generalized result masking require the persisted workspace
+mode to be `production`. Leaderboard always retains legacy exact-shape exposure, regardless of whether
+the source operator also contains a public problem contract.
 
 ### Production policy
 
