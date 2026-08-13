@@ -53,8 +53,8 @@ steps map onto the telemetry phases above: `profile`, `research`, `planning`, `i
 
 Read the workspace goal, unmasked `memory/v*.json`, and prior plans/profiles. Prior-episode summaries
 are carried only by canonical memory and are not injected into the episode prompt. Identify attempted
-dead ends and open directions from those records. Start with one falsifiable hypothesis tied to the
-current bottleneck.
+dead ends and open directions from those records, including each record's compact
+`experience.experiments`. Start with one falsifiable hypothesis tied to the current bottleneck.
 
 ### 2. Profile and localize
 

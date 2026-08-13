@@ -29,6 +29,21 @@
     "bottleneck_type": "<compute_bound / memory_bound>",
     "evidence_chain": "<evidence -> inference -> action>"
   },
+  "experience": {
+    "experiment_count": 0,
+    "recorded_experiment_count": 0,
+    "experiments": [
+      {
+        "index": 1,
+        "name": "<experiment name>",
+        "hypothesis": "<what was expected>",
+        "change": "<what was changed>",
+        "evidence": "<measurement or observation>",
+        "result": "<what happened>",
+        "decision": "<continue / revert / pivot>"
+      }
+    ]
+  },
   "correctness": {
     "rel_err": null,
     "status": "<PASS / FAIL / TIMEOUT_FAIL>"

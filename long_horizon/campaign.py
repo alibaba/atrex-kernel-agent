@@ -32,6 +32,16 @@ from .verifier import GatewayABBAValidator
 MODULE_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
 EVIDENCE_PREFIXES = ("plans/", "profiles/")
+MEMORY_EXPERIMENT_FIELDS = (
+    "name",
+    "hypothesis",
+    "change",
+    "evidence",
+    "result",
+    "decision",
+    "timestamp",
+)
+MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -110,6 +120,51 @@ def _candidate_shape_latencies(
         },
         measured_runs,
     )
+
+
+def _memory_experiment_value(value: object) -> str:
+    """Render one journal value into bounded canonical-memory text."""
+    if isinstance(value, str):
+        rendered = value.strip()
+    else:
+        try:
+            rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            rendered = repr(value)
+    if len(rendered) > MAX_MEMORY_EXPERIMENT_FIELD_CHARS:
+        return rendered[:MAX_MEMORY_EXPERIMENT_FIELD_CHARS] + "… [truncated]"
+    return rendered
+
+
+def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
+    """Preserve every decisive experiment as a compact canonical-memory record."""
+    raw_experiments = journal.get("experiments")
+    if not isinstance(raw_experiments, list):
+        raw_experiments = []
+    experiments: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_experiments, start=1):
+        if not isinstance(raw, dict):
+            continue
+        compact: dict[str, Any] = {"index": index}
+        for field in MEMORY_EXPERIMENT_FIELDS:
+            if field not in raw:
+                continue
+            rendered = _memory_experiment_value(raw[field])
+            if rendered:
+                compact[field] = rendered
+        extra = {
+            key: value
+            for key, value in raw.items()
+            if key not in MEMORY_EXPERIMENT_FIELDS
+        }
+        if extra:
+            compact["details"] = _memory_experiment_value(extra)
+        experiments.append(compact)
+    return {
+        "experiment_count": len(raw_experiments),
+        "recorded_experiment_count": len(experiments),
+        "experiments": experiments,
+    }
 
 
 @dataclass
@@ -303,6 +358,7 @@ class LongHorizonCampaign:
                 "bottleneck_type": "episode-derived",
                 "evidence_chain": "episode evidence -> candidate -> independent ABBA -> promotion",
             },
+            "experience": _memory_experience(journal),
             "correctness": {
                 "status": "PASS",
                 "max_abs_err": representative.get("max_abs_err", 0.0),
@@ -399,6 +455,7 @@ class LongHorizonCampaign:
                 "bottleneck_type": "episode-derived",
                 "evidence_chain": "episode evidence -> terminal handoff -> no promotion",
             },
+            "experience": _memory_experience(journal),
             "correctness": {"status": "FAIL" if violation else "UNKNOWN"},
             "quality_gate": {"result": "FAIL", "failure_reason": failure},
             "open_directions": [
@@ -444,6 +501,23 @@ class LongHorizonCampaign:
         ):
             return attempt
         return None
+
+    @staticmethod
+    def _load_recovery_journal(
+        store: CampaignStore, episode: int, worktree_path: Path | None
+    ) -> dict[str, Any]:
+        candidates: list[Path] = []
+        if worktree_path is not None:
+            candidates.append(worktree_path / RUNTIME_DIR / "journal.json")
+        candidates.append(
+            store.episode_dir(episode) / "episode_runtime" / "journal.json"
+        )
+        for path in candidates:
+            try:
+                return load_journal(path)
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+                continue
+        return {}
 
     def _recover_interrupted(
         self, store: CampaignStore, state: SupervisorState
@@ -506,11 +580,23 @@ class LongHorizonCampaign:
                 )
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
+                recovered_attempt: dict[str, Any] = {
+                    "episode": episode,
+                    "version": memory_version,
+                    "status": "candidate_ready" if promoted else terminal_status,
+                    "accepted": promoted,
+                    "violation": None,
+                    "base_commit": base_commit,
+                    "episode_branch": branch,
+                    "recovered_after_supervisor_interruption": True,
+                }
                 if promoted:
                     state.accepted += 1
                     state.consecutive_without_promotion = 0
+                    recovered_attempt["promotion_commit"] = git_head(self.workspace)
                 else:
                     state.consecutive_without_promotion += 1
+                    recovered_attempt["outcome_commit"] = git_head(self.workspace)
                     if terminal_status == "pivot":
                         state.pivoted += 1
                     elif terminal_status == "blocked":
@@ -520,29 +606,21 @@ class LongHorizonCampaign:
                             if self._blocked_retry_pending(state)
                             else None
                         )
-                        recovered_attempt: dict[str, Any] = {
-                            "episode": episode,
-                            "version": memory_version,
-                            "status": "blocked",
-                            "accepted": False,
-                            "violation": None,
-                            "base_commit": base_commit,
-                            "episode_branch": branch,
-                            "outcome_commit": git_head(self.workspace),
-                            "recovered_after_supervisor_interruption": True,
-                            "blocked_retry_scheduled": retry_of is None,
-                            "blocked_terminal": retry_of is not None,
-                        }
+                        recovered_attempt["blocked_retry_scheduled"] = retry_of is None
+                        recovered_attempt["blocked_terminal"] = retry_of is not None
                         if retry_of is not None:
                             recovered_attempt["blocked_retry_of_episode"] = (
                                 retry_of.get("episode")
                             )
-                        state.attempts.append(recovered_attempt)
-                        store.archive_attempt(episode, recovered_attempt)
+                    elif terminal_status == "interrupted":
+                        state.interrupted += 1
+                        recovered_attempt["violation"] = "supervisor process interrupted"
                     elif terminal_status == "invalid_handoff":
                         state.protocol_failures += 1
                     else:
                         state.rejected += 1
+                state.attempts.append(recovered_attempt)
+                store.archive_attempt(episode, recovered_attempt)
         else:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these
@@ -574,21 +652,88 @@ class LongHorizonCampaign:
                 if not already_recorded:
                     worktree.archive(episode_dir / "interrupted_archive")
                     self._copy_runtime_artifacts(worktree, episode_dir)
-                worktree.remove(self.workspace)
+            if memory_version <= 0:
+                raise RuntimeError("interrupted episode has no canonical memory version")
+            journal = self._load_recovery_journal(store, episode, worktree_path)
+            outcome = (
+                journal.get("outcome")
+                if isinstance(journal.get("outcome"), dict)
+                else {}
+            )
+            candidate_commit = str(journal.get("candidate_commit") or "")
+            active["phase"] = "recording"
+            active["terminal_status"] = "interrupted"
+            store.save_active(active)
+            memory = self._outcome_memory_record(
+                version=memory_version,
+                status="interrupted",
+                violation="supervisor process interrupted",
+                journal=journal,
+                candidate_commit=candidate_commit,
+            )
+            outcome_commit = record_episode_outcome(
+                self.workspace,
+                base_commit=base_commit,
+                version=memory_version,
+                episode=episode,
+                status="interrupted",
+                memory_record=memory,
+            )
+            active["phase"] = "recorded"
+            active["outcome_commit"] = outcome_commit
+            store.save_active(active)
+            attempt = {
+                "episode": episode,
+                "version": memory_version,
+                "status": "interrupted",
+                "accepted": False,
+                "violation": "supervisor process interrupted",
+                "base_commit": base_commit,
+                "episode_branch": branch,
+                "candidate_commit": candidate_commit or None,
+                "summary": outcome.get("summary"),
+                "next_directions": outcome.get("next_directions"),
+                "outcome_commit": outcome_commit,
+                "recovered_after_supervisor_interruption": True,
+            }
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
                 state.interrupted += 1
                 state.consecutive_without_promotion += 1
-                state.attempts.append(
-                    {
-                        "episode": episode,
-                        "status": "interrupted",
-                        "accepted": False,
-                        "violation": "supervisor process interrupted",
-                        "base_commit": base_commit,
-                        "episode_branch": branch,
-                    }
+                state.attempts.append(attempt)
+            else:
+                for existing in state.attempts:
+                    if (
+                        existing.get("episode") == episode
+                        and existing.get("episode_branch") == branch
+                    ):
+                        existing.update(attempt)
+                        break
+            store.archive_attempt(episode, attempt)
+            try:
+                sync_live_memory(
+                    store.live_memory_path,
+                    journal,
+                    phase="recorded",
+                    canonical_memory=f"memory/v{memory_version}.json",
+                    accepted=False,
+                    memory_version=memory_version,
+                    episode=episode,
                 )
+            except OSError:
+                pass
+        if worktree_path is not None and worktree_path != self.workspace.resolve():
+            registered = {
+                Path(line.split(" ", 1)[1]).resolve()
+                for line in git_text(
+                    self.workspace, "worktree", "list", "--porcelain"
+                ).splitlines()
+                if line.startswith("worktree ")
+            }
+            if worktree_path in registered:
+                EpisodeWorktree(
+                    episode, base_commit, branch or "atrex/recovery", worktree_path
+                ).remove(self.workspace)
         main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
         store.save_state(state)
         store.clear_active()
