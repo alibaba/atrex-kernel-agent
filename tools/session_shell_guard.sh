@@ -177,7 +177,19 @@ _atrex_guarded_python() {
         # branch because their first argument is tools/sandbox.py.
         local -a prefix=("${original[@]:0:code_index}")
         local -a trailing=("${original[@]:code_index + 2}")
-        printf '%s\n' "$code" | command "$executable" "${prefix[@]}" - "${trailing[@]}"
+        # macOS still ships Bash 3.2. Under `set -u`, expanding an empty
+        # array raises "unbound variable", so only expand arrays proven
+        # non-empty. This matters for the common `python -c CODE` shape,
+        # where both prefix and trailing are empty.
+        if (( ${#prefix[@]} > 0 && ${#trailing[@]} > 0 )); then
+            printf '%s\n' "$code" | command "$executable" "${prefix[@]}" - "${trailing[@]}"
+        elif (( ${#prefix[@]} > 0 )); then
+            printf '%s\n' "$code" | command "$executable" "${prefix[@]}" -
+        elif (( ${#trailing[@]} > 0 )); then
+            printf '%s\n' "$code" | command "$executable" - "${trailing[@]}"
+        else
+            printf '%s\n' "$code" | command "$executable" -
+        fi
         return $?
     fi
     command "$executable" "${original[@]}"

@@ -5,9 +5,11 @@ from __future__ import annotations
 import ast
 import io
 import json
+import pkgutil
 import re
 import subprocess
 import sys
+import sysconfig
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,7 +256,25 @@ def install_workspace_policy(
             handle.write(entry + "\n")
 
 
-_STDLIB_IMPORTS = frozenset(sys.stdlib_module_names) | {"__future__"}
+def _stdlib_import_names() -> frozenset[str]:
+    known = getattr(sys, "stdlib_module_names", None)
+    if known is not None:
+        return frozenset(known)
+    roots = {
+        value
+        for key in ("stdlib", "platstdlib")
+        if (value := sysconfig.get_path(key))
+    }
+    roots.update(
+        str(Path(root) / "lib-dynload")
+        for root in tuple(roots)
+        if (Path(root) / "lib-dynload").is_dir()
+    )
+    discovered = {name for _, name, _ in pkgutil.iter_modules(sorted(roots))}
+    return frozenset((*sys.builtin_module_names, *discovered))
+
+
+_STDLIB_IMPORTS = _stdlib_import_names() | {"__future__"}
 _ALLOWED_IMPORTS = {
     "triton": {"torch", "triton", "sol_execbench"},
     "gluon": {"torch", "triton", "sol_execbench"},
