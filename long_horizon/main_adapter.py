@@ -87,13 +87,14 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
 
 def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
+    discussion = bool(getattr(campaign, "discussion", False))
     return {
         "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(agent_cli),
-        "plan_generator": _plan_generator_directive(agent_cli, version),
+        "plan_generator": _plan_generator_directive(agent_cli, version, discussion),
     }
 
 

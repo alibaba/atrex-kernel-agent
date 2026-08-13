@@ -97,6 +97,7 @@ class Campaign:
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""      # native shapes route: canonical checkout owning run_eval.py
     agent_cli: str = "claude"       # episode backend: claude, qodercli, codex, or pi
+    discussion: bool = False         # opt in to Humanize iterative plan discussion
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     framework_baseline: str = "auto"        # auto = production only; always | never override it
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S

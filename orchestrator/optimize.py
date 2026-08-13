@@ -347,6 +347,15 @@ def main(argv: Optional[list[str]] = None) -> int:
              "(default: claude).",
     )
     ap.add_argument(
+        "--discussion",
+        action="store_true",
+        help=(
+            "Enable iterative Humanize discussion while generating each optimization plan. "
+            "By default the same coding agent generates the plan itself without Humanize, "
+            "Codex consultation, or a planning subagent."
+        ),
+    )
+    ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
         default="leaderboard",
@@ -475,6 +484,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     frameworks = (args.framework,) if args.framework else supported_frameworks(args.platform, arch)
     print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
           f"optimization_mode={args.optimization_mode} platform={args.platform} "
+          f"discussion={args.discussion} "
           f"sandbox_hardware={sandbox_hardware} "
           f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
           f"frameworks={','.join(frameworks)} "
@@ -505,6 +515,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
         agent_cli=args.agent_cli,
+        discussion=args.discussion,
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
