@@ -97,6 +97,7 @@ class Campaign:
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""      # native shapes route: canonical checkout owning run_eval.py
     agent_cli: str = "claude"       # episode backend: claude, qodercli, codex, or pi
+    discussion: bool = False         # opt in to Humanize iterative plan discussion
     optimization_mode: str = "leaderboard"  # permissive contest flow or strict production gate
     framework_baseline: str = "auto"        # auto = production only; always | never override it
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
@@ -703,10 +704,17 @@ class Campaign:
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
         """Re-validate the candidate through the gateway: single seed, then five seeds."""
+        # V1 is a correctness/framework bring-up gate, not a performance gate.  Keep a
+        # small timing sample so acceptance still records positive full-workload latency
+        # coverage, but do not let the evaluator's per-candidate benchmark budget reject
+        # an intentionally slow correctness-first implementation before optimization can
+        # begin.  The default 100 timed runs can exceed that budget for a valid V1.
+        timing_args = ["--timed-runs", "5"]
         stages = (
-            ("single-seed", ["python", "test_kernel.py", "--version", f"v{n}", "--no-memory"]),
+            ("single-seed", ["python", "test_kernel.py", "--version", f"v{n}",
+                             *timing_args, "--no-memory"]),
             ("multi-seed", ["python", "test_kernel.py", "--version", f"v{n}",
-                            "--multi-seed", "5", "--no-memory"]),
+                            "--multi-seed", "5", *timing_args, "--no-memory"]),
         )
         result: Optional[dict] = None
         for stage_name, command in stages:

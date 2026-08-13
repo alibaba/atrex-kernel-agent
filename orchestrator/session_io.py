@@ -156,30 +156,51 @@ def ensure_jq() -> str:
 
 
 def ensure_submodules() -> None:
-    """Initialize submodules and host tools required by the optimization pipeline.
+    """Initialize every registered top-level submodule and required host tool.
 
-    Covers: gpu-wiki/3rdparty (KernelWiki), 3rdparty/ncu-report-skill, 3rdparty/humanize.
-    Skips reference-projects (large, optional — only needed for L2 search).
-    Idempotent: already-initialized submodules are untouched.
+    Reference projects are part of the optimizer's source-search corpus, so a
+    campaign must not silently run with those gitlinks left uninitialized.
+    The update is idempotent for submodules that are already ready.
     """
     needed = [
         ("gpu-wiki/3rdparty/", REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md"),
         ("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md"),
         ("3rdparty/humanize", HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md"),
     ]
-    to_init = [path for path, marker in needed if not marker.exists()]
-    if to_init:
-        print(f"[orchestrator] initializing submodules: {to_init}", flush=True)
-        cmd = ["git", "submodule", "update", "--init", "--depth", "1", "--"] + to_init
-        subprocess.run(cmd, cwd=str(REPO_ROOT), check=True)
-        # verify
-        for path, marker in needed:
-            if not marker.exists():
-                raise RuntimeError(
-                    f"submodule init failed for {path} — {marker} not found. "
-                    "Run `git submodule update --init` manually."
-                )
-        print("[orchestrator] all submodules ready", flush=True)
+    # The internal launcher presents a generated repository view whose files
+    # point at the real open-source checkout.  The view intentionally has no
+    # independent Git metadata, so submodule operations must run in the source
+    # checkout recorded by the launcher.  This is not a bypass: every campaign
+    # still executes the same unconditional submodule update.
+    submodule_root = REPO_ROOT
+    runtime_metadata = REPO_ROOT / ".internal-runtime.json"
+    if runtime_metadata.is_file():
+        try:
+            metadata = json.loads(runtime_metadata.read_text(encoding="utf-8"))
+            recorded_root = metadata.get("open_root")
+            if not isinstance(recorded_root, str) or not recorded_root.strip():
+                raise ValueError("open_root is missing")
+            submodule_root = Path(recorded_root).expanduser().resolve()
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"invalid internal runtime metadata: {runtime_metadata}: {exc}"
+            ) from exc
+    print(
+        f"[orchestrator] initializing all top-level submodules in {submodule_root}",
+        flush=True,
+    )
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "--recursive"],
+        cwd=str(submodule_root),
+        check=True,
+    )
+    for path, marker in needed:
+        if not marker.exists():
+            raise RuntimeError(
+                f"submodule init failed for {path} — {marker} not found. "
+                "Run `git submodule update --init` manually."
+            )
+    print("[orchestrator] all submodules ready", flush=True)
     ensure_jq()
 
 

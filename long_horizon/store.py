@@ -41,6 +41,11 @@ class CampaignStore:
             f"/{VERIFY_DIR}/",
             f"/{main_adapter.STALL_STATE_FILE}",
             f"/{LIVE_MEMORY_FILE}",
+            # Episode evidence is archived by the supervisor and must never
+            # become part of the candidate commit.
+            "/plans/",
+            "/profiles/",
+            "/.humanize/",
         )
         missing = [rule for rule in rules if rule not in text.splitlines()]
         if missing:

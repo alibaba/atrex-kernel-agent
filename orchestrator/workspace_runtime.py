@@ -94,33 +94,47 @@ def _baseline_driver_directive(agent_cli: str) -> str:
     )
 
 
-def _plan_generator_directive(agent_cli: str, version: int) -> str:
+def _plan_generator_directive(
+    agent_cli: str,
+    version: int,
+    discussion: bool = False,
+) -> str:
     draft = f"plans/v{version}_draft.md"
     plan = f"plans/v{version}_plan.md"
+    if not discussion:
+        return (
+            f"Read `{draft}` and generate `{plan}` yourself in this same coding-agent session. "
+            "Do not invoke Humanize, ask-codex, a slash command, the Skill tool, or a planning "
+            "subagent. Write a complete plan containing the evidence-to-action chain, exactly "
+            "one optimization category, concrete file changes, correctness/performance "
+            "validation steps, and measurable acceptance criteria. Preserve the draft's Search "
+            "Log and constraints."
+        )
     if agent_cli == "codex":
         return (
             f"Invoke the `$humanize-gen-plan` skill with `{draft}` as input and `{plan}` as "
-            "output. Use direct/no-discussion mode for this single-action optimization plan. "
+            "output. Use discussion/convergence mode with iterative review before finalizing. "
             "The skill is repository-local under `.agents/skills/`; do not look for a slash "
             "command or Claude plugin."
         )
     if agent_cli == "pi":
         return (
             f"Invoke `/skill:humanize-gen-plan` in this Pi session with `{draft}` as input and "
-            f"`{plan}` as output. Use direct/no-discussion mode and wait for the plan file before "
+            f"`{plan}` as output. Use discussion/convergence mode and wait for the plan file before "
             "continuing."
         )
     if agent_cli == "qodercli":
         return (
             f"Read `{draft}` and generate `{plan}` yourself in this Qoder session. Do not invoke "
             "Humanize, a slash command, the Skill tool, or a planning subagent. Write a complete "
-            "one-shot plan containing the evidence-to-action chain, exactly one optimization "
+            "discussion-style plan with iterative self-review, containing the evidence-to-action "
+            "chain, exactly one optimization "
             "category, concrete file changes, correctness/performance validation steps, and "
             "measurable acceptance criteria. Preserve the draft's Search Log and constraints."
         )
     return (
         "```text\n"
-        f"/humanize:gen-plan --input {draft} --output {plan} --direct\n"
+        f"/humanize:gen-plan --input {draft} --output {plan} --discussion\n"
         "```"
     )
 
