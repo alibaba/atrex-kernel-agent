@@ -111,6 +111,7 @@ python_args+=(-- "${command[@]}")
 
 echo "ask-codex: running isolated read-only consultation (timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
 if codex_response="$(python3 - "${python_args[@]}" <<'PY'
+import os
 import pathlib
 import subprocess
 import sys
@@ -125,6 +126,8 @@ if sys.argv[separator] != "--":
     print("ask-codex: internal command separator is missing", file=sys.stderr)
     raise SystemExit(2)
 command = sys.argv[separator + 1 :]
+environment = os.environ.copy()
+environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
 
 parts = [
     "Act as an independent reviewer for a GPU-kernel implementation plan.\n",
@@ -158,6 +161,7 @@ try:
             capture_output=True,
             check=False,
             cwd=review_cwd,
+            env=environment,
             timeout=timeout,
         )
 except subprocess.TimeoutExpired:

@@ -80,12 +80,36 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
     return f"```text\n/gen-plan --input {draft} --output {plan} --direct\n```"
 
 
+def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> None:
+    """Copy evaluator code without exposing the checkout's data directory."""
+    evaluator = atrex_bench_root / "scripts" / "run_eval.py"
+    package = atrex_bench_root / "src" / "atrex_bench"
+    if not evaluator.is_file() or not package.is_dir():
+        raise FileNotFoundError(
+            f"invalid Atrex-Bench runtime root (missing run_eval.py/src): {atrex_bench_root}"
+        )
+
+    runtime_dir = workspace / "atrex-bench"
+    if runtime_dir.is_symlink() or runtime_dir.is_file():
+        runtime_dir.unlink()
+    elif runtime_dir.exists():
+        shutil.rmtree(runtime_dir)
+    (runtime_dir / "scripts").mkdir(parents=True)
+    shutil.copy2(evaluator, runtime_dir / "scripts" / "run_eval.py")
+    shutil.copytree(
+        package,
+        runtime_dir / "src" / "atrex_bench",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+
+
 def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> None:
     """Link repository runtime assets into a campaign workspace.
 
     The gpu-kernel-* skills reference ``tools/``, ``reference/``, ``skills/``,
     ``reference-projects/``, and ``gpu-wiki/`` by relative path. Sessions run with
-    ``cwd=workspace``, so symlink them in using absolute targets. Idempotent.
+    ``cwd=workspace``, so symlink them in using absolute targets. Atrex-Bench evaluator code is
+    copied from its checkout without linking the checkout's private ``data/`` tree.
 
     Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/``, and
     repository-local Codex/Pi skills into ``.agents/skills/``.
@@ -98,25 +122,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
     if atrex_bench_root is not None:
-        evaluator = atrex_bench_root / "scripts" / "run_eval.py"
-        package = atrex_bench_root / "src" / "atrex_bench"
-        if not evaluator.is_file() or not package.is_dir():
-            raise FileNotFoundError(
-                f"invalid Atrex-Bench runtime root (missing run_eval.py/src): {atrex_bench_root}"
-            )
-        runtime_link = workspace / "atrex-bench"
-        if runtime_link.is_symlink():
-            if runtime_link.resolve() != atrex_bench_root.resolve():
-                raise RuntimeError(
-                    f"workspace Atrex-Bench runtime points at {runtime_link.resolve()}, "
-                    f"expected {atrex_bench_root.resolve()}"
-                )
-        elif runtime_link.exists():
-            raise RuntimeError(
-                f"workspace path blocks the Atrex-Bench runtime link: {runtime_link}"
-            )
-        else:
-            os.symlink(atrex_bench_root.resolve(), runtime_link)
+        _install_atrex_bench_runtime(workspace, atrex_bench_root)
     # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
     # so selecting a different --agent-cli does not change the available optimization knowledge.
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"

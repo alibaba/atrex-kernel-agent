@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -46,7 +47,9 @@ def _iso_timestamp(value: str) -> float:
 def _conversion_parity_passes(verification: VerificationResult) -> bool:
     candidate = verification.candidate_latency_us
     incumbent = verification.incumbent_latency_us
-    if not isinstance(candidate, (int, float)) or not isinstance(incumbent, (int, float)):
+    if not isinstance(candidate, (int, float)) or not isinstance(
+        incumbent, (int, float)
+    ):
         return False
     if candidate > incumbent * (1.0 + main_adapter.CONVERT_PERF_TOL):
         return False
@@ -55,6 +58,57 @@ def _conversion_parity_passes(verification: VerificationResult) -> bool:
         and isinstance(run.result, dict)
         and bool(run.result.get("all_pass"))
         for run in verification.runs
+    )
+
+
+def _representative_candidate_result(
+    verification: VerificationResult | None,
+) -> dict[str, Any]:
+    """Return the latest real candidate measurement from authoritative verification."""
+    if verification is None:
+        return {}
+    for run in reversed(verification.runs):
+        if run.revision == "candidate" and isinstance(run.result, dict):
+            return run.result
+    return {}
+
+
+def _candidate_shape_latencies(
+    verification: VerificationResult | None,
+) -> tuple[dict[str, float], int]:
+    """Aggregate real per-shape candidate latency across authoritative ABBA repeats."""
+    values: dict[str, list[float]] = {}
+    measured_runs = 0
+    if verification is None:
+        return {}, measured_runs
+    for run in verification.runs:
+        if run.revision != "candidate" or not isinstance(run.result, dict):
+            continue
+        by_shape = run.result.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict):
+            continue
+        measured_runs += 1
+        for shape_id, raw_value in by_shape.items():
+            if (
+                isinstance(raw_value, (int, float))
+                and not isinstance(raw_value, bool)
+                and raw_value > 0
+                and math.isfinite(float(raw_value))
+            ):
+                values.setdefault(str(shape_id), []).append(float(raw_value))
+    return (
+        {
+            shape_id: (
+                samples[0]
+                if len(samples) == 1
+                else math.exp(
+                    sum(math.log(value) for value in samples) / len(samples)
+                )
+            )
+            for shape_id, samples in values.items()
+            if samples
+        },
+        measured_runs,
     )
 
 
@@ -130,7 +184,9 @@ class LongHorizonCampaign:
         journal_path: Path,
         handoff: EpisodeHandoff,
     ) -> str:
-        candidate = handoff.candidate_commit if handoff.status == "candidate_ready" else ""
+        candidate = (
+            handoff.candidate_commit if handoff.status == "candidate_ready" else ""
+        )
         diagnosis = validate_terminal(
             journal_path,
             expected_episode=worktree.episode,
@@ -149,14 +205,20 @@ class LongHorizonCampaign:
         try:
             journal = load_journal(journal_path)
             finalized_at = _iso_timestamp(str(journal["finalized_at"]))
-            committed_at = float(git_text(worktree.path, "show", "-s", "--format=%ct", candidate))
+            committed_at = float(
+                git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
+            )
         except (KeyError, ValueError, OSError, json.JSONDecodeError) as exc:
             return f"cannot validate terminal journal ordering: {exc}"
         if finalized_at <= committed_at:
-            return "candidate journal must be finalized after the exact candidate commit"
+            return (
+                "candidate journal must be finalized after the exact candidate commit"
+            )
         return ""
 
-    def _copy_runtime_artifacts(self, worktree: EpisodeWorktree, episode_dir: Path) -> None:
+    def _copy_runtime_artifacts(
+        self, worktree: EpisodeWorktree, episode_dir: Path
+    ) -> None:
         source = worktree.path / RUNTIME_DIR
         if source.is_dir():
             destination = episode_dir / "episode_runtime"
@@ -178,14 +240,28 @@ class LongHorizonCampaign:
         journal: dict[str, Any],
         verification: VerificationResult,
     ) -> dict[str, Any]:
-        candidate_runs = [
-            run for run in verification.runs
-            if run.revision == "candidate" and isinstance(run.result, dict)
-        ]
-        representative = candidate_runs[-1].result if candidate_runs else {}
-        by_shape = representative.get("latency_us_by_shape", {}) if representative else {}
-        outcome = journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
-        directions = outcome.get("next_directions", []) if isinstance(outcome, dict) else []
+        representative = _representative_candidate_result(verification)
+        by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
+        if self.base_campaign.private_reference_dir is not None:
+            expected_shapes = set(
+                json.loads(
+                    (self.base_campaign.private_reference_dir / "shapes.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+            measured_shapes = set(by_shape) if isinstance(by_shape, dict) else set()
+            if measured_shapes != expected_shapes:
+                raise RuntimeError(
+                    "authoritative candidate memory lacks complete hidden-shape performance "
+                    f"coverage ({len(measured_shapes)}/{len(expected_shapes)})"
+                )
+        outcome = (
+            journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
+        )
+        directions = (
+            outcome.get("next_directions", []) if isinstance(outcome, dict) else []
+        )
         return {
             "version": f"v{version}",
             "masked": False,
@@ -197,6 +273,11 @@ class LongHorizonCampaign:
                     "latency_us_arith_mean", verification.candidate_latency_us
                 ),
                 "latency_us_by_shape": by_shape if isinstance(by_shape, dict) else {},
+                "measurement_scope": "real_evaluator_shapes",
+                "shape_ids_are_opaque": self.base_campaign.private_reference_dir
+                is not None,
+                "measurement_status": "complete",
+                "shape_measurement_repeats": shape_measurement_repeats,
                 "speedup_vs_ref_geomean": representative.get(
                     "speedup_vs_ref_geomean", 0.0
                 ),
@@ -210,7 +291,9 @@ class LongHorizonCampaign:
             },
             "optimization": {
                 "action_category": "long_horizon_episode",
-                "action_description": str(outcome.get("summary", "verified long-horizon candidate")),
+                "action_description": str(
+                    outcome.get("summary", "verified long-horizon candidate")
+                ),
                 "expected_impact": "independently verified incumbent/candidate latency reduction",
                 "risks_and_rollback": "candidate retained on isolated episode branch",
             },
@@ -227,8 +310,12 @@ class LongHorizonCampaign:
             },
             "quality_gate": {"result": "PASS", "failure_reason": None},
             "open_directions": [
-                {"direction": value, "rationale": "carried from terminal episode journal"}
-                for value in directions if isinstance(value, str)
+                {
+                    "direction": value,
+                    "rationale": "carried from terminal episode journal",
+                }
+                for value in directions
+                if isinstance(value, str)
             ],
             "git_commit_hash": candidate_commit,
         }
@@ -241,18 +328,64 @@ class LongHorizonCampaign:
         violation: str,
         journal: dict[str, Any],
         candidate_commit: str,
+        verification: VerificationResult | None = None,
     ) -> dict[str, Any]:
-        outcome = journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
-        directions = outcome.get("next_directions", []) if isinstance(outcome, dict) else []
+        outcome = (
+            journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
+        )
+        directions = (
+            outcome.get("next_directions", []) if isinstance(outcome, dict) else []
+        )
         failure = violation or str(outcome.get("summary", status))
+        representative = _representative_candidate_result(verification)
+        by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
+        expected_shape_ids: set[str] | None = None
+        if self.base_campaign.private_reference_dir is not None:
+            expected_shape_ids = set(
+                json.loads(
+                    (self.base_campaign.private_reference_dir / "shapes.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+        expected_shape_count = (
+            len(expected_shape_ids) if expected_shape_ids is not None else None
+        )
+        measured_shape_count = len(by_shape)
+        if (
+            representative.get("all_pass")
+            and expected_shape_ids is not None
+            and set(by_shape) != expected_shape_ids
+        ):
+            raise RuntimeError(
+                "correct candidate outcome lacks complete hidden-shape performance "
+                f"coverage ({measured_shape_count}/{expected_shape_count})"
+            )
+        measurement_complete = bool(
+            representative.get("all_pass")
+            and (
+                expected_shape_count is None
+                or measured_shape_count == expected_shape_count
+            )
+        )
         return {
             "version": f"v{version}",
             "masked": False,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "performance": {
-                "latency_us": None,
-                "latency_us_geomean": None,
-                "latency_us_by_shape": {},
+                "latency_us": representative.get("latency_us_geomean"),
+                "latency_us_geomean": representative.get("latency_us_geomean"),
+                "latency_us_arith_mean": representative.get("latency_us_arith_mean"),
+                "latency_us_by_shape": by_shape,
+                "measurement_scope": "real_evaluator_shapes",
+                "shape_ids_are_opaque": self.base_campaign.private_reference_dir
+                is not None,
+                "measurement_status": "complete"
+                if measurement_complete
+                else "not_evaluated_or_incomplete",
+                "measured_shape_count": measured_shape_count,
+                "expected_shape_count": expected_shape_count,
+                "shape_measurement_repeats": shape_measurement_repeats,
             },
             "optimization": {
                 "action_category": "long_horizon_episode",
@@ -269,7 +402,10 @@ class LongHorizonCampaign:
             "correctness": {"status": "FAIL" if violation else "UNKNOWN"},
             "quality_gate": {"result": "FAIL", "failure_reason": failure},
             "open_directions": [
-                {"direction": value, "rationale": "carried from terminal episode journal"}
+                {
+                    "direction": value,
+                    "rationale": "carried from terminal episode journal",
+                }
                 for value in directions
                 if isinstance(value, str)
             ],
@@ -279,7 +415,6 @@ class LongHorizonCampaign:
                 "candidate_commit": candidate_commit or None,
             },
         }
-
 
     @staticmethod
     def _valid_blocked_attempt(attempt: object) -> bool:
@@ -310,8 +445,9 @@ class LongHorizonCampaign:
             return attempt
         return None
 
-
-    def _recover_interrupted(self, store: CampaignStore, state: SupervisorState) -> None:
+    def _recover_interrupted(
+        self, store: CampaignStore, state: SupervisorState
+    ) -> None:
         active = store.load_active()
         if active is None:
             return
@@ -328,20 +464,24 @@ class LongHorizonCampaign:
         memory_version = int(active.get("memory_version", 0) or 0)
         terminal_status = str(active.get("terminal_status", ""))
         already_recorded = any(
-            attempt.get("episode") == episode and attempt.get("episode_branch") == branch
+            attempt.get("episode") == episode
+            and attempt.get("episode_branch") == branch
             for attempt in state.attempts
         )
         if git_head(self.workspace) != base_commit:
             message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
             parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
             evidence = git_text(
-                self.workspace, "show", f"HEAD:memory/long_horizon_e{episode:04d}.json",
+                self.workspace,
+                "show",
+                f"HEAD:memory/long_horizon_e{episode:04d}.json",
                 check=False,
             )
             promoted = (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
-                and message == f"episode {episode}: promote verified long-horizon candidate"
+                and message
+                == f"episode {episode}: promote verified long-horizon candidate"
                 and bool(evidence)
             )
             outcome_recorded = (
@@ -361,7 +501,9 @@ class LongHorizonCampaign:
                 )
             )
             if not (promoted or outcome_recorded):
-                raise RuntimeError("incumbent advanced during an interrupted episode without proof")
+                raise RuntimeError(
+                    "incumbent advanced during an interrupted episode without proof"
+                )
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
                 if promoted:
@@ -392,8 +534,8 @@ class LongHorizonCampaign:
                             "blocked_terminal": retry_of is not None,
                         }
                         if retry_of is not None:
-                            recovered_attempt["blocked_retry_of_episode"] = retry_of.get(
-                                "episode"
+                            recovered_attempt["blocked_retry_of_episode"] = (
+                                retry_of.get("episode")
                             )
                         state.attempts.append(recovered_attempt)
                         store.archive_attempt(episode, recovered_attempt)
@@ -408,12 +550,16 @@ class LongHorizonCampaign:
             if working_changes(self.workspace):
                 subprocess.run(
                     ["git", "reset", "--hard", base_commit],
-                    cwd=str(self.workspace), check=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cwd=str(self.workspace),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             registered = {
                 Path(line.split(" ", 1)[1]).resolve()
-                for line in git_text(self.workspace, "worktree", "list", "--porcelain").splitlines()
+                for line in git_text(
+                    self.workspace, "worktree", "list", "--porcelain"
+                ).splitlines()
                 if line.startswith("worktree ")
             }
             if (
@@ -452,7 +598,9 @@ class LongHorizonCampaign:
         store = CampaignStore(self.workspace)
         state = store.load_state()
         if state.episodes == 0 and state.consecutive_without_promotion == 0:
-            state.consecutive_without_promotion = main_adapter.restored_stall(self.workspace)
+            state.consecutive_without_promotion = main_adapter.restored_stall(
+                self.workspace
+            )
         self._recover_interrupted(store, state)
         if working_changes(self.workspace):
             raise RuntimeError(
@@ -475,6 +623,7 @@ class LongHorizonCampaign:
             profile=self.base_campaign.sandbox_profile,
             url=self.base_campaign.sandbox_url,
             timeout=self.base_campaign.sandbox_timeout,
+            private_reference_dir=self.base_campaign.private_reference_dir,
         )
         runner = self.session_runner or LongSessionRunner(
             agent_cli=getattr(self.base_campaign, "agent_cli", "claude")
@@ -548,7 +697,8 @@ class LongHorizonCampaign:
             unexpected = working_changes(worktree.path)
             if unexpected:
                 raise RuntimeError(
-                    "runtime linking dirtied the episode boundary: " + ", ".join(unexpected)
+                    "runtime linking dirtied the episode boundary: "
+                    + ", ".join(unexpected)
                 )
             runtime = worktree.path / RUNTIME_DIR
             journal_path = runtime / "journal.json"
@@ -579,6 +729,7 @@ class LongHorizonCampaign:
                 "ATREX_TELEMETRY_ITERATION_ID": f"episode-{episode:04d}",
                 "ATREX_TELEMETRY_ATTEMPT_ID": "invocation",
             }
+            telemetry_environment.update(self.base_campaign.agent_environment())
             result = runner.run(
                 worktree.path,
                 prompt,
@@ -602,7 +753,10 @@ class LongHorizonCampaign:
             if result.exit_status != 0 or result.timed_out:
                 violation = f"session failed: exit={result.exit_status} timeout={result.timed_out}"
             elif handoff is None:
-                violation = result.completion_diagnosis or "session produced no valid terminal handoff"
+                violation = (
+                    result.completion_diagnosis
+                    or "session produced no valid terminal handoff"
+                )
             elif status == "candidate_ready":
                 violation, paths = worktree.validate_candidate(candidate_commit)
                 if (
@@ -610,14 +764,17 @@ class LongHorizonCampaign:
                     and conversion_pending
                     and not main_adapter.candidate_is_gluon(worktree.path)
                 ):
-                    violation = "mandatory conversion candidate is not a committed Gluon kernel"
+                    violation = (
+                        "mandatory conversion candidate is not a committed Gluon kernel"
+                    )
                 if not violation:
                     policy_violations = main_adapter.candidate_policy_violations(
                         self.base_campaign, worktree.path
                     )
                     if policy_violations:
-                        violation = "production policy rejected candidate: " + "; ".join(
-                            policy_violations
+                        violation = (
+                            "production policy rejected candidate: "
+                            + "; ".join(policy_violations)
                         )
                 if not violation:
                     active["phase"] = "verifying"
@@ -654,7 +811,11 @@ class LongHorizonCampaign:
                 journal = load_journal(journal_path)
             except Exception:
                 journal = {}
-            outcome = journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
+            outcome = (
+                journal.get("outcome")
+                if isinstance(journal.get("outcome"), dict)
+                else {}
+            )
             attempt = {
                 "episode": episode,
                 "version": memory_version,
@@ -669,8 +830,12 @@ class LongHorizonCampaign:
                 "session_id": result.session_id,
                 "resume_count": result.resume_count,
                 "tokens": result.tokens,
-                "summary": outcome.get("summary") if isinstance(outcome, dict) else None,
-                "next_directions": outcome.get("next_directions") if isinstance(outcome, dict) else None,
+                "summary": outcome.get("summary")
+                if isinstance(outcome, dict)
+                else None,
+                "next_directions": outcome.get("next_directions")
+                if isinstance(outcome, dict)
+                else None,
                 "verification": verification.as_dict() if verification else None,
             }
             try:
@@ -703,7 +868,9 @@ class LongHorizonCampaign:
                 )
             valid_blocked = status == "blocked" and not violation
             if valid_blocked:
-                retry_of = state.attempts[-1] if self._blocked_retry_pending(state) else None
+                retry_of = (
+                    state.attempts[-1] if self._blocked_retry_pending(state) else None
+                )
                 if retry_of is None:
                     attempt["blocked_retry_scheduled"] = True
                     attempt["blocked_terminal"] = False
@@ -750,6 +917,7 @@ class LongHorizonCampaign:
                     violation=violation,
                     journal=journal,
                     candidate_commit=candidate_commit,
+                    verification=verification,
                 )
                 outcome_commit = record_episode_outcome(
                     self.workspace,

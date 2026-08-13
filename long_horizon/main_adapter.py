@@ -64,11 +64,15 @@ def prepare_campaign(campaign: Campaign) -> None:
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
-    if campaign.optimization_mode == "production" and latest_version(campaign.workspace) > 0:
+    if (
+        campaign.optimization_mode == "production"
+        and latest_version(campaign.workspace) > 0
+    ):
         violations = campaign._production_kernel_violations()
         if violations and not head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
-                "cannot resume a non-compliant production HEAD: " + "; ".join(violations)
+                "cannot resume a non-compliant production HEAD: "
+                + "; ".join(violations)
             )
         if violations:
             print(
@@ -144,7 +148,9 @@ def resume_session_command(
     try:
         index = command.index("--session-id")
     except ValueError as exc:
-        raise RuntimeError("current main Claude command has no --session-id compatibility seam") from exc
+        raise RuntimeError(
+            "current main Claude command has no --session-id compatibility seam"
+        ) from exc
     command[index : index + 2] = ["--resume", session_id]
     return command
 
@@ -157,7 +163,9 @@ def supports_same_session_resume(agent_cli: str) -> bool:
     return agent_cli in {"claude", "codex"}
 
 
-def session_id_from_stream(agent_cli: str, stdout: str, requested_session_id: str) -> str:
+def session_id_from_stream(
+    agent_cli: str, stdout: str, requested_session_id: str
+) -> str:
     """Return the persistent CLI session id observed in one stream.
 
     Claude accepts the supervisor-provided id. Codex creates its own thread id
@@ -193,9 +201,7 @@ def normalize_stream(
     except Exception as exc:
         events = ()
         terminal_usage = terminal_usage_from_stream(stdout)
-        observation_errors = (
-            f"stream_normalization_failed:{type(exc).__name__}",
-        )
+        observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
     capabilities = replace(
         adapter.capabilities,
         usage_delta_observed=any(event.kind == "usage_delta" for event in events),
@@ -207,14 +213,10 @@ def normalize_stream(
                 terminal_usage,
                 capabilities,
                 ledger_errors,
-            ) = observe_codex_usage(
-                codex_observer, session_id, terminal_usage
-            )
+            ) = observe_codex_usage(codex_observer, session_id, terminal_usage)
             observation_errors += ledger_errors
         except Exception as exc:
-            observation_errors += (
-                f"codex_ledger_unavailable:{type(exc).__name__}",
-            )
+            observation_errors += (f"codex_ledger_unavailable:{type(exc).__name__}",)
     return events, terminal_usage, capabilities, observation_errors
 
 
@@ -229,6 +231,7 @@ def run_sandbox(
     sync: tuple[str, ...] = (),
     wall_timeout: int | None = None,
     gateway_kind: str = "auto",
+    private_reference_dir: Path | None = None,
 ):
     """Use main's sandbox command builder and queue/timeout semantics verbatim."""
     return _sandbox_command(
@@ -241,6 +244,7 @@ def run_sandbox(
         sync=sync,
         wall_timeout=wall_timeout,
         gateway_kind=gateway_kind,
+        private_reference_dir=private_reference_dir,
     )
 
 

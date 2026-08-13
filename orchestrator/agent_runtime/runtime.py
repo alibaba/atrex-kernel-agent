@@ -88,6 +88,9 @@ def token_usage_from_stream(stdout: str) -> int:
 def build_session_environment(runtime_id: str) -> dict[str, str]:
     """Build the current guarded environment for one coding-agent session."""
     environment = os.environ.copy()
+    # Private Atrex-Bench evaluator inputs are campaign-scoped and must be reintroduced only by
+    # the owning campaign, never inherited accidentally by an unrelated or legacy session.
+    environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     environment["ATREX_AGENT_CLI"] = runtime_id
     python_bin = str(Path(sys.executable).resolve().parent)
     path_parts = [

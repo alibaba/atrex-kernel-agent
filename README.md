@@ -17,7 +17,8 @@ not a second CLI.
 
 ## Current Design
 
-- Accepts SOL-ExecBench operators and native Atrex-Bench shape operators.
+- Accepts SOL-ExecBench operators plus legacy exact-shape and generalized private-case native
+  Atrex-Bench operators.
 - Creates one isolated Git workspace per framework and target, with separate campaign state for
   leaderboard and production optimization.
 - Establishes a correctness-passing V0 and, by default in production mode, a self-contained
@@ -70,7 +71,10 @@ correctness-passing improvement.
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
 experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.
 
-SOL and native Atrex-Bench campaigns optimize and validate the complete workload set together.
+SOL and native Atrex-Bench campaigns validate the complete workload set together. Generalized
+Atrex-Bench tasks optimize against `agent_problem.json` while keeping exact evaluator shapes hidden.
+Their canonical `memory/v<N>.json` records real evaluator latency for every opaque shape id, and
+profiling privately injects the selected real `PROFILE_SHAPE_ID` without exposing the full shape set.
 
 GPU validation and profiling execute through the configured gateway, while optimization memory,
 plans, edits, episode state, and Git history remain local. Repository-scoped skills are prepared

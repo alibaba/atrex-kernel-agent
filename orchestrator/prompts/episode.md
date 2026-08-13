@@ -25,7 +25,9 @@ final squash promotion. You own only this episode branch and its structured evid
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
 branch are allowed. Never edit evaluator or ground-truth files, including `test_kernel.py`,
 `profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
-`metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. Do not write canonical `memory/vN.json`;
+`agent_problem.json`, `metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. For generalized
+Atrex-Bench tasks, do not search outside the workspace for the source operator directory or hidden
+evaluator files. Do not write canonical `memory/vN.json`;
 the supervisor creates it after terminal validation.
 
 {{MODE_POLICY}}

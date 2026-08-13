@@ -3,10 +3,12 @@
 Owns session spawning and accounting, the independent dependency review, sandbox command
 construction, and evaluator result parsing.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -79,8 +81,14 @@ def ensure_submodules() -> None:
     Idempotent: already-initialized submodules are untouched.
     """
     needed = [
-        ("gpu-wiki/3rdparty/", REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md"),
-        ("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md"),
+        (
+            "gpu-wiki/3rdparty/",
+            REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md",
+        ),
+        (
+            "3rdparty/ncu-report-skill",
+            REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
+        ),
     ]
     to_init = [path for path, marker in needed if not marker.exists()]
     if to_init:
@@ -224,7 +232,9 @@ def _validate_dependency_review(
             raise ValueError("dependency review item must be an object")
         signal_id = item.get("id")
         if not isinstance(signal_id, str) or signal_id not in expected:
-            raise ValueError(f"dependency review returned unexpected signal id: {signal_id!r}")
+            raise ValueError(
+                f"dependency review returned unexpected signal id: {signal_id!r}"
+            )
         if signal_id in reviewed:
             raise ValueError(f"dependency review duplicated signal id: {signal_id}")
         decision = item.get("decision")
@@ -245,8 +255,10 @@ def _validate_dependency_review(
             )
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError(f"dependency review reason is empty for {signal_id}")
-        if not isinstance(evidence, list) or not evidence or not all(
-            isinstance(value, str) and value.strip() for value in evidence
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or not all(isinstance(value, str) and value.strip() for value in evidence)
         ):
             raise ValueError(f"dependency review evidence is invalid for {signal_id}")
         reviewed[signal_id] = item
@@ -258,9 +270,7 @@ def _validate_dependency_review(
 
     missing = sorted(expected - set(reviewed))
     if missing:
-        raise ValueError(
-            "dependency review omitted signal ids: " + ", ".join(missing)
-        )
+        raise ValueError("dependency review omitted signal ids: " + ", ".join(missing))
     expected_verdict = "reject" if rejected else "allow"
     if verdict != expected_verdict:
         raise ValueError(
@@ -277,9 +287,7 @@ def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
         endpoint = f" using gateway profile `{profile}`"
     else:
         endpoint = " using agate's configured gateway"
-    return _render(
-        SANDBOX_DIRECTIVE_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+    return _render(SANDBOX_DIRECTIVE_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
 
 
 def _sandbox_command(
@@ -293,14 +301,20 @@ def _sandbox_command(
     sync: tuple[str, ...] = (),
     wall_timeout: Optional[int] = None,
     gateway_kind: str = "auto",
+    private_reference_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     cmd = [
-        sys.executable, str(SANDBOX_TOOL),
-        "--kind", gateway_kind,
-        "--hardware", hardware,
-        "--workspace", str(workspace),
-        "--timeout", str(timeout),
+        sys.executable,
+        str(SANDBOX_TOOL),
+        "--kind",
+        gateway_kind,
+        "--hardware",
+        hardware,
+        "--workspace",
+        str(workspace),
+        "--timeout",
+        str(timeout),
     ]
     if url:
         cmd += ["--url", url]
@@ -312,9 +326,14 @@ def _sandbox_command(
     else:
         cmd.append("--no-sync")
     cmd += ["--", *command]
+    environment = os.environ.copy()
+    environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+    if private_reference_dir is not None:
+        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     return subprocess.run(
         cmd,
         cwd=str(workspace),
+        env=environment,
         capture_output=True,
         text=True,
         # Gateway execution timeout starts only after a worker claims the job.
@@ -327,7 +346,7 @@ def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
     for line in reversed(stdout.splitlines()):
         if line.startswith(TEST_RESULT_PREFIX):
-            result = json.loads(line[len(TEST_RESULT_PREFIX):])
+            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
             if isinstance(result, dict):
                 return result
     raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
@@ -349,7 +368,15 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
     perf["latency_us"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_geomean"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_arith_mean"] = result.get("latency_us_arith_mean", 0.0)
-    perf["latency_us_by_shape"] = result.get("latency_us_by_shape", {})
+    by_shape = result.get("latency_us_by_shape", {})
+    by_shape = by_shape if isinstance(by_shape, dict) else {}
+    perf["latency_us_by_shape"] = by_shape
+    perf["measurement_scope"] = "real_evaluator_shapes"
+    perf["shape_ids_are_opaque"] = (workspace / "agent_problem.json").is_file()
+    perf["measurement_status"] = (
+        "complete" if result.get("all_pass") and by_shape else "incomplete"
+    )
+    perf["measured_shape_count"] = len(by_shape)
     perf["speedup_vs_ref_geomean"] = result.get("speedup_vs_ref_geomean", 0.0)
     all_pass = bool(result.get("all_pass"))
     corr = data.setdefault("correctness", {})
@@ -360,7 +387,9 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
     gate["result"] = "PASS" if all_pass else "FAIL"
     failures = result.get("failures") or []
     gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     return path
 
 
@@ -388,7 +417,11 @@ def detect_arch(
         try:
             with tempfile.TemporaryDirectory(prefix="atrex-arch-") as temp_dir:
                 result = _sandbox_command(
-                    Path(temp_dir), sandbox_hardware, sandbox_profile, sandbox_url, 120,
+                    Path(temp_dir),
+                    sandbox_hardware,
+                    sandbox_profile,
+                    sandbox_url,
+                    120,
                     ["python", "-c", code],
                 )
             if result.returncode == 0:
@@ -403,13 +436,18 @@ def detect_arch(
                 flush=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            print(f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         return ""
 
     for py in ("python", "python3", sys.executable):
         try:
-            out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=120)
+            out = subprocess.run(
+                [py, "-c", code], capture_output=True, text=True, timeout=120
+            )
             s = out.stdout.strip()
             if s:
                 return s

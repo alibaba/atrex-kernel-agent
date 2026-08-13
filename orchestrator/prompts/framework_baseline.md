@@ -26,8 +26,8 @@ Hard rules for this session:
   `screen` session, never delete/edit its configured state directory or job database/log, and never cancel gateway jobs
   directly. If unavailable, record an infrastructure failure and exit; do not repair it from this session.
 - **Preserve optimizer history and ground truth.** Never delete or move Git-tracked workspace files. Never
-  modify `test_kernel.py`, `reference.py`, `input.py`, `shapes.json`, `metadata.json`, `roofline.json`,
-  `valid.py`, `workload.jsonl`, or `memory/v0.json` — the orchestrator restores any of them you edit, so
+  modify `test_kernel.py`, `reference.py`, `input.py`, `agent_problem.json`, `shapes.json`,
+  `metadata.json`, `roofline.json`, `valid.py`, `workload.jsonl`, or `memory/v0.json` — the orchestrator restores any of them you edit, so
   changing them only wastes your session. Never create `framework_baseline.json`; the orchestrator owns it.
 - **CUDA campaigns must keep the executable candidate in `kernel.py`.** A standalone `kernel.cu` with a
   `solution.json` entry such as `kernel.cu::run` cannot be versioned by the campaign. Embed the self-authored CUDA
@@ -71,15 +71,17 @@ through `tools/sandbox.py`.
 4. No immutable ground-truth file was modified.
 5. Single-seed correctness passes over the full workload set.
 6. `--multi-seed 5` correctness passes over the full workload set.
-7. `memory/v{{N}}.json` records a positive `performance.latency_us` geomean and a
-   `performance.latency_us_by_shape` map covering **exactly the same workload keys as `memory/v0.json`**.
+7. `memory/v{{N}}.json` records a positive `performance.latency_us` geomean and a complete
+   `performance.latency_us_by_shape` map covering exactly the `memory/v0.json` opaque workload ids.
+   Generalized private-case tasks reveal these ids and measured latencies, but not their input values.
 
 ## Step A — Read the baseline
 
 Read, in this order: workspace `README.md` (goal, platform `{{PLATFORM}}`, framework `{{FRAMEWORK}}`, target
 arch `{{ARCH}}`), `memory/v0.json` (the PyTorch per-workload latencies), `baseline_report.md`, the current
-wrapper `kernel.py`, and the immutable `reference.py` / `input.py` / `shapes.json` for the actual math,
-dtypes, layouts, and the full shape set you must cover.
+wrapper `kernel.py`, immutable `reference.py` / `input.py`, and either public `agent_problem.json` or
+legacy `shapes.json` for the actual math, dtypes, layouts, and domain you must cover. Never locate or
+infer hidden evaluator cases for a generalized problem.
 
 ## Step B — Research the implementation approach
 
@@ -163,9 +165,10 @@ Run the immutable harness once more for the recorded measurement:
 ```bash
 python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v{{N}} --no-memory
 ```
-Record locally from `RESULT_JSON`: `performance.latency_us` (geomean), `performance.latency_us_by_shape`
-(every workload, same keys as `memory/v0.json`), `performance.speedup_vs_ref_geomean` when the evaluator
-provides it, and `correctness.status` / `quality_gate.result` (PASS iff ALL workloads pass).
+Record locally from `RESULT_JSON`: `performance.latency_us` (geomean), the complete
+`performance.latency_us_by_shape` map, `performance.speedup_vs_ref_geomean` when the evaluator provides
+it, and `correctness.status` / `quality_gate.result` (PASS iff ALL workloads pass). Never fabricate
+shape inputs or failure details for a generalized private-case task.
 
 Report the geomean honestly — **being slower than the PyTorch V0 is an acceptable outcome for v{{N}}** and
 must not be hidden or "fixed" by tuning. The orchestrator re-runs this validation itself and owns acceptance.

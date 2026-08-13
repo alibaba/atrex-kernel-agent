@@ -73,15 +73,22 @@ python tools/sandbox.py --kind profile --sync <PROFILE_DIR> -- \
   bash tools/profile_kernel.sh profile_driver.py --output-dir <PROFILE_DIR>
 ```
 
-`profile_driver.py` imports the current `kernel.py`, builds real inputs from the campaign's immutable
-ground truth (`definition.json` + `workload.jsonl`, or `shapes.json` + `input.py`), warms up, and then
+`profile_driver.py` imports the current `kernel.py`, builds real inputs from the campaign contract
+(`definition.json` + `workload.jsonl`, a privately injected generalized Atrex-Bench real shape,
+or legacy `shapes.json` + `input.py`), warms up, and then
 invokes the candidate repeatedly. Select what it drives with environment variables rather than editing
 it — it is a protected path and a candidate that modifies it is rejected:
 
 ```bash
 PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python tools/sandbox.py ...   # SOL: one workload
-PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python tools/sandbox.py ...       # Atrex-Bench: one shape
+PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python tools/sandbox.py ...       # generalized or legacy Atrex-Bench
 ```
+
+For generalized Atrex-Bench tasks, choose `PROFILE_SHAPE_ID` from the previous canonical memory's
+complete opaque-id `performance.latency_us_by_shape` map. The sandbox privately resolves that id and
+injects only its real input case into the ephemeral remote profile job; the driver deletes the case
+JSON before importing candidate code. Profile the highest-cost ids and additional ids representing
+distinct latency regimes, but do not infer or reconstruct the complete hidden input table.
 
 Extract a concrete bottleneck and source-level target. Use PTX/SASS/TTGIR inspection when compiler
 lowering or instruction selection is part of the hypothesis. Do not make speculative optimization
@@ -100,8 +107,8 @@ collected without it.
 #### When the seeded driver cannot represent the work
 
 Build a local fallback driver at `<PROFILE_DIR>/harness/profile_driver.py` and profile that file
-instead when the seeded driver cannot express the case — a multi-kernel sequence, a shape outside the
-ground-truth set, or a driver that needs sibling helper modules. It must import `kernel.py` plus the
+instead when the seeded driver cannot express the case — a multi-kernel sequence, a new synthetic
+case inside the public domain, or a driver that needs sibling helper modules. It must import `kernel.py` plus the
 immutable input module, select a representative workload, warm up, invoke the entry point repeatedly,
 and never write memory files. Because it lives below `<PROFILE_DIR>/harness/`, Python does not put the
 workspace root on its import path; add it before importing anything local:

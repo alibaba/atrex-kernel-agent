@@ -23,6 +23,20 @@ The full multi-cycle workflow and terminal handoff are defined in `orchestrator/
 - **The SOL ground-truth files are immutable**: never edit `definition.json`, `reference.py`, or `workload.jsonl`. Edit `kernel.py` (DPS `run()`; args = definition.inputs then definition.outputs); update `solution.json` only when languages/dependencies/entry_point change.
 - **`profile_driver.py` is the immutable profiling entry point** — profilers run `python <file>`, and `kernel.py` is import-only, so profile `profile_driver.py`, never `kernel.py`. It is a protected path: choose what it drives with `PROFILE_ITERS` / `PROFILE_WARMUP` / `PROFILE_WORKLOAD_IDX` / `PROFILE_SHAPE_ID` instead of editing it, and do NOT add a `__main__` profiling block to `kernel.py` — an in-kernel entry is silently lost the next time `run()` is rewritten, leaving the profiler to capture nothing while still exiting 0. When it genuinely cannot express the case, add a fallback driver under `profiles/<dir>/harness/` and profile that file.
 
+### Generalized Atrex-Bench problems
+
+- When `agent_problem.json` exists, it is the authoritative public contract. Optimize across its
+  complete `shape_domain`; use aggregate distribution shares only to prioritize common paths.
+- Exact `shapes.json`, evaluator metadata, and per-case roofline inputs are private. Do not search
+  outside the workspace for the source operator directory or reconstruct hidden cases.
+- Profile a real evaluator case by selecting an opaque id from canonical
+  `memory/vN.json.performance.latency_us_by_shape` with `PROFILE_SHAPE_ID`. The sandbox injects only
+  that selected case into the ephemeral remote profile workspace; the driver removes its private JSON
+  before importing candidate code. Profile multiple ids when distinct performance regimes matter.
+- Hidden evaluation returns aggregate PASS/FAIL plus real latency keyed by opaque shape id. Canonical
+  memory must retain the complete `latency_us_by_shape` map on evaluated iterations, while shape input
+  parameters, failure details, and raw evaluator logs remain private.
+
 ### Real-submission input model (don't overfit to the local bench)
 
 The local `test_kernel.py` run is a **proxy** for the real evaluator. In the real scenario,

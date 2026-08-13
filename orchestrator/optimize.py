@@ -45,6 +45,7 @@ Usage
         --optimization-mode production
 
 """
+
 from __future__ import annotations
 
 import argparse
@@ -89,8 +90,18 @@ try:
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
     from .session_io import detect_arch, ensure_submodules
-    from .operator_layout import find_atrex_bench_root, is_sol_op
-    from .workspace_state import latest_version, preserve_interrupted_tracked_changes
+    from .operator_layout import (
+        AGENT_PROBLEM_FILENAME,
+        find_atrex_bench_root,
+        has_agent_problem,
+        is_sol_op,
+        validate_agent_problem,
+    )
+    from .workspace_state import (
+        latest_version,
+        preserve_interrupted_tracked_changes,
+        read_memory,
+    )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator import agent_runtime as _agent_runtime  # type: ignore[no-redef]
     from orchestrator.campaign import Campaign  # type: ignore[no-redef]
@@ -118,12 +129,16 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         ensure_submodules,
     )
     from orchestrator.operator_layout import (  # type: ignore[no-redef]
+        AGENT_PROBLEM_FILENAME,
         find_atrex_bench_root,
+        has_agent_problem,
         is_sol_op,
+        validate_agent_problem,
     )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
         preserve_interrupted_tracked_changes,
+        read_memory,
     )
 
 
@@ -240,9 +255,12 @@ def dispatch_framework_campaigns(
                 sys.executable,
                 str(Path(__file__).resolve()),
                 *common_argv,
-                "--framework", framework,
-                "--workspace", str(workspace_base),
-                "--workspace-suffix", workspace_suffix,
+                "--framework",
+                framework,
+                "--workspace",
+                str(workspace_base),
+                "--workspace-suffix",
+                workspace_suffix,
             ]
             if arch:
                 cmd += ["--arch", arch]
@@ -265,7 +283,11 @@ def dispatch_framework_campaigns(
             if returncode != 0:
                 failed.append((framework, returncode))
     except KeyboardInterrupt:
-        print("[orchestrator] interrupt: stopping framework campaigns", file=sys.stderr, flush=True)
+        print(
+            "[orchestrator] interrupt: stopping framework campaigns",
+            file=sys.stderr,
+            flush=True,
+        )
         stop_children()
         return 130
     except BaseException:
@@ -277,7 +299,11 @@ def dispatch_framework_campaigns(
 
     if failed:
         summary = ", ".join(f"{name}={code}" for name, code in failed)
-        print(f"[orchestrator] framework campaign failures: {summary}", file=sys.stderr, flush=True)
+        print(
+            f"[orchestrator] framework campaign failures: {summary}",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
     return 0
 
@@ -293,6 +319,17 @@ def _resolve_op(op_dir: str) -> dict:
     if not ref.is_file():
         raise SystemExit(f"--op-dir has no reference.py: {d}")
     atrex_bench_root = ""
+    generalized = has_agent_problem(d)
+    if generalized:
+        try:
+            validate_agent_problem(d / AGENT_PROBLEM_FILENAME)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        if not (d / "shapes.json").is_file():
+            raise SystemExit(
+                "generalized Atrex-Bench operator requires private evaluator shapes.json: "
+                f"{d}"
+            )
     if not is_sol_op(d) and (d / "shapes.json").is_file():
         native_root = find_atrex_bench_root(d)
         if native_root is None:
@@ -306,109 +343,191 @@ def _resolve_op(op_dir: str) -> dict:
         "reference": str(ref),
         "op_dir": str(d),
         "atrex_bench_root": atrex_bench_root,
+        "agent_problem": str(d / AGENT_PROBLEM_FILENAME) if generalized else "",
     }
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Long-horizon episode orchestrator for atrex-kernel-agent.")
-    ap.add_argument("--op-dir", required=True,
-                    help="The operator dir (SOL definition.json / workload.jsonl / reference.py, or "
-                         "atrex-bench shapes.json / roofline.json / metadata.json / input.py / reference.py). "
-                         "EVERYTHING op-specific is read from here — the workspace "
-                         "name (dir basename), kernel to optimize (reference.py), and the full shape set. "
-                         "Never hardcoded.")
-    ap.add_argument("--platform", required=True, help="Target hardware, e.g. B200 / H20 / MI308X "
-                                                      "(cannot be deduced from the op dir).")
-    ap.add_argument(
-        "--sandbox-hardware", default="",
-        help="agate GPU scheduler token used for all tests/profiles, e.g. REMOTE_GPU. "
-             "Default: --platform; set explicitly when the gateway uses a different alias.",
+    ap = argparse.ArgumentParser(
+        description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
     ap.add_argument(
-        "--sandbox-profile", choices=("pre", "prod"), default="",
+        "--op-dir",
+        required=True,
+        help=(
+            "The operator dir (SOL definition.json/workload.jsonl/reference.py, or native "
+            "Atrex-Bench reference.py/input.py/shapes.json with optional agent_problem.json). "
+            "When agent_problem.json exists it is the public optimization contract and exact "
+            "shapes.json remains evaluator-only."
+        ),
+    )
+    ap.add_argument(
+        "--platform",
+        required=True,
+        help="Target hardware, e.g. B200 / H20 / MI308X "
+        "(cannot be deduced from the op dir).",
+    )
+    ap.add_argument(
+        "--sandbox-hardware",
+        default="",
+        help="agate GPU scheduler token used for all tests/profiles, e.g. REMOTE_GPU. "
+        "Default: --platform; set explicitly when the gateway uses a different alias.",
+    )
+    ap.add_argument(
+        "--sandbox-profile",
+        choices=("pre", "prod"),
+        default="",
         help="Optional agate endpoint profile. Default: preserve AGATE_URL/config resolution.",
     )
     ap.add_argument(
-        "--sandbox-url", default="",
+        "--sandbox-url",
+        default="",
         help="Explicit agate endpoint URL for all tests/profiles, e.g. "
-             "http://127.0.0.1:8000 for `atrex-gateway serve --local`. "
-             "Mutually exclusive with --sandbox-profile.",
+        "http://127.0.0.1:8000 for `atrex-gateway serve --local`. "
+        "Mutually exclusive with --sandbox-profile.",
     )
     ap.add_argument(
-        "--sandbox-timeout", type=int, default=DEFAULT_SANDBOX_TIMEOUT,
+        "--sandbox-timeout",
+        type=int,
+        default=DEFAULT_SANDBOX_TIMEOUT,
         help=(
             "Per sandbox test/profile command execution timeout in seconds "
             "(1..600; queue wait is budgeted separately)."
         ),
     )
     ap.add_argument(
-        "--agent-cli", choices=AGENT_CLI_CHOICES, default="claude",
+        "--agent-cli",
+        choices=AGENT_CLI_CHOICES,
+        default="claude",
         help="Coding CLI used for optimization episodes: claude, qodercli, codex, or pi "
-             "(default: claude).",
+        "(default: claude).",
     )
     ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
         default="leaderboard",
         help="leaderboard preserves the permissive current CLAUDE.md flow; production mechanically "
-             "enforces each campaign's framework and delegates ambiguous third-party dependency "
-             "provenance to an independent fail-closed Agent review.",
+        "enforces each campaign's framework and delegates ambiguous third-party dependency "
+        "provenance to an independent fail-closed Agent review.",
     )
     ap.add_argument(
-        "--framework", default="",
+        "--framework",
+        default="",
         help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL. When omitted, launch all "
-             "frameworks supported by the detected hardware in parallel: NVIDIA uses "
-             "Triton/CuteDSL/Cuda, AMD uses Triton/FlyDSL, and unknown hardware uses Triton. "
-             "Each auto-dispatched production child is bound to its assigned framework.",
+        "frameworks supported by the detected hardware in parallel: NVIDIA uses "
+        "Triton/CuteDSL/Cuda, AMD uses Triton/FlyDSL, and unknown hardware uses Triton. "
+        "Each auto-dispatched production child is bound to its assigned framework.",
     )
-    ap.add_argument("--notes", default="none", help="Extra constraints / known bottlenecks.")
-    ap.add_argument("--max-iters", type=int, default=20,
-                    help="Hard cap on canonical optimization versions/episodes.")
-    ap.add_argument("--token-budget", type=int, default=0,
-                    help="Hard token cap across all episode turns (0 = no cap; max-iters still bounds it).")
-    ap.add_argument("--target-util", type=float, default=90.0,
-                    help="Peak-utilization %% short-circuit (default stop condition).")
-    ap.add_argument("--iter-timeout", type=int, default=5400,
-                    help="Wall-clock budget and worst-case terminal-handoff cadence for one "
-                         "complete long-horizon episode (s).")
-    ap.add_argument("--setup-timeout", type=int, default=7200, help="Baseline session timeout (s).")
-    ap.add_argument("--handoff-resumes", type=int, default=DEFAULT_HANDOFF_RESUMES,
-                    help="Same-session recovery turns after an incomplete episode handoff (default: 2).")
-    ap.add_argument("--verify-repeats", type=int, default=DEFAULT_VERIFY_REPEATS,
-                    help="Incumbent/candidate ABBA repeat pairs in one gateway allocation (default: 2).")
-    ap.add_argument("--verify-run-timeout", type=int, default=DEFAULT_VERIFY_RUN_TIMEOUT,
-                    help="Evaluator budget for each ABBA run (default: 120s; the remote driver "
-                         "allows up to 60s cold-start/finalization grace within the unchanged "
-                         "whole-allocation timeout).")
-    ap.add_argument("--min-improvement-pct", type=float, default=0.0,
-                    help="Minimum strict ABBA improvement required for promotion (default: >0%%).")
-    ap.add_argument("--framework-baseline", choices=FRAMEWORK_BASELINE_MODES, default="auto",
-                    help="Run one dedicated session after V0 setup that "
-                         "replaces the V0 PyTorch wrapper with the first self-contained framework "
-                         "kernel, recorded as v1 (so optimization episodes start at v2). Production "
-                         "auto = production mode only; always = leaderboard too; "
-                         "never = optimize directly from the V0 kernel.")
-    ap.add_argument("--framework-baseline-timeout", type=int, default=FRAMEWORK_BASELINE_TIMEOUT_S,
-                    help="Framework baseline session timeout (s).")
-    ap.add_argument("--max-stall", type=int, default=0,
-                    help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).")
-    ap.add_argument("--convert-after", type=int, default=DEFAULT_CONVERT_AFTER,
-                    help="Triton only: after N consecutive stalled episodes, require conversion "
-                         "to Gluon. Failed conversions retry immediately until one passes correctness "
-                         "and performance parity, then optimization continues in Gluon. Default: 3; "
-                         "0 disables conversion.")
-    ap.add_argument("--arch", default="",
-                    help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
-                         "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.")
-    ap.add_argument("--workspace", default="",
-                    help="Working directory for the optimization campaign. A flat "
-                         "kernel_opt_<name>_<framework>_<platform>/ workspace is created under this "
-                         "directory. Default: current working directory.")
+    ap.add_argument(
+        "--notes", default="none", help="Extra constraints / known bottlenecks."
+    )
+    ap.add_argument(
+        "--max-iters",
+        type=int,
+        default=20,
+        help="Hard cap on canonical optimization versions/episodes.",
+    )
+    ap.add_argument(
+        "--token-budget",
+        type=int,
+        default=0,
+        help="Hard token cap across all episode turns (0 = no cap; max-iters still bounds it).",
+    )
+    ap.add_argument(
+        "--target-util",
+        type=float,
+        default=90.0,
+        help="Peak-utilization %% short-circuit (default stop condition).",
+    )
+    ap.add_argument(
+        "--iter-timeout",
+        type=int,
+        default=5400,
+        help="Wall-clock budget and worst-case terminal-handoff cadence for one "
+        "complete long-horizon episode (s).",
+    )
+    ap.add_argument(
+        "--setup-timeout", type=int, default=7200, help="Baseline session timeout (s)."
+    )
+    ap.add_argument(
+        "--handoff-resumes",
+        type=int,
+        default=DEFAULT_HANDOFF_RESUMES,
+        help="Same-session recovery turns after an incomplete episode handoff (default: 2).",
+    )
+    ap.add_argument(
+        "--verify-repeats",
+        type=int,
+        default=DEFAULT_VERIFY_REPEATS,
+        help="Incumbent/candidate ABBA repeat pairs in one gateway allocation (default: 2).",
+    )
+    ap.add_argument(
+        "--verify-run-timeout",
+        type=int,
+        default=DEFAULT_VERIFY_RUN_TIMEOUT,
+        help="Evaluator budget for each ABBA run (default: 120s; the remote driver "
+        "allows up to 60s cold-start/finalization grace within the unchanged "
+        "whole-allocation timeout).",
+    )
+    ap.add_argument(
+        "--min-improvement-pct",
+        type=float,
+        default=0.0,
+        help="Minimum strict ABBA improvement required for promotion (default: >0%%).",
+    )
+    ap.add_argument(
+        "--framework-baseline",
+        choices=FRAMEWORK_BASELINE_MODES,
+        default="auto",
+        help="Run one dedicated session after V0 setup that "
+        "replaces the V0 PyTorch wrapper with the first self-contained framework "
+        "kernel, recorded as v1 (so optimization episodes start at v2). Production "
+        "auto = production mode only; always = leaderboard too; "
+        "never = optimize directly from the V0 kernel.",
+    )
+    ap.add_argument(
+        "--framework-baseline-timeout",
+        type=int,
+        default=FRAMEWORK_BASELINE_TIMEOUT_S,
+        help="Framework baseline session timeout (s).",
+    )
+    ap.add_argument(
+        "--max-stall",
+        type=int,
+        default=0,
+        help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).",
+    )
+    ap.add_argument(
+        "--convert-after",
+        type=int,
+        default=DEFAULT_CONVERT_AFTER,
+        help="Triton only: after N consecutive stalled episodes, require conversion "
+        "to Gluon. Failed conversions retry immediately until one passes correctness "
+        "and performance parity, then optimization continues in Gluon. Default: 3; "
+        "0 disables conversion.",
+    )
+    ap.add_argument(
+        "--arch",
+        default="",
+        help="Override the real runtime GPU arch, e.g. sm_103 or gfx942. Default: auto-detect "
+        "via torch (get_device_capability / gcnArchName) — use this if auto-detect fails.",
+    )
+    ap.add_argument(
+        "--workspace",
+        default="",
+        help="Working directory for the optimization campaign. A flat "
+        "kernel_opt_<name>_<framework>_<platform>/ workspace is created under this "
+        "directory. Default: current working directory.",
+    )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
-    if args.workspace_suffix and args.workspace_suffix != _workspace_slug(args.workspace_suffix):
-        ap.error("--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix")
+    if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
+        args.workspace_suffix
+    ):
+        ap.error(
+            "--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix"
+        )
     if not 1 <= args.sandbox_timeout <= MAX_SANDBOX_TIMEOUT:
         ap.error(
             "--sandbox-timeout must be in the gateway-supported range "
@@ -472,15 +591,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     op = _resolve_op(args.op_dir)
     ensure_submodules()
-    frameworks = (args.framework,) if args.framework else supported_frameworks(args.platform, arch)
-    print(f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
-          f"optimization_mode={args.optimization_mode} platform={args.platform} "
-          f"sandbox_hardware={sandbox_hardware} "
-          f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
-          f"frameworks={','.join(frameworks)} "
-          "runtime_arch="
-          f"{arch or 'UNKNOWN (detect failed)'} "
-          f"(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
+    frameworks = (
+        (args.framework,)
+        if args.framework
+        else supported_frameworks(args.platform, arch)
+    )
+    print(
+        f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
+        f"optimization_mode={args.optimization_mode} platform={args.platform} "
+        f"sandbox_hardware={sandbox_hardware} "
+        f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
+        f"frameworks={','.join(frameworks)} "
+        "runtime_arch="
+        f"{arch or 'UNKNOWN (detect failed)'} "
+        f"(device name / vendor-smi may be desensitized; trusting the runtime API)",
+        flush=True,
+    )
 
     if not args.framework:
         base = Path(args.workspace).resolve() if args.workspace else Path.cwd()
@@ -498,9 +624,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     campaign = Campaign(
-        name=op["name"], kernel_demo=op["reference"], platform=args.platform,
-        framework=args.framework, notes=args.notes, arch=arch,
-        sandbox_hardware=sandbox_hardware, sandbox_profile=args.sandbox_profile,
+        name=op["name"],
+        kernel_demo=op["reference"],
+        platform=args.platform,
+        framework=args.framework,
+        notes=args.notes,
+        arch=arch,
+        sandbox_hardware=sandbox_hardware,
+        sandbox_profile=args.sandbox_profile,
         sandbox_url=args.sandbox_url,
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
@@ -508,8 +639,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
-        max_iters=args.max_iters, token_budget=args.token_budget, target_util=args.target_util,
-        iter_timeout=args.iter_timeout, setup_timeout=args.setup_timeout, max_stall=args.max_stall,
+        max_iters=args.max_iters,
+        token_budget=args.token_budget,
+        target_util=args.target_util,
+        iter_timeout=args.iter_timeout,
+        setup_timeout=args.setup_timeout,
+        max_stall=args.max_stall,
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
         handoff_resumes=args.handoff_resumes,
@@ -527,6 +662,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         preserve_interrupted_tracked_changes(campaign.workspace, "resume workspace")
         campaign._link_runtime()
+    baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
+        read_memory(campaign.workspace, 0)
+    )
+    if baseline_coverage_problem:
+        raise RuntimeError(
+            "generalized campaign baseline is incompatible with authoritative per-shape "
+            f"memory: {baseline_coverage_problem}; start a fresh workspace"
+        )
     campaign.ensure_framework_baseline()
     campaign.run()
     return 0

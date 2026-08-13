@@ -120,13 +120,18 @@ command+=(--tools "" -- "$query")
 
 echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, effort=$reasoning_effort)" >&2
 if qoder_response="$(python3 - "$qoder_timeout" "${command[@]}" <<'PY'
+import os
 import subprocess
 import sys
 
 timeout = int(sys.argv[1])
 command = sys.argv[2:]
+environment = os.environ.copy()
+environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
 try:
-    completed = subprocess.run(command, check=False, timeout=timeout)
+    completed = subprocess.run(
+        command, check=False, timeout=timeout, env=environment
+    )
 except subprocess.TimeoutExpired:
     print(f"ask-qoder: timed out after {timeout}s", file=sys.stderr)
     raise SystemExit(124)

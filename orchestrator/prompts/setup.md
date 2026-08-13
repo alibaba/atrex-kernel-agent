@@ -40,8 +40,10 @@ Do the following, in order, but only through baseline:
 
 1. **Step 0 — Hardware specs + Roofline.** Source
    every hardware spec from `gpu-wiki/` (**no fabrication** — every spec value must cite a gpu-wiki path),
-   do the Roofline analysis, compute absolute targets (`hardware peak * 90%`), and write `Hardware Spec`,
-   the Roofline analysis, and `Stop Conditions` into the workspace `README.md`.
+   do the Roofline analysis from the public workload contract, compute absolute targets
+   (`hardware peak * 90%`), and write `Hardware Spec`, the Roofline analysis, and `Stop Conditions`
+   into the workspace `README.md`. If `agent_problem.json` exists, never seek private per-case
+   roofline data or exact evaluator shapes.
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
 3. **Stage 1 — Baseline.** {{BASELINE_DRIVER}}: implement `kernel.py`, use the evaluator
    route declared above, validate correctness and baseline performance, write `baseline_report.md`, write
@@ -49,8 +51,10 @@ Do the following, in order, but only through baseline:
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
    `python test_kernel.py --version v0 --no-memory` through `tools/sandbox.py --kind run`, parse the emitted
    `[test_kernel] RESULT_JSON=...`, and write `memory/v0.json` locally. Reject local-GPU measurement and remotely
-   written memory. The test must cover every shape in `shapes.json`; record all shape latencies and their
-   geomean. Do not edit an evaluator adapter supplied by the orchestrator. A derived legacy boundary may create
+   written memory. The test must cover the evaluator's complete workload—hidden cases for a generalized
+   `agent_problem.json`, or every legacy `shapes.json` entry—and record the aggregate result and complete
+   real `latency_us_by_shape` map. Generalized tasks expose only opaque shape ids and their measured
+   latency; exact shape inputs and failure details remain private. Do not edit an evaluator adapter supplied by the orchestrator. A derived legacy boundary may create
    its harness only before V0, then must commit and preserve it unchanged.
 
 Then **STOP**. Do **NOT** enter Stage 2 / any optimization iteration — the orchestrator spawns those as

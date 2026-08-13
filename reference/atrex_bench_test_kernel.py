@@ -174,6 +174,19 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
     }
 
 
+def _mask_generalized_result(workspace: Path, result: dict[str, Any]) -> dict[str, Any]:
+    """Withhold hidden inputs and failure details while retaining measured shape latency."""
+    if not (workspace / "agent_problem.json").is_file():
+        return result
+    masked = dict(result)
+    if result.get("failures"):
+        masked["failures"] = [
+            "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
+        ]
+    masked["hidden_case_details"] = "shape inputs and failure details withheld"
+    return masked
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the official Atrex-Bench evaluator and emit optimizer RESULT_JSON"
@@ -251,14 +264,21 @@ def main(argv: list[str] | None = None) -> int:
             text=True,
             check=False,
         )
-        if completed.stdout:
-            print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
-        if completed.stderr:
-            print(
-                completed.stderr,
-                end="" if completed.stderr.endswith("\n") else "\n",
-                file=sys.stderr,
-            )
+        # Generalized tasks return only the sanitized transport result below. Keep the
+        # evaluator's raw diagnostics private because future run_eval versions may include
+        # exact inputs or other sensitive per-case context in their output.
+        if not (workspace / "agent_problem.json").is_file():
+            if completed.stdout:
+                print(
+                    completed.stdout,
+                    end="" if completed.stdout.endswith("\n") else "\n",
+                )
+            if completed.stderr:
+                print(
+                    completed.stderr,
+                    end="" if completed.stderr.endswith("\n") else "\n",
+                    file=sys.stderr,
+                )
 
         result_paths = sorted(Path(output_dir).rglob("eval_result.json"))
         if not result_paths:
@@ -285,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"atrex-bench run_eval exited with code {completed.returncode}"
                 )
 
+    result = _mask_generalized_result(workspace, result)
     print(RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)
     return 0 if result["all_pass"] else 1
 

@@ -34,11 +34,16 @@ cd atrex-kernel-agent
 `--op-dir` supports two evaluator-owned layouts:
 
 - SOL-ExecBench: `reference.py`, `definition.json`, and `workload.jsonl`.
-- Native Atrex-Bench: `reference.py` and `shapes.json`, inside a checkout containing
-  `scripts/run_eval.py` and `src/atrex_bench`; `input.py`, `metadata.json`, `roofline.json`, and
-  `valid.py` are copied when present.
+- Native Atrex-Bench legacy: `reference.py`, `input.py`, and `shapes.json`, inside a checkout
+  containing `scripts/run_eval.py` and `src/atrex_bench`.
+- Native Atrex-Bench generalized: the same evaluator inputs plus `agent_problem.json` using schema
+  `atrex.agent_problem.v1`. Only `reference.py`, `input.py`, and `agent_problem.json` enter the agent
+  workspace; exact shapes and evaluator metadata are injected privately during sandbox evaluation.
+  Canonical memory retains real per-shape latency under opaque ids. Set `PROFILE_SHAPE_ID` to one of
+  those ids to profile that real shape; the sandbox privately injects only the selected case remotely.
 
-The orchestrator never treats operator inputs as editable candidate files.
+The orchestrator never treats operator inputs as editable candidate files. Start a fresh workspace
+when switching an existing campaign from legacy exact-shape exposure to a generalized problem.
 
 ## 2. Run the Orchestrated Loop
 

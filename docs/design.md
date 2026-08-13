@@ -168,6 +168,14 @@ transport-compatible trusted-code executor, not a security boundary.
 
 SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every
 candidate is validated for full-workload correctness and compared by its full-workload geomean.
+When a native operator provides `agent_problem.json`, agent sessions see its generalized domain,
+invariants, aggregate distribution, and synthetic development cases instead of exact `shapes.json`.
+The sandbox injects exact shapes and evaluator metadata only at the official remote evaluation
+boundary. Profiling selects an opaque id from canonical memory and injects only that real shape into
+the ephemeral remote profile job; the complete hidden shape table never enters the workspace. Optimization
+feedback retains aggregate results plus real per-shape latency keyed by opaque shape id, while
+withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
+runtime is copied into the workspace without linking its checkout-level `data/` tree.
 
 ### Production policy
 
