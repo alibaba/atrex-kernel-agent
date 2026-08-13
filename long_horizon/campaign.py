@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -42,6 +43,7 @@ MEMORY_EXPERIMENT_FIELDS = (
     "timestamp",
 )
 MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
+EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -120,6 +122,138 @@ def _candidate_shape_latencies(
         },
         measured_runs,
     )
+
+
+def _positive_finite(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if number > 0.0 and math.isfinite(number) else None
+
+
+def _latest_complete_canonical_performance(
+    workspace: Path,
+    *,
+    before_version: int,
+    expected_shape_ids: set[str] | None,
+) -> tuple[dict[str, Any], int] | None:
+    """Find the newest complete real-shape incumbent measurement before a round.
+
+    A pivot, blocked session, protocol failure, or supervisor interruption may have no
+    candidate verification at all.  Its memory must still carry the real per-shape
+    performance of the unchanged canonical incumbent rather than replacing known facts
+    with nulls.  Only a complete, finite canonical record is eligible for carry-forward.
+    """
+    for version in range(before_version - 1, -1, -1):
+        memory = main_adapter.read_memory(workspace, version)
+        if not isinstance(memory, dict):
+            continue
+        performance = memory.get("performance")
+        if not isinstance(performance, dict):
+            continue
+        by_shape = performance.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict) or not by_shape:
+            continue
+        normalized: dict[str, float] = {}
+        for shape_id, raw_value in by_shape.items():
+            value = _positive_finite(raw_value)
+            if value is None:
+                normalized = {}
+                break
+            normalized[str(shape_id)] = value
+        if not normalized:
+            continue
+        if expected_shape_ids is not None and set(normalized) != expected_shape_ids:
+            continue
+        latency = _positive_finite(
+            performance.get("latency_us_geomean", performance.get("latency_us"))
+        )
+        if latency is None:
+            continue
+        carried = dict(performance)
+        carried["latency_us"] = latency
+        carried["latency_us_geomean"] = latency
+        carried["latency_us_arith_mean"] = _positive_finite(
+            performance.get("latency_us_arith_mean")
+        ) or (sum(normalized.values()) / len(normalized))
+        carried["latency_us_by_shape"] = normalized
+        return carried, version
+    return None
+
+
+def _latest_complete_episode_performance(
+    episode_workspace: Path | None,
+    *,
+    expected_shape_ids: set[str] | None,
+) -> dict[str, Any] | None:
+    """Read the latest complete supervisor-independent measurement from an episode."""
+    if episode_workspace is None:
+        return None
+    path = episode_workspace / EPISODE_EVALUATIONS_PATH
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kernel_path = episode_workspace / "kernel.py"
+        kernel_bytes = kernel_path.read_bytes()
+        kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
+        kernel_mtime = kernel_path.stat().st_mtime
+    except (OSError, UnicodeError):
+        return None
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict) or not result.get("all_pass"):
+            continue
+        schema_version = payload.get("schema_version")
+        recorded_kernel_sha256 = payload.get("kernel_sha256")
+        if isinstance(schema_version, int) and schema_version >= 2:
+            if recorded_kernel_sha256 != kernel_sha256:
+                continue
+        else:
+            # Schema v1 predates code fingerprints.  It is safe only when the
+            # current kernel has not been modified since this measurement.
+            try:
+                measured_at = _iso_timestamp(str(payload["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if measured_at < kernel_mtime:
+                continue
+        by_shape = result.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict) or not by_shape:
+            continue
+        normalized: dict[str, float] = {}
+        for shape_id, raw_value in by_shape.items():
+            value = _positive_finite(raw_value)
+            if value is None:
+                normalized = {}
+                break
+            normalized[str(shape_id)] = value
+        if not normalized:
+            continue
+        if expected_shape_ids is not None and set(normalized) != expected_shape_ids:
+            continue
+        latency = _positive_finite(
+            result.get("latency_us_geomean", result.get("latency_us"))
+        )
+        if latency is None:
+            continue
+        return {
+            "all_pass": True,
+            "latency_us_geomean": latency,
+            "latency_us_arith_mean": _positive_finite(
+                result.get("latency_us_arith_mean")
+            )
+            or (sum(normalized.values()) / len(normalized)),
+            "latency_us_by_shape": normalized,
+            "speedup_vs_ref_geomean": result.get("speedup_vs_ref_geomean"),
+            "max_abs_err": result.get("max_abs_err"),
+            "max_rel_err": result.get("max_rel_err"),
+            "eval_id": result.get("eval_id"),
+            "timestamp": payload.get("timestamp"),
+        }
+    return None
 
 
 def _memory_experiment_value(value: object) -> str:
@@ -332,9 +466,20 @@ class LongHorizonCampaign:
                 "shape_ids_are_opaque": self.base_campaign.private_reference_dir
                 is not None,
                 "measurement_status": "complete",
+                "measured_shape_count": len(by_shape),
+                "expected_shape_count": (
+                    len(expected_shapes)
+                    if self.base_campaign.private_reference_dir is not None
+                    else None
+                ),
                 "shape_measurement_repeats": shape_measurement_repeats,
-                "speedup_vs_ref_geomean": representative.get(
-                    "speedup_vs_ref_geomean", 0.0
+                "measurement_subject": "candidate",
+                "measurement_source": "authoritative_verification",
+                "carried_from_version": None,
+                "speedup_vs_ref_geomean": main_adapter.speedup_vs_reference(
+                    self.workspace,
+                    verification.candidate_latency_us,
+                    representative.get("speedup_vs_ref_geomean"),
                 ),
                 "tflops_peak_utilization_pct": representative.get(
                     "tflops_peak_utilization_pct"
@@ -385,6 +530,7 @@ class LongHorizonCampaign:
         journal: dict[str, Any],
         candidate_commit: str,
         verification: VerificationResult | None = None,
+        episode_workspace: Path | None = None,
     ) -> dict[str, Any]:
         outcome = (
             journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
@@ -392,7 +538,16 @@ class LongHorizonCampaign:
         directions = (
             outcome.get("next_directions", []) if isinstance(outcome, dict) else []
         )
-        failure = violation or str(outcome.get("summary", status))
+        verification_failure = ""
+        if verification is not None and not verification.passed:
+            verification_failure = verification.error or (
+                f"authoritative verification gate {verification.gate} did not pass"
+            )
+        failure = (
+            violation
+            or verification_failure
+            or str(outcome.get("summary", status))
+        )
         representative = _representative_candidate_result(verification)
         by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
         expected_shape_ids: set[str] | None = None
@@ -424,6 +579,53 @@ class LongHorizonCampaign:
                 or measured_shape_count == expected_shape_count
             )
         )
+        measurement_subject = "candidate" if measurement_complete else "unavailable"
+        measurement_source = (
+            "authoritative_verification" if measurement_complete else "none"
+        )
+        carried_from_version: int | None = None
+        carried: tuple[dict[str, Any], int] | None = None
+        if not measurement_complete:
+            episode_performance = _latest_complete_episode_performance(
+                episode_workspace,
+                expected_shape_ids=expected_shape_ids,
+            )
+            if episode_performance is not None:
+                representative = episode_performance
+                by_shape = dict(episode_performance["latency_us_by_shape"])
+                shape_measurement_repeats = 1
+                measured_shape_count = len(by_shape)
+                measurement_complete = True
+                measurement_subject = "episode_head"
+                measurement_source = "episode_evaluator_result"
+            else:
+                carried = _latest_complete_canonical_performance(
+                    self.workspace,
+                    before_version=version,
+                    expected_shape_ids=expected_shape_ids,
+                )
+            if not measurement_complete and carried is not None:
+                incumbent_performance, carried_from_version = carried
+                representative = {
+                    "all_pass": True,
+                    "latency_us_geomean": incumbent_performance.get(
+                        "latency_us_geomean"
+                    ),
+                    "latency_us_arith_mean": incumbent_performance.get(
+                        "latency_us_arith_mean"
+                    ),
+                    "speedup_vs_ref_geomean": incumbent_performance.get(
+                        "speedup_vs_ref_geomean"
+                    ),
+                }
+                by_shape = dict(incumbent_performance["latency_us_by_shape"])
+                shape_measurement_repeats = int(
+                    incumbent_performance.get("shape_measurement_repeats") or 0
+                )
+                measured_shape_count = len(by_shape)
+                measurement_complete = True
+                measurement_subject = "incumbent"
+                measurement_source = "canonical_incumbent_carry_forward"
         return {
             "version": f"v{version}",
             "masked": False,
@@ -442,6 +644,18 @@ class LongHorizonCampaign:
                 "measured_shape_count": measured_shape_count,
                 "expected_shape_count": expected_shape_count,
                 "shape_measurement_repeats": shape_measurement_repeats,
+                "measurement_subject": measurement_subject,
+                "measurement_source": measurement_source,
+                "carried_from_version": (
+                    f"v{carried_from_version}"
+                    if carried_from_version is not None
+                    else None
+                ),
+                "speedup_vs_ref_geomean": main_adapter.speedup_vs_reference(
+                    self.workspace,
+                    representative.get("latency_us_geomean"),
+                    representative.get("speedup_vs_ref_geomean"),
+                ),
             },
             "optimization": {
                 "action_category": "long_horizon_episode",
@@ -456,7 +670,13 @@ class LongHorizonCampaign:
                 "evidence_chain": "episode evidence -> terminal handoff -> no promotion",
             },
             "experience": _memory_experience(journal),
-            "correctness": {"status": "FAIL" if violation else "UNKNOWN"},
+            "correctness": {
+                "status": (
+                    "PASS" if measurement_complete else ("FAIL" if violation else "UNKNOWN")
+                ),
+                "max_abs_err": representative.get("max_abs_err"),
+                "max_rel_err": representative.get("max_rel_err"),
+            },
             "quality_gate": {"result": "FAIL", "failure_reason": failure},
             "open_directions": [
                 {
@@ -670,6 +890,7 @@ class LongHorizonCampaign:
                 violation="supervisor process interrupted",
                 journal=journal,
                 candidate_commit=candidate_commit,
+                episode_workspace=worktree_path,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1063,6 +1284,7 @@ class LongHorizonCampaign:
                     journal=journal,
                     candidate_commit=candidate_commit,
                     verification=verification,
+                    episode_workspace=worktree.path,
                 )
                 outcome_commit = record_episode_outcome(
                     self.workspace,

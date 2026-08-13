@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
 import io
 import json
 import math
@@ -128,6 +129,8 @@ OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
 MAX_COMMAND_TIMEOUT = 600
 DEFAULT_QUEUE_WAIT_GRACE = 14_400
+MAX_GATEWAY_JOB_TIMEOUT = 10_800
+MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 RUNTIME_CHUNK_BYTES = 20 * 1024
 # Workspace bundle uses a smaller chunk size because agate embeds the file
@@ -171,6 +174,7 @@ NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
 AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"tools/profile_kernel.sh"})
 OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
+ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
 TYPED_FALLBACK_REASONS = (
@@ -185,6 +189,7 @@ AGENT_PROBLEM_FILENAME = "agent_problem.json"
 PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
+EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 PROFILE_ENVIRONMENT_KEYS = (
     "PROFILE_ITERS",
     "PROFILE_WARMUP",
@@ -711,6 +716,26 @@ def _with_inherited_profile_environment(items: Iterable[str]) -> list[str]:
         if key not in configured and key in os.environ:
             result.append(f"{key}={os.environ[key]}")
     return result
+
+
+def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Move PROFILE_* controls into the uploaded command for a dev fallback.
+
+    The gateway intentionally accepts only a small environment-variable allowlist,
+    which does not include the profiler driver's local PROFILE_* controls.  A
+    generalized profile already falls back to an uploaded dev command so it can
+    consume one privately injected real shape.  Prefix those non-secret controls
+    on that command instead of asking the gateway API to inject them.
+    """
+    command_environment: list[str] = []
+    gateway_environment: list[str] = []
+    for item in items:
+        key = item.split("=", 1)[0]
+        if key in PROFILE_ENVIRONMENT_KEYS:
+            command_environment.append(item)
+        else:
+            gateway_environment.append(item)
+    return command_environment, gateway_environment
 
 
 def _typed_request(
@@ -1288,6 +1313,27 @@ def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
     return match.group(1) if match else None
 
 
+def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
+    """Budget typed gateway queueing separately from evaluator runtime.
+
+    Typed eval/profile jobs accept a larger enclosing deadline than their evaluator
+    timeout.  Give that job deadline as much of the configured queue grace as the
+    service permits.
+    """
+    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+
+
+def _dev_gateway_job_timeout(command_timeout: int) -> int:
+    """Return a service-valid deadline for an agate dev job.
+
+    Unlike typed eval/profile jobs, the dev API currently validates ``timeout_s``
+    against a hard 600-second ceiling.  Passing the longer client-side queue wait
+    budget through ``--job-timeout`` is rejected at submission time with HTTP 422,
+    so keep queue grace exclusively in ``--wait-timeout`` for this route.
+    """
+    return min(MAX_DEV_JOB_TIMEOUT, command_timeout)
+
+
 def _resume_interrupted_agate_wait(
     *,
     executable: str,
@@ -1429,13 +1475,19 @@ def _typed_agate_command(
     elif args.gateway_profile:
         command += ["--profile", args.gateway_profile]
     options = request["options"]
+    # Generalized workspaces deliberately expose only agent_problem.json to the
+    # optimization agent.  The agate client still needs the evaluator-owned
+    # shapes/reference files locally to assemble its typed eval payload, so point
+    # --reference-dir at the private source while keeping the candidate in the
+    # public workspace.  The private directory is never copied into the workspace.
+    reference_dir = _private_reference_dir(workspace) or workspace
     command += [
         "--gpu",
         args.hardware,
         "--candidate",
         str(workspace / "kernel.py"),
         "--reference-dir",
-        str(workspace),
+        str(reference_dir),
         "--operator",
         str(request["reference"]["operator"]),
         "--num-correctness-cases",
@@ -1447,7 +1499,7 @@ def _typed_agate_command(
         "--wait-timeout",
         str(args.timeout + queue_wait_grace),
         "--job-timeout",
-        str(args.timeout),
+        str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
     for item in args.env:
         command += ["--env-var", item]
@@ -1627,6 +1679,7 @@ def _mask_generalized_result(
     workspace: Path, result: dict[str, Any]
 ) -> dict[str, Any]:
     """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
+    result = _with_workspace_reference_speedup(workspace, result)
     if not _is_generalized_workspace(workspace):
         return result
     masked = dict(result)
@@ -1636,6 +1689,135 @@ def _mask_generalized_result(
         ]
     masked["hidden_case_details"] = "shape inputs and failure details withheld"
     return masked
+
+
+def _record_episode_evaluation(
+    workspace: Path,
+    result: dict[str, Any],
+    *,
+    gateway_kind: str,
+    job_id: object = None,
+) -> None:
+    """Persist exact optimizer-facing results for terminal memory construction.
+
+    Long-horizon workers use ``--no-memory`` because canonical memory belongs to the
+    supervisor.  Keep their complete evaluator results in excluded episode runtime
+    state so a pivot or interruption can still record this round's real per-shape
+    performance without parsing model-authored journal prose.
+    """
+    runtime = workspace / ".atrex_long_horizon"
+    if not (runtime / "journal.json").is_file():
+        return
+    try:
+        kernel_sha256 = hashlib.sha256((workspace / "kernel.py").read_bytes()).hexdigest()
+    except OSError:
+        kernel_sha256 = None
+    payload = {
+        "schema_version": 2,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "gateway_kind": gateway_kind,
+        "job_id": str(job_id) if job_id else None,
+        "kernel_sha256": kernel_sha256,
+        "result": result,
+    }
+    path = workspace / EPISODE_EVALUATIONS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode(
+        "utf-8"
+    )
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line)
+    finally:
+        os.close(descriptor)
+
+
+def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> None:
+    """Record the last ordinary RESULT_JSON emitted by a dev evaluator command."""
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(TEST_RESULT_PREFIX):
+            continue
+        try:
+            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
+        except json.JSONDecodeError:
+            return
+        if isinstance(result, dict):
+            result = _with_workspace_reference_speedup(workspace, result)
+            _record_episode_evaluation(
+                workspace, result, gateway_kind=gateway_kind
+            )
+        return
+
+
+def _positive_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if number > 0.0 and math.isfinite(number) else None
+
+
+def _with_workspace_reference_speedup(
+    workspace: Path, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill candidate-only gateway results from the canonical V0 latency."""
+    if _positive_number(result.get("speedup_vs_ref_geomean")) is not None:
+        return result
+    candidate = _positive_number(result.get("latency_us_geomean"))
+    try:
+        baseline = _json_object(workspace / "memory" / "v0.json") or {}
+    except ValueError:
+        return result
+    performance = baseline.get("performance")
+    performance = performance if isinstance(performance, dict) else {}
+    reference = _positive_number(
+        performance.get("latency_us_geomean", performance.get("latency_us"))
+    )
+    if candidate is None or reference is None:
+        return result
+    hydrated = dict(result)
+    hydrated["speedup_vs_ref_geomean"] = reference / candidate
+    return hydrated
+
+
+def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
+    """Normalize candidate-only ABBA run results for long-lived supervisors."""
+    normalized: list[str] = []
+    for line in stdout.splitlines():
+        if not line.startswith(ABBA_RESULT_PREFIX):
+            normalized.append(line)
+            continue
+        try:
+            payload = json.loads(line[len(ABBA_RESULT_PREFIX) :])
+        except json.JSONDecodeError:
+            normalized.append(line)
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("runs"), list):
+            normalized.append(line)
+            continue
+        changed = False
+        runs: list[object] = []
+        for row in payload["runs"]:
+            if not isinstance(row, dict) or not isinstance(row.get("result"), dict):
+                runs.append(row)
+                continue
+            result = _with_workspace_reference_speedup(workspace, row["result"])
+            if result is row["result"]:
+                runs.append(row)
+                continue
+            updated = dict(row)
+            updated["result"] = result
+            runs.append(updated)
+            changed = True
+        if not changed:
+            normalized.append(line)
+            continue
+        updated_payload = dict(payload)
+        updated_payload["runs"] = runs
+        normalized.append(
+            ABBA_RESULT_PREFIX
+            + json.dumps(updated_payload, ensure_ascii=False, allow_nan=False)
+        )
+    return "\n".join(normalized)
 
 
 def _record_profile_job(
@@ -1729,7 +1911,9 @@ def _run_typed_gateway(
                 executable=agate_executable,
                 url=args.url,
                 gateway_profile=args.gateway_profile,
-                command_timeout=args.timeout,
+                command_timeout=_gateway_job_timeout(
+                    args.timeout, queue_wait_grace
+                ),
                 wait_budget=args.timeout + queue_wait_grace,
             )
     except GatewayHTTPError as exc:
@@ -1794,6 +1978,12 @@ def _run_typed_gateway(
             _optimizer_result_from_eval(
                 job["result"], _expected_shape_ids(workspace)
             ),
+        )
+        _record_episode_evaluation(
+            workspace,
+            result,
+            gateway_kind=kind,
+            job_id=job.get("job_id"),
         )
         print(
             TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
@@ -1955,6 +2145,13 @@ def _main(argv: list[str] | None = None) -> int:
         runtime_bundle = None
     bundle_bytes = len(bundle.encode("ascii"))
     runtime_bundle_bytes = len(runtime_bundle.encode("ascii")) if runtime_bundle else 0
+    gateway_environment = list(args.env)
+    if profile_command and _is_generalized_workspace(workspace):
+        command_environment, gateway_environment = _profile_command_environment(
+            args.env
+        )
+        if command_environment:
+            command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = _find_agate()
     direct_http = bool(
         args.url and (agate_executable is None or bundle_bytes > 50 * 1024)
@@ -2073,7 +2270,7 @@ def _main(argv: list[str] | None = None) -> int:
             "--wait-timeout",
             str(args.timeout + queue_wait_grace),
             "--job-timeout",
-            str(args.timeout),
+            str(_dev_gateway_job_timeout(args.timeout)),
         ]
         if workspace_part_paths:
             for index, part_path in enumerate(workspace_part_paths):
@@ -2096,7 +2293,7 @@ def _main(argv: list[str] | None = None) -> int:
                 "--file",
                 f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}={part_path}",
             ]
-        for item in args.env:
+        for item in gateway_environment:
             if "=" not in item or item.startswith("="):
                 raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
             agate += ["--env-var", item]
@@ -2141,7 +2338,7 @@ def _main(argv: list[str] | None = None) -> int:
                     hardware=args.hardware,
                     timeout=args.timeout,
                     queue_wait_grace=queue_wait_grace,
-                    env_items=args.env,
+                    env_items=gateway_environment,
                     files=direct_files,
                     command="bash __atrex_runner.sh",
                 )
@@ -2156,7 +2353,7 @@ def _main(argv: list[str] | None = None) -> int:
                     executable=agate_executable or "agate",
                     url=args.url,
                     gateway_profile=args.gateway_profile,
-                    command_timeout=args.timeout,
+                    command_timeout=_dev_gateway_job_timeout(args.timeout),
                     wait_budget=args.timeout + queue_wait_grace,
                 )
             except FileNotFoundError as exc:
@@ -2192,11 +2389,14 @@ def _main(argv: list[str] | None = None) -> int:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
+    if evaluator_command:
+        command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
+        _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
         command_stdout = "\n".join(
             line
             for line in command_stdout.splitlines()
-            if line.startswith(TEST_RESULT_PREFIX)
+            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
         )
     if command_stdout:
         print(command_stdout)

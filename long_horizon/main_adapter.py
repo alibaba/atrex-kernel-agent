@@ -279,6 +279,8 @@ def save_stall(workspace: Path, value: int) -> None:
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
 run_bounded = _agent_process.run_bounded
 peak_util = _workspace_state.peak_util
+read_memory = _workspace_state.read_memory
+speedup_vs_reference = _workspace_state.speedup_vs_reference
 CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
 IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
 STALL_STATE_FILE = _constants.STALL_STATE_FILE

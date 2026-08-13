@@ -6,6 +6,7 @@ facts rather than model-reported ones.
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -43,6 +44,38 @@ def read_memory(workspace: Path, n: int) -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def speedup_vs_reference(
+    workspace: Path,
+    candidate_latency_us: object,
+    reported_speedup: object = None,
+) -> Optional[float]:
+    """Return a real reported speedup or derive it from canonical V0 latency."""
+
+    def positive(value: object) -> Optional[float]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        return number if number > 0.0 and math.isfinite(number) else None
+
+    reported = positive(reported_speedup)
+    if reported is not None:
+        return reported
+    candidate = positive(candidate_latency_us)
+    baseline = read_memory(workspace, 0)
+    performance = (
+        baseline.get("performance")
+        if isinstance(baseline, dict)
+        and isinstance(baseline.get("performance"), dict)
+        else {}
+    )
+    reference = positive(
+        performance.get("latency_us_geomean", performance.get("latency_us"))
+    )
+    if candidate is None or reference is None:
+        return None
+    return reference / candidate
 
 
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────

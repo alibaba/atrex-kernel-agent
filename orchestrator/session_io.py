@@ -29,6 +29,7 @@ from .constants import (
     TEST_RESULT_PREFIX,
 )
 from .optimization_policy import DependencyReviewSignal
+from .workspace_state import speedup_vs_reference
 
 
 def _status_is(value: object, expected: str) -> bool:
@@ -377,7 +378,11 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
         "complete" if result.get("all_pass") and by_shape else "incomplete"
     )
     perf["measured_shape_count"] = len(by_shape)
-    perf["speedup_vs_ref_geomean"] = result.get("speedup_vs_ref_geomean", 0.0)
+    perf["speedup_vs_ref_geomean"] = speedup_vs_reference(
+        workspace,
+        result.get("latency_us_geomean"),
+        result.get("speedup_vs_ref_geomean"),
+    )
     all_pass = bool(result.get("all_pass"))
     corr = data.setdefault("correctness", {})
     corr["status"] = "PASS" if all_pass else "FAIL"
