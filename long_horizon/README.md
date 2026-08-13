@@ -12,6 +12,10 @@ incumbent and candidate in an exact same-allocation ABBA schedule. A strict corr
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
+An episode candidate commit contains only `kernel.py`. Plans, profiles, planner discussions,
+journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
+worktree is removed.
+
 Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
 `--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.

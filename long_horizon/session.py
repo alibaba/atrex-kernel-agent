@@ -194,7 +194,8 @@ class LongSessionRunner:
                     turn_prompt = (
                         "The engineering budget for this long-horizon episode has expired. Stop "
                         "further exploration, profiling, and evaluation. Preserve the completed "
-                        "work now: inspect the current Git worktree, commit a coherent candidate "
+                        "work now: inspect the current Git worktree, commit only kernel.py for a "
+                        "coherent candidate "
                         "when one is ready, finalize the episode journal, and atomically publish a "
                         "valid handoff. If there is no coherent candidate, publish an honest pivot "
                         "or blocked handoff instead of continuing to optimize."
@@ -203,7 +204,8 @@ class LongSessionRunner:
                     turn_prompt = (
                         "Continue the same long-horizon optimization episode. The previous turn did "
                         f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
-                        "work from the current Git worktree. Do not merely explain the problem. Before "
+                        "work from the current Git worktree. Candidate commits may contain only "
+                        "kernel.py; leave all evidence uncommitted. Do not merely explain the problem. Before "
                         "stopping, finalize the episode journal and atomically publish a valid handoff."
                     )
                 command = (
