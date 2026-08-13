@@ -1068,10 +1068,21 @@ class Campaign:
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
         """Re-validate the candidate through the gateway: single seed, then five seeds."""
+        # V1 is a correctness/framework bring-up gate, not a performance gate. Keep a
+        # small timing sample so a slow but valid first implementation can enter the
+        # optimization loop without exhausting the evaluator's benchmark budget.
+        timing_args = ["--timed-runs", "5"]
         stages = (
             (
                 "single-seed",
-                ["python", "test_kernel.py", "--version", f"v{n}", "--no-memory"],
+                [
+                    "python",
+                    "test_kernel.py",
+                    "--version",
+                    f"v{n}",
+                    *timing_args,
+                    "--no-memory",
+                ],
             ),
             (
                 "multi-seed",
@@ -1082,6 +1093,7 @@ class Campaign:
                     f"v{n}",
                     "--multi-seed",
                     "5",
+                    *timing_args,
                     "--no-memory",
                 ],
             ),

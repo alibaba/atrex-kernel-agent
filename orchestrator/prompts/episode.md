@@ -23,7 +23,9 @@ final squash promotion. You own only this episode branch and its structured evid
 {{AGENT_RUNTIME}}
 
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
-branch are allowed. Never edit evaluator or ground-truth files, including `test_kernel.py`,
+branch are allowed, but every commit must contain only `kernel.py`. Plans, profiles, discussion
+transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add
+them to Git. Never edit evaluator or ground-truth files, including `test_kernel.py`,
 `profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
 `agent_problem.json`, `metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. For generalized
 Atrex-Bench tasks, do not search outside the workspace for the source operator directory or hidden
@@ -110,9 +112,13 @@ Reach exactly one evidence-backed terminal state:
 2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 
-For `candidate_ready`, commit the exact candidate, append final evidence, then finalize the journal:
+For `candidate_ready`, append the final evidence, commit only `kernel.py`, then finalize the journal.
+The candidate commit must be the episode `HEAD`, and its complete diff from the incumbent must name
+exactly `kernel.py`:
 
 ```bash
+git add -- kernel.py
+git commit -m "v{{VERSION}}: kernel candidate"
 candidate_commit=$(git rev-parse HEAD)
 {{JOURNAL_COMMAND}} finalize --path {{JOURNAL_PATH_SHELL}} --state candidate_ready \
   --candidate-commit "$candidate_commit" \

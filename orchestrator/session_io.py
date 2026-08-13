@@ -91,11 +91,27 @@ def ensure_submodules() -> None:
             REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
         ),
     ]
+    # Internal launchers may expose a generated repository view without independent Git
+    # metadata. Run submodule commands in the recorded open-source checkout while keeping
+    # the current branch's intentionally small required-submodule set.
+    submodule_root = REPO_ROOT
+    runtime_metadata = REPO_ROOT / ".internal-runtime.json"
+    if runtime_metadata.is_file():
+        try:
+            metadata = json.loads(runtime_metadata.read_text(encoding="utf-8"))
+            recorded_root = metadata.get("open_root")
+            if not isinstance(recorded_root, str) or not recorded_root.strip():
+                raise ValueError("open_root is missing")
+            submodule_root = Path(recorded_root).expanduser().resolve()
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"invalid internal runtime metadata: {runtime_metadata}: {exc}"
+            ) from exc
     to_init = [path for path, marker in needed if not marker.exists()]
     if to_init:
         print(f"[orchestrator] initializing submodules: {to_init}", flush=True)
         cmd = ["git", "submodule", "update", "--init", "--depth", "1", "--"] + to_init
-        subprocess.run(cmd, cwd=str(REPO_ROOT), check=True)
+        subprocess.run(cmd, cwd=str(submodule_root), check=True)
         # verify
         for path, marker in needed:
             if not marker.exists():

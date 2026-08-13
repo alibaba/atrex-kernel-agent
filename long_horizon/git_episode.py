@@ -39,6 +39,7 @@ PROTECTED_PREFIXES = (
     ".agents/",
     ".atrex_",
 )
+EPISODE_EVIDENCE_PREFIXES = ("plans/", "profiles/", ".humanize/")
 
 
 def _git(workspace: Path, *args: str, check: bool = True, binary: bool = False):
@@ -78,6 +79,19 @@ def changed_paths(
         base_commit,
         candidate_commit,
         "--",
+    )
+    return sorted(path for path in output.splitlines() if path)
+
+
+def ignored_evidence_files(workspace: Path) -> list[str]:
+    output = git_text(
+        workspace,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        *[prefix.rstrip("/") for prefix in EPISODE_EVIDENCE_PREFIXES],
     )
     return sorted(path for path in output.splitlines() if path)
 
@@ -180,11 +194,8 @@ class EpisodeWorktree:
         paths = changed_paths(self.path, self.base_commit, resolved)
         if not paths:
             return "candidate has no changes relative to incumbent", []
-        violation = protected_violation(paths)
-        if violation:
-            return violation, paths
-        if "kernel.py" not in paths:
-            return "candidate must change kernel.py relative to incumbent", paths
+        if paths != ["kernel.py"]:
+            return "candidate commit may change only kernel.py", paths
         return "", paths
 
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:
@@ -206,6 +217,7 @@ class EpisodeWorktree:
         archived_files = destination / "worktree_files"
         paths = set(changed_paths(self.path, self.base_commit, candidate_commit))
         paths.update(working_changes(self.path))
+        paths.update(ignored_evidence_files(self.path))
         for relative in sorted(paths):
             source = self.path / relative
             if not source.is_file() or source.is_symlink():
