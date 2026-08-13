@@ -31,10 +31,6 @@ from .verifier import GatewayABBAValidator
 MODULE_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
 EVIDENCE_PREFIXES = ("plans/", "profiles/")
-MAX_EPISODE_HISTORY_BYTES = 48 * 1024
-MAX_HISTORY_SUMMARY_CHARS = 6_000
-MAX_HISTORY_DIRECTION_CHARS = 2_000
-MAX_HISTORY_DIRECTIONS = 8
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -80,73 +76,6 @@ class LongHorizonCampaign:
     def workspace(self) -> Path:
         return self.base_campaign.workspace
 
-    def _history(self, state: SupervisorState) -> str:
-        compact: list[dict[str, Any]] = []
-        for attempt in state.attempts[-8:]:
-            item = {
-                key: attempt.get(key)
-                for key in (
-                    "episode", "status", "accepted", "summary", "next_directions",
-                    "candidate_commit", "promotion_commit", "verification", "violation",
-                )
-                if attempt.get(key) is not None
-            }
-            summary = item.get("summary")
-            if isinstance(summary, str) and len(summary) > MAX_HISTORY_SUMMARY_CHARS:
-                item["summary"] = summary[:MAX_HISTORY_SUMMARY_CHARS] + "… [truncated]"
-            directions = item.get("next_directions")
-            if isinstance(directions, list):
-                item["next_directions"] = [
-                    (
-                        direction[:MAX_HISTORY_DIRECTION_CHARS] + "… [truncated]"
-                        if isinstance(direction, str)
-                        and len(direction) > MAX_HISTORY_DIRECTION_CHARS
-                        else direction
-                    )
-                    for direction in directions[:MAX_HISTORY_DIRECTIONS]
-                ]
-            verification = item.get("verification")
-            if isinstance(verification, dict):
-                item["verification"] = {
-                    key: verification.get(key)
-                    for key in (
-                        "gate",
-                        "candidate_latency_us",
-                        "incumbent_latency_us",
-                        "improvement_pct",
-                        "error",
-                    )
-                    if verification.get(key) is not None
-                }
-            episode = int(attempt.get("episode", 0) or 0)
-            if episode > 0:
-                episode_dir = self.workspace / RUNTIME_DIR / "episodes" / f"e{episode:04d}"
-                for archive_name in ("interrupted_archive", "archive"):
-                    for patch_name in ("candidate.patch", "worktree.patch"):
-                        patch = episode_dir / archive_name / patch_name
-                        if patch.is_file() and patch.stat().st_size:
-                            item["recovery_patch"] = str(patch)
-                            break
-                    if "recovery_patch" in item:
-                        break
-            compact.append(item)
-        omitted = 0
-        while len(compact) > 1:
-            rendered = json.dumps(compact, indent=2, ensure_ascii=False)
-            if len(rendered.encode("utf-8")) <= MAX_EPISODE_HISTORY_BYTES:
-                return rendered
-            compact.pop(0)
-            omitted += 1
-        if omitted:
-            compact.insert(
-                0,
-                {
-                    "omitted_older_attempts": omitted,
-                    "note": "Read canonical memory and archived episode evidence in the workspace if needed.",
-                },
-            )
-        return json.dumps(compact, indent=2, ensure_ascii=False)
-
     def _prompt(
         self,
         *,
@@ -156,7 +85,6 @@ class LongHorizonCampaign:
         journal_path: Path,
         handoff_path: Path,
         live_memory_path: Path,
-        state: SupervisorState,
         conversion_pending: bool,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign, version)
@@ -184,7 +112,6 @@ class LongHorizonCampaign:
                 "SANDBOX": directives["sandbox"],
                 "AGENT_RUNTIME": directives["agent_runtime"],
                 "PLAN_GENERATOR": directives["plan_generator"],
-                "HISTORY": self._history(state),
                 "JOURNAL_COMMAND": journal_command,
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
@@ -641,7 +568,6 @@ class LongHorizonCampaign:
                 journal_path=journal_path,
                 handoff_path=handoff_path,
                 live_memory_path=store.live_memory_path,
-                state=state,
                 conversion_pending=conversion_pending,
             )
             store.write_brief(episode, prompt)

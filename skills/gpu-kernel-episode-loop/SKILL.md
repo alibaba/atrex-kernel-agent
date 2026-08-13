@@ -51,9 +51,10 @@ steps map onto the telemetry phases above: `profile`, `research`, `planning`, `i
 
 ### 1. Reconstruct the incumbent and choose a hypothesis
 
-Read the workspace goal, unmasked `memory/v*.json`, prior plans/profiles, and the prior-episode
-evidence block in the episode prompt. Identify attempted dead ends and open directions. Start with one
-falsifiable hypothesis tied to the current bottleneck.
+Read the workspace goal, unmasked `memory/v*.json`, and prior plans/profiles. Prior-episode summaries
+are carried only by canonical memory and are not injected into the episode prompt. Identify attempted
+dead ends and open directions from those records. Start with one falsifiable hypothesis tied to the
+current bottleneck.
 
 ### 2. Profile and localize
 
