@@ -53,7 +53,7 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
-├── skills/                            # Baseline runtime skill for Codex/Pi
+├── skills/                            # Backend-local workflow and plan-generation skills
 ├── tools/
 │   ├── sandbox.py                     # Gateway packaging and execution boundary
 │   ├── local_gateway.py               # Trusted localhost FIFO scheduler
@@ -62,7 +62,7 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
 ├── gpu-wiki/                          # Hardware and optimization knowledge base
 ├── reference-projects/                # Optional source-search repositories
-└── 3rdparty/                          # Humanize and profiler-analysis dependencies
+└── 3rdparty/                          # Profiler-analysis dependencies
 ```
 
 The `skills/` and `agents/` directories are internal runtime assets. The orchestrator links or
@@ -148,7 +148,10 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
 - `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
-- Humanize planning assets are hydrated locally without changing global user configuration.
+- The repository-native `gen-plan` skill is linked into every backend's local discovery tree and
+  independently obtains read-only, non-persistent Codex and Qoder reviews before evidence-based
+  cross-review synthesis. A matching primary backend reviews in its current session to avoid
+  recursion.
 
 ### Sandbox and gateway
 

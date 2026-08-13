@@ -33,7 +33,6 @@ from .process import (
     run_bounded,
 )
 from .runtime import (
-    DEFAULT_HUMANIZE_DIR,
     PYPI_MIRROR,
     SESSION_SHELL_GUARD,
     SUPPORTED_RUNTIME_IDS,
@@ -60,7 +59,6 @@ __all__ = [
     "CodexAdapter",
     "CodexRuntime",
     "DEFAULT_BACKEND_REGISTRY",
-    "DEFAULT_HUMANIZE_DIR",
     "DEFAULT_PROTECTED_GATEWAY_SCREEN",
     "DEFAULT_PROTECTED_GATEWAY_STATE_NAME",
     "NormalizedAgentEvent",

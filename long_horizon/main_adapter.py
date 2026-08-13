@@ -18,7 +18,6 @@ from orchestrator.agent_runtime.model import (
     TokenUsage,
 )
 from orchestrator.agent_runtime.runtime import (
-    DEFAULT_HUMANIZE_DIR,
     build_session_command,
     build_session_environment,
     terminal_usage_from_stream,
@@ -187,7 +186,7 @@ def normalize_stream(
     tuple[str, ...],
 ]:
     """Observe one long-session invocation through main's backend adapter."""
-    adapter = DEFAULT_BACKEND_REGISTRY.create(agent_cli, DEFAULT_HUMANIZE_DIR)
+    adapter = DEFAULT_BACKEND_REGISTRY.create(agent_cli)
     observation_errors: tuple[str, ...] = ()
     try:
         events, terminal_usage = adapter.normalize_stream(stdout)

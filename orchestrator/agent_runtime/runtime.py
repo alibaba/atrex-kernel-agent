@@ -15,10 +15,8 @@ from .adapter import (
     CodexAdapter,
     PiAdapter,
     QoderAdapter,
-    codex_settings_args,
     token_usage_from_mapping,
     token_usage_from_model_usage,
-    toml_config_value,
 )
 from .codex_ledger import (
     CodexSessionLedgerObserver,
@@ -39,7 +37,6 @@ from .process import ProcessRunner, protected_gateway_identity, run_bounded
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
-DEFAULT_HUMANIZE_DIR = REPO_ROOT / "3rdparty" / "humanize"
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
@@ -91,6 +88,7 @@ def token_usage_from_stream(stdout: str) -> int:
 def build_session_environment(runtime_id: str) -> dict[str, str]:
     """Build the current guarded environment for one coding-agent session."""
     environment = os.environ.copy()
+    environment["ATREX_AGENT_CLI"] = runtime_id
     python_bin = str(Path(sys.executable).resolve().parent)
     path_parts = [
         part
@@ -169,6 +167,9 @@ class CliAgentRuntime:
                     for key, value in request.extra_environment.items()
                 }
             )
+        # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
+        # launching Codex or Qoder from an episode already owned by the matching backend.
+        environment["ATREX_AGENT_CLI"] = self.id
         codex_observer = None
         codex_temporary_home = None
         pre_observation_errors: tuple[str, ...] = ()
@@ -218,14 +219,10 @@ class CliAgentRuntime:
             # and the existing terminal token budget must remain available.
             events = ()
             terminal_usage = terminal_usage_from_stream(stdout)
-            observation_errors = (
-                f"stream_normalization_failed:{type(exc).__name__}",
-            )
+            observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
         capabilities = replace(
             self._adapter.capabilities,
-            usage_delta_observed=any(
-                event.kind == "usage_delta" for event in events
-            ),
+            usage_delta_observed=any(event.kind == "usage_delta" for event in events),
         )
         if codex_observer is not None:
             observed_session_id = codex_thread_id_from_stream(stdout)
@@ -271,10 +268,10 @@ class ClaudeRuntime(CliAgentRuntime):
         self,
         *,
         process_runner: ProcessRunner = run_bounded,
-        humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+        runtime_assets_dir: Path | None = None,
     ) -> None:
         super().__init__(
-            ClaudeAdapter(humanize_dir), process_runner=process_runner
+            ClaudeAdapter(runtime_assets_dir), process_runner=process_runner
         )
 
 
@@ -283,9 +280,11 @@ class QoderRuntime(CliAgentRuntime):
         self,
         *,
         process_runner: ProcessRunner = run_bounded,
-        humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+        runtime_assets_dir: Path | None = None,
     ) -> None:
-        super().__init__(QoderAdapter(humanize_dir), process_runner=process_runner)
+        super().__init__(
+            QoderAdapter(runtime_assets_dir), process_runner=process_runner
+        )
 
 
 class PiRuntime(CliAgentRuntime):
@@ -293,9 +292,9 @@ class PiRuntime(CliAgentRuntime):
         self,
         *,
         process_runner: ProcessRunner = run_bounded,
-        humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+        runtime_assets_dir: Path | None = None,
     ) -> None:
-        super().__init__(PiAdapter(humanize_dir), process_runner=process_runner)
+        super().__init__(PiAdapter(runtime_assets_dir), process_runner=process_runner)
 
 
 class CodexRuntime(CliAgentRuntime):
@@ -303,19 +302,21 @@ class CodexRuntime(CliAgentRuntime):
         self,
         *,
         process_runner: ProcessRunner = run_bounded,
-        humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+        runtime_assets_dir: Path | None = None,
     ) -> None:
-        super().__init__(CodexAdapter(humanize_dir), process_runner=process_runner)
+        super().__init__(
+            CodexAdapter(runtime_assets_dir), process_runner=process_runner
+        )
 
 
 def build_agent_runtime(
     runtime_id: str,
     *,
     process_runner: ProcessRunner = run_bounded,
-    humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+    runtime_assets_dir: Path | None = None,
     registry: BackendAdapterRegistry = DEFAULT_BACKEND_REGISTRY,
 ) -> AgentRuntime:
-    adapter = registry.create(runtime_id, humanize_dir)
+    adapter = registry.create(runtime_id, runtime_assets_dir)
     return CliAgentRuntime(adapter, process_runner=process_runner)
 
 
@@ -325,15 +326,15 @@ def build_session_command(
     session_id: str,
     reasoning_effort: str = "max",
     *,
-    humanize_dir: Path = DEFAULT_HUMANIZE_DIR,
+    runtime_assets_dir: Path | None = None,
 ) -> list[str]:
     if reasoning_effort not in REASONING_EFFORTS:
         raise ValueError(f"unsupported reasoning effort: {reasoning_effort!r}")
-    runtime = build_agent_runtime(runtime_id, humanize_dir=humanize_dir)
+    runtime = build_agent_runtime(runtime_id, runtime_assets_dir=runtime_assets_dir)
     assert isinstance(runtime, CliAgentRuntime)
     return runtime.build_command(prompt, session_id, reasoning_effort)
 
 
 def auth_hint(runtime_id: str) -> str:
-    adapter = DEFAULT_BACKEND_REGISTRY.create(runtime_id, DEFAULT_HUMANIZE_DIR)
+    adapter = DEFAULT_BACKEND_REGISTRY.create(runtime_id)
     return adapter.auth_hint()

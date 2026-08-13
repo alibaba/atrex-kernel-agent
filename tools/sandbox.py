@@ -83,11 +83,13 @@ INPUT_SKIP_DIRS = {
     "gpu-wiki",
     "reference-projects",
     "skills",
-    # Plans and humanize state are local campaign inputs for the agent, never
-    # runtime inputs for the command executing in the GPU pod.  In particular,
-    # preserved implementation patches can be large enough to push agate's
-    # single uploaded-file argument past Linux MAX_ARG_STRLEN.
+    # Plans are local campaign inputs for the agent, never runtime inputs for
+    # the command executing in the GPU pod. In particular, preserved
+    # implementation patches can be large enough to push agate's single
+    # uploaded-file argument past Linux MAX_ARG_STRLEN.
     "plans",
+    # Older resumable workspaces may retain this former plan-plugin cache. It
+    # is never a GPU runtime input and can contain large preserved patches.
     ".humanize",
 }
 INPUT_SKIP_PATHS = {

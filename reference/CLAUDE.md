@@ -127,4 +127,5 @@ library primitives — are unaffected.
 - Baseline setup session: `orchestrator/prompts/setup.md`
 - Triton→Gluon conversion: latched directive inside the episode prompt
 - NVIDIA profiling skill (Stage 1): `.claude/skills/ncu-report-skill/SKILL.md`
-- Plan generation (Stage 2): `/humanize:gen-plan` (plugin, loaded via `--plugin-dir`)
+- Plan generation (Stage 2): repository-native `skills/gen-plan/SKILL.md` with independent Codex
+  and Qoder review synthesis

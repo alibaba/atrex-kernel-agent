@@ -95,10 +95,10 @@ architecture and workflow design, see [docs/design.md](docs/design.md).
 ├── docs/                            # Detailed project design docs
 ├── reference/                       # Workspace init, evaluator adapters, schemas, SOL packaging
 ├── reference-projects/              # Optional source-search repositories used by episodes
-├── skills/                          # Workspace-local baseline skill used by Agent sessions
+├── skills/                          # Workspace-local workflow and plan-generation skills
 ├── tools/                           # Sandbox, local gateway, profiling, memory, and measurement tools
 ├── gpu-wiki/                        # Architecture-scoped GPU knowledge base
-└── 3rdparty/                        # Runtime planning and profiler-analysis dependencies
+└── 3rdparty/                        # Profiler-analysis dependencies
 ```
 
 ## Acknowledgements
@@ -124,12 +124,13 @@ Reference kernel projects (`reference-projects/`):
 - [quack](https://github.com/Dao-AILab/quack) — Dao-AILab Quack
 - [tilelang](https://github.com/tile-ai/tilelang) — TileLang
 
-Knowledge base and tooling (`gpu-wiki/3rdparty/`, `3rdparty/`):
+Knowledge base and tooling (`gpu-wiki/3rdparty/`, `3rdparty/`, and `skills/`):
 
 - [KernelWiki](https://github.com/mit-han-lab/KernelWiki) — GPU kernel knowledge base
 - [modern-gpu-programming-for-mlsys](https://github.com/mlc-ai/modern-gpu-programming-for-mlsys) — Modern GPU programming for MLSys
 - [ncu-report-skill](https://github.com/mit-han-lab/ncu-report-skill) — Nsight Compute report parsing skill
-- [humanize](https://github.com/PolyArch/humanize) — Plan generation plugin
+- [humanize](https://github.com/PolyArch/humanize) — Original source of the repository-native
+  `gen-plan` workflow
 - [AKO4ALL](https://github.com/TongmingLAIC/AKO4ALL) — AKO4ALL
 - [KDA](https://github.com/mit-han-lab/kernel-design-agents) — Kernel Design Agents
 

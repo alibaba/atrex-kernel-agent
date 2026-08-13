@@ -7,15 +7,22 @@ AKA exposes one supported execution path: the unattended, budget-bounded orchest
 
 - `bash`
 - `git`
-- Python 3, `torch`, and `jq` on the coordinator host
+- Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - `agate` (`atrex-gateway-client`) configured with gateway URL and credentials
 - The selected gateway environment must provide the workload's framework and GPU stack
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
-The orchestrator verifies required submodules and `jq` before starting. Missing required submodules
-are initialized automatically; the large `reference-projects/` collection remains optional.
+The orchestrator verifies required submodules before starting and initializes missing ones
+automatically; the large `reference-projects/` collection remains optional.
+
+The repository-native `gen-plan` skill requests independent, read-only, non-persistent reviews from
+Codex and Qoder, then resolves their agreements and disagreements against repository evidence. A
+Codex- or Qoder-owned episode performs its matching review in the current session to avoid recursion;
+an unavailable reviewer is recorded explicitly and does not discard the other review. External
+`ask-codex` and `ask-qoder` consultations always run with maximum reasoning effort, independently of
+the primary episode's configured effort.
 
 ## 1. Clone the Repository
 
@@ -87,9 +94,10 @@ after normalization or terminal-only fallback. The orchestrator uses `session_me
 the exact workspace or thread when stdout omits it, verifies every available usage component against
 `turn.completed.usage`, and records ledger or cleanup errors without failing the Agent run. If ledger
 observation fails during an episode resume, consecutive cumulative stdout totals still provide a
-non-duplicated invocation total while phase attribution is disabled. Optimization and Humanize skills
-stay in the campaign-scoped `.agents/skills/` tree, so the user's global Codex installation is not
-modified. Optional Codex config overrides use a JSON object or an array of literal `key=value` values:
+non-duplicated invocation total while phase attribution is disabled. Optimization and
+plan-generation skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
+Codex installation is not modified. Optional Codex config overrides use a JSON object or an array of
+literal `key=value` values:
 
 ```bash
 export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_effort":"xhigh"}'

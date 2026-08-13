@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,7 +21,6 @@ from . import agent_runtime as _agent_runtime
 from .constants import (
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
-    HUMANIZE_DIR,
     REPO_ROOT,
     SANDBOX_DIRECTIVE_PROMPT,
     SANDBOX_TOOL,
@@ -74,98 +71,16 @@ def _render(template_path: Path, **kw: str) -> str:
     return text
 
 
-def _find_jq() -> Optional[str]:
-    found = shutil.which("jq")
-    if found:
-        return found
-    adjacent = Path(sys.executable).resolve().parent / "jq"
-    if adjacent.is_file() and os.access(adjacent, os.X_OK):
-        return str(adjacent)
-    return None
-
-
-def ensure_jq() -> str:
-    """Install jq with an available package manager when the runtime lacks it."""
-    found = _find_jq()
-    if found:
-        return found
-
-    privileged_prefix: list[str] | None
-    if getattr(os, "geteuid", lambda: 1)() == 0:
-        privileged_prefix = []
-    elif shutil.which("sudo"):
-        privileged_prefix = ["sudo"]
-    else:
-        privileged_prefix = None
-
-    installers: list[tuple[str, list[str], dict[str, str] | None]] = []
-    system_commands = (
-        ("apt-get", ["apt-get", "install", "-y", "jq"]),
-        ("dnf", ["dnf", "install", "-y", "jq"]),
-        ("yum", ["yum", "install", "-y", "jq"]),
-        ("apk", ["apk", "add", "jq"]),
-        ("zypper", ["zypper", "--non-interactive", "install", "jq"]),
-    )
-    if privileged_prefix is not None:
-        for manager, command in system_commands:
-            if shutil.which(manager):
-                installers.append((manager, [*privileged_prefix, *command], None))
-    if shutil.which("brew"):
-        installers.append(("brew", ["brew", "install", "jq"], None))
-    if shutil.which("conda"):
-        conda_env = os.environ.copy()
-        conda_env["CONDA_SOLVER"] = "classic"
-        installers.append(
-            (
-                "conda",
-                ["conda", "install", "-y", "-c", "conda-forge", "jq"],
-                conda_env,
-            )
-        )
-
-    failures: list[str] = []
-    for manager, command, environment in installers:
-        print(f"[orchestrator] jq not found; installing with {manager}", flush=True)
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=600,
-                env=environment,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            failures.append(f"{manager}: {exc}")
-            continue
-        found = _find_jq()
-        if completed.returncode == 0 and found:
-            jq_dir = str(Path(found).resolve().parent)
-            path_parts = os.environ.get("PATH", "").split(os.pathsep)
-            if jq_dir not in path_parts:
-                os.environ["PATH"] = os.pathsep.join([jq_dir, *path_parts])
-            print(f"[orchestrator] jq installed with {manager}", flush=True)
-            return found
-        output_lines = (completed.stdout or "").strip().splitlines()
-        detail = output_lines[-1] if output_lines else f"exit {completed.returncode}"
-        failures.append(f"{manager}: {detail}")
-
-    detail = "; ".join(failures) if failures else "no supported package manager found"
-    raise RuntimeError(f"jq is required and automatic installation failed: {detail}")
-
-
 def ensure_submodules() -> None:
-    """Initialize submodules and host tools required by the optimization pipeline.
+    """Initialize submodules required by the optimization pipeline.
 
-    Covers: gpu-wiki/3rdparty (KernelWiki), 3rdparty/ncu-report-skill, 3rdparty/humanize.
+    Covers: gpu-wiki/3rdparty (KernelWiki) and 3rdparty/ncu-report-skill.
     Skips reference-projects (large, optional — only needed for L2 search).
     Idempotent: already-initialized submodules are untouched.
     """
     needed = [
         ("gpu-wiki/3rdparty/", REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md"),
         ("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md"),
-        ("3rdparty/humanize", HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md"),
     ]
     to_init = [path for path, marker in needed if not marker.exists()]
     if to_init:
@@ -180,7 +95,6 @@ def ensure_submodules() -> None:
                     "Run `git submodule update --init` manually."
                 )
         print("[orchestrator] all submodules ready", flush=True)
-    ensure_jq()
 
 
 def run_session(
@@ -197,15 +111,13 @@ def run_session(
     agent_plugins: bool = True,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
+    # Kept for the dependency-review call contract. Runtime plan generation is now a
+    # workspace-local skill rather than a process-level plugin.
+    del agent_plugins
     session_id = str(uuid.uuid4())
     runtime = _agent_runtime.build_agent_runtime(
         agent_cli,
         process_runner=_agent_runtime.run_bounded,
-        humanize_dir=(
-            HUMANIZE_DIR
-            if agent_plugins
-            else workspace / ".atrex-disabled-agent-plugins"
-        ),
     )
     result = runtime.run(
         _agent_runtime.AgentRunRequest(

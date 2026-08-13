@@ -327,8 +327,8 @@ class ClaudeAdapter(ClaudeLikeAdapter):
     id = "claude"
     settings_variable = "ATREX_CLAUDE_SESSION_SETTINGS"
 
-    def __init__(self, humanize_dir: Path) -> None:
-        self._humanize_dir = humanize_dir
+    def __init__(self, runtime_assets_dir: Path | None = None) -> None:
+        del runtime_assets_dir
 
     def build_command(
         self,
@@ -351,9 +351,6 @@ class ClaudeAdapter(ClaudeLikeAdapter):
         ]
         if settings:
             command += ["--settings", settings]
-        marker = self._humanize_dir / "skills" / "humanize-gen-plan" / "SKILL.md"
-        if marker.exists():
-            command += ["--plugin-dir", str(self._humanize_dir)]
         command.append(prompt)
         return command
 
@@ -365,8 +362,8 @@ class QoderAdapter(ClaudeLikeAdapter):
     id = "qodercli"
     settings_variable = "ATREX_QODER_SESSION_SETTINGS"
 
-    def __init__(self, humanize_dir: Path) -> None:
-        del humanize_dir
+    def __init__(self, runtime_assets_dir: Path | None = None) -> None:
+        del runtime_assets_dir
 
     def normalize_stream(
         self, stdout: str
@@ -422,8 +419,8 @@ class PiAdapter(AgentBackendAdapter):
         phase_marker_receipt=True,
     )
 
-    def __init__(self, humanize_dir: Path) -> None:
-        del humanize_dir
+    def __init__(self, runtime_assets_dir: Path | None = None) -> None:
+        del runtime_assets_dir
 
     def build_command(
         self,
@@ -523,8 +520,8 @@ class CodexAdapter(AgentBackendAdapter):
         phase_marker_receipt=True,
     )
 
-    def __init__(self, humanize_dir: Path) -> None:
-        del humanize_dir
+    def __init__(self, runtime_assets_dir: Path | None = None) -> None:
+        del runtime_assets_dir
 
     def build_command(
         self,
@@ -595,7 +592,7 @@ class CodexAdapter(AgentBackendAdapter):
         return 'run `codex login status` and `codex exec "reply ok"` to diagnose'
 
 
-AdapterFactory = Callable[[Path], AgentBackendAdapter]
+AdapterFactory = Callable[[Path | None], AgentBackendAdapter]
 
 
 class BackendAdapterRegistry:
@@ -607,11 +604,13 @@ class BackendAdapterRegistry:
             raise ValueError(f"agent backend already registered: {runtime_id!r}")
         self._factories[runtime_id] = factory
 
-    def create(self, runtime_id: str, humanize_dir: Path) -> AgentBackendAdapter:
+    def create(
+        self, runtime_id: str, runtime_assets_dir: Path | None = None
+    ) -> AgentBackendAdapter:
         factory = self._factories.get(runtime_id)
         if factory is None:
             raise ValueError(f"unsupported agent CLI: {runtime_id!r}")
-        adapter = factory(humanize_dir)
+        adapter = factory(runtime_assets_dir)
         if adapter.id != runtime_id:
             raise ValueError(
                 "agent backend registry key "
