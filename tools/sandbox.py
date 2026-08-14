@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
 import io
 import json
 import math
@@ -83,11 +84,13 @@ INPUT_SKIP_DIRS = {
     "gpu-wiki",
     "reference-projects",
     "skills",
-    # Plans and humanize state are local campaign inputs for the agent, never
-    # runtime inputs for the command executing in the GPU pod.  In particular,
-    # preserved implementation patches can be large enough to push agate's
-    # single uploaded-file argument past Linux MAX_ARG_STRLEN.
+    # Plans are local campaign inputs for the agent, never runtime inputs for
+    # the command executing in the GPU pod. In particular, preserved
+    # implementation patches can be large enough to push agate's single
+    # uploaded-file argument past Linux MAX_ARG_STRLEN.
     "plans",
+    # Older resumable workspaces may retain this former plan-plugin cache. It
+    # is never a GPU runtime input and can contain large preserved patches.
     ".humanize",
 }
 INPUT_SKIP_PATHS = {
@@ -109,7 +112,12 @@ INPUT_SKIP_PATHS = {
     "valid.py",
 }
 INPUT_SKIP_SUFFIXES = {
-    ".pyc", ".pyo", ".ncu-rep", ".att", ".pftrace", ".otf2",
+    ".pyc",
+    ".pyo",
+    ".ncu-rep",
+    ".att",
+    ".pftrace",
+    ".otf2",
     # Campaign documentation, plans, and prior profile reports are local agent
     # state.  Remote correctness/profile commands only need executable sources
     # and harness inputs; omitting Markdown also keeps agate's uploaded file
@@ -121,6 +129,8 @@ OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
 MAX_COMMAND_TIMEOUT = 600
 DEFAULT_QUEUE_WAIT_GRACE = 14_400
+MAX_GATEWAY_JOB_TIMEOUT = 10_800
+MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 RUNTIME_CHUNK_BYTES = 20 * 1024
 # Workspace bundle uses a smaller chunk size because agate embeds the file
@@ -130,11 +140,13 @@ WORKSPACE_CHUNK_BYTES = 20 * 1024
 SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
 EVALUATION_INPUT_PATHS = frozenset(
     {
+        "agent_problem.json",
         "definition.json",
         "input.py",
         "kernel.py",
         "metadata.json",
         "reference.py",
+        "roofline.json",
         "shapes.json",
         "solution.json",
         "test_kernel.py",
@@ -143,6 +155,7 @@ EVALUATION_INPUT_PATHS = frozenset(
 )
 CANDIDATE_RUNTIME_INPUT_PATHS = frozenset(
     {
+        "agent_problem.json",
         "definition.json",
         "input.py",
         "kernel.py",
@@ -161,6 +174,7 @@ NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
 AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"tools/profile_kernel.sh"})
 OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
+ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
 TYPED_FALLBACK_REASONS = (
@@ -170,6 +184,19 @@ TYPED_FALLBACK_REASONS = (
     "http 404",
     "http 413",
     "http 501",
+)
+AGENT_PROBLEM_FILENAME = "agent_problem.json"
+MODE_STATE_FILENAME = ".orchestrator_mode.json"
+PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
+PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
+PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
+EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
+PROFILE_ENVIRONMENT_KEYS = (
+    "PROFILE_ITERS",
+    "PROFILE_WARMUP",
+    "PROFILE_WORKLOAD_IDX",
+    "PROFILE_SHAPE_ID",
+    "PROFILE_DEVICE",
 )
 
 
@@ -195,7 +222,8 @@ def _walk_files(root: Path) -> Iterable[Path]:
     """Yield regular files below root without following directory symlinks."""
     for current, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = [
-            name for name in dirs
+            name
+            for name in dirs
             if name not in INPUT_SKIP_DIRS and not (Path(current) / name).is_symlink()
         ]
         for name in files:
@@ -208,6 +236,8 @@ def _make_input_bundle(
     workspace: Path,
     max_file_bytes: int,
     input_paths: Iterable[str] = (),
+    injected_inputs: dict[str, Path] | None = None,
+    injected_payloads: dict[str, bytes] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing only explicitly selected inputs."""
     archive = io.BytesIO()
@@ -245,7 +275,27 @@ def _make_input_bundle(
             arcname = f"{prefix}/{rel}" if prefix else rel
             add_file(tf, path, arcname)
 
+    def add_payload(tf: tarfile.TarFile, payload: bytes, arcname: str) -> None:
+        nonlocal count
+        if arcname in seen or arcname not in selected_inputs:
+            return
+        if len(payload) > max_file_bytes:
+            skipped.append(f"{arcname} ({len(payload)} bytes > input limit)")
+            return
+        info = tarfile.TarInfo(arcname)
+        info.size = len(payload)
+        info.mode = 0o400
+        tf.addfile(info, io.BytesIO(payload))
+        seen.add(arcname)
+        count += 1
+
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+        # Evaluator-only inputs are added before the public workspace tree so a candidate-created
+        # file with the same name cannot shadow the orchestrator-owned private test set.
+        for arcname, path in (injected_inputs or {}).items():
+            add_file(tf, path, arcname)
+        for arcname, payload in (injected_payloads or {}).items():
+            add_payload(tf, payload, arcname)
         add_tree(tf, workspace)
         # Optimization workspaces receive tools/ as a symlink.  Materialize the
         # small tool directory so remote profile commands are self-contained.
@@ -266,7 +316,9 @@ def _declared_candidate_sources(workspace: Path) -> set[str]:
             raise RuntimeError(f"invalid workspace solution.json: {exc}") from exc
         sources = solution.get("sources", []) if isinstance(solution, dict) else []
         if not isinstance(sources, list):
-            raise RuntimeError("workspace solution.json sources must be a list of paths")
+            raise RuntimeError(
+                "workspace solution.json sources must be a list of paths"
+            )
         for source in sources:
             if isinstance(source, str):
                 source_path = source
@@ -288,14 +340,15 @@ def _declared_candidate_sources(workspace: Path) -> set[str]:
 
 def _evaluation_input_paths(workspace: Path) -> frozenset[str]:
     """Return only files required by the immutable evaluator."""
-    return frozenset(set(EVALUATION_INPUT_PATHS) | _declared_candidate_sources(workspace))
+    return frozenset(
+        set(EVALUATION_INPUT_PATHS) | _declared_candidate_sources(workspace)
+    )
 
 
 def _candidate_runtime_input_paths(workspace: Path) -> set[str]:
     """Return candidate and workload modules needed by profile/import commands."""
     selected = {
-        path for path in CANDIDATE_RUNTIME_INPUT_PATHS
-        if (workspace / path).is_file()
+        path for path in CANDIDATE_RUNTIME_INPUT_PATHS if (workspace / path).is_file()
     }
     selected.update(_declared_candidate_sources(workspace))
     return selected
@@ -387,7 +440,8 @@ def _command_input_paths(
     imports = _python_inline_imports(parts)
     candidate_command = bool(
         imports & {"kernel", "input", "reference"}
-        or basenames & {
+        or basenames
+        & {
             "kernel.py",
             "profile_driver.py",
             "profile_nvidia.sh",
@@ -435,7 +489,8 @@ def _is_test_kernel_command(parts: list[str]) -> bool:
 def _is_profile_command(parts: list[str]) -> bool:
     """Return whether argv invokes one of the repository profiler wrappers."""
     return any(
-        Path(token).name in {"profile_nvidia.sh", "profile_kernel.sh"}
+        Path(token).name
+        in {"profile_nvidia.sh", "profile_kernel.sh", "profile_driver.py"}
         for token in _command_parts(parts)
     )
 
@@ -465,14 +520,116 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
-def _typed_workspace_limitation(workspace: Path, command: list[str]) -> str | None:
+def _is_generalized_workspace(workspace: Path) -> bool:
+    """Return whether production policy enables private exact-case handling."""
+    state = _json_object(workspace / MODE_STATE_FILENAME) or {}
+    return (
+        state.get("mode") == "production"
+        and (workspace / AGENT_PROBLEM_FILENAME).is_file()
+    )
+
+
+def _private_reference_dir(workspace: Path) -> Path | None:
+    """Resolve private evaluator inputs only for a generalized production workspace."""
+    if not _is_generalized_workspace(workspace):
+        return None
+    raw = os.environ.get(PRIVATE_REFERENCE_ENV, "")
+    if not raw:
+        raise ValueError(
+            f"{PRIVATE_REFERENCE_ENV} is required for generalized Atrex-Bench evaluation"
+        )
+    private_dir = Path(raw).expanduser().resolve()
+    if not private_dir.is_dir():
+        raise ValueError("configured private Atrex-Bench reference directory is missing")
+    private_problem = private_dir / AGENT_PROBLEM_FILENAME
+    public_problem = workspace / AGENT_PROBLEM_FILENAME
+    # A user-provided contract remains evaluator-owned and must match byte-for-byte.
+    # An automatically authored production contract intentionally exists only in the
+    # campaign workspace, so absence from the detailed-shape source is valid.
+    if private_problem.is_file() and (
+        private_problem.read_bytes() != public_problem.read_bytes()
+    ):
+        raise ValueError(
+            "workspace agent_problem.json does not match the evaluator-owned public contract"
+        )
+    return private_dir
+
+
+def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> Path:
+    private_dir = _private_reference_dir(workspace)
+    path = (
+        (private_dir / filename) if private_dir is not None else (workspace / filename)
+    )
+    if required and not path.is_file():
+        raise ValueError(f"required evaluator input is missing: {filename}")
+    return path
+
+
+def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
+    private_dir = _private_reference_dir(workspace)
+    if private_dir is None:
+        return {}
+    inputs: dict[str, Path] = {}
+    for filename in PRIVATE_EVALUATOR_FILENAMES:
+        path = private_dir / filename
+        if filename in {"shapes.json", "metadata.json"} and not path.is_file():
+            raise ValueError(f"required private evaluator input is missing: {filename}")
+        if path.is_file():
+            inputs[filename] = path
+    return inputs
+
+
+def _sort_shape_id(shape_id: str) -> tuple[int, object]:
+    return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
+
+
+def _private_profile_case(
+    workspace: Path, env_items: Iterable[str]
+) -> tuple[str, bytes] | None:
+    """Materialize exactly one private real shape for an ephemeral remote profile."""
+    private_dir = _private_reference_dir(workspace)
+    if private_dir is None:
+        return None
+    shapes = _json_object(private_dir / "shapes.json", required=True)
+    if not shapes:
+        raise ValueError("private shapes.json must contain a non-empty object")
+    environment = _parse_env_items(env_items)
+    shape_id = environment.get("PROFILE_SHAPE_ID") or sorted(
+        (str(value) for value in shapes), key=_sort_shape_id
+    )[0]
+    entry = shapes.get(shape_id)
+    if not isinstance(entry, dict):
+        raise ValueError(f"PROFILE_SHAPE_ID={shape_id!r} is not a real evaluator shape id")
+    payload = {
+        "schema_version": 1,
+        "shape_id": shape_id,
+        "init_kwargs": entry.get("init_kwargs") or {},
+        "input_kwargs": entry.get("input_kwargs") or {},
+    }
+    return (
+        PRIVATE_PROFILE_CASE_FILENAME,
+        (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"),
+    )
+
+
+def _typed_workspace_limitation(
+    workspace: Path, command: list[str], kind: str
+) -> str | None:
     """Explain why the typed run/profile source contract cannot represent a workspace."""
-    required = ("kernel.py", "reference.py", "input.py", "shapes.json")
+    required = ("kernel.py", "reference.py", "input.py")
     missing = [name for name in required if not (workspace / name).is_file()]
     if missing:
         return "missing " + ", ".join(missing)
+    try:
+        _evaluator_input_path(workspace, "shapes.json", required=True)
+    except ValueError as exc:
+        return str(exc)
+    if kind == "profile" and _is_generalized_workspace(workspace):
+        return "generalized tasks inject one private real shape through the dev profile route"
     if (workspace / "workload.jsonl").is_file():
-        return "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
+        return (
+            "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
+        )
 
     solution = _json_object(workspace / "solution.json")
     if solution is not None:
@@ -494,7 +651,9 @@ def _typed_workspace_limitation(workspace: Path, command: list[str]) -> str | No
         imported_roots: set[str] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+                imported_roots.update(
+                    alias.name.split(".", 1)[0] for alias in node.names
+                )
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_roots.add(node.module.split(".", 1)[0])
         local_imports = sorted(
@@ -507,7 +666,9 @@ def _typed_workspace_limitation(workspace: Path, command: list[str]) -> str | No
             )
         )
         if local_imports:
-            return "candidate imports local auxiliary modules: " + ", ".join(local_imports)
+            return "candidate imports local auxiliary modules: " + ", ".join(
+                local_imports
+            )
 
     # These test-harness controls do not exist in the typed request contract.
     # Preserve their exact semantics through dev instead of silently dropping them.
@@ -555,6 +716,36 @@ def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
     return env_vars
 
 
+def _with_inherited_profile_environment(items: Iterable[str]) -> list[str]:
+    """Forward the documented PROFILE_* shell assignments without forwarding secrets."""
+    result = list(items)
+    configured = _parse_env_items(result)
+    for key in PROFILE_ENVIRONMENT_KEYS:
+        if key not in configured and key in os.environ:
+            result.append(f"{key}={os.environ[key]}")
+    return result
+
+
+def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Move PROFILE_* controls into the uploaded command for a dev fallback.
+
+    The gateway intentionally accepts only a small environment-variable allowlist,
+    which does not include the profiler driver's local PROFILE_* controls.  A
+    generalized profile already falls back to an uploaded dev command so it can
+    consume one privately injected real shape.  Prefix those non-secret controls
+    on that command instead of asking the gateway API to inject them.
+    """
+    command_environment: list[str] = []
+    gateway_environment: list[str] = []
+    for item in items:
+        key = item.split("=", 1)[0]
+        if key in PROFILE_ENVIRONMENT_KEYS:
+            command_environment.append(item)
+        else:
+            gateway_environment.append(item)
+    return command_environment, gateway_environment
+
+
 def _typed_request(
     workspace: Path,
     hardware: str,
@@ -570,7 +761,9 @@ def _typed_request(
     top_kernels: int | None = None,
 ) -> dict[str, Any]:
     """Build the public run/profile request without importing the agate package."""
-    shapes = _json_object(workspace / "shapes.json", required=True)
+    shapes = _json_object(
+        _evaluator_input_path(workspace, "shapes.json", required=True), required=True
+    )
     assert shapes is not None
     try:
         multi_seed = int(_option_value(command, "--multi-seed", 0))
@@ -580,7 +773,9 @@ def _typed_request(
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid evaluator command option: {exc}") from exc
     if multi_seed < 0 or bench_iters < 1:
-        raise ValueError("--multi-seed must be non-negative and --timed-runs must be positive")
+        raise ValueError(
+            "--multi-seed must be non-negative and --timed-runs must be positive"
+        )
 
     solution = _json_object(workspace / "solution.json") or {}
     languages = solution.get("languages")
@@ -592,8 +787,11 @@ def _typed_request(
         "input_py": (workspace / "input.py").read_text(encoding="utf-8"),
         "shapes": shapes,
     }
-    for filename, field in (("metadata.json", "metadata"), ("roofline.json", "roofline")):
-        value = _json_object(workspace / filename)
+    for filename, field in (
+        ("metadata.json", "metadata"),
+        ("roofline.json", "roofline"),
+    ):
+        value = _json_object(_evaluator_input_path(workspace, filename, required=False))
         if value is not None:
             reference[field] = value
 
@@ -639,9 +837,9 @@ def _make_atrex_bench_runtime_bundle(
     because agate's worker places each file value in one Linux argv entry.
     """
     runtime_link = workspace / "atrex-bench"
-    if not runtime_link.is_symlink():
+    if not runtime_link.is_dir():
         return None
-    runtime_root = runtime_link.resolve()
+    runtime_root = runtime_link
     run_eval = runtime_root / "scripts" / "run_eval.py"
     package = runtime_root / "src" / "atrex_bench"
     utils_module = package / "utils.py"
@@ -651,7 +849,9 @@ def _make_atrex_bench_runtime_bundle(
         or not run_eval.is_file()
         or (evaluator_only and not utils_module.is_file())
     ):
-        raise RuntimeError(f"invalid workspace Atrex-Bench runtime link: {runtime_link}")
+        raise RuntimeError(
+            f"invalid workspace Atrex-Bench runtime link: {runtime_link}"
+        )
 
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
@@ -684,7 +884,7 @@ def _make_atrex_bench_runtime_bundle(
     return base64.b64encode(archive.getvalue()).decode("ascii")
 
 
-REMOTE_COLLECTOR = r'''#!/usr/bin/env python3
+REMOTE_COLLECTOR = r"""#!/usr/bin/env python3
 import base64
 import io
 import json
@@ -735,11 +935,11 @@ if skipped:
 print(BEGIN)
 print(base64.b64encode(archive.getvalue()).decode("ascii"))
 print(END)
-'''
+"""
 
 
 def _runner_source() -> str:
-    return r'''#!/usr/bin/env bash
+    return r"""#!/usr/bin/env bash
 set -uo pipefail
 mkdir -p workspace
 ws_parts=(__atrex_workspace.tar.gz.b64.part*)
@@ -772,7 +972,7 @@ if [[ $collect_status -ne 0 ]]; then
     exit 98
 fi
 exit $command_status
-'''
+"""
 
 
 def _extract_outputs(stdout: str, workspace: Path) -> str:
@@ -788,9 +988,13 @@ def _extract_outputs(stdout: str, workspace: Path) -> str:
         for member in tf.getmembers():
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts:
-                raise RuntimeError(f"unsafe artifact path returned by sandbox: {member.name!r}")
+                raise RuntimeError(
+                    f"unsafe artifact path returned by sandbox: {member.name!r}"
+                )
             if member.issym() or member.islnk():
-                raise RuntimeError(f"sandbox artifact links are not accepted: {member.name!r}")
+                raise RuntimeError(
+                    f"sandbox artifact links are not accepted: {member.name!r}"
+                )
             target = workspace / path.as_posix()
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -850,47 +1054,70 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Explicit gateway URL (default: ATREX_SANDBOX_URL; overrides environment profile/config).",
     )
-    parser.add_argument("--workspace", default=".", help="Local workspace to upload (default: cwd).")
+    parser.add_argument(
+        "--workspace", default=".", help="Local workspace to upload (default: cwd)."
+    )
     parser.add_argument(
         "--timeout",
         type=int,
-        default=int(os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))),
+        default=int(
+            os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
+        ),
         help=(
             "Remote command execution timeout in seconds, 1..600 "
             "(default: 600; queue wait is budgeted separately)."
         ),
     )
     parser.add_argument(
-        "--sync", action="append", default=[], metavar="PATH",
+        "--sync",
+        action="append",
+        default=[],
+        metavar="PATH",
         help="Relative profile/result path to copy back (repeatable; default: profiles).",
     )
-    parser.add_argument("--no-sync", action="store_true", help="Do not copy any files back.")
     parser.add_argument(
-        "--include-raw-profile", action="store_true",
+        "--no-sync", action="store_true", help="Do not copy any files back."
+    )
+    parser.add_argument(
+        "--include-raw-profile",
+        action="store_true",
         help="Return raw .ncu-rep/ATT artifacts (can make the gateway response very large).",
     )
     parser.add_argument(
-        "--profile-level", choices=("survey", "sol", "deep"), default="sol",
+        "--profile-level",
+        choices=("survey", "sol", "deep"),
+        default="sol",
         help="Typed profile funnel level (default: sol).",
     )
     parser.add_argument(
-        "--profiler", choices=("ncu", "rocprofv3"), default=None,
+        "--profiler",
+        choices=("ncu", "rocprofv3"),
+        default=None,
         help="Typed profile backend (default: gateway vendor auto-detection).",
     )
     parser.add_argument(
-        "--profile-counter", action="append", default=[], metavar="METRIC",
+        "--profile-counter",
+        action="append",
+        default=[],
+        metavar="METRIC",
         help="Typed profile metric/counter (repeatable).",
     )
     parser.add_argument(
-        "--kernel-regex", default=None,
+        "--kernel-regex",
+        default=None,
         help="Typed profile kernel regex (required by a deep profile).",
     )
     parser.add_argument(
-        "--top-kernels", type=int, default=None,
+        "--top-kernels",
+        type=int,
+        default=None,
         help="Limit the typed profile result to the N hottest kernels.",
     )
     parser.add_argument(
-        "--input", action="append", default=[], metavar="PATH",
+        "--input",
+        action="append",
+        default=[],
+        metavar="PATH",
         help=(
             "Additional required workspace file or directory for a non-evaluator command "
             "(repeatable). Arbitrary commands otherwise receive only paths referenced by "
@@ -898,19 +1125,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--max-input-file-mb", type=int, default=16,
+        "--max-input-file-mb",
+        type=int,
+        default=16,
         help="Skip individual workspace input files larger than this (default: 16 MiB).",
     )
     parser.add_argument(
-        "--max-output-file-mb", type=int, default=8,
+        "--max-output-file-mb",
+        type=int,
+        default=8,
         help="Skip individual returned artifacts larger than this (default: 8 MiB).",
     )
     parser.add_argument("-e", "--env", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument(
-        "--keep-pod", action="store_true",
+        "--keep-pod",
+        action="store_true",
         help="Ask the gateway not to recycle the pod; filesystem persistence is still not assumed.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Package and print the request summary only.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Package and print the request summary only.",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command after --.")
     return parser
 
@@ -918,6 +1154,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _auth_headers() -> dict[str, str]:
     """Generate token or AK/SK headers matching agate's auth precedence."""
     import hashlib
+
     private_token = os.environ.get("AGATE_TOKEN", "")
     if private_token:
         return {"Authorization": f"Bearer {private_token}"}
@@ -1014,7 +1251,9 @@ def _run_direct_job(
                 pass
             raise
 
-    raise AssertionError("unreachable: direct gateway retry loop returned no terminal job")
+    raise AssertionError(
+        "unreachable: direct gateway retry loop returned no terminal job"
+    )
 
 
 def _run_direct_gateway(
@@ -1038,11 +1277,13 @@ def _run_direct_gateway(
         timeout=timeout,
         queue_wait_grace=queue_wait_grace,
         payload={
-        "spec": {"target_hardware": [hardware]},
-        "command": command,
-        "timeout_s": timeout,
-        "env_vars": env_vars,
-        "files": {name: path.read_text(encoding="utf-8") for name, path in files.items()},
+            "spec": {"target_hardware": [hardware]},
+            "command": command,
+            "timeout_s": timeout,
+            "env_vars": env_vars,
+            "files": {
+                name: path.read_text(encoding="utf-8") for name, path in files.items()
+            },
         },
     )
 
@@ -1080,6 +1321,27 @@ def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
     return match.group(1) if match else None
 
 
+def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
+    """Budget typed gateway queueing separately from evaluator runtime.
+
+    Typed eval/profile jobs accept a larger enclosing deadline than their evaluator
+    timeout.  Give that job deadline as much of the configured queue grace as the
+    service permits.
+    """
+    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+
+
+def _dev_gateway_job_timeout(command_timeout: int) -> int:
+    """Return a service-valid deadline for an agate dev job.
+
+    Unlike typed eval/profile jobs, the dev API currently validates ``timeout_s``
+    against a hard 600-second ceiling.  Passing the longer client-side queue wait
+    budget through ``--job-timeout`` is rejected at submission time with HTTP 422,
+    so keep queue grace exclusively in ``--wait-timeout`` for this route.
+    """
+    return min(MAX_DEV_JOB_TIMEOUT, command_timeout)
+
+
 def _resume_interrupted_agate_wait(
     *,
     executable: str,
@@ -1112,9 +1374,12 @@ def _resume_interrupted_agate_wait(
     elif gateway_profile:
         get_command += ["--profile", gateway_profile]
     get_command += [
-        "--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
-        "--wait-timeout", str(max(1, remaining)),
-        "--job-timeout", str(command_timeout),
+        "--http-timeout",
+        str(MAX_HTTP_REQUEST_TIMEOUT),
+        "--wait-timeout",
+        str(max(1, remaining)),
+        "--job-timeout",
+        str(command_timeout),
         "--wait",
         job_id,
     ]
@@ -1123,7 +1388,9 @@ def _resume_interrupted_agate_wait(
         f"[sandbox] agate polling exited {initial.returncode}; "
         f"resumed existing job_id={job_id} without resubmission"
     )
-    stderr_parts = [part.rstrip() for part in (initial.stderr, note, resumed.stderr) if part]
+    stderr_parts = [
+        part.rstrip() for part in (initial.stderr, note, resumed.stderr) if part
+    ]
     return subprocess.CompletedProcess(
         args=resumed.args,
         returncode=resumed.returncode,
@@ -1190,7 +1457,9 @@ def _run_agate_with_cancel_retry(
         f"[sandbox] gateway cancelled job_id={first_job_id} without a result/error; "
         "resubmitted once"
     )
-    stderr_parts = [part.rstrip() for part in (first.stderr, note, second.stderr) if part]
+    stderr_parts = [
+        part.rstrip() for part in (first.stderr, note, second.stderr) if part
+    ]
     return subprocess.CompletedProcess(
         args=second.args,
         returncode=second.returncode,
@@ -1214,16 +1483,31 @@ def _typed_agate_command(
     elif args.gateway_profile:
         command += ["--profile", args.gateway_profile]
     options = request["options"]
+    # Generalized workspaces deliberately expose only agent_problem.json to the
+    # optimization agent.  The agate client still needs the evaluator-owned
+    # shapes/reference files locally to assemble its typed eval payload, so point
+    # --reference-dir at the private source while keeping the candidate in the
+    # public workspace.  The private directory is never copied into the workspace.
+    reference_dir = _private_reference_dir(workspace) or workspace
     command += [
-        "--gpu", args.hardware,
-        "--candidate", str(workspace / "kernel.py"),
-        "--reference-dir", str(workspace),
-        "--operator", str(request["reference"]["operator"]),
-        "--num-correctness-cases", str(options["num_correctness_cases"]),
-        "--bench-iters", str(options["bench_iters"]),
-        "--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
-        "--wait-timeout", str(args.timeout + queue_wait_grace),
-        "--job-timeout", str(args.timeout),
+        "--gpu",
+        args.hardware,
+        "--candidate",
+        str(workspace / "kernel.py"),
+        "--reference-dir",
+        str(reference_dir),
+        "--operator",
+        str(request["reference"]["operator"]),
+        "--num-correctness-cases",
+        str(options["num_correctness_cases"]),
+        "--bench-iters",
+        str(options["bench_iters"]),
+        "--http-timeout",
+        str(MAX_HTTP_REQUEST_TIMEOUT),
+        "--wait-timeout",
+        str(args.timeout + queue_wait_grace),
+        "--job-timeout",
+        str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
     for item in args.env:
         command += ["--env-var", item]
@@ -1253,7 +1537,9 @@ def _finite_number(value: object) -> float | None:
 
 
 def _expected_shape_ids(workspace: Path) -> list[str]:
-    shapes = _json_object(workspace / "shapes.json", required=True)
+    shapes = _json_object(
+        _evaluator_input_path(workspace, "shapes.json", required=True), required=True
+    )
     assert shapes is not None
 
     def sort_key(shape_id: str) -> tuple[int, object]:
@@ -1309,11 +1595,15 @@ def _optimizer_result_from_eval(
     failures.extend(_compile_failures(passed.get("compile"), shape_ids))
 
     correctness_status = passed.get("correctness")
-    correctness_status = correctness_status if isinstance(correctness_status, dict) else {}
+    correctness_status = (
+        correctness_status if isinstance(correctness_status, dict) else {}
+    )
     correctness = payload.get("correctness")
     correctness = correctness if isinstance(correctness, dict) else {}
     correctness_shapes = correctness.get("shapes")
-    correctness_shapes = correctness_shapes if isinstance(correctness_shapes, dict) else {}
+    correctness_shapes = (
+        correctness_shapes if isinstance(correctness_shapes, dict) else {}
+    )
     max_abs = 0.0
     max_rel = 0.0
     for shape_id in shape_ids:
@@ -1344,7 +1634,9 @@ def _optimizer_result_from_eval(
     performance = payload.get("performance")
     performance = performance if isinstance(performance, dict) else {}
     performance_shapes = performance.get("shapes")
-    performance_shapes = performance_shapes if isinstance(performance_shapes, dict) else {}
+    performance_shapes = (
+        performance_shapes if isinstance(performance_shapes, dict) else {}
+    )
     latency_by_shape: dict[str, float] = {}
     for shape_id in shape_ids:
         shape_result = performance_shapes.get(shape_id)
@@ -1391,7 +1683,154 @@ def _optimizer_result_from_eval(
     }
 
 
-def _record_profile_job(job: dict[str, Any], workspace: Path, sync_paths: list[str]) -> None:
+def _mask_generalized_result(
+    workspace: Path, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
+    result = _with_workspace_reference_speedup(workspace, result)
+    if not _is_generalized_workspace(workspace):
+        return result
+    masked = dict(result)
+    if result.get("failures"):
+        masked["failures"] = [
+            "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
+        ]
+    masked["hidden_case_details"] = "shape inputs and failure details withheld"
+    return masked
+
+
+def _record_episode_evaluation(
+    workspace: Path,
+    result: dict[str, Any],
+    *,
+    gateway_kind: str,
+    job_id: object = None,
+) -> None:
+    """Persist exact optimizer-facing results for terminal memory construction.
+
+    Long-horizon workers use ``--no-memory`` because canonical memory belongs to the
+    supervisor.  Keep their complete evaluator results in excluded episode runtime
+    state so a pivot or interruption can still record this round's real per-shape
+    performance without parsing model-authored journal prose.
+    """
+    runtime = workspace / ".atrex_long_horizon"
+    if not (runtime / "journal.json").is_file():
+        return
+    try:
+        kernel_sha256 = hashlib.sha256((workspace / "kernel.py").read_bytes()).hexdigest()
+    except OSError:
+        kernel_sha256 = None
+    payload = {
+        "schema_version": 2,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "gateway_kind": gateway_kind,
+        "job_id": str(job_id) if job_id else None,
+        "kernel_sha256": kernel_sha256,
+        "result": result,
+    }
+    path = workspace / EPISODE_EVALUATIONS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode(
+        "utf-8"
+    )
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(descriptor, line)
+    finally:
+        os.close(descriptor)
+
+
+def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> None:
+    """Record the last ordinary RESULT_JSON emitted by a dev evaluator command."""
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(TEST_RESULT_PREFIX):
+            continue
+        try:
+            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
+        except json.JSONDecodeError:
+            return
+        if isinstance(result, dict):
+            result = _with_workspace_reference_speedup(workspace, result)
+            _record_episode_evaluation(
+                workspace, result, gateway_kind=gateway_kind
+            )
+        return
+
+
+def _positive_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if number > 0.0 and math.isfinite(number) else None
+
+
+def _with_workspace_reference_speedup(
+    workspace: Path, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill candidate-only gateway results from the canonical V0 latency."""
+    if _positive_number(result.get("speedup_vs_ref_geomean")) is not None:
+        return result
+    candidate = _positive_number(result.get("latency_us_geomean"))
+    try:
+        baseline = _json_object(workspace / "memory" / "v0.json") or {}
+    except ValueError:
+        return result
+    performance = baseline.get("performance")
+    performance = performance if isinstance(performance, dict) else {}
+    reference = _positive_number(
+        performance.get("latency_us_geomean", performance.get("latency_us"))
+    )
+    if candidate is None or reference is None:
+        return result
+    hydrated = dict(result)
+    hydrated["speedup_vs_ref_geomean"] = reference / candidate
+    return hydrated
+
+
+def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
+    """Normalize candidate-only ABBA run results for long-lived supervisors."""
+    normalized: list[str] = []
+    for line in stdout.splitlines():
+        if not line.startswith(ABBA_RESULT_PREFIX):
+            normalized.append(line)
+            continue
+        try:
+            payload = json.loads(line[len(ABBA_RESULT_PREFIX) :])
+        except json.JSONDecodeError:
+            normalized.append(line)
+            continue
+        if not isinstance(payload, dict) or not isinstance(payload.get("runs"), list):
+            normalized.append(line)
+            continue
+        changed = False
+        runs: list[object] = []
+        for row in payload["runs"]:
+            if not isinstance(row, dict) or not isinstance(row.get("result"), dict):
+                runs.append(row)
+                continue
+            result = _with_workspace_reference_speedup(workspace, row["result"])
+            if result is row["result"]:
+                runs.append(row)
+                continue
+            updated = dict(row)
+            updated["result"] = result
+            runs.append(updated)
+            changed = True
+        if not changed:
+            normalized.append(line)
+            continue
+        updated_payload = dict(payload)
+        updated_payload["runs"] = runs
+        normalized.append(
+            ABBA_RESULT_PREFIX
+            + json.dumps(updated_payload, ensure_ascii=False, allow_nan=False)
+        )
+    return "\n".join(normalized)
+
+
+def _record_profile_job(
+    job: dict[str, Any], workspace: Path, sync_paths: list[str]
+) -> None:
     """Persist the typed profile response where the local optimization session expects it."""
     for relative in sync_paths:
         path = PurePosixPath(relative)
@@ -1413,6 +1852,7 @@ def _run_typed_gateway(
     queue_wait_grace: int,
 ) -> int | None:
     """Run agate run/profile, returning None only for a documented dev fallback."""
+    generalized = _is_generalized_workspace(workspace)
     try:
         request = _typed_request(
             workspace,
@@ -1428,22 +1868,34 @@ def _run_typed_gateway(
             top_kernels=args.top_kernels,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        print(f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev", file=sys.stderr)
+        print(
+            f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev",
+            file=sys.stderr,
+        )
         return None
 
     if args.dry_run:
-        print(json.dumps({
-            "hardware": args.hardware,
-            "url": args.url or None,
-            "gateway_profile": args.gateway_profile,
-            "workspace": str(workspace),
-            "kind": kind,
-            "fallback_kind": "dev",
-            "candidate_bytes": len(request["candidate"].encode("utf-8")),
-            "shape_count": len(request["reference"]["shapes"]),
-            "options": request["options"],
-            "sync": sync_paths,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "hardware": args.hardware,
+                    "url": args.url or None,
+                    "gateway_profile": args.gateway_profile,
+                    "workspace": str(workspace),
+                    "kind": kind,
+                    "fallback_kind": "dev",
+                    "candidate_bytes": len(request["candidate"].encode("utf-8")),
+                    "shape_count": (
+                        "private"
+                        if _is_generalized_workspace(workspace)
+                        else len(request["reference"]["shapes"])
+                    ),
+                    "options": request["options"],
+                    "sync": sync_paths,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     agate_executable = _find_agate()
@@ -1467,13 +1919,23 @@ def _run_typed_gateway(
                 executable=agate_executable,
                 url=args.url,
                 gateway_profile=args.gateway_profile,
-                command_timeout=args.timeout,
+                command_timeout=_gateway_job_timeout(
+                    args.timeout, queue_wait_grace
+                ),
                 wait_budget=args.timeout + queue_wait_grace,
             )
     except GatewayHTTPError as exc:
         if _typed_fallback_allowed(exc):
-            print(f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev", file=sys.stderr)
+            print(
+                f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
+                file=sys.stderr,
+            )
             return None
+        if generalized:
+            raise SystemExit(
+                f"sandbox: generalized {kind} gateway request failed; "
+                "hidden-case details withheld"
+            ) from exc
         raise SystemExit(f"sandbox: {kind} gateway request failed: {exc}") from exc
     except FileNotFoundError as exc:
         raise SystemExit(
@@ -1481,20 +1943,37 @@ def _run_typed_gateway(
             "install atrex-gateway-client first"
         ) from exc
 
-    if proc.returncode and _typed_fallback_allowed((proc.stderr or "") + (proc.stdout or "")):
-        if proc.stderr:
+    if proc.returncode and _typed_fallback_allowed(
+        (proc.stderr or "") + (proc.stdout or "")
+    ):
+        if proc.stderr and not generalized:
             print(proc.stderr.rstrip(), file=sys.stderr)
-        print(f"[sandbox] gateway {kind} interface rejected this request; using dev", file=sys.stderr)
+        print(
+            f"[sandbox] gateway {kind} interface rejected this request; using dev",
+            file=sys.stderr,
+        )
         return None
-    if proc.stderr:
+    if proc.stderr and not generalized:
         print(proc.stderr.rstrip(), file=sys.stderr)
     job = _job_response(proc.stdout or "")
     if job is None:
-        if proc.stdout:
+        if proc.stdout and not generalized:
             print(proc.stdout.rstrip())
+        elif generalized:
+            print(
+                "[sandbox] generalized gateway response unavailable; evaluator details withheld",
+                file=sys.stderr,
+            )
         return proc.returncode or 2
     if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-        print(json.dumps(job, ensure_ascii=False))
+        if generalized:
+            print(
+                "[sandbox] generalized evaluation failed; hidden-case details withheld; "
+                f"job_id={job.get('job_id')}",
+                file=sys.stderr,
+            )
+        else:
+            print(json.dumps(job, ensure_ascii=False))
         return proc.returncode or 1
 
     print(
@@ -1502,8 +1981,21 @@ def _run_typed_gateway(
         file=sys.stderr,
     )
     if kind == "run":
-        result = _optimizer_result_from_eval(job["result"], _expected_shape_ids(workspace))
-        print(TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False))
+        result = _mask_generalized_result(
+            workspace,
+            _optimizer_result_from_eval(
+                job["result"], _expected_shape_ids(workspace)
+            ),
+        )
+        _record_episode_evaluation(
+            workspace,
+            result,
+            gateway_kind=kind,
+            job_id=job.get("job_id"),
+        )
+        print(
+            TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
+        )
         return 0 if result["all_pass"] else 1
 
     _record_profile_job(job, workspace, sync_paths)
@@ -1538,42 +2030,66 @@ def _main(argv: list[str] | None = None) -> int:
         )
     try:
         queue_wait_grace = int(
-            os.environ.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE))
+            os.environ.get(
+                "ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)
+            )
         )
     except ValueError as exc:
-        raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer") from exc
+        raise SystemExit(
+            "sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer"
+        ) from exc
     if queue_wait_grace < 0:
         raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
     try:
         command = _command_text(args.command)
-        sync_paths = [] if args.no_sync else [
-            _safe_relative(path) for path in (args.sync or list(DEFAULT_SYNC_PATHS))
-        ]
+        sync_paths = (
+            []
+            if args.no_sync
+            else [
+                _safe_relative(path) for path in (args.sync or list(DEFAULT_SYNC_PATHS))
+            ]
+        )
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
 
     workspace = Path(args.workspace).resolve()
     if any(PurePosixPath(path).parts[0] == "memory" for path in sync_paths):
-        raise SystemExit("sandbox: memory/ is local optimizer state and cannot be synchronized")
+        raise SystemExit(
+            "sandbox: memory/ is local optimizer state and cannot be synchronized"
+        )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
+    profile_command = _is_profile_command(args.command)
+    if profile_command:
+        try:
+            args.env = _with_inherited_profile_environment(args.env)
+        except ValueError as exc:
+            raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
     if gateway_kind in TYPED_KINDS:
-        if gateway_kind == "profile" and args.profile_level == "deep" and not args.kernel_regex:
+        if (
+            gateway_kind == "profile"
+            and args.profile_level == "deep"
+            and not args.kernel_regex
+        ):
             raise SystemExit("sandbox: --profile-level deep requires --kernel-regex")
         if args.keep_pod:
             typed_limitation = "--keep-pod is only supported by dev"
         elif args.input:
             typed_limitation = "custom --input files are only supported by dev"
         elif gateway_kind == "profile" and args.include_raw_profile:
-            typed_limitation = "--include-raw-profile requires the custom dev profiler wrapper"
+            typed_limitation = (
+                "--include-raw-profile requires the custom dev profiler wrapper"
+            )
         else:
             try:
-                typed_limitation = _typed_workspace_limitation(workspace, args.command)
+                typed_limitation = _typed_workspace_limitation(
+                    workspace, args.command, gateway_kind
+                )
             except ValueError as exc:
                 typed_limitation = str(exc)
         if typed_limitation is None:
@@ -1606,11 +2122,26 @@ def _main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
-    bundle, file_count, skipped = _make_input_bundle(
-        workspace,
-        args.max_input_file_mb * 1024 * 1024,
-        selected_inputs,
-    )
+    try:
+        injected_inputs = (
+            _private_evaluator_inputs(workspace) if evaluator_command else {}
+        )
+        injected_payloads: dict[str, bytes] = {}
+        if profile_command and _is_generalized_workspace(workspace):
+            profile_case = _private_profile_case(workspace, args.env)
+            if profile_case is not None:
+                filename, payload = profile_case
+                injected_payloads[filename] = payload
+                selected_inputs = frozenset((*selected_inputs, filename))
+        bundle, file_count, skipped = _make_input_bundle(
+            workspace,
+            args.max_input_file_mb * 1024 * 1024,
+            selected_inputs,
+            injected_inputs,
+            injected_payloads,
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise SystemExit(f"sandbox: cannot prepare evaluator inputs: {exc}") from exc
     if evaluator_command:
         runtime_bundle = _make_atrex_bench_runtime_bundle(
             workspace,
@@ -1622,8 +2153,17 @@ def _main(argv: list[str] | None = None) -> int:
         runtime_bundle = None
     bundle_bytes = len(bundle.encode("ascii"))
     runtime_bundle_bytes = len(runtime_bundle.encode("ascii")) if runtime_bundle else 0
+    gateway_environment = list(args.env)
+    if profile_command and _is_generalized_workspace(workspace):
+        command_environment, gateway_environment = _profile_command_environment(
+            args.env
+        )
+        if command_environment:
+            command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = _find_agate()
-    direct_http = bool(args.url and (agate_executable is None or bundle_bytes > 50 * 1024))
+    direct_http = bool(
+        args.url and (agate_executable is None or bundle_bytes > 50 * 1024)
+    )
     # Linux limits each individual argv entry to 128 KiB (MAX_ARG_STRLEN).
     # agate's worker materializes an uploaded file through one such argument,
     # so leave headroom for its framing instead of creating a doomed job.
@@ -1646,20 +2186,25 @@ def _main(argv: list[str] | None = None) -> int:
     if skipped:
         print("[sandbox] inputs skipped: " + ", ".join(skipped), file=sys.stderr)
     if args.dry_run:
-        print(json.dumps({
-            "hardware": args.hardware,
-            "url": args.url or None,
-            "gateway_profile": args.gateway_profile,
-            "workspace": str(workspace),
-            "kind": "dev",
-            "requested_kind": args.kind,
-            "typed_fallback_reason": typed_limitation,
-            "files": file_count,
-            "payload_bytes": bundle_bytes,
-            "atrex_runtime_payload_bytes": runtime_bundle_bytes,
-            "sync": sync_paths,
-            "command": command,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "hardware": args.hardware,
+                    "url": args.url or None,
+                    "gateway_profile": args.gateway_profile,
+                    "workspace": str(workspace),
+                    "kind": "dev",
+                    "requested_kind": args.kind,
+                    "typed_fallback_reason": typed_limitation,
+                    "files": file_count,
+                    "payload_bytes": bundle_bytes,
+                    "atrex_runtime_payload_bytes": runtime_bundle_bytes,
+                    "sync": sync_paths,
+                    "command": command,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     output_cfg = {
@@ -1677,7 +2222,9 @@ def _main(argv: list[str] | None = None) -> int:
         # Chunk workspace bundle when it exceeds MAX_ARG_STRLEN safe limit
         # (same pattern as runtime chunking). The runner concatenates parts.
         if len(bundle) > WORKSPACE_CHUNK_BYTES:
-            for index, offset in enumerate(range(0, len(bundle), WORKSPACE_CHUNK_BYTES)):
+            for index, offset in enumerate(
+                range(0, len(bundle), WORKSPACE_CHUNK_BYTES)
+            ):
                 part_path = temp / f"atrex_workspace.part{index:03d}"
                 part_path.write_text(
                     bundle[offset : offset + WORKSPACE_CHUNK_BYTES],
@@ -1687,11 +2234,15 @@ def _main(argv: list[str] | None = None) -> int:
         else:
             bundle_path = temp / "workspace.tar.gz.b64"
             bundle_path.write_text(bundle, encoding="ascii")
-        command_path.write_text("#!/usr/bin/env bash\nset -o pipefail\n" + command + "\n", encoding="utf-8")
+        command_path.write_text(
+            "#!/usr/bin/env bash\nset -o pipefail\n" + command + "\n", encoding="utf-8"
+        )
         collector_path.write_text(REMOTE_COLLECTOR, encoding="utf-8")
         outputs_path.write_text(json.dumps(output_cfg), encoding="utf-8")
         if runtime_bundle:
-            for index, offset in enumerate(range(0, len(runtime_bundle), RUNTIME_CHUNK_BYTES)):
+            for index, offset in enumerate(
+                range(0, len(runtime_bundle), RUNTIME_CHUNK_BYTES)
+            ):
                 part_path = temp / f"atrex_runtime.part{index:03d}"
                 part_path.write_text(
                     runtime_bundle[offset : offset + RUNTIME_CHUNK_BYTES],
@@ -1718,11 +2269,16 @@ def _main(argv: list[str] | None = None) -> int:
         elif args.gateway_profile:
             agate += ["--profile", args.gateway_profile]
         agate += [
-            "--gpu", args.hardware,
-            "--dev-timeout", str(args.timeout),
-            "--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
-            "--wait-timeout", str(args.timeout + queue_wait_grace),
-            "--job-timeout", str(args.timeout),
+            "--gpu",
+            args.hardware,
+            "--dev-timeout",
+            str(args.timeout),
+            "--http-timeout",
+            str(MAX_HTTP_REQUEST_TIMEOUT),
+            "--wait-timeout",
+            str(args.timeout + queue_wait_grace),
+            "--job-timeout",
+            str(_dev_gateway_job_timeout(args.timeout)),
         ]
         if workspace_part_paths:
             for index, part_path in enumerate(workspace_part_paths):
@@ -1733,16 +2289,19 @@ def _main(argv: list[str] | None = None) -> int:
         else:
             agate += ["--file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
         agate += [
-            "--file", f"__atrex_command.sh={command_path}",
-            "--file", f"__atrex_collect.py={collector_path}",
-            "--file", f"__atrex_outputs.json={outputs_path}",
+            "--file",
+            f"__atrex_command.sh={command_path}",
+            "--file",
+            f"__atrex_collect.py={collector_path}",
+            "--file",
+            f"__atrex_outputs.json={outputs_path}",
         ]
         for index, part_path in enumerate(runtime_part_paths):
             agate += [
                 "--file",
                 f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}={part_path}",
             ]
-        for item in args.env:
+        for item in gateway_environment:
             if "=" not in item or item.startswith("="):
                 raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
             agate += ["--env-var", item]
@@ -1787,12 +2346,14 @@ def _main(argv: list[str] | None = None) -> int:
                     hardware=args.hardware,
                     timeout=args.timeout,
                     queue_wait_grace=queue_wait_grace,
-                    env_items=args.env,
+                    env_items=gateway_environment,
                     files=direct_files,
                     command="bash __atrex_runner.sh",
                 )
             except (OSError, RuntimeError, TimeoutError) as exc:
-                raise SystemExit(f"sandbox: direct gateway request failed: {exc}") from exc
+                raise SystemExit(
+                    f"sandbox: direct gateway request failed: {exc}"
+                ) from exc
         else:
             try:
                 proc = _run_agate_with_cancel_retry(
@@ -1800,7 +2361,7 @@ def _main(argv: list[str] | None = None) -> int:
                     executable=agate_executable or "agate",
                     url=args.url,
                     gateway_profile=args.gateway_profile,
-                    command_timeout=args.timeout,
+                    command_timeout=_dev_gateway_job_timeout(args.timeout),
                     wait_budget=args.timeout + queue_wait_grace,
                 )
             except FileNotFoundError as exc:
@@ -1809,13 +2370,19 @@ def _main(argv: list[str] | None = None) -> int:
                     "install atrex-gateway-client first"
                 ) from exc
 
-    if proc.stderr:
+    hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
+    if proc.stderr and not hide_evaluator_details:
         print(proc.stderr.rstrip(), file=sys.stderr)
     try:
         job = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        if proc.stdout:
+        if proc.stdout and not hide_evaluator_details:
             print(proc.stdout.rstrip())
+        elif hide_evaluator_details:
+            print(
+                "sandbox: generalized gateway response unavailable; evaluator details withheld",
+                file=sys.stderr,
+            )
         return proc.returncode or 2
 
     result = job.get("result") or {}
@@ -1824,15 +2391,24 @@ def _main(argv: list[str] | None = None) -> int:
     try:
         command_stdout = _extract_outputs(remote_stdout, workspace)
     except (RuntimeError, ValueError, tarfile.TarError) as exc:
-        if remote_stdout:
+        if remote_stdout and not hide_evaluator_details:
             print(remote_stdout.rstrip())
-        if remote_stderr:
+        if remote_stderr and not hide_evaluator_details:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
+    if evaluator_command:
+        command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
+        _record_result_lines(workspace, command_stdout, gateway_kind="dev")
+    if hide_evaluator_details:
+        command_stdout = "\n".join(
+            line
+            for line in command_stdout.splitlines()
+            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
+        )
     if command_stdout:
         print(command_stdout)
-    if remote_stderr:
+    if remote_stderr and not hide_evaluator_details:
         print(remote_stderr.rstrip(), file=sys.stderr)
     remote_rc = result.get("exit_code")
     if isinstance(remote_rc, int):

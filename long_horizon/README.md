@@ -24,6 +24,12 @@ Each active episode also exposes ignored `memory/live.json`. It is initialized i
 atomically refreshed after every journal append, but it never participates in version selection or
 promotion; `memory/vN.json` remains the canonical supervisor-owned record.
 
+Every canonical record carries a compact copy of all structured experiments already persisted in
+the episode journal. If the supervisor is terminated, the next startup archives the worktree and
+records an `interrupted` `memory/vN.json` before continuing. Recovery is idempotent across a second
+termination; performance is explicitly marked incomplete when no authoritative shape evaluation
+finished, rather than being fabricated.
+
 Claude and Codex can resume the same session to repair an incomplete handoff; Qoder and Pi use a
 single long invocation. Codex token deltas and marker ordering are read incrementally from the
 resumable native rollout. Available invocation components must reconcile with cumulative rollout and

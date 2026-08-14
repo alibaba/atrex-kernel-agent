@@ -27,7 +27,9 @@ branch are allowed, but every commit must contain only `kernel.py`. Plans, profi
 transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add
 them to Git. Never edit evaluator or ground-truth files, including `test_kernel.py`,
 `profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
-`metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. Do not write canonical `memory/vN.json`;
+`agent_problem.json`, `metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. For generalized
+Atrex-Bench tasks, do not search outside the workspace for the source operator directory or hidden
+evaluator files. Do not write canonical `memory/vN.json`;
 the supervisor creates it after terminal validation.
 
 {{MODE_POLICY}}
@@ -67,14 +69,13 @@ When conversion is mandatory, treat the whole episode as a Triton-to-Gluon lower
 4. A terminal candidate must be committed Gluon, correctness-passing in development, and plausibly
    within 5% of the incumbent. The supervisor independently enforces parity.
 
-## Prior episode evidence
+## Prior iteration state
 
-```json
-{{HISTORY}}
-```
-
-Historical attempts are evidence, not orders. Do not repeat a rejected direction unless new evidence
-or a materially different implementation changes the expected result.
+No recent-episode summary is injected into this prompt. Reconstruct prior outcomes exclusively from
+the canonical `memory/v*.json` records in the workspace. Treat those records as evidence, not orders,
+and do not repeat a rejected direction unless new evidence or a materially different implementation
+changes the expected result. Detailed within-episode journals remain archived under
+`.atrex_long_horizon/episodes/` and are not part of the inherited prompt context.
 
 ## Engineering loop
 

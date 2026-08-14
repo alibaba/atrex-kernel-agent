@@ -21,6 +21,7 @@ PROTECTED_PATHS = frozenset(
         "test_kernel.py",
         "config.json",
         "input.py",
+        "agent_problem.json",
         "shapes.json",
         "metadata.json",
         "roofline.json",
@@ -67,9 +68,17 @@ def working_changes(workspace: Path) -> list[str]:
     return [line[3:].strip('"') for line in output.splitlines() if len(line) >= 4]
 
 
-def changed_paths(workspace: Path, base_commit: str, candidate_commit: str = "HEAD") -> list[str]:
+def changed_paths(
+    workspace: Path, base_commit: str, candidate_commit: str = "HEAD"
+) -> list[str]:
     output = git_text(
-        workspace, "diff", "--name-only", "--no-renames", base_commit, candidate_commit, "--"
+        workspace,
+        "diff",
+        "--name-only",
+        "--no-renames",
+        base_commit,
+        candidate_commit,
+        "--",
     )
     return sorted(path for path in output.splitlines() if path)
 
@@ -122,8 +131,19 @@ class EpisodeWorktree:
 
     def materialize(self, incumbent_workspace: Path) -> None:
         subprocess.run(
-            ["git", "worktree", "add", "-b", self.branch, str(self.path), self.base_commit],
-            cwd=str(incumbent_workspace), check=True, capture_output=True, text=True,
+            [
+                "git",
+                "worktree",
+                "add",
+                "-b",
+                self.branch,
+                str(self.path),
+                self.base_commit,
+            ],
+            cwd=str(incumbent_workspace),
+            check=True,
+            capture_output=True,
+            text=True,
         )
         CampaignStore.ensure_excluded(self.path)
 
@@ -141,23 +161,36 @@ class EpisodeWorktree:
 
     def validate_candidate(self, candidate_commit: str) -> tuple[str, list[str]]:
         resolved = git_text(
-            self.path, "rev-parse", "--verify", f"{candidate_commit}^{{commit}}", check=False
+            self.path,
+            "rev-parse",
+            "--verify",
+            f"{candidate_commit}^{{commit}}",
+            check=False,
         )
         if not resolved:
             return "candidate_commit does not resolve", []
         if resolved != git_head(self.path):
             return "candidate_commit must equal episode HEAD", []
-        branch = git_text(self.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+        branch = git_text(
+            self.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+        )
         if branch != self.branch:
             return "episode worktree left its isolated branch", []
         ancestor = _git(
-            self.path, "merge-base", "--is-ancestor", self.base_commit, resolved, check=False
+            self.path,
+            "merge-base",
+            "--is-ancestor",
+            self.base_commit,
+            resolved,
+            check=False,
         )
         if ancestor.returncode:
             return "candidate_commit is not descended from incumbent", []
         dirty = working_changes(self.path)
         if dirty:
-            return "candidate_ready requires a clean worktree: " + ", ".join(dirty[:8]), []
+            return "candidate_ready requires a clean worktree: " + ", ".join(
+                dirty[:8]
+            ), []
         paths = changed_paths(self.path, self.base_commit, resolved)
         if not paths:
             return "candidate has no changes relative to incumbent", []
@@ -168,7 +201,13 @@ class EpisodeWorktree:
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:
         destination.mkdir(parents=True, exist_ok=True)
         committed_patch = _git(
-            self.path, "diff", "--binary", self.base_commit, candidate_commit, "--", binary=True
+            self.path,
+            "diff",
+            "--binary",
+            self.base_commit,
+            candidate_commit,
+            "--",
+            binary=True,
         ).stdout
         (destination / "candidate.patch").write_bytes(committed_patch)
         worktree_patch = _git(
@@ -201,7 +240,10 @@ class EpisodeWorktree:
     def remove(self, incumbent_workspace: Path) -> None:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(self.path)],
-            cwd=str(incumbent_workspace), check=True, capture_output=True, text=True,
+            cwd=str(incumbent_workspace),
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
 
@@ -220,9 +262,14 @@ def promote_candidate(
     try:
         subprocess.run(
             ["git", "merge", "--squash", "--no-commit", candidate_commit],
-            cwd=str(incumbent_workspace), check=True, capture_output=True, text=True,
+            cwd=str(incumbent_workspace),
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        staged = git_text(incumbent_workspace, "diff", "--cached", "--name-only").splitlines()
+        staged = git_text(
+            incumbent_workspace, "diff", "--cached", "--name-only"
+        ).splitlines()
         violation = protected_violation([path for path in staged if path])
         if violation:
             raise RuntimeError(violation)
@@ -231,22 +278,39 @@ def promote_candidate(
         atomic_write_json(memory_dir / f"long_horizon_e{episode:04d}.json", evidence)
         atomic_write_json(memory_dir / f"v{memory_version}.json", memory_record)
         subprocess.run(
-            ["git", "add", f"memory/long_horizon_e{episode:04d}.json", f"memory/v{memory_version}.json"],
-            cwd=str(incumbent_workspace), check=True,
+            [
+                "git",
+                "add",
+                f"memory/long_horizon_e{episode:04d}.json",
+                f"memory/v{memory_version}.json",
+            ],
+            cwd=str(incumbent_workspace),
+            check=True,
         )
         subprocess.run(
             [
-                "git", "-c", "user.name=atrex-long-horizon",
-                "-c", "user.email=atrex-long-horizon@local",
-                "commit", "-m", f"episode {episode}: promote verified long-horizon candidate",
+                "git",
+                "-c",
+                "user.name=atrex-long-horizon",
+                "-c",
+                "user.email=atrex-long-horizon@local",
+                "commit",
+                "-m",
+                f"episode {episode}: promote verified long-horizon candidate",
             ],
-            cwd=str(incumbent_workspace), check=True, capture_output=True, text=True,
+            cwd=str(incumbent_workspace),
+            check=True,
+            capture_output=True,
+            text=True,
         )
         return git_head(incumbent_workspace)
     except Exception:
         subprocess.run(
-            ["git", "reset", "--hard", base_commit], cwd=str(incumbent_workspace),
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            ["git", "reset", "--hard", base_commit],
+            cwd=str(incumbent_workspace),
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         raise
 

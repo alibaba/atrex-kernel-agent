@@ -25,8 +25,12 @@ workspace template.
 ## Inputs and Immutable State
 
 - SOL campaigns consume `reference.py`, `definition.json`, and `workload.jsonl`.
-- Native Atrex-Bench campaigns consume `reference.py`, `shapes.json`, and their canonical
-  `scripts/run_eval.py`; optional evaluator metadata is copied when present.
+- Legacy native Atrex-Bench campaigns expose `reference.py`, `input.py`, and `shapes.json`.
+- Generalized native Atrex-Bench campaigns expose `reference.py`, `input.py`, and
+  `agent_problem.json`; exact shapes and evaluator metadata remain private and are injected only by
+  the sandbox into the canonical `scripts/run_eval.py` evaluation. Each canonical memory record
+  retains evaluator latency for every real opaque shape id without publishing its input parameters;
+  profiling injects only the selected `PROFILE_SHAPE_ID` into the ephemeral remote job.
 - The orchestrator installs an immutable workspace `test_kernel.py` adapter. Agent sessions must
   not replace it or edit evaluator/ground-truth files.
 - V0 is a correctness-passing baseline. Production normally creates and pins a framework-native

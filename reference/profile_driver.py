@@ -12,23 +12,24 @@ then invokes the candidate repeatedly so the profiler captures steady-state laun
 It never writes `memory/`, never benchmarks, and never reports correctness — the
 immutable `test_kernel.py` owns all of that.
 
-Two campaign layouts are supported and detected from the files present:
+Three campaign layouts are supported and detected from the files present:
 
 - SOL-ExecBench: `definition.json` + `workload.jsonl`, candidate exposes DPS `run()`.
-- Atrex-Bench:   `shapes.json` + `input.py`, candidate exposes `Model`.
+- Generalized Atrex-Bench: `agent_problem.json` + `input.py`; profile one privately injected real shape.
+- Legacy Atrex-Bench: `shapes.json` + `input.py`; profile one evaluator shape.
 
 Usage (from the workspace root, normally under a profiler wrapper):
 
     python profile_driver.py
     PROFILE_ITERS=30 python profile_driver.py
     PROFILE_WORKLOAD_IDX=2 python profile_driver.py     # SOL: pick a workload
-    PROFILE_SHAPE_ID=3 python profile_driver.py         # Atrex-Bench: pick a shape
+    PROFILE_SHAPE_ID=3 python profile_driver.py         # generalized or legacy Atrex-Bench
 
 Environment:
     PROFILE_ITERS         profiled iterations (default 10)
     PROFILE_WARMUP        warmup iterations (default 3)
     PROFILE_WORKLOAD_IDX  SOL workload index (default 0)
-    PROFILE_SHAPE_ID      Atrex-Bench shape id (default: first sorted key)
+    PROFILE_SHAPE_ID      opaque Atrex-Bench shape id (default: first sorted key)
     PROFILE_DEVICE        torch device (default cuda:0)
 """
 
@@ -42,6 +43,9 @@ from pathlib import Path
 from types import ModuleType
 
 
+PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
+
+
 def _workspace_root() -> Path:
     """Return the workspace root, whether this file sits at the root or under harness/.
 
@@ -52,11 +56,15 @@ def _workspace_root() -> Path:
     for candidate in (here.parent, *here.parents):
         if not (candidate / "kernel.py").is_file():
             continue
-        if (candidate / "definition.json").is_file() or (candidate / "shapes.json").is_file():
+        if (
+            (candidate / "definition.json").is_file()
+            or (candidate / "agent_problem.json").is_file()
+            or (candidate / "shapes.json").is_file()
+        ):
             return candidate
     raise RuntimeError(
         "cannot locate the workspace root: no ancestor holds kernel.py plus "
-        "definition.json or shapes.json"
+        "definition.json, agent_problem.json, or shapes.json"
     )
 
 
@@ -82,7 +90,9 @@ def _run_sol(root: Path, device: str) -> None:
     from sol_execbench.core.bench.io import allocate_outputs, gen_inputs
     from sol_execbench.core.data import Definition, Workload
 
-    definition = Definition(**json.loads((root / "definition.json").read_text(encoding="utf-8")))
+    definition = Definition(
+        **json.loads((root / "definition.json").read_text(encoding="utf-8"))
+    )
     workloads = [
         Workload(**json.loads(line))
         for line in (root / "workload.jsonl").read_text(encoding="utf-8").splitlines()
@@ -109,8 +119,28 @@ def _run_sol(root: Path, device: str) -> None:
     _drive(lambda: run(*inputs, *outputs), f"SOL workload[{index}]")
 
 
-def _run_atrex_bench(root: Path, device: str) -> None:
-    """Drive an Atrex-Bench candidate through its `Model` entry point."""
+def _private_real_shape(root: Path) -> tuple[dict, str]:
+    """Consume the single real shape injected for this ephemeral remote profile."""
+    path = root / PRIVATE_PROFILE_CASE_FILENAME
+    if not path.is_file():
+        raise RuntimeError(
+            "generalized Atrex-Bench profiling requires a sandbox-injected real shape"
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    finally:
+        # Remove private input parameters before importing candidate code. The candidate still
+        # observes the selected runtime tensor shapes, which is intrinsic to profiling that case.
+        path.unlink(missing_ok=True)
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise RuntimeError("invalid private profile case payload")
+    shape_id = payload.get("shape_id")
+    if not isinstance(shape_id, str) or not shape_id:
+        raise RuntimeError("private profile case has no opaque shape id")
+    return payload, f"generalized Atrex-Bench real shape[{shape_id}]"
+
+
+def _legacy_shape(root: Path) -> tuple[dict, str]:
     shapes = json.loads((root / "shapes.json").read_text(encoding="utf-8"))
     if not isinstance(shapes, dict) or not shapes:
         raise RuntimeError("shapes.json must contain a non-empty object")
@@ -122,10 +152,19 @@ def _run_atrex_bench(root: Path, device: str) -> None:
     entry = shapes.get(str(shape_id))
     if not isinstance(entry, dict):
         raise RuntimeError(f"shapes.json has no object entry for shape id {shape_id!r}")
+    return entry, f"legacy Atrex-Bench shape[{shape_id}]"
+
+
+def _run_atrex_bench(root: Path, device: str) -> None:
+    """Drive an Atrex-Bench candidate through its `Model` entry point."""
+    if (root / "agent_problem.json").is_file():
+        entry, label = _private_real_shape(root)
+    else:
+        entry, label = _legacy_shape(root)
     init_kwargs = entry.get("init_kwargs") or {}
     input_kwargs = entry.get("input_kwargs") or {}
     if not isinstance(init_kwargs, dict) or not isinstance(input_kwargs, dict):
-        raise RuntimeError(f"shapes.json[{shape_id!r}] init_kwargs/input_kwargs must be objects")
+        raise RuntimeError(f"{label} init_kwargs/input_kwargs must be objects")
 
     kernel = _import_from(root / "kernel.py", "kernel")
     model_class = getattr(kernel, "Model", None)
@@ -141,13 +180,15 @@ def _run_atrex_bench(root: Path, device: str) -> None:
     model = model_class(**init_kwargs).to(device).eval()
     raw = make_inputs(**input_kwargs)
     if not isinstance(raw, dict):
-        raise RuntimeError(f"_make_inputs must return dict[str, Tensor], got {type(raw).__name__}")
+        raise RuntimeError(
+            f"_make_inputs must return dict[str, Tensor], got {type(raw).__name__}"
+        )
     inputs = {
         key: value.to(device) if isinstance(value, torch.Tensor) else value
         for key, value in raw.items()
     }
     with torch.no_grad():
-        _drive(lambda: model(**inputs), f"Atrex-Bench shape[{shape_id}]")
+        _drive(lambda: model(**inputs), label)
 
 
 def _drive(call, label: str) -> None:
@@ -182,12 +223,14 @@ def main() -> int:
     device = os.environ.get("PROFILE_DEVICE", "cuda:0")
     if (root / "definition.json").is_file() and (root / "workload.jsonl").is_file():
         _run_sol(root, device)
-    elif (root / "shapes.json").is_file() and (root / "input.py").is_file():
+    elif (
+        (root / "agent_problem.json").is_file() or (root / "shapes.json").is_file()
+    ) and (root / "input.py").is_file():
         _run_atrex_bench(root, device)
     else:
         raise RuntimeError(
             "unrecognized workspace layout: expected definition.json+workload.jsonl (SOL) "
-            "or shapes.json+input.py (Atrex-Bench)"
+            "or agent_problem.json/shapes.json + input.py (Atrex-Bench)"
         )
     return 0
 

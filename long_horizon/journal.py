@@ -65,7 +65,8 @@ def sync_live_memory(
         "canonical": False,
         "canonical_memory_recorded": effective_phase == "recorded",
         "note": (
-            "Live optimization progress only; memory/vN.json is authoritative after supervisor verification."
+            "Live optimization progress only; memory/vN.json is authoritative after "
+            "the supervisor records verification or an interrupted recovery outcome."
         ),
         "version": f"v{version}" if version is not None else None,
         "episode": raw_episode,

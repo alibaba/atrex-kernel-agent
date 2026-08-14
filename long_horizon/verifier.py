@@ -36,8 +36,14 @@ def _payload_from_stdout(stdout: str) -> dict[str, Any]:
 def verification_schedule(repeats: int) -> list[dict[str, int | str]]:
     schedule: list[dict[str, int | str]] = []
     for repeat in range(max(1, repeats)):
-        revisions = ("incumbent", "candidate") if repeat % 2 == 0 else ("candidate", "incumbent")
-        schedule.extend({"revision": revision, "repeat": repeat} for revision in revisions)
+        revisions = (
+            ("incumbent", "candidate")
+            if repeat % 2 == 0
+            else ("candidate", "incumbent")
+        )
+        schedule.extend(
+            {"revision": revision, "repeat": repeat} for revision in revisions
+        )
     return schedule
 
 
@@ -54,7 +60,11 @@ def _result_latency(result: object) -> float | None:
     if not isinstance(value, (int, float)):
         performance = result.get("performance")
         value = performance.get("latency_us") if isinstance(performance, dict) else None
-    if not isinstance(value, (int, float)) or value <= 0 or not math.isfinite(float(value)):
+    if (
+        not isinstance(value, (int, float))
+        or value <= 0
+        or not math.isfinite(float(value))
+    ):
         return None
     return float(value)
 
@@ -68,10 +78,14 @@ def score_verification_payload(
     artifact: str = "",
 ) -> VerificationResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-        return VerificationResult("ERROR", None, None, None, error="unsupported result schema")
+        return VerificationResult(
+            "ERROR", None, None, None, error="unsupported result schema"
+        )
     rows = payload.get("runs")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        return VerificationResult("ERROR", None, None, None, error="runs must be a list of objects")
+        return VerificationResult(
+            "ERROR", None, None, None, error="runs must be a list of objects"
+        )
     runs = [
         VerificationRun(
             revision=str(row.get("revision", "")),
@@ -85,33 +99,61 @@ def score_verification_payload(
     ]
     if payload.get("error"):
         return VerificationResult(
-            "ERROR", None, None, None, runs=runs, error=str(payload["error"]), artifact=artifact
+            "ERROR",
+            None,
+            None,
+            None,
+            runs=runs,
+            error=str(payload["error"]),
+            artifact=artifact,
         )
     actual = [{"revision": run.revision, "repeat": run.repeat} for run in runs]
     if actual != schedule:
         return VerificationResult(
-            "ERROR", None, None, None, runs=runs,
-            error="remote verifier did not execute the exact ABBA schedule", artifact=artifact,
+            "ERROR",
+            None,
+            None,
+            None,
+            runs=runs,
+            error="remote verifier did not execute the exact ABBA schedule",
+            artifact=artifact,
         )
     candidate_values = [
-        value for run in runs if run.revision == "candidate" and run.exit_code == 0
+        value
+        for run in runs
+        if run.revision == "candidate" and run.exit_code == 0
         if (value := _result_latency(run.result)) is not None
     ]
     incumbent_values = [
-        value for run in runs if run.revision == "incumbent" and run.exit_code == 0
+        value
+        for run in runs
+        if run.revision == "incumbent" and run.exit_code == 0
         if (value := _result_latency(run.result)) is not None
     ]
     candidate = _geomean(candidate_values)
     incumbent = _geomean(incumbent_values)
     if len(candidate_values) != repeats or len(incumbent_values) != repeats:
         return VerificationResult(
-            "FAIL", candidate, incumbent, None, runs=runs,
-            error="not every authoritative ABBA run passed", artifact=artifact,
+            "FAIL",
+            candidate,
+            incumbent,
+            None,
+            runs=runs,
+            error="not every authoritative ABBA run passed",
+            artifact=artifact,
         )
-    improvement = ((incumbent - candidate) / incumbent * 100.0) if candidate and incumbent else None
+    improvement = (
+        ((incumbent - candidate) / incumbent * 100.0)
+        if candidate and incumbent
+        else None
+    )
     if improvement is None or improvement <= min_improvement_pct:
         return VerificationResult(
-            "FAIL", candidate, incumbent, improvement, runs=runs,
+            "FAIL",
+            candidate,
+            incumbent,
+            improvement,
+            runs=runs,
             error=(
                 f"candidate improvement {improvement if improvement is not None else 'unknown'} "
                 f"did not exceed {min_improvement_pct:.3f}%"
@@ -164,6 +206,7 @@ class GatewayABBAValidator:
         per_run_timeout: int = 120,
         min_improvement_pct: float = 0.0,
         queue_wait_grace: int = 14_400,
+        private_reference_dir: Path | None = None,
     ):
         self.hardware = hardware
         self.profile = profile
@@ -173,6 +216,7 @@ class GatewayABBAValidator:
         self.per_run_timeout = per_run_timeout
         self.min_improvement_pct = min_improvement_pct
         self.queue_wait_grace = queue_wait_grace
+        self.private_reference_dir = private_reference_dir
 
     def verify(
         self,
@@ -185,7 +229,10 @@ class GatewayABBAValidator:
         schedule = verification_schedule(self.repeats)
         if self.per_run_timeout * len(schedule) + 30 > self.timeout:
             return VerificationResult(
-                "ERROR", None, None, None,
+                "ERROR",
+                None,
+                None,
+                None,
                 error="ABBA schedule cannot fit in one gateway allocation timeout",
             )
         verification_id = uuid.uuid4().hex
@@ -211,7 +258,13 @@ class GatewayABBAValidator:
             "schema_version": 1,
             "schedule": schedule,
             "manifests": manifests,
-            "command": ["python3", "test_kernel.py", "--version", "vlong", "--no-memory"],
+            "command": [
+                "python3",
+                "test_kernel.py",
+                "--version",
+                "vlong",
+                "--no-memory",
+            ],
             "run_timeout_seconds": self.per_run_timeout,
         }
         atomic_write_json(workspace / request_relative, request)
@@ -234,6 +287,7 @@ class GatewayABBAValidator:
                 sync=(),
                 wall_timeout=self.timeout + self.queue_wait_grace + 120,
                 gateway_kind="dev",
+                private_reference_dir=self.private_reference_dir,
             )
         except subprocess.TimeoutExpired:
             return VerificationResult(
@@ -241,7 +295,10 @@ class GatewayABBAValidator:
             )
         if process.returncode != 0:
             return VerificationResult(
-                "ERROR", None, None, None,
+                "ERROR",
+                None,
+                None,
+                None,
                 error=f"gateway ABBA command exited {process.returncode}: "
                 + (process.stdout + "\n" + process.stderr)[-3000:],
             )
@@ -249,7 +306,10 @@ class GatewayABBAValidator:
             payload = _payload_from_stdout(process.stdout)
         except ValueError as exc:
             return VerificationResult(
-                "ERROR", None, None, None,
+                "ERROR",
+                None,
+                None,
+                None,
                 error=f"gateway returned no valid ABBA result: {exc}",
             )
         result_path = workspace / result_relative
@@ -257,7 +317,10 @@ class GatewayABBAValidator:
             atomic_write_json(result_path, payload)
         except (OSError, TypeError, ValueError) as exc:
             return VerificationResult(
-                "ERROR", None, None, None,
+                "ERROR",
+                None,
+                None,
+                None,
                 error=f"cannot persist gateway ABBA result: {type(exc).__name__}: {exc}",
             )
         return score_verification_payload(

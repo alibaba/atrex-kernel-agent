@@ -3,13 +3,13 @@
 Owns session spawning and accounting, the independent dependency review, sandbox command
 construction, and evaluator result parsing.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,13 +23,13 @@ from . import agent_runtime as _agent_runtime
 from .constants import (
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
-    HUMANIZE_DIR,
     REPO_ROOT,
     SANDBOX_DIRECTIVE_PROMPT,
     SANDBOX_TOOL,
     TEST_RESULT_PREFIX,
 )
 from .optimization_policy import DependencyReviewSignal
+from .workspace_state import speedup_vs_reference
 
 
 def _status_is(value: object, expected: str) -> bool:
@@ -74,104 +74,26 @@ def _render(template_path: Path, **kw: str) -> str:
     return text
 
 
-def _find_jq() -> Optional[str]:
-    found = shutil.which("jq")
-    if found:
-        return found
-    adjacent = Path(sys.executable).resolve().parent / "jq"
-    if adjacent.is_file() and os.access(adjacent, os.X_OK):
-        return str(adjacent)
-    return None
-
-
-def ensure_jq() -> str:
-    """Install jq with an available package manager when the runtime lacks it."""
-    found = _find_jq()
-    if found:
-        return found
-
-    privileged_prefix: list[str] | None
-    if getattr(os, "geteuid", lambda: 1)() == 0:
-        privileged_prefix = []
-    elif shutil.which("sudo"):
-        privileged_prefix = ["sudo"]
-    else:
-        privileged_prefix = None
-
-    installers: list[tuple[str, list[str], dict[str, str] | None]] = []
-    system_commands = (
-        ("apt-get", ["apt-get", "install", "-y", "jq"]),
-        ("dnf", ["dnf", "install", "-y", "jq"]),
-        ("yum", ["yum", "install", "-y", "jq"]),
-        ("apk", ["apk", "add", "jq"]),
-        ("zypper", ["zypper", "--non-interactive", "install", "jq"]),
-    )
-    if privileged_prefix is not None:
-        for manager, command in system_commands:
-            if shutil.which(manager):
-                installers.append((manager, [*privileged_prefix, *command], None))
-    if shutil.which("brew"):
-        installers.append(("brew", ["brew", "install", "jq"], None))
-    if shutil.which("conda"):
-        conda_env = os.environ.copy()
-        conda_env["CONDA_SOLVER"] = "classic"
-        installers.append(
-            (
-                "conda",
-                ["conda", "install", "-y", "-c", "conda-forge", "jq"],
-                conda_env,
-            )
-        )
-
-    failures: list[str] = []
-    for manager, command, environment in installers:
-        print(f"[orchestrator] jq not found; installing with {manager}", flush=True)
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=600,
-                env=environment,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            failures.append(f"{manager}: {exc}")
-            continue
-        found = _find_jq()
-        if completed.returncode == 0 and found:
-            jq_dir = str(Path(found).resolve().parent)
-            path_parts = os.environ.get("PATH", "").split(os.pathsep)
-            if jq_dir not in path_parts:
-                os.environ["PATH"] = os.pathsep.join([jq_dir, *path_parts])
-            print(f"[orchestrator] jq installed with {manager}", flush=True)
-            return found
-        output_lines = (completed.stdout or "").strip().splitlines()
-        detail = output_lines[-1] if output_lines else f"exit {completed.returncode}"
-        failures.append(f"{manager}: {detail}")
-
-    detail = "; ".join(failures) if failures else "no supported package manager found"
-    raise RuntimeError(f"jq is required and automatic installation failed: {detail}")
-
-
 def ensure_submodules() -> None:
-    """Initialize every registered top-level submodule and required host tool.
+    """Initialize submodules required by the optimization pipeline.
 
-    Reference projects are part of the optimizer's source-search corpus, so a
-    campaign must not silently run with those gitlinks left uninitialized.
-    The update is idempotent for submodules that are already ready.
+    Covers: gpu-wiki/3rdparty (KernelWiki) and 3rdparty/ncu-report-skill.
+    Skips reference-projects (large, optional — only needed for L2 search).
+    Idempotent: already-initialized submodules are untouched.
     """
     needed = [
-        ("gpu-wiki/3rdparty/", REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md"),
-        ("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md"),
-        ("3rdparty/humanize", HUMANIZE_DIR / "skills" / "humanize-gen-plan" / "SKILL.md"),
+        (
+            "gpu-wiki/3rdparty/",
+            REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md",
+        ),
+        (
+            "3rdparty/ncu-report-skill",
+            REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
+        ),
     ]
-    # The internal launcher presents a generated repository view whose files
-    # point at the real open-source checkout.  The view intentionally has no
-    # independent Git metadata, so submodule operations must run in the source
-    # checkout recorded by the launcher.  This is not a bypass: every campaign
-    # still executes the same unconditional submodule update.
+    # Internal launchers may expose a generated repository view without independent Git
+    # metadata. Run submodule commands in the recorded open-source checkout while keeping
+    # the current branch's intentionally small required-submodule set.
     submodule_root = REPO_ROOT
     runtime_metadata = REPO_ROOT / ".internal-runtime.json"
     if runtime_metadata.is_file():
@@ -185,23 +107,19 @@ def ensure_submodules() -> None:
             raise RuntimeError(
                 f"invalid internal runtime metadata: {runtime_metadata}: {exc}"
             ) from exc
-    print(
-        f"[orchestrator] initializing all top-level submodules in {submodule_root}",
-        flush=True,
-    )
-    subprocess.run(
-        ["git", "submodule", "update", "--init", "--recursive"],
-        cwd=str(submodule_root),
-        check=True,
-    )
-    for path, marker in needed:
-        if not marker.exists():
-            raise RuntimeError(
-                f"submodule init failed for {path} — {marker} not found. "
-                "Run `git submodule update --init` manually."
-            )
-    print("[orchestrator] all submodules ready", flush=True)
-    ensure_jq()
+    to_init = [path for path, marker in needed if not marker.exists()]
+    if to_init:
+        print(f"[orchestrator] initializing submodules: {to_init}", flush=True)
+        cmd = ["git", "submodule", "update", "--init", "--depth", "1", "--"] + to_init
+        subprocess.run(cmd, cwd=str(submodule_root), check=True)
+        # verify
+        for path, marker in needed:
+            if not marker.exists():
+                raise RuntimeError(
+                    f"submodule init failed for {path} — {marker} not found. "
+                    "Run `git submodule update --init` manually."
+                )
+        print("[orchestrator] all submodules ready", flush=True)
 
 
 def run_session(
@@ -218,15 +136,13 @@ def run_session(
     agent_plugins: bool = True,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
+    # Kept for the dependency-review call contract. Runtime plan generation is now a
+    # workspace-local skill rather than a process-level plugin.
+    del agent_plugins
     session_id = str(uuid.uuid4())
     runtime = _agent_runtime.build_agent_runtime(
         agent_cli,
         process_runner=_agent_runtime.run_bounded,
-        humanize_dir=(
-            HUMANIZE_DIR
-            if agent_plugins
-            else workspace / ".atrex-disabled-agent-plugins"
-        ),
     )
     result = runtime.run(
         _agent_runtime.AgentRunRequest(
@@ -333,7 +249,9 @@ def _validate_dependency_review(
             raise ValueError("dependency review item must be an object")
         signal_id = item.get("id")
         if not isinstance(signal_id, str) or signal_id not in expected:
-            raise ValueError(f"dependency review returned unexpected signal id: {signal_id!r}")
+            raise ValueError(
+                f"dependency review returned unexpected signal id: {signal_id!r}"
+            )
         if signal_id in reviewed:
             raise ValueError(f"dependency review duplicated signal id: {signal_id}")
         decision = item.get("decision")
@@ -354,8 +272,10 @@ def _validate_dependency_review(
             )
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError(f"dependency review reason is empty for {signal_id}")
-        if not isinstance(evidence, list) or not evidence or not all(
-            isinstance(value, str) and value.strip() for value in evidence
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or not all(isinstance(value, str) and value.strip() for value in evidence)
         ):
             raise ValueError(f"dependency review evidence is invalid for {signal_id}")
         reviewed[signal_id] = item
@@ -367,9 +287,7 @@ def _validate_dependency_review(
 
     missing = sorted(expected - set(reviewed))
     if missing:
-        raise ValueError(
-            "dependency review omitted signal ids: " + ", ".join(missing)
-        )
+        raise ValueError("dependency review omitted signal ids: " + ", ".join(missing))
     expected_verdict = "reject" if rejected else "allow"
     if verdict != expected_verdict:
         raise ValueError(
@@ -386,9 +304,7 @@ def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
         endpoint = f" using gateway profile `{profile}`"
     else:
         endpoint = " using agate's configured gateway"
-    return _render(
-        SANDBOX_DIRECTIVE_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+    return _render(SANDBOX_DIRECTIVE_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
 
 
 def _sandbox_command(
@@ -402,14 +318,20 @@ def _sandbox_command(
     sync: tuple[str, ...] = (),
     wall_timeout: Optional[int] = None,
     gateway_kind: str = "auto",
+    private_reference_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     cmd = [
-        sys.executable, str(SANDBOX_TOOL),
-        "--kind", gateway_kind,
-        "--hardware", hardware,
-        "--workspace", str(workspace),
-        "--timeout", str(timeout),
+        sys.executable,
+        str(SANDBOX_TOOL),
+        "--kind",
+        gateway_kind,
+        "--hardware",
+        hardware,
+        "--workspace",
+        str(workspace),
+        "--timeout",
+        str(timeout),
     ]
     if url:
         cmd += ["--url", url]
@@ -421,9 +343,14 @@ def _sandbox_command(
     else:
         cmd.append("--no-sync")
     cmd += ["--", *command]
+    environment = os.environ.copy()
+    environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+    if private_reference_dir is not None:
+        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     return subprocess.run(
         cmd,
         cwd=str(workspace),
+        env=environment,
         capture_output=True,
         text=True,
         # Gateway execution timeout starts only after a worker claims the job.
@@ -436,7 +363,7 @@ def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
     for line in reversed(stdout.splitlines()):
         if line.startswith(TEST_RESULT_PREFIX):
-            result = json.loads(line[len(TEST_RESULT_PREFIX):])
+            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
             if isinstance(result, dict):
                 return result
     raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
@@ -458,8 +385,20 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
     perf["latency_us"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_geomean"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_arith_mean"] = result.get("latency_us_arith_mean", 0.0)
-    perf["latency_us_by_shape"] = result.get("latency_us_by_shape", {})
-    perf["speedup_vs_ref_geomean"] = result.get("speedup_vs_ref_geomean", 0.0)
+    by_shape = result.get("latency_us_by_shape", {})
+    by_shape = by_shape if isinstance(by_shape, dict) else {}
+    perf["latency_us_by_shape"] = by_shape
+    perf["measurement_scope"] = "real_evaluator_shapes"
+    perf["shape_ids_are_opaque"] = (workspace / "agent_problem.json").is_file()
+    perf["measurement_status"] = (
+        "complete" if result.get("all_pass") and by_shape else "incomplete"
+    )
+    perf["measured_shape_count"] = len(by_shape)
+    perf["speedup_vs_ref_geomean"] = speedup_vs_reference(
+        workspace,
+        result.get("latency_us_geomean"),
+        result.get("speedup_vs_ref_geomean"),
+    )
     all_pass = bool(result.get("all_pass"))
     corr = data.setdefault("correctness", {})
     corr["status"] = "PASS" if all_pass else "FAIL"
@@ -469,7 +408,9 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
     gate["result"] = "PASS" if all_pass else "FAIL"
     failures = result.get("failures") or []
     gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     return path
 
 
@@ -497,7 +438,11 @@ def detect_arch(
         try:
             with tempfile.TemporaryDirectory(prefix="atrex-arch-") as temp_dir:
                 result = _sandbox_command(
-                    Path(temp_dir), sandbox_hardware, sandbox_profile, sandbox_url, 120,
+                    Path(temp_dir),
+                    sandbox_hardware,
+                    sandbox_profile,
+                    sandbox_url,
+                    120,
                     ["python", "-c", code],
                 )
             if result.returncode == 0:
@@ -512,13 +457,18 @@ def detect_arch(
                 flush=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            print(f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         return ""
 
     for py in ("python", "python3", sys.executable):
         try:
-            out = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=120)
+            out = subprocess.run(
+                [py, "-c", code], capture_output=True, text=True, timeout=120
+            )
             s = out.stdout.strip()
             if s:
                 return s

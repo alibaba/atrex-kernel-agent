@@ -7,15 +7,24 @@ AKA exposes one supported execution path: the unattended, budget-bounded orchest
 
 - `bash`
 - `git`
-- Python 3, `torch`, and `jq` on the coordinator host
+- Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - `agate` (`atrex-gateway-client`) configured with gateway URL and credentials
 - The selected gateway environment must provide the workload's framework and GPU stack
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
-The orchestrator verifies required submodules and `jq` before starting. Missing required submodules
-are initialized automatically; the large `reference-projects/` collection remains optional.
+The orchestrator verifies required submodules before starting and initializes missing ones
+automatically; the large `reference-projects/` collection remains optional.
+
+The repository-native `gen-plan` skill requests independent, read-only, non-persistent reviews from
+Codex and Qoder, then resolves their agreements and disagreements against repository evidence. A
+Codex- or Qoder-owned episode performs its matching review in the current session to avoid recursion;
+external reviewers are probed once before the first optimization episode. The campaign caches that
+decision under `.atrex_long_horizon/`, reuses it after restarts, and never retries a reviewer that
+failed the startup probe. An unavailable reviewer is recorded explicitly and does not discard the
+other review. External `ask-codex` and `ask-qoder` consultations always run with maximum reasoning
+effort, independently of the primary episode's configured effort.
 
 ## 1. Clone the Repository
 
@@ -27,11 +36,23 @@ cd atrex-kernel-agent
 `--op-dir` supports two evaluator-owned layouts:
 
 - SOL-ExecBench: `reference.py`, `definition.json`, and `workload.jsonl`.
-- Native Atrex-Bench: `reference.py` and `shapes.json`, inside a checkout containing
-  `scripts/run_eval.py` and `src/atrex_bench`; `input.py`, `metadata.json`, `roofline.json`, and
-  `valid.py` are copied when present.
+- Native Atrex-Bench: `reference.py`, `input.py`, and detailed `shapes.json`, inside a checkout
+  containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
+  the generalized public contract using schema `atrex.agent_problem.v1`.
 
-The orchestrator never treats operator inputs as editable candidate files.
+Production native campaigns never expose detailed shapes to baseline or optimization sessions. If
+`agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
+preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
+`reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public
+`agent_problem.json`, validates that its development cases do not duplicate evaluator cases, and
+persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
+injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
+opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape privately.
+
+Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
+contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are
+production-only. The orchestrator never treats operator inputs as editable candidate files. Start a
+fresh workspace when resuming an older production campaign that exposed exact shapes.
 
 ## 2. Run the Orchestrated Loop
 
@@ -87,9 +108,10 @@ after normalization or terminal-only fallback. The orchestrator uses `session_me
 the exact workspace or thread when stdout omits it, verifies every available usage component against
 `turn.completed.usage`, and records ledger or cleanup errors without failing the Agent run. If ledger
 observation fails during an episode resume, consecutive cumulative stdout totals still provide a
-non-duplicated invocation total while phase attribution is disabled. Optimization and Humanize skills
-stay in the campaign-scoped `.agents/skills/` tree, so the user's global Codex installation is not
-modified. Optional Codex config overrides use a JSON object or an array of literal `key=value` values:
+non-duplicated invocation total while phase attribution is disabled. Optimization and
+plan-generation skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
+Codex installation is not modified. Optional Codex config overrides use a JSON object or an array of
+literal `key=value` values:
 
 ```bash
 export ATREX_CODEX_SESSION_SETTINGS='{"model":"gpt-5.6-sol","model_reasoning_effort":"xhigh"}'
@@ -175,8 +197,6 @@ performance parity pass, and later episodes remain in Gluon.
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---iter-timeout S                 Wall-clock budget and worst-case handoff cadence for one episode
-                                 (default: 5400)
 --setup-timeout S                V0 setup session timeout (default: 7200)
 --sandbox-hardware GPU           Gateway selector or alias
 --sandbox-profile PROFILE        Optional pre/prod endpoint profile
@@ -196,9 +216,9 @@ Run `python orchestrator/optimize.py --help` for the complete current interface.
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 
-Lowering `--iter-timeout` makes numbered canonical memory arrive more frequently, but it also pays
-terminal-handoff and ABBA verification overhead more often. `memory/live.json` is independent of
-that tradeoff and refreshes within an active episode.
+Optimization episodes have no wall-clock deadline: an episode runs until it publishes a terminal
+handoff or its coding-agent process exits. `memory/live.json` exposes progress during a long active
+episode, while canonical `memory/vN.json` is written only after the episode reaches a terminal state.
 
 ### Local gateway
 

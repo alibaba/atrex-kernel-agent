@@ -4,6 +4,16 @@ Copyright 2026 Alibaba Group
 This product includes software developed by third parties.
 
 ================================================================================
+Humanize gen-plan workflow
+================================================================================
+
+Portions of skills/gen-plan/ are adapted from the Humanize gen-plan workflow.
+Copyright (c) PolyArch contributors.
+SPDX-License-Identifier: MIT
+Source: https://github.com/PolyArch/humanize (commit 0ec921a36b4365df503511c5567bbd3e02db0df5)
+The applicable MIT license text is included at skills/gen-plan/LICENSE.
+
+================================================================================
 Third-Party Code in gpu-wiki/reference-kernels/
 ================================================================================
 

@@ -53,7 +53,7 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
-├── skills/                            # Baseline runtime skill for Codex/Pi
+├── skills/                            # Backend-local workflow and plan-generation skills
 ├── tools/
 │   ├── sandbox.py                     # Gateway packaging and execution boundary
 │   ├── local_gateway.py               # Trusted localhost FIFO scheduler
@@ -62,7 +62,7 @@ same-allocation ABBA verification, and squash promotion; it is not a second CLI.
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
 ├── gpu-wiki/                          # Hardware and optimization knowledge base
 ├── reference-projects/                # Optional source-search repositories
-└── 3rdparty/                          # Humanize and profiler-analysis dependencies
+└── 3rdparty/                          # Profiler-analysis dependencies
 ```
 
 The `skills/` and `agents/` directories are internal runtime assets. The orchestrator links or
@@ -148,7 +148,11 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
 - `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
-- Humanize planning assets are hydrated locally without changing global user configuration.
+- The repository-native `gen-plan` skill is linked into every backend's local discovery tree and
+  independently obtains read-only, non-persistent Codex and Qoder reviews before evidence-based
+  cross-review synthesis. A matching primary backend reviews in its current session to avoid
+  recursion. Before the first episode, the campaign probes each external reviewer once, caches the
+  result in private runtime state, and disables later calls to reviewers that were unavailable.
 
 ### Sandbox and gateway
 
@@ -165,6 +169,22 @@ transport-compatible trusted-code executor, not a security boundary.
 
 SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every
 candidate is validated for full-workload correctness and compared by its full-workload geomean.
+Production makes generalized input handling a mode policy rather than an operator opt-in. A native
+operator's user-provided `agent_problem.json` is validated and used directly. When only detailed
+`shapes.json` exists, a dedicated clean problem-authoring session reads the evaluator inputs in an
+ephemeral directory and derives the public contract before any baseline or optimization session runs.
+Only the resulting generalized domain, invariants, safe aggregate distribution, and synthetic
+development cases enter the campaign workspace.
+
+The sandbox injects exact shapes and evaluator metadata only at the official remote evaluation
+boundary. Profiling selects an opaque id from canonical memory and injects only that real shape into
+the ephemeral remote profile job; the complete hidden shape table never enters the workspace.
+Optimization feedback retains aggregate results plus real per-shape latency keyed by opaque shape id,
+while withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
+runtime is copied into the workspace without linking its checkout-level `data/` tree. Sandbox private
+shape injection, opaque-shape profiling, and generalized result masking require the persisted workspace
+mode to be `production`. Leaderboard always retains legacy exact-shape exposure, regardless of whether
+the source operator also contains a public problem contract.
 
 ### Production policy
 
