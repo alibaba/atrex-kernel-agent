@@ -72,6 +72,12 @@ answers materially change scope, correctness, or acceptance.
 
 ### 4. Obtain independent Codex and Qoder reviews
 
+The campaign probes both optional reviewers once before the first optimization episode and caches
+the decision in its private runtime state. A reviewer disabled by that startup probe must not be
+retried by later plans in the same campaign; retain the helper's
+`disabled_after_startup_probe` status and recorded reason. Campaign restarts reuse the same cached
+decision.
+
 After completing the initial analysis, freeze one evidence packet and use the bundled dual-review
 helper before choosing the final plan direction. Give both reviewers the original draft plus the
 same small set of directly relevant text files, normally `README.md`, `kernel.py`, the latest

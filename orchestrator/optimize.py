@@ -461,13 +461,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Peak-utilization %% short-circuit (default stop condition).",
     )
     ap.add_argument(
-        "--iter-timeout",
-        type=int,
-        default=5400,
-        help="Wall-clock budget and worst-case terminal-handoff cadence for one "
-        "complete long-horizon episode (s).",
-    )
-    ap.add_argument(
         "--setup-timeout", type=int, default=7200, help="Baseline session timeout (s)."
     )
     ap.add_argument(
@@ -664,7 +657,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_iters=args.max_iters,
         token_budget=args.token_budget,
         target_util=args.target_util,
-        iter_timeout=args.iter_timeout,
         setup_timeout=args.setup_timeout,
         max_stall=args.max_stall,
         framework_baseline=args.framework_baseline,

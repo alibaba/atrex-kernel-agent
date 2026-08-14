@@ -20,9 +20,11 @@ automatically; the large `reference-projects/` collection remains optional.
 The repository-native `gen-plan` skill requests independent, read-only, non-persistent reviews from
 Codex and Qoder, then resolves their agreements and disagreements against repository evidence. A
 Codex- or Qoder-owned episode performs its matching review in the current session to avoid recursion;
-an unavailable reviewer is recorded explicitly and does not discard the other review. External
-`ask-codex` and `ask-qoder` consultations always run with maximum reasoning effort, independently of
-the primary episode's configured effort.
+external reviewers are probed once before the first optimization episode. The campaign caches that
+decision under `.atrex_long_horizon/`, reuses it after restarts, and never retries a reviewer that
+failed the startup probe. An unavailable reviewer is recorded explicitly and does not discard the
+other review. External `ask-codex` and `ask-qoder` consultations always run with maximum reasoning
+effort, independently of the primary episode's configured effort.
 
 ## 1. Clone the Repository
 
@@ -195,8 +197,6 @@ performance parity pass, and later episodes remain in Gluon.
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---iter-timeout S                 Wall-clock budget and worst-case handoff cadence for one episode
-                                 (default: 5400)
 --setup-timeout S                V0 setup session timeout (default: 7200)
 --sandbox-hardware GPU           Gateway selector or alias
 --sandbox-profile PROFILE        Optional pre/prod endpoint profile
@@ -216,9 +216,9 @@ Run `python orchestrator/optimize.py --help` for the complete current interface.
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 
-Lowering `--iter-timeout` makes numbered canonical memory arrive more frequently, but it also pays
-terminal-handoff and ABBA verification overhead more often. `memory/live.json` is independent of
-that tradeoff and refreshes within an active episode.
+Optimization episodes have no wall-clock deadline: an episode runs until it publishes a terminal
+handoff or its coding-agent process exits. `memory/live.json` exposes progress during a long active
+episode, while canonical `memory/vN.json` is written only after the episode reaches a terminal state.
 
 ### Local gateway
 

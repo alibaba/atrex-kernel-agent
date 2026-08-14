@@ -151,7 +151,8 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 - The repository-native `gen-plan` skill is linked into every backend's local discovery tree and
   independently obtains read-only, non-persistent Codex and Qoder reviews before evidence-based
   cross-review synthesis. A matching primary backend reviews in its current session to avoid
-  recursion.
+  recursion. Before the first episode, the campaign probes each external reviewer once, caches the
+  result in private runtime state, and disables later calls to reviewers that were unavailable.
 
 ### Sandbox and gateway
 

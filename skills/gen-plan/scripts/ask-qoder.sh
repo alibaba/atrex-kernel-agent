@@ -9,6 +9,7 @@ usage() {
 
 input_file=""
 context_files=()
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 qoder_timeout="${ATREX_ASK_QODER_TIMEOUT:-600}"
 # Keep the independent review at maximum reasoning depth regardless of the active episode or
 # settings file. The explicit CLI flag below has precedence over configured defaults.
@@ -72,6 +73,23 @@ done
 # second Qoder process would add recursion without providing an independent backend perspective.
 if [[ "${ATREX_AGENT_CLI:-}" == "qodercli" ]]; then
     echo "ASK_QODER_SKIPPED: current agent backend is qodercli; use the current session's review"
+    exit 0
+fi
+
+reviewer_enabled="${ATREX_PLAN_REVIEW_QODER_ENABLED:-}"
+reviewer_reason="${ATREX_PLAN_REVIEW_QODER_REASON:-}"
+if [[ -z "$reviewer_enabled" ]]; then
+    cached_reason="$(python3 "$script_dir/cached-reviewer-disable-reason.py" qoder)"
+    if [[ -n "$cached_reason" ]]; then
+        reviewer_enabled="0"
+        reviewer_reason="$cached_reason"
+    else
+        reviewer_enabled="1"
+    fi
+fi
+if [[ "$reviewer_enabled" == "0" ]]; then
+    reason="${reviewer_reason:-disabled by the campaign startup probe}"
+    echo "ASK_QODER_DISABLED: $reason"
     exit 0
 fi
 

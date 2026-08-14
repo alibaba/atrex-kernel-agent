@@ -51,13 +51,23 @@ import sys
 script_dir = sys.argv[1]
 reviewer_args = sys.argv[2:]
 reviewers = (
-    ("CODEX", os.path.join(script_dir, "ask-codex.sh"), "ASK_CODEX_SKIPPED:"),
-    ("QODER", os.path.join(script_dir, "ask-qoder.sh"), "ASK_QODER_SKIPPED:"),
+    (
+        "CODEX",
+        os.path.join(script_dir, "ask-codex.sh"),
+        "ASK_CODEX_SKIPPED:",
+        "ASK_CODEX_DISABLED:",
+    ),
+    (
+        "QODER",
+        os.path.join(script_dir, "ask-qoder.sh"),
+        "ASK_QODER_SKIPPED:",
+        "ASK_QODER_DISABLED:",
+    ),
 )
 
 
 def run_reviewer(spec):
-    name, helper, skip_marker = spec
+    name, helper, skip_marker, disabled_marker = spec
     try:
         completed = subprocess.run(
             ["bash", helper, *reviewer_args],
@@ -73,12 +83,16 @@ def run_reviewer(spec):
     stderr = completed.stderr.strip()
     if completed.returncode == 0 and stdout.startswith(skip_marker):
         status = f"current_{name.lower()}_session"
+    elif completed.returncode == 0 and stdout.startswith(disabled_marker):
+        status = "disabled_after_startup_probe"
     elif completed.returncode == 0:
         status = "completed"
     else:
         status = f"unavailable (exit {completed.returncode})"
     failure_reason = ""
-    if completed.returncode != 0:
+    if completed.returncode == 0 and stdout.startswith(disabled_marker):
+        failure_reason = stdout.removeprefix(disabled_marker).strip()
+    elif completed.returncode != 0:
         lines = [line.strip() for line in stderr.splitlines() if line.strip()]
         failure_reason = next(
             (
@@ -90,6 +104,8 @@ def run_reviewer(spec):
             ),
             f"helper exited with code {completed.returncode}",
         )
+    if stdout.startswith((skip_marker, disabled_marker)):
+        stdout = ""
     return name, status, stdout, stderr, failure_reason
 
 
@@ -105,7 +121,7 @@ for name, status, stdout, stderr, failure_reason in results:
     print(f"{name}_CONSULTATION_STATUS: {status}")
     if failure_reason:
         print(f"{name}_FAILURE_REASON: {failure_reason}")
-    if stdout and not stdout.startswith(f"ASK_{name}_SKIPPED:"):
+    if stdout:
         print(stdout)
     print(f"=== END {name} REVIEW ===")
 PY

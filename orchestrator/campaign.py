@@ -44,6 +44,7 @@ from .optimization_policy import (
     optimization_mode_directive,
     production_kernel_violations,
 )
+from .plan_reviewers import discover_plan_reviewers, plan_reviewer_environment
 from .session_io import (
     SessionResult,
     _dependency_review_candidate_paths,
@@ -97,7 +98,6 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    iter_timeout: int = 5400  # 90 min wall-clock budget per optimization episode
     setup_timeout: int = 7200  # 120 min for the baseline session
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
     convert_after: int = (
@@ -128,6 +128,9 @@ class Campaign:
     )
     _generated_agent_problem_digest: str = field(
         default="", init=False, repr=False, compare=False
+    )
+    _plan_reviewer_environment: dict[str, str] = field(
+        default_factory=dict, init=False, repr=False, compare=False
     )
 
     @property
@@ -257,10 +260,29 @@ class Campaign:
 
     def agent_environment(self) -> dict[str, str]:
         private_dir = self.private_reference_dir
-        return (
-            {ATREX_PRIVATE_REFERENCE_ENV: str(private_dir)}
-            if private_dir is not None
-            else {}
+        environment = dict(self._plan_reviewer_environment)
+        if private_dir is not None:
+            environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
+        return environment
+
+    def ensure_plan_reviewer_availability(self) -> None:
+        """Probe optional plan reviewers once and reuse the campaign-local decision."""
+        if self._plan_reviewer_environment:
+            return
+        value, reused = discover_plan_reviewers(
+            self.workspace,
+            agent_cli=self.agent_cli,
+        )
+        self._plan_reviewer_environment = plan_reviewer_environment(value)
+        statuses = []
+        for name in ("codex", "qoder"):
+            record = value["reviewers"][name]
+            status = "available" if record["available"] else "disabled"
+            statuses.append(f"{name}={status} ({record['reason']})")
+        source = "cached" if reused else "startup probe"
+        print(
+            f"[orchestrator] plan reviewers ({source}): " + "; ".join(statuses),
+            flush=True,
         )
 
     def _generalized_memory_coverage_problem(self, memory: dict | None) -> str:
@@ -1393,7 +1415,11 @@ class Campaign:
         """Run the native long-horizon episode supervisor for this campaign."""
         from long_horizon.campaign import LongHorizonCampaign
         from long_horizon.session import LongSessionRunner
+        from long_horizon.store import CampaignStore
         from long_horizon.verifier import GatewayABBAValidator
+
+        CampaignStore.ensure_excluded(self.workspace)
+        self.ensure_plan_reviewer_availability()
 
         verifier = GatewayABBAValidator(
             hardware=self.sandbox_hardware,
@@ -1409,7 +1435,6 @@ class Campaign:
             base_campaign=self,
             max_version=self.max_iters,
             token_budget=self.token_budget,
-            session_timeout=self.iter_timeout,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,
             verifier=verifier,

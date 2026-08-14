@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import signal
-import time
 import uuid
 from pathlib import Path
 from collections.abc import Mapping
@@ -27,12 +26,11 @@ from .protocol import handoff_diagnosis, read_handoff
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 CommandExecutor = Callable[
-    [list[str], Path, int, dict[str, str]], tuple[str, str, int, bool]
+    [list[str], Path, int | None, dict[str, str]], tuple[str, str, int, bool]
 ]
 
 
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
-_MAX_HANDOFF_GRACE_SECONDS = 600
 
 
 def _codex_invocation_usage(
@@ -96,7 +94,6 @@ class LongSessionRunner:
         workspace: Path,
         prompt: str,
         *,
-        timeout: int,
         handoff_path: Path,
         handoff_resumes: int,
         completion_check: CompletionCheck,
@@ -109,18 +106,6 @@ class LongSessionRunner:
         active_session_id = "" if is_codex else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
-        deadline = time.monotonic() + timeout
-        # Keep a small part of the episode budget for a same-session terminal
-        # handoff.  Otherwise the first coding turn can consume the complete
-        # deadline and get SIGKILLed with no opportunity to commit or publish
-        # the work it already finished.
-        handoff_grace = (
-            min(_MAX_HANDOFF_GRACE_SECONDS, max(1, timeout // 10))
-            if timeout >= 10
-            and handoff_resumes > 0
-            and main_adapter.supports_same_session_resume(self.agent_cli)
-            else 0
-        )
         environment = (
             main_adapter.session_environment()
             if self.agent_cli == "claude"
@@ -156,14 +141,6 @@ class LongSessionRunner:
         invocations: list[InvocationObservation] = []
 
         for attempt in range(max(0, handoff_resumes) + 1):
-            remaining = int(deadline - time.monotonic())
-            if remaining <= 0:
-                timed_out = True
-                exit_status = -1
-                break
-            turn_timeout = remaining
-            if attempt == 0 and handoff_grace:
-                turn_timeout = max(1, remaining - handoff_grace)
             if attempt == 0:
                 turn_prompt = prompt
                 command = (
@@ -190,24 +167,14 @@ class LongSessionRunner:
                     break
                 resume_count += 1
                 diagnosis = completion_diagnosis or handoff_diagnosis(handoff_path)
-                if completion_diagnosis.startswith("engineering budget expired"):
-                    turn_prompt = (
-                        "The engineering budget for this long-horizon episode has expired. Stop "
-                        "further exploration, profiling, and evaluation. Preserve the completed "
-                        "work now: inspect the current Git worktree, commit only kernel.py for a "
-                        "coherent candidate "
-                        "when one is ready, finalize the episode journal, and atomically publish a "
-                        "valid handoff. If there is no coherent candidate, publish an honest pivot "
-                        "or blocked handoff instead of continuing to optimize."
-                    )
-                else:
-                    turn_prompt = (
-                        "Continue the same long-horizon optimization episode. The previous turn did "
-                        f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
-                        "work from the current Git worktree. Candidate commits may contain only "
-                        "kernel.py; leave all evidence uncommitted. Do not merely explain the problem. Before "
-                        "stopping, finalize the episode journal and atomically publish a valid handoff."
-                    )
+                turn_prompt = (
+                    "Continue the same long-horizon optimization episode. The previous turn did "
+                    f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
+                    "work from the current Git worktree. Candidate commits may contain only "
+                    "kernel.py; leave all evidence uncommitted. Do not merely explain the problem. "
+                    "Before stopping, finalize the episode journal and atomically publish a valid "
+                    "handoff."
+                )
                 command = (
                     main_adapter.resume_session_command(
                         turn_prompt, active_session_id, reasoning_effort
@@ -222,7 +189,7 @@ class LongSessionRunner:
                     f"{telemetry_attempt_prefix}-{attempt + 1}"
                 )
             stdout, stderr, exit_status, turn_timed_out = self.executor(
-                command, workspace, turn_timeout, environment
+                command, workspace, None, environment
             )
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
@@ -327,11 +294,10 @@ class LongSessionRunner:
                     bool(active_session_id)
                     and main_adapter.supports_same_session_resume(self.agent_cli)
                     and attempt < max(0, handoff_resumes)
-                    and int(deadline - time.monotonic()) > 0
                 )
                 if can_resume:
                     completion_diagnosis = (
-                        "engineering budget expired before a valid terminal handoff"
+                        "coding session timed out before a valid terminal handoff"
                     )
                     continue
                 break

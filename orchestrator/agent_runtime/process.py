@@ -22,7 +22,7 @@ class ProcessRunner(Protocol):
         self,
         command: list[str],
         cwd: Path,
-        timeout: int,
+        timeout: int | None,
         env: dict | None = None,
     ) -> tuple[str, str, int, bool]:
         ...
@@ -388,10 +388,10 @@ def dependency_guard(
 def run_bounded(
     command: list[str],
     cwd: Path,
-    timeout: int,
+    timeout: int | None,
     env: dict | None = None,
 ) -> tuple[str, str, int, bool]:
-    """Run a command in its own process group with timeout and policy enforcement."""
+    """Run a guarded command, optionally without a wall-clock deadline."""
     proc = subprocess.Popen(
         command,
         cwd=str(cwd),

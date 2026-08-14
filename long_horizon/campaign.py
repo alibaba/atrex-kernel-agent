@@ -308,7 +308,6 @@ class LongHorizonCampaign:
     max_version: int | None = None
     episode_limit: int = 0
     token_budget: int = 0
-    session_timeout: int = 18_000
     handoff_resumes: int = 2
     max_stall: int = 0
     verifier: GatewayABBAValidator | None = None
@@ -1099,7 +1098,6 @@ class LongHorizonCampaign:
             result = runner.run(
                 worktree.path,
                 prompt,
-                timeout=self.session_timeout,
                 handoff_path=handoff_path,
                 handoff_resumes=self.handoff_resumes,
                 completion_check=lambda handoff: self._completion_check(
