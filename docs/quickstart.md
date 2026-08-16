@@ -192,6 +192,7 @@ performance parity pass, and later episodes remain in Gluon.
 --max-iters N                    Hard cap on canonical versions/episodes
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
+--long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex implemented)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never
