@@ -15,6 +15,7 @@ qoder_timeout="${ATREX_ASK_QODER_TIMEOUT:-600}"
 # settings file. The explicit CLI flag below has precedence over configured defaults.
 reasoning_effort="max"
 max_output_tokens="${ATREX_ASK_QODER_MAX_OUTPUT_TOKENS:-4096}"
+qoder_model="${ATREX_QODER_MODEL:-Ultimate}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -122,6 +123,7 @@ command=(
     --print
     --no-session-persistence
     --permission-mode dont_ask
+    --model "$qoder_model"
     --reasoning-effort "$reasoning_effort"
     --max-output-tokens "$max_output_tokens"
 )
@@ -136,7 +138,7 @@ done
 # Empty tools keeps the consultation read-only. Attachments provide all required context.
 command+=(--tools "" -- "$query")
 
-echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, effort=$reasoning_effort)" >&2
+echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
 if qoder_response="$(python3 - "$qoder_timeout" "${command[@]}" <<'PY'
 import os
 import subprocess

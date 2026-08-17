@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -42,6 +43,34 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
         return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
     return sorted((str(shape_id) for shape_id in payload), key=sort_key)
+
+
+def _shape_reference(workspace: Path, destination: Path, shape_ids: list[str]) -> Path:
+    destination.mkdir()
+    for filename in ("reference.py", "input.py"):
+        source = workspace / filename
+        if source.is_file():
+            shutil.copy2(source, destination / filename)
+    shapes = json.loads((workspace / "shapes.json").read_text(encoding="utf-8"))
+    (destination / "shapes.json").write_text(
+        json.dumps({shape_id: shapes[shape_id] for shape_id in shape_ids}),
+        encoding="utf-8",
+    )
+    for filename in ("metadata.json", "roofline.json"):
+        source = workspace / filename
+        if not source.is_file():
+            continue
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(payload.get("shapes"), dict):
+            payload["shapes"] = {
+                shape_id: payload["shapes"][shape_id]
+                for shape_id in shape_ids
+                if shape_id in payload["shapes"]
+            }
+        if filename == "metadata.json" and "num_shapes" in payload:
+            payload["num_shapes"] = len(shape_ids)
+        (destination / filename).write_text(json.dumps(payload), encoding="utf-8")
+    return destination
 
 
 def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
@@ -206,6 +235,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timed-runs", type=int, default=100)
     parser.add_argument("--candidate-timeout-s", type=float, default=20.0)
     parser.add_argument("--perf-timeout-s", type=float, default=120.0)
+    parser.add_argument("--shape-id", action="append", dest="shape_ids")
     return parser
 
 
@@ -224,23 +254,34 @@ def main(argv: list[str] | None = None) -> int:
             f"{evaluator} and {runtime_src / 'atrex_bench'}"
         )
 
-    shape_ids = _expected_shape_ids(workspace)
+    all_shape_ids = _expected_shape_ids(workspace)
+    shape_ids = args.shape_ids or all_shape_ids
+    unknown = [shape_id for shape_id in shape_ids if shape_id not in all_shape_ids]
+    if unknown:
+        raise SystemExit("unknown --shape-id values: " + ", ".join(unknown))
     env = os.environ.copy()
     pythonpath = str(runtime_src)
     if env.get("PYTHONPATH"):
         pythonpath += os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pythonpath
 
-    with tempfile.TemporaryDirectory(prefix="atrex-eval-") as output_dir:
+    with tempfile.TemporaryDirectory(prefix="atrex-eval-") as temp_dir:
+        temp = Path(temp_dir)
+        output_dir = temp / "output"
+        reference_dir = (
+            _shape_reference(workspace, temp / "reference", shape_ids)
+            if args.shape_ids
+            else workspace
+        )
         command = [
             sys.executable,
             str(evaluator),
             "--input",
             str(workspace / "kernel.py"),
             "--reference-dir",
-            str(workspace),
+            str(reference_dir),
             "--output",
-            output_dir,
+            str(output_dir),
             "--atol",
             str(args.atol),
             "--rtol",
@@ -280,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
 
-        result_paths = sorted(Path(output_dir).rglob("eval_result.json"))
+        result_paths = sorted(output_dir.rglob("eval_result.json"))
         if not result_paths:
             result = {
                 "all_pass": False,

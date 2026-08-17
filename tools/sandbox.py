@@ -50,6 +50,7 @@ import json
 import math
 import os
 import re
+import signal
 import shlex
 import shutil
 import statistics
@@ -60,8 +61,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from threading import Lock
 from typing import Any, Iterable
 
 
@@ -127,17 +130,22 @@ INPUT_SKIP_SUFFIXES = {
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
+DEFAULT_EVAL_BATCH_WORKERS = 4
 MAX_COMMAND_TIMEOUT = 600
 DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
+AGATE_WAIT_SLICE_SECONDS = 300
 RUNTIME_CHUNK_BYTES = 20 * 1024
-# Workspace bundle uses a smaller chunk size because agate embeds the file
-# content in one argv entry alongside other metadata, and the total must stay
-# below Linux MAX_ARG_STRLEN (128 KiB).
+# Small inline workspace bundles stay below Linux MAX_ARG_STRLEN; larger
+# bundles use agate's OSS attachment transport.
 WORKSPACE_CHUNK_BYTES = 20 * 1024
+OSS_WORKSPACE_THRESHOLD_BYTES = 120 * 1024
 SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
+ACTIVE_AGATE_JOBS: dict[str, tuple[str, str, str | None]] = {}
+ACTIVE_AGATE_JOBS_LOCK = Lock()
 EVALUATION_INPUT_PATHS = frozenset(
     {
         "agent_problem.json",
@@ -306,7 +314,7 @@ def _make_input_bundle(
 
 
 def _declared_candidate_sources(workspace: Path) -> set[str]:
-    """Return candidate sources declared by solution.json plus verification artifacts."""
+    """Return candidate sources declared by solution.json."""
     selected: set[str] = set()
     solution_path = workspace / "solution.json"
     if solution_path.is_file():
@@ -330,19 +338,23 @@ def _declared_candidate_sources(workspace: Path) -> set[str]:
                 )
             selected.add(_safe_relative(source_path))
 
-    verification_sources = workspace / "verification_artifacts"
-    if verification_sources.is_dir():
-        for path in _walk_files(verification_sources):
-            selected.add(path.relative_to(workspace).as_posix())
-
     return selected
 
 
-def _evaluation_input_paths(workspace: Path) -> frozenset[str]:
+def _evaluation_input_paths(
+    workspace: Path, command: Iterable[str] = ()
+) -> frozenset[str]:
     """Return only files required by the immutable evaluator."""
-    return frozenset(
-        set(EVALUATION_INPUT_PATHS) | _declared_candidate_sources(workspace)
-    )
+    selected = set(EVALUATION_INPUT_PATHS) | _declared_candidate_sources(workspace)
+    referenced = _referenced_workspace_inputs(workspace, _command_parts(list(command)))
+    selected.update(referenced)
+    for path in referenced:
+        if "verification_artifacts" not in PurePosixPath(path).parts:
+            continue
+        snapshots = PurePosixPath(path).parent / "snapshots"
+        if (workspace / snapshots).is_dir():
+            selected.update(_expand_workspace_input(workspace, snapshots.as_posix()))
+    return frozenset(selected)
 
 
 def _candidate_runtime_input_paths(workspace: Path) -> set[str]:
@@ -1069,6 +1081,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--shape-batch-size",
+        type=int,
+        default=int(
+            os.environ.get(
+                "ATREX_EVAL_SHAPE_BATCH_SIZE", str(DEFAULT_EVAL_SHAPE_BATCH_SIZE)
+            )
+        ),
+        help="Maximum Atrex-Bench shapes per concurrent eval job (default: 4).",
+    )
+    parser.add_argument(
         "--sync",
         action="append",
         default=[],
@@ -1315,10 +1337,78 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
     )
 
 
+def _ray_submit_version_mismatch(job: dict | None) -> bool:
+    error = job.get("error") if job else None
+    return bool(
+        isinstance(error, dict)
+        and error.get("reason") == "submit_failed"
+        and "Version check returned 404" in str(error.get("message", ""))
+    )
+
+
+def _queue_timeout_before_start(job: dict | None) -> bool:
+    error = job.get("error") if job else None
+    return bool(
+        isinstance(error, dict)
+        and error.get("reason") == "timeout"
+        and "never started executing" in str(error.get("message", ""))
+    )
+
+
+def _l20n_failover_command(agate: list[str]) -> list[str] | None:
+    try:
+        gpu_index = agate.index("--gpu") + 1
+    except (ValueError, IndexError):
+        return None
+    if agate[gpu_index].casefold() != "l20n":
+        return None
+    fallback = list(agate)
+    fallback[gpu_index] = "l20n-ray"
+    return fallback
+
+
 def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
     """Recover the job id printed by agate before it starts polling."""
     match = SUBMITTED_JOB_RE.search((proc.stderr or "") + "\n" + (proc.stdout or ""))
     return match.group(1) if match else None
+
+
+def _track_agate_job(
+    job_id: str, executable: str, url: str, gateway_profile: str | None
+) -> None:
+    with ACTIVE_AGATE_JOBS_LOCK:
+        ACTIVE_AGATE_JOBS[job_id] = (executable, url, gateway_profile)
+
+
+def _forget_agate_job(job_id: str) -> None:
+    with ACTIVE_AGATE_JOBS_LOCK:
+        ACTIVE_AGATE_JOBS.pop(job_id, None)
+
+
+def _cancel_active_agate_jobs() -> None:
+    with ACTIVE_AGATE_JOBS_LOCK:
+        jobs = list(ACTIVE_AGATE_JOBS.items())
+    for job_id, (executable, url, gateway_profile) in jobs:
+        command = [executable, "cancel"]
+        if url:
+            command += ["--url", url]
+        elif gateway_profile:
+            command += ["--profile", gateway_profile]
+        command += ["--http-timeout", "10", job_id]
+        try:
+            subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
+    _cancel_active_agate_jobs()
+    raise KeyboardInterrupt
 
 
 def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
@@ -1352,18 +1442,21 @@ def _resume_interrupted_agate_wait(
     elapsed: float,
     initial: subprocess.CompletedProcess[str],
 ) -> subprocess.CompletedProcess[str]:
-    """Continue waiting for an already-submitted job without resubmitting it.
+    """Wait for an already-submitted job without resubmitting it.
 
-    A long-lived ``agate dev`` polling process can occasionally receive SIGTERM
-    while its remote job continues running.  In that case Python normalizes the
-    child's ``-SIGTERM`` return code to exit 241, and treating it as a kernel
-    failure loses a perfectly valid later RESULT_JSON.  Agate prints the job id
-    before polling, so attach to that same job with ``agate get --wait`` for the
-    remainder of the original client-side budget.
+    Submission is deliberately non-blocking so the sandbox knows the job id and
+    can cancel it if its own parent terminates the sandbox while it is polling.
     """
-    if _job_response(initial.stdout or "") is not None:
+    initial_job = _job_response(initial.stdout or "")
+    if initial_job and initial_job.get("status") in {
+        "succeeded",
+        "failed",
+        "cancelled",
+    }:
         return initial
-    job_id = _submitted_job_id(initial)
+    job_id = (
+        initial_job.get("job_id") if initial_job else _submitted_job_id(initial)
+    )
     remaining = int(wait_budget - elapsed)
     if not job_id or remaining <= 0:
         return initial
@@ -1373,24 +1466,33 @@ def _resume_interrupted_agate_wait(
         get_command += ["--url", url]
     elif gateway_profile:
         get_command += ["--profile", gateway_profile]
-    get_command += [
-        "--http-timeout",
-        str(MAX_HTTP_REQUEST_TIMEOUT),
-        "--wait-timeout",
-        str(max(1, remaining)),
-        "--job-timeout",
-        str(command_timeout),
-        "--wait",
-        job_id,
-    ]
-    resumed = subprocess.run(get_command, capture_output=True, text=True)
-    note = (
-        f"[sandbox] agate polling exited {initial.returncode}; "
-        f"resumed existing job_id={job_id} without resubmission"
-    )
-    stderr_parts = [
-        part.rstrip() for part in (initial.stderr, note, resumed.stderr) if part
-    ]
+    note = f"submitted job_id={job_id}; polling..."
+    stderr_parts = [part.rstrip() for part in (initial.stderr, note) if part]
+    deadline = time.monotonic() + remaining
+    resumed = initial
+    while (remaining := int(deadline - time.monotonic())) > 0:
+        resumed = subprocess.run(
+            [
+                *get_command,
+                "--http-timeout",
+                str(MAX_HTTP_REQUEST_TIMEOUT),
+                "--wait-timeout",
+                str(min(AGATE_WAIT_SLICE_SECONDS, remaining)),
+                "--job-timeout",
+                str(command_timeout),
+                "--wait",
+                job_id,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if resumed.stderr:
+            stderr_parts.append(resumed.stderr.rstrip())
+        job = _job_response(resumed.stdout or "")
+        if job and job.get("status") in {"succeeded", "failed", "cancelled"}:
+            break
+        if not job:
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
     return subprocess.CompletedProcess(
         args=resumed.args,
         returncode=resumed.returncode,
@@ -1408,18 +1510,26 @@ def _run_agate_once(
     command_timeout: int,
     wait_budget: int,
 ) -> subprocess.CompletedProcess[str]:
-    """Submit one agate job and preserve the existing interrupted-wait recovery."""
+    """Submit one agate job, then wait while keeping its id available for cleanup."""
     wait_started = time.monotonic()
-    proc = subprocess.run(agate, capture_output=True, text=True)
-    return _resume_interrupted_agate_wait(
-        executable=executable,
-        url=url,
-        gateway_profile=gateway_profile,
-        command_timeout=command_timeout,
-        wait_budget=wait_budget,
-        elapsed=time.monotonic() - wait_started,
-        initial=proc,
-    )
+    submitted = subprocess.run([*agate, "--no-wait"], capture_output=True, text=True)
+    job = _job_response(submitted.stdout or "")
+    if submitted.returncode or not job:
+        return submitted
+    job_id = job["job_id"]
+    _track_agate_job(job_id, executable, url, gateway_profile)
+    try:
+        return _resume_interrupted_agate_wait(
+            executable=executable,
+            url=url,
+            gateway_profile=gateway_profile,
+            command_timeout=command_timeout,
+            wait_budget=wait_budget,
+            elapsed=time.monotonic() - wait_started,
+            initial=submitted,
+        )
+    finally:
+        _forget_agate_job(job_id)
 
 
 def _run_agate_with_cancel_retry(
@@ -1431,7 +1541,8 @@ def _run_agate_with_cancel_retry(
     command_timeout: int,
     wait_budget: int,
 ) -> subprocess.CompletedProcess[str]:
-    """Retry once only when a cancelled job produced no result or error."""
+    """Retry transient gateway-only failures without blaming the submitted kernel."""
+    deadline = time.monotonic() + wait_budget
     first = _run_agate_once(
         agate=agate,
         executable=executable,
@@ -1441,6 +1552,56 @@ def _run_agate_with_cancel_retry(
         wait_budget=wait_budget,
     )
     first_job = _job_response(first.stdout or "")
+    fallback = (
+        _l20n_failover_command(agate)
+        if _ray_submit_version_mismatch(first_job)
+        else None
+    )
+    if fallback is not None:
+        agate = fallback
+        print(
+            "[sandbox] L20N submit cluster unavailable; retrying on l20n-ray",
+            file=sys.stderr,
+            flush=True,
+        )
+        first = _run_agate_once(
+            agate=agate,
+            executable=executable,
+            url=url,
+            gateway_profile=gateway_profile,
+            command_timeout=command_timeout,
+            wait_budget=max(1, int(deadline - time.monotonic())),
+        )
+        first_job = _job_response(first.stdout or "")
+    while _ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(
+        first_job
+    ):
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 1:
+            return first
+        delay = min(60, remaining - 1) if _ray_submit_version_mismatch(first_job) else 0
+        if delay:
+            print(
+                f"[sandbox] gateway Ray submit compatibility outage; retrying in {delay}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+        else:
+            print(
+                "[sandbox] gateway queue timeout before job start; resubmitting",
+                file=sys.stderr,
+                flush=True,
+            )
+        first = _run_agate_once(
+            agate=agate,
+            executable=executable,
+            url=url,
+            gateway_profile=gateway_profile,
+            command_timeout=command_timeout,
+            wait_budget=remaining - delay,
+        )
+        first_job = _job_response(first.stdout or "")
     if not _cancelled_without_outcome(first_job):
         return first
 
@@ -1475,6 +1636,7 @@ def _typed_agate_command(
     kind: str,
     request: dict[str, Any],
     queue_wait_grace: int,
+    reference_dir: Path | None = None,
 ) -> list[str]:
     """Build an agate run/profile invocation for a typed request."""
     command = [executable, kind]
@@ -1488,7 +1650,7 @@ def _typed_agate_command(
     # shapes/reference files locally to assemble its typed eval payload, so point
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
-    reference_dir = _private_reference_dir(workspace) or workspace
+    reference_dir = reference_dir or _private_reference_dir(workspace) or workspace
     command += [
         "--gpu",
         args.hardware,
@@ -1546,6 +1708,58 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
         return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
     return sorted((str(shape_id) for shape_id in shapes), key=sort_key)
+
+
+def _shape_batches(shape_ids: list[str], batch_size: int) -> list[list[str]]:
+    return [
+        shape_ids[offset : offset + batch_size]
+        for offset in range(0, len(shape_ids), batch_size)
+    ]
+
+
+def _shape_batch_request(
+    request: dict[str, Any], shape_ids: list[str]
+) -> dict[str, Any]:
+    batched = dict(request)
+    reference = dict(request["reference"])
+    reference["shapes"] = {
+        shape_id: request["reference"]["shapes"][shape_id] for shape_id in shape_ids
+    }
+    for field in ("metadata", "roofline"):
+        payload = reference.get(field)
+        if not isinstance(payload, dict):
+            continue
+        payload = dict(payload)
+        if isinstance(payload.get("shapes"), dict):
+            payload["shapes"] = {
+                shape_id: payload["shapes"][shape_id]
+                for shape_id in shape_ids
+                if shape_id in payload["shapes"]
+            }
+        if field == "metadata" and "num_shapes" in payload:
+            payload["num_shapes"] = len(shape_ids)
+        reference[field] = payload
+    batched["reference"] = reference
+    return batched
+
+
+def _shape_batch_reference(
+    reference: dict[str, Any], destination: Path
+) -> None:
+    destination.mkdir()
+    for filename, field in (
+        ("reference.py", "reference_py"),
+        ("input.py", "input_py"),
+        ("shapes.json", "shapes"),
+        ("metadata.json", "metadata"),
+        ("roofline.json", "roofline"),
+    ):
+        value = reference.get(field)
+        if value is not None:
+            (destination / filename).write_text(
+                value if isinstance(value, str) else json.dumps(value),
+                encoding="utf-8",
+            )
 
 
 def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
@@ -1680,6 +1894,49 @@ def _optimizer_result_from_eval(
         "max_rel_err": max_rel,
         "evaluator": "atrex-gpu-gateway/run",
         "eval_id": payload.get("eval_id"),
+    }
+
+
+def _merge_optimizer_results(
+    results: list[dict[str, Any]], shape_ids: list[str]
+) -> dict[str, Any]:
+    latency_by_shape = {
+        str(shape_id): float(latency)
+        for result in results
+        for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
+    }
+    latencies = [
+        latency_by_shape[shape_id]
+        for shape_id in shape_ids
+        if shape_id in latency_by_shape
+    ]
+    complete = len(latencies) == len(shape_ids)
+    return {
+        "all_pass": complete and all(result.get("all_pass") for result in results),
+        "failures": [
+            str(failure)
+            for result in results
+            for failure in (result.get("failures") or [])
+        ],
+        "latency_us_geomean": (
+            math.exp(sum(math.log(value) for value in latencies) / len(latencies))
+            if complete and latencies
+            else 0.0
+        ),
+        "latency_us_arith_mean": (
+            sum(latencies) / len(latencies) if complete and latencies else 0.0
+        ),
+        "latency_us_by_shape": latency_by_shape,
+        "speedup_vs_ref_geomean": None,
+        "max_abs_err": max(
+            float(result.get("max_abs_err") or 0.0) for result in results
+        ),
+        "max_rel_err": max(
+            float(result.get("max_rel_err") or 0.0) for result in results
+        ),
+        "evaluator": "atrex-gpu-gateway/run/batched",
+        "eval_id": results[-1].get("eval_id"),
+        "shape_batch_count": len(results),
     }
 
 
@@ -1874,6 +2131,17 @@ def _run_typed_gateway(
         )
         return None
 
+    expected_shape_ids = _expected_shape_ids(workspace)
+    shape_batches = (
+        _shape_batches(
+            expected_shape_ids,
+            getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
+        )
+        if kind == "run"
+        else [expected_shape_ids]
+    )
+    batched = len(shape_batches) > 1
+
     if args.dry_run:
         print(
             json.dumps(
@@ -1890,6 +2158,7 @@ def _run_typed_gateway(
                         if _is_generalized_workspace(workspace)
                         else len(request["reference"]["shapes"])
                     ),
+                    "shape_batch_count": len(shape_batches),
                     "options": request["options"],
                     "sync": sync_paths,
                 },
@@ -1900,30 +2169,64 @@ def _run_typed_gateway(
 
     agate_executable = _find_agate()
     try:
-        if args.url and agate_executable is None:
-            proc = _run_direct_job(
-                url=args.url,
-                kind="eval" if kind == "run" else kind,
-                payload=request,
-                timeout=args.timeout,
-                queue_wait_grace=queue_wait_grace,
-            )
-        else:
-            if agate_executable is None:
-                raise FileNotFoundError("agate")
-            agate = _typed_agate_command(
-                agate_executable, args, workspace, kind, request, queue_wait_grace
-            )
-            proc = _run_agate_with_cancel_retry(
-                agate=agate,
-                executable=agate_executable,
-                url=args.url,
-                gateway_profile=args.gateway_profile,
-                command_timeout=_gateway_job_timeout(
-                    args.timeout, queue_wait_grace
-                ),
-                wait_budget=args.timeout + queue_wait_grace,
-            )
+        with tempfile.TemporaryDirectory(prefix="atrex-shape-batches-") as temp_dir:
+            batch_root = Path(temp_dir)
+
+            def run_batch(
+                item: tuple[int, list[str]],
+            ) -> subprocess.CompletedProcess[str]:
+                batch_index, shape_ids = item
+                batch_request = (
+                    _shape_batch_request(request, shape_ids) if batched else request
+                )
+                if args.url and agate_executable is None:
+                    return _run_direct_job(
+                        url=args.url,
+                        kind="eval" if kind == "run" else kind,
+                        payload=batch_request,
+                        timeout=args.timeout,
+                        queue_wait_grace=queue_wait_grace,
+                    )
+                if agate_executable is None:
+                    raise FileNotFoundError("agate")
+                reference_dir = None
+                if batched:
+                    reference_dir = batch_root / f"batch-{batch_index:04d}"
+                    _shape_batch_reference(batch_request["reference"], reference_dir)
+                agate = _typed_agate_command(
+                    agate_executable,
+                    args,
+                    workspace,
+                    kind,
+                    batch_request,
+                    queue_wait_grace,
+                    reference_dir,
+                )
+                return _run_agate_with_cancel_retry(
+                    agate=agate,
+                    executable=agate_executable,
+                    url=args.url,
+                    gateway_profile=args.gateway_profile,
+                    command_timeout=_gateway_job_timeout(
+                        args.timeout, queue_wait_grace
+                    ),
+                    wait_budget=args.timeout + queue_wait_grace,
+                )
+
+            batch_items = list(enumerate(shape_batches))
+            if batched:
+                print(
+                    f"[sandbox] running {len(shape_batches)} shape batches "
+                    f"with {min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))} workers",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                with ThreadPoolExecutor(
+                    max_workers=min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))
+                ) as executor:
+                    processes = list(executor.map(run_batch, batch_items))
+            else:
+                processes = [run_batch(batch_items[0])]
     except GatewayHTTPError as exc:
         if _typed_fallback_allowed(exc):
             print(
@@ -1943,63 +2246,73 @@ def _run_typed_gateway(
             "install atrex-gateway-client first"
         ) from exc
 
-    if proc.returncode and _typed_fallback_allowed(
-        (proc.stderr or "") + (proc.stdout or "")
-    ):
+    jobs: list[dict[str, Any]] = []
+    for proc in processes:
+        if proc.returncode and _typed_fallback_allowed(
+            (proc.stderr or "") + (proc.stdout or "")
+        ):
+            print(
+                f"[sandbox] gateway {kind} interface rejected this request; using dev",
+                file=sys.stderr,
+            )
+            return None
         if proc.stderr and not generalized:
             print(proc.stderr.rstrip(), file=sys.stderr)
-        print(
-            f"[sandbox] gateway {kind} interface rejected this request; using dev",
-            file=sys.stderr,
-        )
-        return None
-    if proc.stderr and not generalized:
-        print(proc.stderr.rstrip(), file=sys.stderr)
-    job = _job_response(proc.stdout or "")
-    if job is None:
-        if proc.stdout and not generalized:
-            print(proc.stdout.rstrip())
-        elif generalized:
-            print(
-                "[sandbox] generalized gateway response unavailable; evaluator details withheld",
-                file=sys.stderr,
-            )
-        return proc.returncode or 2
-    if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-        if generalized:
-            print(
-                "[sandbox] generalized evaluation failed; hidden-case details withheld; "
-                f"job_id={job.get('job_id')}",
-                file=sys.stderr,
-            )
-        else:
-            print(json.dumps(job, ensure_ascii=False))
-        return proc.returncode or 1
+        job = _job_response(proc.stdout or "")
+        if job is None:
+            if proc.stdout and not generalized:
+                print(proc.stdout.rstrip())
+            elif generalized:
+                print(
+                    "[sandbox] generalized gateway response unavailable; evaluator details withheld",
+                    file=sys.stderr,
+                )
+            return proc.returncode or 2
+        if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
+            if generalized:
+                print(
+                    "[sandbox] generalized evaluation failed; hidden-case details withheld; "
+                    f"job_id={job.get('job_id')}",
+                    file=sys.stderr,
+                )
+            else:
+                print(json.dumps(job, ensure_ascii=False))
+            return proc.returncode or 1
+        jobs.append(job)
 
     print(
-        f"[sandbox] gateway_kind={kind} job_id={job.get('job_id')}",
+        f"[sandbox] gateway_kind={kind} "
+        + (
+            f"job_ids={','.join(str(job.get('job_id')) for job in jobs)}"
+            if batched
+            else f"job_id={jobs[0].get('job_id')}"
+        ),
         file=sys.stderr,
     )
     if kind == "run":
+        batch_results = [
+            _optimizer_result_from_eval(job["result"], shape_ids)
+            for job, shape_ids in zip(jobs, shape_batches)
+        ]
         result = _mask_generalized_result(
             workspace,
-            _optimizer_result_from_eval(
-                job["result"], _expected_shape_ids(workspace)
-            ),
+            _merge_optimizer_results(batch_results, expected_shape_ids)
+            if batched
+            else batch_results[0],
         )
         _record_episode_evaluation(
             workspace,
             result,
             gateway_kind=kind,
-            job_id=job.get("job_id"),
+            job_id=",".join(str(job.get("job_id")) for job in jobs),
         )
         print(
             TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
         )
         return 0 if result["all_pass"] else 1
 
-    _record_profile_job(job, workspace, sync_paths)
-    print(PROFILE_RESULT_PREFIX + json.dumps(job["result"], ensure_ascii=False))
+    _record_profile_job(jobs[0], workspace, sync_paths)
+    print(PROFILE_RESULT_PREFIX + json.dumps(jobs[0]["result"], ensure_ascii=False))
     return 0
 
 
@@ -2028,6 +2341,8 @@ def _main(argv: list[str] | None = None) -> int:
             "sandbox: --timeout must be in the gateway-supported range "
             f"1..{MAX_COMMAND_TIMEOUT}"
         )
+    if args.shape_batch_size <= 0:
+        raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
         queue_wait_grace = int(
             os.environ.get(
@@ -2112,7 +2427,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     evaluator_command = _is_test_kernel_command(args.command)
     if evaluator_command:
-        selected_inputs = _evaluation_input_paths(workspace)
+        selected_inputs = _evaluation_input_paths(workspace, args.command)
     else:
         try:
             selected_inputs = _command_input_paths(
@@ -2161,25 +2476,22 @@ def _main(argv: list[str] | None = None) -> int:
         if command_environment:
             command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = _find_agate()
-    direct_http = bool(
-        args.url and (agate_executable is None or bundle_bytes > 50 * 1024)
+    direct_http = bool(args.url and agate_executable is None)
+    oss_workspace = bool(
+        agate_executable and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
     )
-    # Linux limits each individual argv entry to 128 KiB (MAX_ARG_STRLEN).
-    # agate's worker materializes an uploaded file through one such argument,
-    # so leave headroom for its framing instead of creating a doomed job.
-    # The direct HTTP fallback does not place file contents in argv and can use
-    # the gateway's normal request-body allowance instead.
-    safe_bundle_bytes = 20 * 1024 * 1024 if direct_http else 120 * 1024
-    if bundle_bytes > safe_bundle_bytes:
+    workspace_transport = (
+        "oss" if oss_workspace else ("http" if direct_http else "inline")
+    )
+    if direct_http and bundle_bytes > 20 * 1024 * 1024:
         raise SystemExit(
             f"sandbox: packaged payload is {bundle_bytes / 1024:.1f} KiB, "
-            f"above the safe {safe_bundle_bytes / 1024:.0f} KiB gateway argument limit; "
-            "exclude additional "
-            "local-only workspace artifacts"
+            "above the 20 MiB direct gateway request limit"
         )
     print(
         f"[sandbox] gateway_kind=dev hardware={args.hardware} files={file_count} "
         f"payload={bundle_bytes / 1024:.1f} KiB "
+        f"transport={workspace_transport} "
         f"atrex_runtime={runtime_bundle_bytes / 1024:.1f} KiB command={command!r}",
         file=sys.stderr,
     )
@@ -2198,6 +2510,7 @@ def _main(argv: list[str] | None = None) -> int:
                     "typed_fallback_reason": typed_limitation,
                     "files": file_count,
                     "payload_bytes": bundle_bytes,
+                    "workspace_transport": workspace_transport,
                     "atrex_runtime_payload_bytes": runtime_bundle_bytes,
                     "sync": sync_paths,
                     "command": command,
@@ -2221,7 +2534,7 @@ def _main(argv: list[str] | None = None) -> int:
         workspace_part_paths: list[Path] = []
         # Chunk workspace bundle when it exceeds MAX_ARG_STRLEN safe limit
         # (same pattern as runtime chunking). The runner concatenates parts.
-        if len(bundle) > WORKSPACE_CHUNK_BYTES:
+        if not oss_workspace and len(bundle) > WORKSPACE_CHUNK_BYTES:
             for index, offset in enumerate(
                 range(0, len(bundle), WORKSPACE_CHUNK_BYTES)
             ):
@@ -2280,7 +2593,9 @@ def _main(argv: list[str] | None = None) -> int:
             "--job-timeout",
             str(_dev_gateway_job_timeout(args.timeout)),
         ]
-        if workspace_part_paths:
+        if oss_workspace:
+            agate += ["--oss-file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
+        elif workspace_part_paths:
             for index, part_path in enumerate(workspace_part_paths):
                 agate += [
                     "--file",
@@ -2452,6 +2767,10 @@ def main(argv: list[str] | None = None) -> int:
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
     category = _sandbox_telemetry_category(arguments)
     started = time.monotonic()
+    previous_handlers = {
+        signum: signal.signal(signum, _interrupt_active_agate_jobs)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     _append_sandbox_telemetry(
         "sandbox_operation_started",
         operation_id=operation_id,
@@ -2460,6 +2779,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         returncode = _main(argv)
     except BaseException as exc:
+        _cancel_active_agate_jobs()
         _append_sandbox_telemetry(
             "sandbox_operation_completed",
             operation_id=operation_id,
@@ -2469,6 +2789,9 @@ def main(argv: list[str] | None = None) -> int:
             failure_type=type(exc).__name__,
         )
         raise
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
     _append_sandbox_telemetry(
         "sandbox_operation_completed",
         operation_id=operation_id,

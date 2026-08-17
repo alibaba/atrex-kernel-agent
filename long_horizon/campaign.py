@@ -148,6 +148,8 @@ def _latest_complete_canonical_performance(
         memory = main_adapter.read_memory(workspace, version)
         if not isinstance(memory, dict):
             continue
+        if (memory.get("quality_gate") or {}).get("result") != "PASS":
+            continue
         performance = memory.get("performance")
         if not isinstance(performance, dict):
             continue
@@ -254,6 +256,19 @@ def _latest_complete_episode_performance(
             "timestamp": payload.get("timestamp"),
         }
     return None
+
+
+def _episode_head_matches_incumbent(
+    workspace: Path, episode_workspace: Path | None
+) -> bool:
+    if episode_workspace is None:
+        return False
+    try:
+        return (episode_workspace / "kernel.py").read_bytes() == (
+            workspace / "kernel.py"
+        ).read_bytes()
+    except OSError:
+        return False
 
 
 def _memory_experiment_value(value: object) -> str:
@@ -571,23 +586,23 @@ class LongHorizonCampaign:
                 "correct candidate outcome lacks complete hidden-shape performance "
                 f"coverage ({measured_shape_count}/{expected_shape_count})"
             )
-        measurement_complete = bool(
-            representative.get("all_pass")
-            and (
-                expected_shape_count is None
-                or measured_shape_count == expected_shape_count
-            )
-        )
-        measurement_subject = "candidate" if measurement_complete else "unavailable"
-        measurement_source = (
-            "authoritative_verification" if measurement_complete else "none"
-        )
+        # This path records a non-promotion outcome.  Even a correctness-complete
+        # candidate result cannot describe the canonical incumbent.
+        measurement_complete = False
+        measurement_subject = "unavailable"
+        measurement_source = "none"
         carried_from_version: int | None = None
         carried: tuple[dict[str, Any], int] | None = None
         if not measurement_complete:
-            episode_performance = _latest_complete_episode_performance(
-                episode_workspace,
-                expected_shape_ids=expected_shape_ids,
+            episode_performance = (
+                _latest_complete_episode_performance(
+                    episode_workspace,
+                    expected_shape_ids=expected_shape_ids,
+                )
+                if _episode_head_matches_incumbent(
+                    self.workspace, episode_workspace
+                )
+                else None
             )
             if episode_performance is not None:
                 representative = episode_performance
@@ -693,35 +708,6 @@ class LongHorizonCampaign:
         }
 
     @staticmethod
-    def _valid_blocked_attempt(attempt: object) -> bool:
-        return (
-            isinstance(attempt, dict)
-            and attempt.get("status") == "blocked"
-            and not attempt.get("violation")
-        )
-
-    def _blocked_retry_pending(self, state: SupervisorState) -> bool:
-        if not state.attempts:
-            return False
-        attempt = state.attempts[-1]
-        return self._valid_blocked_attempt(attempt) and not bool(
-            attempt.get("blocked_terminal")
-        )
-
-    def _terminal_blocked_attempt(
-        self, state: SupervisorState
-    ) -> dict[str, Any] | None:
-        if not state.attempts:
-            return None
-        attempt = state.attempts[-1]
-        if (
-            self._valid_blocked_attempt(attempt)
-            and attempt.get("blocked_terminal") is True
-        ):
-            return attempt
-        return None
-
-    @staticmethod
     def _load_recovery_journal(
         store: CampaignStore, episode: int, worktree_path: Path | None
     ) -> dict[str, Any]:
@@ -820,17 +806,7 @@ class LongHorizonCampaign:
                         state.pivoted += 1
                     elif terminal_status == "blocked":
                         state.blocked += 1
-                        retry_of = (
-                            state.attempts[-1]
-                            if self._blocked_retry_pending(state)
-                            else None
-                        )
-                        recovered_attempt["blocked_retry_scheduled"] = retry_of is None
-                        recovered_attempt["blocked_terminal"] = retry_of is not None
-                        if retry_of is not None:
-                            recovered_attempt["blocked_retry_of_episode"] = (
-                                retry_of.get("episode")
-                            )
+                        recovered_attempt["blocked_retry_scheduled"] = True
                     elif terminal_status == "interrupted":
                         state.interrupted += 1
                         recovered_attempt["violation"] = "supervisor process interrupted"
@@ -967,22 +943,6 @@ class LongHorizonCampaign:
                 self.workspace
             )
         self._recover_interrupted(store, state)
-        if working_changes(self.workspace):
-            raise RuntimeError(
-                "long-horizon campaign requires a clean incumbent workspace: "
-                + ", ".join(working_changes(self.workspace)[:12])
-            )
-        terminal_block = self._terminal_blocked_attempt(state)
-        if terminal_block is not None:
-            reason = "blocked"
-            print(
-                f"[long-horizon] STOP {reason}; episodes={state.episodes} "
-                f"accepted={state.accepted} rejected={state.rejected} "
-                f"pivoted={state.pivoted} blocked={state.blocked} "
-                f"protocol_failures={state.protocol_failures} tokens={state.tokens}",
-                flush=True,
-            )
-            return reason
         verifier = self.verifier or GatewayABBAValidator(
             hardware=self.base_campaign.sandbox_hardware,
             profile=self.base_campaign.sandbox_profile,
@@ -997,11 +957,10 @@ class LongHorizonCampaign:
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
-            blocked_retry_pending = self._blocked_retry_pending(state)
             conversion_pending = main_adapter.conversion_required(
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
-            if self.max_version is not None and not blocked_retry_pending:
+            if self.max_version is not None:
                 if main_adapter.latest_version(self.workspace) >= self.max_version:
                     if conversion_pending:
                         raise RuntimeError(
@@ -1012,21 +971,18 @@ class LongHorizonCampaign:
             elif (
                 self.max_version is None
                 and state.episodes >= self.max_episodes
-                and not blocked_retry_pending
             ):
                 reason = "max-episodes"
                 break
             if (
                 self.episode_limit
                 and state.episodes - starting_episodes >= self.episode_limit
-                and not blocked_retry_pending
             ):
                 reason = "episode-limit"
                 break
             if (
                 self.token_budget
                 and state.tokens >= self.token_budget
-                and not blocked_retry_pending
             ):
                 if conversion_pending:
                     raise RuntimeError(
@@ -1232,16 +1188,7 @@ class LongHorizonCampaign:
                 )
             valid_blocked = status == "blocked" and not violation
             if valid_blocked:
-                retry_of = (
-                    state.attempts[-1] if self._blocked_retry_pending(state) else None
-                )
-                if retry_of is None:
-                    attempt["blocked_retry_scheduled"] = True
-                    attempt["blocked_terminal"] = False
-                else:
-                    attempt["blocked_retry_scheduled"] = False
-                    attempt["blocked_terminal"] = True
-                    attempt["blocked_retry_of_episode"] = retry_of.get("episode")
+                attempt["blocked_retry_scheduled"] = True
             promotion_commit = ""
             outcome_commit = ""
             memory: dict[str, Any] | None = None
@@ -1341,15 +1288,12 @@ class LongHorizonCampaign:
                     )
                     break
             if valid_blocked:
-                if not attempt.get("blocked_terminal"):
-                    print(
-                        f"[long-horizon] blocked at episode={episode}; starting one fresh "
-                        "long-horizon episode retry",
-                        flush=True,
-                    )
-                    continue
-                reason = "blocked"
-                break
+                print(
+                    f"[long-horizon] blocked at episode={episode}; starting a fresh "
+                    "long-horizon episode retry",
+                    flush=True,
+                )
+                continue
             if (
                 self.max_stall
                 and state.consecutive_without_promotion >= self.max_stall

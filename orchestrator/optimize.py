@@ -49,7 +49,9 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -79,6 +81,7 @@ try:
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
@@ -114,6 +117,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
@@ -161,6 +165,15 @@ def _without_cli_options(argv: list[str], option_names: tuple[str, ...]) -> list
             continue
         cleaned.append(arg)
     return cleaned
+
+
+def _recorded_workspace_arch(workspace: Path) -> str:
+    try:
+        marker = json.loads((workspace / FRAMEWORK_BASELINE_FILE).read_text())
+    except (OSError, json.JSONDecodeError):
+        return ""
+    arch = str(marker.get("arch") or "")
+    return arch if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", arch) else ""
 
 
 def dispatch_framework_campaigns(
@@ -600,10 +613,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.workspace:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
+    op = _resolve_op(args.op_dir, args.optimization_mode)
     arch = args.arch or detect_arch(
         sandbox_hardware, args.sandbox_profile, args.sandbox_url
     )
-    op = _resolve_op(args.op_dir, args.optimization_mode)
+    if not arch and args.framework:
+        suffix = args.workspace_suffix or framework_workspace_suffix(
+            args.framework, args.platform, args.optimization_mode
+        )
+        base = Path(args.workspace) if args.workspace else Path.cwd()
+        arch = _recorded_workspace_arch(base / f"kernel_opt_{op['name']}_{suffix}")
+        if arch:
+            print(
+                f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
+                file=sys.stderr,
+                flush=True,
+            )
     ensure_submodules()
     frameworks = (
         (args.framework,)

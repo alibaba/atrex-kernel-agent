@@ -92,7 +92,8 @@ def _sync_live_best_effort(
     value: dict[str, Any],
     live_path: Path | None,
 ) -> None:
-    destination = live_path or infer_live_memory_path(journal_path)
+    inferred = infer_live_memory_path(journal_path)
+    destination = inferred or live_path
     if destination is None:
         return
     overrides: dict[str, Any] = {}
