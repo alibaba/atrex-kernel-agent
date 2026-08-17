@@ -84,6 +84,10 @@ PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python tools/sandbox.py ...   # SOL: one
 PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python tools/sandbox.py ...       # generalized or legacy Atrex-Bench
 ```
 
+When several shapes or workloads need profiling, run one sandbox command per id in waves of at most
+four concurrent jobs. Give every job its own `<PROFILE_DIR>/shape-<index>` sync/output directory and
+wait for the whole wave before starting the next one.
+
 For generalized Atrex-Bench tasks, choose `PROFILE_SHAPE_ID` from the previous canonical memory's
 complete opaque-id `performance.latency_us_by_shape` map. The sandbox privately resolves that id and
 injects only its real input case into the ephemeral remote profile job; the driver deletes the case
