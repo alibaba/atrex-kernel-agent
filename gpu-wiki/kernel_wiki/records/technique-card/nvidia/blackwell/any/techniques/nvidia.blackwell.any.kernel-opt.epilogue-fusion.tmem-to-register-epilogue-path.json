@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.epilogue-fusion.tmem-to-register-epilogue-path",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|epilogue-fusion#tmem-to-register-epilogue-path|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tmem-to-register-epilogue-path"
+  ],
+  "triggers": [
+   "the 'TMEM-to-Register Epilogue Path' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): TMEM-to-Register Epilogue Path",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Epilogue Fusion -- TMEM-to-Register Epilogue Path"
+  },
+  "technique": "TMEM-to-Register Epilogue Path",
+  "what": "On Blackwell, the MMA result resides in Tensor Memory (TMEM). Epilogue warps must copy relevant portions of TMEM into registers before applying element-wise operations and writing to global memory:",
+  "when": "On Blackwell, the MMA result resides in Tensor Memory (TMEM).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Epilogue warp: read TMEM accumulator, apply fused operations, store\n// This runs on warps 2-15 while warp 1 continues MMA on next tile\n__device__ void epilogue_warp_fn(\n    int warp_id,\n    int tile_m, int tile_n,\n    float scale, const float* bias,\n    half* C, int ldc)\n{\n    int lane_id = threadIdx.x % 32;\n\n    // Each epilogue warp handles a stripe of the output tile\n    // 14 warps, TILE_M = 128 -> ~9 rows per warp\n    int rows_per_warp = (TILE_M + 13) / 14;\n    int row_start = (warp_id - 2) * rows_per_warp;\n    int row_end   = min(row_start + rows_per_warp, TILE_M);\n\n    for (int r = row_start; r < row_end; r++) {\n        int global_row = tile_m * TILE_M + r;\n\n        for (int c = lane_id; c < TILE_N; c += 32) {\n            // Step 1: Load accumulator from TMEM into register\n            float acc = tmem_load_f32(r, c);\n\n            // Step 2: Fused epilogue operations (all in registers)\n            // Scale\n            acc *= scale;\n            // Bias\n            acc += bias[tile_n * TILE_N + c];\n            // ReLU activation\n            acc = fmaxf(acc, 0.0f);\n\n            // Step 3: Store to global memory\n            int global_col = tile_n * TILE_N + c;\n            C[global_row * ldc + global_col] = __float2half(acc);\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/epilogue-fusion.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

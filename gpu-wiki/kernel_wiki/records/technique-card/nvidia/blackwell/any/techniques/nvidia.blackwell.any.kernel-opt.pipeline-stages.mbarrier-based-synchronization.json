@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.pipeline-stages.mbarrier-based-synchronization",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|pipeline-stages#mbarrier-based-synchronization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "mbarrier-based-synchronization"
+  ],
+  "triggers": [
+   "the 'mbarrier-Based Synchronization' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): mbarrier-Based Synchronization",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Software Pipelining and Multi-Stage Buffering -- mbarrier-Based Synchronization"
+  },
+  "technique": "mbarrier-Based Synchronization",
+  "what": "The mbarrier (memory barrier) is the hardware primitive that makes pipelining efficient. Unlike `__syncthreads()`, mbarrier supports asymmetric producer-consumer synchronization where only the relevant warp participates:",
+  "when": "The mbarrier (memory barrier) is the hardware primitive that makes pipelining efficient.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```ptx\n// Phase-based mbarrier protocol for 3-stage pipeline\n//\n// Each mbarrier tracks a \"phase\" (0 or 1). The producer flips the phase\n// on arrive; the consumer waits for the expected phase.\n\n// Producer: arrive on stage %s (flips phase)\nmbarrier.arrive.shared.b64  %state, [%mbar_load + %s * 8];\n\n// Consumer: wait for phase %expected_phase on stage %s\n// try_wait is non-blocking; the warp can spin-wait or do other work\nWAIT_LOOP:\n    mbarrier.try_wait.parity.shared.b64  %ready, [%mbar_load + %s * 8], %phase;\n    @!%ready bra WAIT_LOOP;\n\n// TMA can also arrive directly on an mbarrier:\n// The TMA unit signals completion without CPU thread involvement\ncp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes\n    [%smem_addr], [%tensor_map, {%coord0, %coord1}], [%mbar_load + %s * 8];\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/pipeline-stages.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

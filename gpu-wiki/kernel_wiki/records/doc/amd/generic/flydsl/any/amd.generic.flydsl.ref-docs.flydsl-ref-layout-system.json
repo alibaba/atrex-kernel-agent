@@ -1,0 +1,173 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-layout-system",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-layout-system|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Document] Layout Algebra Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Document] Layout Algebra Guide"
+  },
+  "title": "[FlyDSL Original Document] Layout Algebra Guide",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Quick Reference",
+    "anchor": "quick-reference",
+    "gist": "table columns: Operation, Python API, Fly Dialect Op, Description"
+   },
+   {
+    "heading": "1. Core Types",
+    "anchor": "1-core-types",
+    "gist": "The Fly dialect defines several custom MLIR types for layout algebra:"
+   },
+   {
+    "heading": "2. Construction",
+    "anchor": "2-construction",
+    "gist": "---"
+   },
+   {
+    "heading": "3. Coordinate Mapping",
+    "anchor": "3-coordinate-mapping",
+    "gist": "The fundamental operation: mapping between logical coordinates and physical memory indices."
+   },
+   {
+    "heading": "4. Query Operations",
+    "anchor": "4-query-operations",
+    "gist": "table columns: Operation, Description, Example"
+   },
+   {
+    "heading": "5. Layout Algebra",
+    "anchor": "5-layout-algebra",
+    "gist": "Composes two layouts: result maps through B first, then A."
+   },
+   {
+    "heading": "6. Product Operations",
+    "anchor": "6-product-operations",
+    "gist": "Products combine two layouts to create a larger layout."
+   },
+   {
+    "heading": "7. Divide Operations",
+    "anchor": "7-divide-operations",
+    "gist": "Divides partition a layout by a divisor, creating a view that separates \"tile\" and \"rest\" dimensions."
+   },
+   {
+    "heading": "8. Structural Operations",
+    "anchor": "8-structural-operations",
+    "gist": "Select modes by index:"
+   },
+   {
+    "heading": "9. MemRef / View / Copy Operations",
+    "anchor": "9-memref-view-copy-operations",
+    "gist": "table columns: Type Factory, Description"
+   },
+   {
+    "heading": "10. Nested / Hierarchical Layouts",
+    "anchor": "10-nested-hierarchical-layouts",
+    "gist": "The Fly dialect supports nested layouts for representing multi-level tiling hierarchies:"
+   },
+   {
+    "heading": "11. IntTuple Arithmetic",
+    "anchor": "11-inttuple-arithmetic",
+    "gist": "---"
+   },
+   {
+    "heading": "12. Printf Debugging",
+    "anchor": "12-printf-debugging",
+    "gist": "The Fly dialect provides a `printf` op for kernel debugging:"
+   },
+   {
+    "heading": "13. Decision Tree",
+    "anchor": "13-decision-tree",
+    "gist": "---"
+   },
+   {
+    "heading": "14. Source Files",
+    "anchor": "14-source-files",
+    "gist": "table columns: File, Description"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nimport flydsl.expr as fx\nfrom flydsl.expr import arith\nfrom flydsl.expr.typing import T\n\n# Shapes and strides (static constants auto-materialized)\nshape = fx.make_shape(8, 16)              # !fly.int_tuple<(8, 16)>\nstride = fx.make_stride(1, 8)             # !fly.int_tuple<(1, 8)>\nlayout = fx.make_layout(shape, stride)    # !fly.layout<(8, 16):(1, 8)>\n\n# Shorthand — pass Python tuples directly\nlayout = fx.make_layout((8, 16), (1, 8))\n\n# Coordinates\ncoord = fx.make_coord(i, j)\n\n# Generic integer tuple\nit = fx.make_int_tuple((4, 8, 2))\n\n# Nested shapes\nshape_nested = fx.make_shape(9, (4, 8))   # (9, (4, 8))\n\n# Ordered layout — specify stride order (e.g., column-major vs row-major)\ncol_major = fx.make_ordered_layout((M, N), order=(0, 1))  # stride order: M-first\nrow_major = fx.make_ordered_layout((M, N), order=(1, 0))  # stride order: N-first\n\n# Identity layout / tensor\nidentity = fx.make_identity_layout((M, N))\nid_tensor = fx.make_identity_tensor((M, N))\n```\n\n```python\nidx = fx.crd2idx(coord, layout)\n```\n\n```python\ncoord = fx.idx2crd(idx, layout)\n```\n\n```python\ns = fx.size(layout)           # total elements (returns Int32 for static)\ncs = fx.cosize(layout)        # codomain size (max index + 1)\nshape = fx.get_shape(layout)\nstride = fx.get_stride(layout)\nv = fx.get(shape, 0)          # first dimension\nr = fx.rank(shape)            # number of modes\n```\n\n```python\ncomposed = fx.composition(layout_a, layout_b)\n```\n\n```python\nrest = fx.complement(tiler, target_size)\n```\n\n```python\nsimplified = fx.coalesce(layout)\n```\n\n```python\ninv = fx.right_inverse(layout)\n```\n\n```python\n# Convert layout from 16-bit to 8-bit elements\nrecasted = fx.recast_layout(layout, old_type_bits=16, new_type_bits=8)\n```\n\n```python\nresult = fx.logical_product(layout, tiler)\nresult = fx.zipped_product(layout, tiler)\nresult = fx.raked_product(layout, tiler)\n```\n\n```python\nresult = fx.logical_divide(layout, divisor)\nresult = fx.zipped_divide(layout, divisor)\n```\n\n```python\nselected = fx.select(int_tuple, indices=[0, 2])  # pick modes 0 and 2\n```\n\n```python\ngrouped = fx.group(int_tuple, begin=1, end=3)\n```\n\n```python\nextended = fx.append(base_tuple, new_elem)\nextended = fx.prepend(base_tuple, new_elem)\n```\n\n```python\nzipped = fx.zip(shapes_a, shapes_b)\n```\n\n```python\nsliced = fx.slice(layout, coord)\n```\n\n```python\n# Allocate on-chip memory with layout\nalloca = fx.memref_alloca(memref_type, layout)\n\n# Load / store through layout\nval = fx.memref_load(memref, indices)\nfx.memref_store(value, memref, indices)\n\n# Vector load / store\nvec = fx.memref_load_vec(memref)\nfx.memref_store_vec(vector, memref)\n\n# Get layout from memref\nly = fx.get_layout(memref)\n\n# Get iterator from memref\nit = fx.get_iter(memref)\n```\n\n```python\n# Create a view from iterator + layout\nview = fx.make_view(iterator, layout)\n\n# Add offset to a pointer\nptr = fx.add_offset(ptr, offset)\n```\n\n```python\n# Create copy atom (copy_op_type, elem_type)\ncopy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), fx.Float32)\n\n# Create MMA atom\nmma_atom = fx.make_mma_atom(fx.rocdl.MFMA(16, 16, 4, fx.Float32))\n\n# Build thread-value layout from thread and value layouts\ntiler_mn, layout_tv = fx.make_layout_tv(thr_layout, val_layout)\n\n# Make tiled copy from copy atom + layout + tile\ntiled_copy = fx.make_tiled_copy(copy_atom, layout_tv, tile_mn)\n\n# Make tiled copy matched to a TiledMma's A/B/C partitioning\ntiled_copy_a = fx.make_tiled_copy_A(copy_atom, tiled_mma)\ntiled_copy_b = fx.make_tiled_copy_B(copy_atom, tiled_mma)\ntiled_copy_c = fx.make_tiled_copy_C(copy_atom, tiled_mma)\n\n# Make tiled MMA from MMA atom + atom layout + optional permutation\ntiled_mma = fx.make_tiled_mma(mma_atom, atom_layout)\ntiled_mma = fx.make_tiled_mma(mma_atom, atom_layout, permutation)\n```\n\n```python\n# Get a per-thread view of a tiled copy\nthr_copy = tiled_copy.get_slice(tid)   # returns ThrCopy\nsrc_part = thr_copy.partition_S(src)   # partition source tensor\ndst_part = thr_copy.partition_D(dst)   # partition destination tensor\nretiled  = thr_copy.retile(tensor)     # retile tensor to match copy atom\n\n# Get a per-thread view of a tiled MMA\nthr_mma = tiled_mma.thr_slice(tid)     # returns ThrMma (alias: get_slice)\n\n# Register fragments: pass the block-level tensor views (see examples/03-tiledMma.py).\nfrag_a = thr_mma.make_fragment_A(tensor_a)\nfrag_b = thr_mma.make_fragment_B(tensor_b)\nfrag_c = thr_mma.make_fragment_C(tensor_c)\n\n# Optional spatial partition of a tensor for this thread (different use case)\npart_a = thr_mma.partition_A(tensor_a)\n```\n\n```python\n# Execute tiled copy\nfx.copy(copy_atom, src_part, dst_part)\n\n# Execute tiled copy with predicate mask (for boundary handling)\nfx.copy(copy_atom, src_part, dst_part, pred=pred_tensor)\n\n# Execute GEMM: D = A * B + C\nfx.gemm(mma_atom, d, a, b, c)\n```\n\n```python\n# Nested shape: 9 elements in first mode, (4, 8) = 32 elements in second\nshape = fx.make_shape(9, (4, 8))\n```\n\n```python\n# Element-wise operations on IntTuples\nsum_it = fx.int_tuple_add(a, b)\ndiff_it = fx.int_tuple_sub(a, b)\nprod_it = fx.int_tuple_mul(a, b)\nquot_it = fx.int_tuple_div(a, b)\n\n# Reduce to product\ntotal = fx.int_tuple_product(int_tuple)\n\n# Per-mode product (for nested tuples)\nproducts = fx.int_tuple_product_each(int_tuple)\n```\n\n```python\nfx.printf(\"tid={} bid={} val={}\", tid, bid, value)\n```\n\n```\nWhich layout operation do I need?\n\n├── Creating a layout?\n│   ├── From explicit shape + stride → make_layout(shape, stride)\n│   ├── Identity layout → make_identity_layout(shape)\n│   └── From existing components → make_layout(get_shape(l), new_stride)\n│\n├── Querying a layout?\n│   ├── Total elements → size(layout)\n│   ├── Extract component → get_shape(layout), get_stride(layout)\n│   ├── Single mode → get(shape, i)\n│   └── Number of modes → rank(layout)\n│\n├── Coordinate mapping?\n│   ├── Coord → memory index → crd2idx(coord, layout)\n│   ├── Memory index → coord → idx2crd(idx, layout)\n│   └── Tuple shortcut → fx.crd2idx([c0, c1], layout)\n│\n├── Combining layouts?\n│   ├── Sequential mapping → composition(A, B)\n│   ├── Extending threads → logical_product / raked_product / block_product\n│   └── Simplifying → coalesce(layout)\n│\n├── Partitioning / tiling?\n│   ├── Split layout → logical_divide / zipped_divide\n│   └── Hierarchical tile → tiled_divide\n│\n├── Type width change?\n│   └── recast_layout(layout, old_bits, new_bits)\n│\n└── Structural manipulation?\n    ├── Select modes → select(it, indices)\n    ├── Group modes → group(it, begin, end)\n    └── Extend → append(it, elem) / prepend(it, elem)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-layout-system.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

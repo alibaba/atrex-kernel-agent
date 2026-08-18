@@ -1,0 +1,153 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-cute-algebra",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-cute-algebra|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Documentation] CuTe Layout Algebra Reference",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Documentation] CuTe Layout Algebra Reference"
+  },
+  "title": "[FlyDSL Original Documentation] CuTe Layout Algebra Reference",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "The CuTe layout algebra is a mathematical framework for describing multidimensional data layouts as compositions of shapes, strides, and coordinate transformations."
+   },
+   {
+    "heading": "2. Layout Algebra Fundamentals",
+    "anchor": "2-layout-algebra-fundamentals",
+    "gist": "A **Layout** is defined by a pair `(Shape, Stride)`:"
+   },
+   {
+    "heading": "3. FlyDSL Kernel Development",
+    "anchor": "3-flydsl-kernel-development",
+    "gist": "FlyDSL kernels are defined using `@flyc.kernel` for GPU device functions and `@flyc.jit` for host-side launch wrappers:"
+   },
+   {
+    "heading": "4. Thread and Block Hierarchy",
+    "anchor": "4-thread-and-block-hierarchy",
+    "gist": "GPU kernels organize threads into a hierarchy of blocks and grids."
+   },
+   {
+    "heading": "5. Tensor Creation and Memory",
+    "anchor": "5-tensor-creation-and-memory",
+    "gist": "FlyDSL provides tensor operations with layout-aware partitioning:"
+   },
+   {
+    "heading": "6. Data Movement",
+    "anchor": "6-data-movement",
+    "gist": "FlyDSL uses the CuTe copy abstraction: a **copy atom** defines a single thread's copy capability, and a **tiled copy** distributes the atom across all threads:"
+   },
+   {
+    "heading": "7. Compute Operations (MFMA)",
+    "anchor": "7-compute-operations-mfma",
+    "gist": "AMD GPUs use MFMA (Matrix Fused Multiply-Add) instructions for matrix math."
+   },
+   {
+    "heading": "8. Synchronization",
+    "anchor": "8-synchronization",
+    "gist": "table columns: FlyDSL API, Description"
+   },
+   {
+    "heading": "9. Compilation and Execution",
+    "anchor": "9-compilation-and-execution",
+    "gist": "FlyDSL compiles Python → MLIR IR → ROCDL dialect → HSACO binary:"
+   },
+   {
+    "heading": "10. Complete Example: GEMM with Layout Algebra",
+    "anchor": "10-complete-example-gemm-with-layout-algebra",
+    "gist": "This example matches `examples/03-tiledMma.py`: zipped divide and block slice, then `tiled_copy_*` + `thr_copy.retile` + `fx.copy` into fragments, `fx.gemm`, and copy out."
+   },
+   {
+    "heading": "11. References",
+    "anchor": "11-references",
+    "gist": "- **C++ headers:** CUTLASS `include/cute/` - `layout.hpp` — Layout type, all algebra operations - `tensor.hpp` — Tensor type (pointer + layout) - `algorithm/` — Copy, GEMM, partit…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nshape = fx.make_shape(128, 64)\nstride = fx.make_stride(1, 128)    # Column-major\nlayout = fx.make_layout(shape, stride)\ncoord = fx.make_coord(3, 5)\n```\n\n```\nindex = crd2idx(coord, shape, stride) = dot(coord, stride)\n```\n\n```\nindex = c0 * d0 + c1 * d1\n```\n\n```\ncoord = idx2crd(index, shape, stride)\n```\n\n```\n(A ∘ B)(c) = A(B(c))\n```\n\n```python\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\n\n@flyc.kernel\ndef my_kernel(\n    A: fx.Tensor,\n    B: fx.Tensor,\n    C: fx.Tensor,\n    block_dim: fx.Constexpr[int],\n):\n    tid = fx.thread_idx.x\n    bid = fx.block_idx.x\n    # Kernel body — use layout algebra here\n    ...\n\n@flyc.jit\ndef launch(\n    A: fx.Tensor, B: fx.Tensor, C,\n    n: fx.Int32,\n    stream: fx.Stream = fx.Stream(None),\n):\n    my_kernel(A, B, C, block_dim).launch(\n        grid=(grid_x, 1, 1), block=(block_dim, 1, 1), stream=stream,\n    )\n```\n\n```python\n# Create a buffer tensor from a tensor argument (AMD buffer descriptor)\nA = fx.rocdl.make_buffer_tensor(A)\n\n# Partition by block, then by thread. A second logical_divide is required before\n# slice(..., (None, tid)) so coord rank matches layout shape/stride rank.\ntA = fx.logical_divide(A, fx.make_layout(block_dim, 1))\ntA = fx.slice(tA, (None, bid))\ntA = fx.logical_divide(tA, fx.make_layout(1, 1))\ntA_thr = fx.slice(tA, (None, tid))\n\n# Allocate register memrefs / copy_atom_call: see docs/quickstart.rst or examples/01-vectorAdd.py\n```\n\n```python\nfrom flydsl.utils.smem_allocator import SmemAllocator\n\nallocator = SmemAllocator(ctx, arch=\"gfx942\")\nlds_gen = allocator.allocate_array(T.f16(), num_elems=128*64)\nallocator.finalize()\n\nbase = allocator.get_base()\nlds_ptr = lds_gen(base)\n```\n\n```python\n# XOR-based swizzle at 16-byte granularity (manual implementation)\ncol_swizzled = col_bytes ^ ((row % k_blocks16) << 4)\n```\n\n```python\ncopy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), fx.Float32)\n\n# Create tiled copy via raked product\nthr_layout = fx.make_layout((4, 1), (1, 1))\nval_layout = fx.make_layout((1, 8), (1, 1))\nlayout_thr_val = fx.raked_product(thr_layout, val_layout)\ntile_mn = fx.make_tile(4, 8)\ntiled_copy = fx.make_tiled_copy(copy_atom, layout_thr_val, tile_mn)\n\n# Get thread slice\nthr_copy = tiled_copy.get_slice(tid)\nsrc_partition = thr_copy.partition_S(src_tensor)\ndst_partition = thr_copy.partition_D(dst_tensor)\n\n# Execute copy\nfx.copy(copy_atom, src_partition, dst_partition)\n```\n\n```python\nA_buf = fx.rocdl.make_buffer_tensor(A)\n\n# Use buffer copy atoms for efficient memory access\ncopy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy128b(), fx.Float32)\n```\n\n```python\nmma_atom = fx.make_mma_atom(fx.rocdl.MFMA(16, 16, 4, fx.Float32))\ntiled_mma = fx.make_tiled_mma(mma_atom, fx.make_layout((2, 2, 1), (1, 2, 0)))\n\n# Block-level tensor views bA, bB, bC (e.g. after zipped_divide + slice by block)\nthr_mma = tiled_mma.thr_slice(tid)\nfrag_A = thr_mma.make_fragment_A(bA)\nfrag_B = thr_mma.make_fragment_B(bB)\nfrag_C = thr_mma.make_fragment_C(bC)\nfx.gemm(mma_atom, frag_C, frag_A, frag_B, frag_C)\n```\n\n```python\nfor ku in range(tile_k_bytes // 64):\n    a_val = lds_load_pack_k32(...)   # Load A from LDS\n    b_val = load_b_pack_k32(...)     # Load B from GMEM\n    c_acc = rocdl.mfma_f32_16x16x32_fp8_fp8(a_val, b_val, c_acc)\n    # second half\n    a_val2 = lds_load_pack_k32(...)\n    b_val2 = load_b_pack_k32(...)\n    c_acc = rocdl.mfma_f32_16x16x32_fp8_fp8(a_val2, b_val2, c_acc)\n```\n\n```python\nfx.gpu.barrier()\n```\n\n```python\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\n\n# Define kernel and launch wrapper\n@flyc.kernel\ndef my_kernel(A: fx.Tensor, B: fx.Tensor, C: fx.Tensor, ...):\n    ...\n\n@flyc.jit\ndef launch(A: fx.Tensor, B: fx.Tensor, C, ...,\n           stream: fx.Stream = fx.Stream(None)):\n    my_kernel(A, B, C, ...).launch(\n        grid=(...), block=(...), stream=stream,\n    )\n\n# Call the jit function — compilation happens automatically on first call\nlaunch(A_torch, B_torch, C_torch, ..., stream=torch.cuda.Stream())\n```\n\n```python\nimport torch\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\n\nblock_m, block_n, block_k = 64, 64, 8\n\n@flyc.kernel\ndef gemm_kernel(A: fx.Tensor, B: fx.Tensor, C: fx.Tensor):\n    tid = fx.thread_idx.x\n    bid = fx.block_idx.x\n\n    tileA = fx.make_tile(block_m, block_k)\n    tileB = fx.make_tile(block_n, block_k)\n    tileC = fx.make_tile(block_m, block_n)\n\n    A = fx.rocdl.make_buffer_tensor(A)\n    B = fx.rocdl.make_buffer_tensor(B)\n    C = fx.rocdl.make_buffer_tensor(C)\n\n    bA = fx.zipped_divide(A, tileA)\n    bB = fx.zipped_divide(B, tileB)\n    bC = fx.zipped_divide(C, tileC)\n\n    bA = fx.slice(bA, (None, bid))\n    bB = fx.slice(bB, (None, bid))\n    bC = fx.slice(bC, (None, bid))\n\n    mma_atom = fx.make_mma_atom(fx.rocdl.MFMA(16, 16, 4, fx.Float32))\n    tiled_mma = fx.make_tiled_mma(mma_atom, fx.make_layout((2, 2, 1), (1, 2, 0)))\n    thr_mma = tiled_mma.thr_slice(tid)\n\n    copy_atom = fx.make_copy_atom(fx.rocdl.BufferCopy32b(), fx.Float32)\n    tiled_copy_A = fx.make_tiled_copy_A(copy_atom, tiled_mma)\n    tiled_copy_B = fx.make_tiled_copy_B(copy_atom, tiled_mma)\n    tiled_copy_C = fx.make_tiled_copy_C(copy_atom, tiled_mma)\n\n    thr_copy_A = tiled_copy_A.get_slice(tid)\n    thr_copy_B = tiled_copy_B.get_slice(tid)\n    thr_copy_C = tiled_copy_C.get_slice(tid)\n\n    copy_src_A = thr_copy_A.partition_S(bA)\n    copy_src_B = thr_copy_B.partition_S(bB)\n    copy_dst_C = thr_copy_C.partition_S(bC)\n\n    frag_A = thr_mma.make_fragment_A(bA)\n    frag_B = thr_mma.make_fragment_B(bB)\n    frag_C = thr_mma.make_fragment_C(bC)\n\n    copy_frag_A = thr_copy_A.retile(frag_A)\n    copy_frag_B = thr_copy_B.retile(frag_B)\n    copy_frag_C = thr_copy_C.retile(frag_C)\n\n    fx.copy(copy_atom, copy_src_A, copy_frag_A, pred=None)\n    fx.copy(copy_atom, copy_src_B, copy_frag_B, pred=None)\n\n    fx.gemm(mma_atom, frag_C, frag_A, frag_B, frag_C)\n\n    fx.copy(copy_atom, copy_frag_C, copy_dst_C, pred=None)\n\n@flyc.jit\ndef tiledMma(A: fx.Tensor, B: fx.Tensor, C: fx.Tensor,\n             stream: fx.Stream = fx.Stream(None)):\n    gemm_kernel(A, B, C).launch(grid=(1, 1, 1), block=(256, 1, 1), stream=stream)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-cute-algebra.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.cuda-tile-vs-triton-benchmark-paper",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|cuda-tile-vs-triton-benchmark-paper|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUDA Tile vs Triton: Hopper/Blackwell GPU Benchmark Paper",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUDA Tile vs Triton: Hopper/Blackwell GPU Benchmark Paper"
+  },
+  "title": "CUDA Tile vs Triton: Hopper/Blackwell GPU Benchmark Paper",
+  "summary": "Analysis of the paper \"Evaluating CUDA Tile for AI Workloads on Hopper and Blackwell GPUs,\" examining CuTile's positioning relative to cuBLAS, Triton, and WMMA for GPU kernel development.",
+  "sections": [
+   {
+    "heading": "1. Paper Background",
+    "anchor": "1-paper-background",
+    "gist": "Paper: \"Evaluating CUDA Tile for AI Workloads on Hopper and Blackwell GPUs\" (arXiv, 2026-04-25, by Divakar Kumar Yadav, Tian Zhao, Deepak Kumar)."
+   },
+   {
+    "heading": "2. GEMM: CuTile is Good, but Does Not Replace cuBLAS",
+    "anchor": "2-gemm-cutile-is-good-but-does-not-replace-cublas",
+    "gist": "BF16 square GEMM **8192×8192 on B200**:"
+   },
+   {
+    "heading": "3. Attention: CuTile's Strongest Result on B200",
+    "anchor": "3-attention-cutile-s-strongest-result-on-b200",
+    "gist": "BF16 causal, batch=8, 32 heads, d=128, **seq=4096 on B200**:"
+   },
+   {
+    "heading": "4. Triton's Position Remains Unshaken",
+    "anchor": "4-triton-s-position-remains-unshaken",
+    "gist": "- Triton runs on all platforms (including H100, where CuTile was unavailable in the paper's test environment) - Maintains **62–101%** of cuBLAS performance for GEMM - Cross-architecture stability is Triton's strength; CuTile shows large va…"
+   },
+   {
+    "heading": "5. Code Volume: CuTile's Strongest Selling Point is Maintenance Cost",
+    "anchor": "5-code-volume-cutile-s-strongest-selling-point-is-maintenance-cost",
+    "gist": "table columns: Kernel, cuBLAS, Triton, CuTile, WMMA, FA2 / SDPA"
+   },
+   {
+    "heading": "6. End-to-End Inference: Not Equivalent to LLM Serving Acceleration",
+    "anchor": "6-end-to-end-inference-not-equivalent-to-llm-serving-acceleration",
+    "gist": "The paper tested a LLaMA-7B-like **4-layer proxy** model:"
+   },
+   {
+    "heading": "7. Version Considerations",
+    "anchor": "7-version-considerations",
+    "gist": "- Paper environment: CUDA Toolkit 12.8 + 13.1, CuTile 1.1.0; H100 unavailable - Subsequent NVIDIA update: **CUDA 13.2** extends CUDA Tile support to CC **8.x, 10.x, 11.x, 12.x**; R580+ driver; Python 3.10-3.13; CUDA Toolkit 13.1+ or `cuda-…"
+   },
+   {
+    "heading": "8. Selection Decision Table",
+    "anchor": "8-selection-decision-table",
+    "gist": "table columns: Scenario, Recommendation"
+   },
+   {
+    "heading": "9. The Bigger Signal",
+    "anchor": "9-the-bigger-signal",
+    "gist": "NVIDIA is pushing Tensor Core kernel programming toward higher-level, more Pythonic, more compiler-driven approaches."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cuda-tile-vs-triton-benchmark-paper.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

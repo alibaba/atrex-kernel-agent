@@ -1,0 +1,33 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.pdl-gdc",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "pdl-gdc",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "PDL/GDC allows overlapping execution of dependent kernel launches. The primary kernel signals it is finishing; the secondary kernel begins before the primary fully completes.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices."
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Programmatic Dependent Launch / Grid Dependency Control",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/pdl-gdc.md"
+   }
+  ]
+ }
+}

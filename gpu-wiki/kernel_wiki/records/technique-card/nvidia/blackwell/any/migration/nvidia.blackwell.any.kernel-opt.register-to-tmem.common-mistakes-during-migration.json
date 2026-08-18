@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-to-tmem.common-mistakes-during-migration",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|register-to-tmem#common-mistakes-during-migration|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "common-mistakes-during-migration"
+  ],
+  "triggers": [
+   "the 'Common Mistakes During Migration' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Common Mistakes During Migration",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Accumulators to TMEM -- Common Mistakes During Migration"
+  },
+  "technique": "Common Mistakes During Migration",
+  "what": "WRONG: Trying to use TMEM values directly in expressions",
+  "when": "WRONG: Trying to use TMEM values directly in expressions",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// WRONG: Trying to use TMEM values directly in expressions\nfloat result = tmem_acc[row][col] + bias;  // TMEM is not directly addressable!\n\n// CORRECT: Load from TMEM to register, then compute\nfloat val = tmem_load_f32(tmem_col);\nfloat result = val + bias;\n```\n\n```cuda\n// WRONG: Fine-grained TMEM access in a tight loop (high latency)\nfor (int i = 0; i < 256; ++i) {\n    float v = tmem_load_f32(tmem_acc + i);  // 420 cycle latency each!\n    output[i] = v;\n}\n\n// CORRECT: Vectorized loads to amortize latency\nfor (int i = 0; i < 256; i += 4) {\n    float4 v = tmem_load_f32x4(tmem_acc + i);  // Single 420-cycle access\n    output[i]   = v.x;\n    output[i+1] = v.y;\n    output[i+2] = v.z;\n    output[i+3] = v.w;\n}\n```\n\n```cuda\n// Hopper: tile size was m64xn128 to avoid register spilling\n// Migrating to Blackwell: keep same tile = leaving performance on the table\n\n// Blackwell should use at minimum m128xn256 (1-SM) or m256xn256 (2-SM)\n// The freed registers allow larger tiles without any spilling risk\n```\n\n```cuda\n// WRONG: Forgetting to dealloc in a persistent kernel\n__global__ void persistent_kernel(/* ... */) {\n    uint32_t tmem = tmem_alloc(256);  // Allocated once\n\n    while (has_work()) {\n        compute_tile(tmem);\n        // BUG: If the kernel exits early (e.g., error path),\n        // TMEM is leaked. Next CTA on this SM cannot allocate.\n    }\n    // Missing: tmem_dealloc(tmem, 256);\n}\n\n// CORRECT: Always dealloc, even on error paths\n__global__ void persistent_kernel(/* ... */) {\n    uint32_t tmem = tmem_alloc(256);\n\n    while (has_work()) {\n        compute_tile(tmem);\n    }\n\n    tmem_dealloc(tmem, 256);  // Always reached\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/register-to-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

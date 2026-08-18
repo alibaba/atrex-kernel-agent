@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.gluon.pitfalls.sm100-blackwell-primitives-pitfalls.2-gl-dot-fma-layout-dtype-rules-differ-from-tl-dot",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|gluon|pitfalls|sm100-blackwell-primitives-pitfalls#2-gl-dot-fma-layout-dtype-rules-differ-from-tl-dot|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA B200 (GB200 / SM100) risks the '2. `gl.dot_fma` layout/dtype rules differ from `tl.dot`' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA B200 (GB200 / SM100): 2. `gl.dot_fma` layout/dtype rules differ from `tl.dot`",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "sm_100 Gluon Blackwell-primitive pitfalls -- 2. `gl.dot_fma` layout/dtype rules differ from `tl.dot`"
+  },
+  "attempted": "Reuse `tl.dot` operand handling for `gl.dot_fma`.",
+  "verdict": "api-limitation",
+  "lesson": "Gluon makes layout and dtype explicit and unforgiving. Set `k_width=0` for blocked parents and pre-cast operands to the accumulator dtype.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_100",
+    "toolchain": "gluon"
+   },
+   "mechanism": "Two hard failures — - `DotOperandLayout(op, parent, k_width=0)` with a `BlockedLayout` parent: any `k_width` other than `0` errors (\"kWidth not supported when parent is a blocked layout\"); `k_width` is a **required positional** arg. - Operand dtypes must all match the accumulator's dtype — `gl.dot_fma` does **not** auto-upcast (unlike `tl.dot`). Cast every operand to a common dtype (`.to(gl.float32)`) *before* `gl.convert_layout`, or hit `FMA.cpp aElem.getType() == tgtTy`."
+  },
+  "observed": "Two hard failures — - `DotOperandLayout(op, parent, k_width=0)` with a `BlockedLayout` parent: any `k_width` other than `0` errors (\"kWidth not supported when parent is a blocked layout\"); `k_width` is a **required positional** arg. - Operand dtypes must all match the accumulator's dtype — `gl.dot_fma` does **not** auto-upcast (unlike `tl.dot`). Cast every operand to a common dtype (`.to(gl.float32)`) *before* `gl.convert_layout`, or hit `FMA.cpp aElem.getType() == tgtTy`."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/pitfalls/gluon/sm100-blackwell-primitives-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

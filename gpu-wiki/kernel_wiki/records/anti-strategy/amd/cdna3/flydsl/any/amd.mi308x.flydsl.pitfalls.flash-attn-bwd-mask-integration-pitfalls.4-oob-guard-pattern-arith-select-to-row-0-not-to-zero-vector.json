@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.4-oob-guard-pattern-arith-select-to-row-0-not-to-zero-vector",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#4-oob-guard-pattern-arith-select-to-row-0-not-to-zero-vector|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '4. OOB guard pattern: `arith.select` to row 0, not to zero vector' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 4. OOB guard pattern: `arith.select` to row 0, not to zero vector",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 4. OOB guard pattern: `arith.select` to row 0, not to zero vector"
+  },
+  "attempted": "When a KV-tile index exceeds `seq_len`, the intuitive guard is to zero the loaded vector: `vec_safe = select(in_bounds, vec, zero_vec)`. But this requires materializing a zero vector constant in registers.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "For OOB guards in masked attention kernels, redirect the load index to a valid row (typically row 0) rather than zeroing the loaded data. The bit-packed mask already ensures OOB contributions are zeroed in the softmax/score computation. Both patterns are correct; the index-redirect pattern saves VGPR.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "A better pattern is to redirect the **index** to row 0: `row_safe = select(in_bounds, row_idx, 0); vec = load(base + row_safe * stride)`. The loaded value from row 0 is \"wrong\" but gets multiplied by zero in the mask (since the mask bit for OOB positions is 0). This avoids materializing zero vectors."
+  },
+  "observed": "Works correctly but wastes VGPR for zero constants.",
+  "root_cause": "A better pattern is to redirect the **index** to row 0: `row_safe = select(in_bounds, row_idx, 0); vec = load(base + row_safe * stride)`. The loaded value from row 0 is \"wrong\" but gets multiplied by zero in the mask (since the mask bit for OOB positions is 0). This avoids materializing zero vectors."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

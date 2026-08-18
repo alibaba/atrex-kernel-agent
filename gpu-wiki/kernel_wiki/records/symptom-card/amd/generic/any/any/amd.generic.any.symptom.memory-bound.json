@@ -1,0 +1,121 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.symptom.memory-bound",
+ "type": "symptom-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|memory-bound|memory-bound|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "memory-bound",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "memory-bound"
+   ]
+  },
+  "technique_tags": [
+   "common-causes-and-fixes",
+   "core-principles",
+   "diagnostic-methods",
+   "relationship-with-other-optimizations"
+  ],
+  "triggers": [
+   "the profile shows memory-bound and a candidate lever is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Choose a lever after profiling shows memory-bound on GPU (vendor/architecture-general)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "The profile points at memory-bound; which documented techniques address it on GPU (vendor/architecture-general)?",
+   "bottleneck": "memory-bound"
+  },
+  "likely_causes": [],
+  "candidate_techniques": [
+   {
+    "technique": "common-causes-and-fixes",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "core-principles",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "diagnostic-methods",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "relationship-with-other-optimizations",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/coalesced-access-load-store-width.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

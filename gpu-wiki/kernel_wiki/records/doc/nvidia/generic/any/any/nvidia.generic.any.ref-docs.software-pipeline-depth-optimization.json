@@ -1,0 +1,120 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.software-pipeline-depth-optimization",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|software-pipeline-depth-optimization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Software Pipeline Depth Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Software Pipeline Depth Optimization"
+  },
+  "title": "Software Pipeline Depth Optimization",
+  "summary": "In GPU kernels, the latency of global memory (HBM/GMEM) is much higher than computation latency. **Software pipelining** hides memory latency by using multi-level buffering to overlap memory loads with computation. Pipeline depth (stage count) is a key parameter affecting kernel performance — too few stages cause compute units to idle waiting for data, while too many stages waste SMEM and reduce occupancy.",
+  "sections": [
+   {
+    "heading": "Overview",
+    "anchor": "overview",
+    "gist": "In GPU kernels, the latency of global memory (HBM/GMEM) is much higher than computation latency."
+   },
+   {
+    "heading": "1. Why Multi-Stage Pipelining Is Needed",
+    "anchor": "1-why-multi-stage-pipelining-is-needed",
+    "gist": "table columns: Operation, Typical Latency"
+   },
+   {
+    "heading": "2. Computing Optimal Pipeline Depth",
+    "anchor": "2-computing-optimal-pipeline-depth",
+    "gist": "Where: - `T_memory`: Time to load one tile into SMEM - `T_compute`: Time to compute one tile - `+1`: At least one extra buffer is needed seks to hold the tile currently being computed"
+   },
+   {
+    "heading": "3. SMEM Budget Constraints",
+    "anchor": "3-smem-budget-constraints",
+    "gist": "Where `aux_smem` includes: - Epilogue output tile buffer - Scale/zero matrices (quantization kernels) - Softmax row max / row sum (attention kernels) - Other temporary storage"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nTime →\n[===== Load tile 0 =====][= Compute tile 0 =][===== Load tile 1 =====][= Compute tile 1 =]\n                          ↑                                         ↑\n                     Compute unit idle                            Compute unit idle\n```\n\n```\n2-stage pipeline:\nProducer: [==load tile 0==][==load tile 1==][==load tile 2==][==load tile 3==]\nConsumer:                  [==comp tile 0==][==comp tile 1==][==comp tile 2==]\n\n4-stage pipeline:\nProducer: [=ld 0=][=ld 1=][=ld 2=][=ld 3=][=ld 4=][=ld 5=][=ld 6=][=ld 7=]\nConsumer:                          [=cp 0=][=cp 1=][=cp 2=][=cp 3=][=cp 4=]\n                  ↑ Fill 3 buffers ↑ Start computation, buffer 0 ready\n```\n\n```\nProducer perspective:        Consumer perspective:\n  acquire(buf[i])  ←——————  release(buf[i])    \"buf[i] available?\"\n  load(buf[i])\n  commit(buf[i])   ——————→  wait(buf[i])       \"buf[i] data ready?\"\n                            compute(buf[i])\n                            release(buf[i])\n```\n\n```\nnum_stages >= ceil(T_memory / T_compute) + 1\n```\n\n```\nT_memory = tile_bytes / effective_bandwidth\n\ntile_bytes = sizeof(ElementA) * M_tile * K_tile + sizeof(ElementB) * N_tile * K_tile\n```\n\n```\nT_compute = total_MMA_ops / MMA_throughput\n\ntotal_MMA_ops = (M_tile / M_mma) * (N_tile / N_mma) * (K_tile / K_mma)\nMMA_throughput = MMA_per_cycle * clock_freq  (but typically calculated using cycles)\n```\n\n```\nA_tile = 128 * 64 * 2B = 16,384 B = 16 KB\nB_tile = 256 * 64 * 2B = 32,768 B = 32 KB\ntile_bytes = 48 KB\n```\n\n```\nH100 HBM: 3.35 TB/s, 132 SMs\nPer-SM bandwidth ≈ 3350 / 132 ≈ 25.4 GB/s\nT_memory ≈ 48 KB / 25.4 GB/s ≈ 1.85 μs ≈ 2960 cycles (at 1.6 GHz)\n```\n\n```\nWGMMA 64x256x16 (FP16): 1 MMA instruction covers 64x256x16\ntile needs: (128/64) * (256/256) * (64/16) = 2 * 1 * 4 = 8 WGMMA instructions\nAssume WGMMA pipeline throughput ≈ 16 cycles/op (pipeline throughput, not latency)\nT_compute ≈ 8 * 16 = 128 cycles ≈ 0.08 μs\n```\n\n```\nnum_stages >= ceil(2960 / 128) + 1 = 24 + 1 = 25 ???\n```\n\n```\nstage_footprint = A_tile_bytes + B_tile_bytes + pipeline_overhead\n\nA_tile_bytes = sizeof(A) * M_tile * K_tile\nB_tile_bytes = sizeof(B) * N_tile * K_tile\npipeline_overhead ≈ 32-64 bytes  (mbarrier / flag storage)\n```\n\n```\nnum_stages * stage_footprint + aux_smem <= available_smem\n```\n\n```Example (H100, FP16, tile 128x256x64):\n  3 stages: 3 * 48.1 = 144.3 KB → Can accommodate 1 CTA (227 KB enough)\n  4 stages: 4 * 48.1 = 192.4 KB → Can accommodate 1 CTA\n  5 stages: 5 * 48.1 = 240.5 KB → Exceeds! Cannot run\n\n  Reduce tile to 128x128x64:\n  stage_footprint = 16 KB + 16 KB = 32 KB\n  4 stages: 128 KB → Can accommodate 1 CTA\n  7 stages: 224 KB → Can accommodate 1 CTA (just enough)```\n\n```python\ndef compute_stages(smem_capacity, tile_shape, elem_a, elem_b, carveout_bytes):\n    \"\"\"Calculate maximum stages accommodatable given SMEM capacity\"\"\"\n    # Bytes per stage\n    a_bytes = elem_a.size * tile_shape.M * tile_shape.K\n    b_bytes = elem_b.size * tile_shape.N * tile_shape.K\n    pipeline_bytes = 64  # mbarrier / flags\n\n    stage_bytes = align_up(a_bytes + b_bytes, 128) + pipeline_bytes\n\n    # Available capacity = Total capacity - kernel extra overhead (epilogue, TMA descriptor, etc.)\n    available = align_down(smem_capacity, 128) - align_up(carveout_bytes, 128)\n\n    return available // stage_bytes\n```\n\n```\nStandard GEMM pipeline (symmetric):\n  A buffer: [stage 0][stage 1][stage 2][stage 3]\n  B buffer: [stage 0][stage 1][stage 2][stage 3]\n  → Same number of stages on both sides\n\nAttention pipeline (asymmetric):\n  Q buffer: [stage 0]  ← Load once, reside in SMEM (or RMEM/TMEM)\n  K buffer: [stage 0][stage 1][stage 2][stage 3]  ← Multi-stage pipeline\n  V buffer: [stage 0][stage 1]                     ← Can have fewer stages\n\n  Q only needs 1 buffer (prologue loads once)\n  K needs 3-5 stages (main loop memory-bound part)\n  V needs 2-3 stages (overlap with softmax)\n```\n\n```\nstage_footprint = activation_tile + filter_tile\n               = (M_tile * K_tile + spatial_overhead) * sizeof(T)\n               + (N_tile * K_tile) * sizeof(T)\n```\n\n```\nGoal: MMA/MFMA units always have data to compute\n\nJudgment criteria:\n  If T_memory <= (num_stages - 1) * T_compute + T_other_overlap\n    → compute-bound (compute unit won't starve)  ✓\n  Otherwise\n    → memory-bound (compute unit waiting for data)  Need more stages or more concurrent CTAs\n```\n\n```\n1. Start from auto-calculated stage count (usually the maximum SMEM can accommodate)\n2. Gradually reduce stage count, observe performance changes:\n   - If performance barely changes → Original stages too many, reducing can improve occupancy\n   - If performance drops sharply → Reached minimum necessary stage count\n3. Find \"knee point\": stage count where performance starts to drop significantly\n4. Use values near knee point (typically +1 as safety margin)\n```\n\n```\n sweet spot:\n\nGEMM (large tile, FP16):     4-5 stages\nGEMM (small tile, FP16):     6-7 stages\nGEMM (FP8):                  5-8 stages\nAttention (KV pipeline):     3-5 stages\nAttention (Q pipeline):      1-2 stages\nReduction / Norm: 2-3 stages (ifpipeline)\n```\n\n```\n                Performance\n                    ^\n                    |        ╭──── Sweet spot\n                    |       ╱  ╲\n                    |      ╱    ╲\n                    |     ╱      ╲\n                    |    ╱        ╲\n                    |   ╱          ╲── Occupancy decrease\n                    |  ╱\n                    | ╱── Stall reduction\n                    +────────────────→ num_stages\n                    2  3  4  5  6  7\n\nFew stages: MMA stall high     Many stages: SMEM full, occupancy low\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/software-pipeline-depth-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutedsl-api-reference-guide",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutedsl-api-reference-guide|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CuTeDSL API Reference Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CuTeDSL API Reference Guide"
+  },
+  "title": "CuTeDSL API Reference Guide",
+  "summary": "A module-by-module quick reference for the CuTe DSL interface, designed to maintain consistency with CuTe C++ while providing Python ergonomics across Ampere, Hopper, and Blackwell GPU architectures.",
+  "sections": [
+   {
+    "heading": "1. Core Decorators",
+    "anchor": "1-core-decorators",
+    "gist": "table columns: Decorator, Purpose, Parameters"
+   },
+   {
+    "heading": "2. Compilation and Execution Interface",
+    "anchor": "2-compilation-and-execution-interface",
+    "gist": "table columns: Function/Method, Description"
+   },
+   {
+    "heading": "3. Tensor Operations",
+    "anchor": "3-tensor-operations",
+    "gist": "table columns: Function, Description"
+   },
+   {
+    "heading": "4. Hardware Atoms",
+    "anchor": "4-hardware-atoms",
+    "gist": "table columns: Category, Interface, Description"
+   },
+   {
+    "heading": "5. Memory Management",
+    "anchor": "5-memory-management",
+    "gist": "table columns: Class/Function, Description"
+   },
+   {
+    "heading": "6. Synchronization and Pipelining",
+    "anchor": "6-synchronization-and-pipelining",
+    "gist": "table columns: Interface, Description"
+   },
+   {
+    "heading": "7. Math and Utility Functions",
+    "anchor": "7-math-and-utility-functions",
+    "gist": "table columns: Category, Functions"
+   },
+   {
+    "heading": "8. Architecture-Specific Interfaces",
+    "anchor": "8-architecture-specific-interfaces",
+    "gist": "table columns: Architecture, Specific Support"
+   },
+   {
+    "heading": "9. Data Type Support",
+    "anchor": "9-data-type-support",
+    "gist": "- **Floating point:** FP64, FP32, TF32, FP16, BF16, FP8 (e4m3/e5m2) - **Block-scaled types:** NVFP4, MXFP4, MXFP6, MXFP8 - **Integer:** I8, I4, binary types - **Custom types:** Supported via `JitArgument` and `DynamicExpression` protocol"
+   },
+   {
+    "heading": "10. Debug and Optimization Interface",
+    "anchor": "10-debug-and-optimization-interface",
+    "gist": "table columns: Feature, Environment Variable / Method"
+   },
+   {
+    "heading": "11. Full API Documentation",
+    "anchor": "11-full-api-documentation",
+    "gist": "The complete API documentation is available in the official CuTe DSL API Reference."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutedsl-api-reference-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

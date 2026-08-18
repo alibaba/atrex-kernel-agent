@@ -1,0 +1,173 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.rocprofv3-profiling-guide",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|rocprofv3-profiling-guide|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): AMD rocprofv3 Profiling Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "AMD rocprofv3 Profiling Guide"
+  },
+  "title": "AMD rocprofv3 Profiling Guide",
+  "summary": "rocprofv3 is a CLI profiling tool on the AMD ROCm platform, installed at `/opt/rocm/bin`. Application tracing and kernel counter collection can be performed without modifying source code.",
+  "sections": [
+   {
+    "heading": "Basic Usage",
+    "anchor": "basic-usage",
+    "gist": ""
+   },
+   {
+    "heading": "Application Tracing",
+    "anchor": "application-tracing",
+    "gist": "Tracing provides execution time data for API calls and GPU commands (kernel execution, asynchronous memory copies, barriers)."
+   },
+   {
+    "heading": "Counter Collection",
+    "anchor": "counter-collection",
+    "gist": "Lists all available metrics defined in `counter_defs.yaml`."
+   },
+   {
+    "heading": "Output Format",
+    "anchor": "output-format",
+    "gist": "table columns: Format, Option, Description"
+   },
+   {
+    "heading": "Kernel Filtering",
+    "anchor": "kernel-filtering",
+    "gist": "Format: `-P (START_DELAY):(COLLECTION_TIME):(REPEAT)`"
+   },
+   {
+    "heading": "Statistics and Summary",
+    "anchor": "statistics-and-summary",
+    "gist": "**Note**: `--stats` does not include default kernel statistics (different from the legacy rocprof)."
+   },
+   {
+    "heading": "Kernel Naming Control",
+    "anchor": "kernel-naming-control",
+    "gist": ""
+   },
+   {
+    "heading": "Process Attachment (Dynamic Profiling)",
+    "anchor": "process-attachment-dynamic-profiling",
+    "gist": "Profile without restarting the application:"
+   },
+   {
+    "heading": "Multi-GPU Profiling",
+    "anchor": "multi-gpu-profiling",
+    "gist": "The `Agent_Id` field in the kernel trace output identifies the executing GPU."
+   },
+   {
+    "heading": "PC Sampling (Beta)",
+    "anchor": "pc-sampling-beta",
+    "gist": "Currently only `time` units and the `host_trap` method are supported."
+   },
+   {
+    "heading": "Perfetto Integration",
+    "anchor": "perfetto-integration",
+    "gist": "Default buffer 1 GB, default shared memory 64 KB."
+   },
+   {
+    "heading": "Complete CLI Options Quick Reference",
+    "anchor": "complete-cli-options-quick-reference",
+    "gist": "table columns: Option, Purpose, Default"
+   },
+   {
+    "heading": "Useful Command Quick Reference",
+    "anchor": "useful-command-quick-reference",
+    "gist": ""
+   },
+   {
+    "heading": "Mapping with NVIDIA Nsight Compute",
+    "anchor": "mapping-with-nvidia-nsight-compute",
+    "gist": "table columns: Function, rocprofv3, ncu"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **NVIDIA counterpart**: NCU Profiling Guide — Full usage of NVIDIA Nsight Compute - **CDNA3 Instruction-level Analysis**: rocprofv3 ATT Detailed Guide"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\n# syntax\nrocprofv3 <options> -- <application_path>\n\n# English note\nrocprofv3 --version\n\n# column counter\nrocprofv3 --list-avail\n```\n\n```bash\n# Runtime trace(recommended)\n# : HIP runtime API + marker + RCCL + memory ops + kernel dispatch\n# : HIP compiler API, HSA API\nrocprofv3 --runtime-trace --output-format csv -- ./app\n\n# System trace\n# runtime trace + HSA API\nrocprofv3 --sys-trace --output-format csv -- ./app\n```\n\n```bash\n# Correct: HIP API + kernel + memory copy\nrocprofv3 --hip-trace --kernel-trace --memory-copy-trace --output-format csv -- ./app\n\n# ordirect --runtime-trace\nrocprofv3 --runtime-trace --output-format csv -- ./app\n```\n\n```bash\n# Kernel execute(, grid/block size, VGPR/SGPR/LDS )\nrocprofv3 --kernel-trace --output-format csv -- ./app\n\n# memorycopyelapsed time\nrocprofv3 --memory-copy-trace --output-format csv -- ./app\n\n# Scratch memory (register)\nrocprofv3 --scratch-memory-trace --output-format csv -- ./app\n\n# RCCL profiling\nrocprofv3 --rccl-trace --output-format csv -- ./app\n```\n\n```bash\nrocprofv3 --list-avail\n```\n\n```bash\n# or\nrocprofv3 --pmc COUNTER1 COUNTER2 -- ./app\nrocprofv3 --pmc COUNTER1,COUNTER2 -- ./app\n```\n\n```bash\n# JSON, YAML,\nrocprofv3 -i input.txt -- ./app\nrocprofv3 --input config.yaml -- ./app\n```\n\n```bash\nrocprofv3 --extra-counters extra_counters.yaml -- ./app\n```\n\n```bash\n# output\nrocprofv3 --kernel-trace --output-format csv -- ./app\n\n# output\nrocprofv3 --sys-trace -f csv json pftrace -- ./app\n\n# outputdirectoryfile\nrocprofv3 --kernel-trace -o my_profile -d ./results -f csv -- ./app\n```\n\n```bash\n# defaultpath: %hostname%/%pid%\nrocprofv3 --kernel-trace -o profile_%hostname% -d ./output -- ./app\n```\n\n```bash\n# kernel\nrocprofv3 --kernel-include-regex \"matmul_kernel\" --pmc COUNTER1 -- ./app\n\n# kernel( include after)\nrocprofv3 --kernel-exclude-regex \"setup_kernel\" --pmc COUNTER1 -- ./app\n\n# use\nrocprofv3 --kernel-include-regex \"gemm\" --kernel-exclude-regex \"debug\" --pmc COUNTER1 -- ./app\n```\n\n```bash\nrocprofv3 --kernel-iteration-range 5-10 --pmc COUNTER1 -- ./app\n```\n\n```bash\n# 10 seconds, 10 seconds, 1\nrocprofv3 -P 10:10:1 --sys-trace -- ./app\n\n# 5 seconds, 3 seconds, none\nrocprofv3 -P 5:3:0 --sys-trace -- ./app\n\n# secondsunit\nrocprofv3 -P 500:1000:2 --collection-period-unit msec --sys-trace -- ./app\n\n# English note\nrocprofv3 -P 10:10:1 5:3:0 --sys-trace -- ./app\n```\n\n```bash\n# (must tracing )\nrocprofv3 --stats --hip-trace --kernel-trace -- ./app\n\n# English note\nrocprofv3 -S --sys-trace -- ./app\n\n# by domain\nrocprofv3 -D --sys-trace -- ./app\n\n# by\nrocprofv3 --summary-groups 'KERNEL_DISPATCH|MEMORY_COPY' --sys-trace -- ./app\n\n# outputfile, definitionunit\nrocprofv3 -S --summary-output-file results.txt -u msec --sys-trace -- ./app\n```\n\n```bash\n# mangled\nrocprofv3 -M --kernel-trace -- ./app\n\n# demangled (high)\nrocprofv3 -T --kernel-trace -- ./app\n\n# ROCTx region kernel\nrocprofv3 --kernel-rename --kernel-trace --marker-trace -- ./app\n```\n\n```bash\nrocprofv3 --attach <PID> --sys-trace\nrocprofv3 -p <PID> --kernel-trace\n```\n\n```bash\n# by HSA Queue (default HIP Stream )\nrocprofv3 --group-by-queue --kernel-trace -f pftrace -- ./app\n```\n\n```bash\nrocprofv3 --pc-sampling-beta-enabled \\\n          --pc-sampling-unit time \\\n          --pc-sampling-method host_trap \\\n          --pc-sampling-interval 1000 \\\n          -- ./app\n```\n\n```bash\n# In-process (default)\nrocprofv3 --sys-trace -f pftrace -- ./app\n\n# System (requires traced daemon row)\nrocprofv3 --sys-trace -f pftrace --perfetto-backend system -- ./app\n\n# definition\nrocprofv3 --sys-trace -f pftrace \\\n          --perfetto-buffer-size 2097152 \\\n          --perfetto-buffer-fill-policy ring_buffer \\\n          -- ./app\n```\n\n```bash\n# fast kernel execute\nrocprofv3 --kernel-trace --output-format csv -- ./app\n\n# tracing(recommended)\nrocprofv3 --runtime-trace --output-format csv -- ./app\n\n# counter\nrocprofv3 --pmc SQ_WAVES,SQ_INSTS_VALU -- ./app\n\n# kernel counter\nrocprofv3 --kernel-include-regex \"gemm\" --pmc SQ_WAVES -- ./app\n\n# Perfetto\nrocprofv3 --sys-trace -f pftrace -- ./app\n# https://ui.perfetto.dev/ .pftrace file\n\n# English note\nrocprofv3 -P 30:10:0 --collection-period-unit sec --runtime-trace -f csv -- ./app\n\n# row\nrocprofv3 --attach $(pidof my_app) --kernel-trace -f csv\n\n# Scratch memory (register)\nrocprofv3 --scratch-memory-trace --kernel-trace --output-format csv -- ./app\n\n# RCCL profiling\nrocprofv3 --rccl-trace --kernel-trace --output-format csv -- ./app\n\n# column counter\nrocprofv3 --list-avail\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/rocprofv3-profiling-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

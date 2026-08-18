@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.tile-scheduling.l2-cache-locality-analysis",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|tile-scheduling#l2-cache-locality-analysis|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "l2-cache-locality-analysis"
+  ],
+  "triggers": [
+   "the 'L2 Cache Locality Analysis' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): L2 Cache Locality Analysis",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "L2 cache reuse analysis for different schedulers -- L2 Cache Locality Analysis"
+  },
+  "technique": "L2 Cache Locality Analysis",
+  "what": "The choice of scheduling strategy directly impacts L2 cache hit rates. On B200 with 126 MB L2:",
+  "when": "The choice of scheduling strategy directly impacts L2 cache hit rates.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# L2 cache reuse analysis for different schedulers\n# Problem: M=8192, N=8192, K=4096, BF16\n# Tile: 128x256, giving 64x32 = 2048 tiles\n# B200 example target: 148 SMs, 126 MB L2\n\ntile_bytes_A = 128 * 4096 * 2  # 1 MB per tile row of A\ntile_bytes_B = 4096 * 256 * 2  # 2 MB per tile column of B\n\n# Linear raster: first wave loads 148 tiles across 148/32 = 4.6 column groups\n# B data for 5 different column groups = 5 * 2 MB = 10 MB (fits in L2)\n# But A data spans about 4.6 row groups × 4.6 column groups = ~22 distinct A rows\n# 22 * 1 MB = 22 MB -> some L2 eviction\n\n# Swizzled raster (swizzle=4): first wave covers 148 tiles in ~37 groups of 4\n# Each group uses 1 A row + 4 B columns = 1 + 8 = 9 MB per group\n# But groups share A rows: total unique A = ~37 rows * 1 MB = 37 MB\n# L2 pressure: 37 MB + 8 MB = 45 MB (fits in B200's 126 MB L2)\n\n# Conclusion: swizzled raster reduces L2 misses by ~2x vs linear for large problems\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/tile-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,153 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-testing-benchmarking",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-testing-benchmarking|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Documentation] Testing & Benchmarking Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Documentation] Testing & Benchmarking Guide"
+  },
+  "title": "[FlyDSL Original Documentation] Testing & Benchmarking Guide",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Quick Reference",
+    "anchor": "quick-reference",
+    "gist": "table columns: Category, Location, Requires GPU, Description"
+   },
+   {
+    "heading": "1. Test Categories",
+    "anchor": "1-test-categories",
+    "gist": "MLIR-based tests organized by category, verified using the `fly-opt` tool."
+   },
+   {
+    "heading": "2. Test Runner Scripts",
+    "anchor": "2-test-runner-scripts",
+    "gist": "Runs the preshuffle GEMM test suite via pytest:"
+   },
+   {
+    "heading": "3. Pytest Configuration",
+    "anchor": "3-pytest-configuration",
+    "gist": "Pytest configuration with MLIR context fixtures for the Fly dialect."
+   },
+   {
+    "heading": "4. Performance Measurement",
+    "anchor": "4-performance-measurement",
+    "gist": "Core performance testing utilities (adapted from AIter)."
+   },
+   {
+    "heading": "5. Compilation Utilities (`tests/utils.py`)",
+    "anchor": "5-compilation-utilities-tests-utils-py",
+    "gist": "Standalone compilation path for tests:"
+   },
+   {
+    "heading": "6. Writing New Tests",
+    "anchor": "6-writing-new-tests",
+    "gist": "---"
+   },
+   {
+    "heading": "7. GEMM Test CLI Arguments",
+    "anchor": "7-gemm-test-cli-arguments",
+    "gist": "The `test_preshuffle_gemm.py` test supports extensive CLI configuration:"
+   },
+   {
+    "heading": "8. Test Configuration via Environment Variables",
+    "anchor": "8-test-configuration-via-environment-variables",
+    "gist": "table columns: Variable, Used By, Description"
+   },
+   {
+    "heading": "9. IR Dump Workflow",
+    "anchor": "9-ir-dump-workflow",
+    "gist": "Produces numbered `.mlir` files per pipeline stage plus `final_isa.s`."
+   },
+   {
+    "heading": "10. Source Files",
+    "anchor": "10-source-files",
+    "gist": "table columns: File, Description"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\nbash scripts/run_tests.sh\n```\n\n```bash\nbash scripts/run_benchmark.sh\n```\n\n```bash\n# Build fly-opt first if needed\ncmake --build build-fly --target fly-opt -j$(nproc)\n\n# Run a single test\nbuild-fly/bin/fly-opt --fly-canonicalize tests/mlir/LayoutAlgebra/construction.mlir\n```\n\n```bash\npython tests/pyir/test_layout_algebra.py\n```\n\n```bash\npython tests/kernels/test_softmax.py\npython tests/kernels/test_preshuffle_gemm.py --in_dtype fp8 -M 16 -N 5120 -K 8192\n```\n\n```\ntests/python/examples/\n└── aot_example.py      # AOT pre-compilation for preshuffle GEMM\n```\n\n```bash\nbash scripts/run_tests.sh\n```\n\n```bash\nPYTHONPATH=\"${BUILD_DIR}/python_packages:${REPO_ROOT}:${PYTHONPATH}\"\nLD_LIBRARY_PATH=\"${MLIR_LIBS_DIR}:${LD_LIBRARY_PATH}\"\n```\n\n```bash\n# Softmax/LayerNorm: \"M,N,dtype\"\nSOFTMAX_SHAPES='32768,8192,bf16'\nLAYERNORM_SHAPES='32768,8192,bf16'\n\n# Preshuffle GEMM: \"dtype,M,N,K,tile_m,tile_n,tile_k\"\nGEMM_SHAPES='\nfp8,16,40960,5120,16,128,256\nfp8,16,77824,5120,16,128,256\nfp8,5120,5120,8320,64,256,128\nfp8,9728,8192,8320,64,256,128\nint8,9728,8192,8320,64,256,128\nint4,9728,8192,8320,64,256,128\nbf16,5120,5120,8320,64,256,128\n'\n\n# FP4 GEMM (gfx950 only): \"M,N,K,tile_m,tile_n,tile_k\"\nGEMM_FP4_SHAPES='8192,8192,8192,64,128,256'\n```\n\n```bash\nbash scripts/run_benchmark.sh                    # default: GEMM only\nbash scripts/run_benchmark.sh softmax             # only softmax\nbash scripts/run_benchmark.sh gemm moe            # GEMM and MoE\nbash scripts/run_benchmark.sh --only softmax,layernorm\nbash scripts/run_benchmark.sh --list              # list available ops\n```\n\n```\nop             shape                              dtype       TB/s    TFLOPS\n-------------- ---------------------------------- ---------- ---------- ----------\ngemm           16x40960x5120                      fp8         1.234     56.789\n```\n\n```python\n@pytest.fixture\ndef ctx():\n    \"\"\"Fresh MLIR context per test with dialects registered.\"\"\"\n    # Creates Context, yields object with: ctx.context, ctx.module, ctx.location\n\n@pytest.fixture\ndef module(ctx):\n    \"\"\"Provides ctx.module.\"\"\"\n\n@pytest.fixture\ndef insert_point(ctx):\n    \"\"\"Sets insertion point to module body.\"\"\"\n```\n\n```python\n@perftest(num_iters=20, num_warmup=3, testGraph=False, num_rotate_args=0)\ndef my_kernel_test(Input, Output):\n    # Kernel invocation\n    ...\n```\n\n```python\ncheckAllclose(output, reference, rtol=1e-2, atol=1e-2, tol_err_ratio=0.05)\n```\n\n```python\nverify_output(c_out, c_ref, atol=1e-2, rtol=1e-2, msg='')\n```\n\n```python\n# Measure device time (torch CUDA events)\ngpu_us = bench_gpu_us_torch(fn, warmup=20, iters=200)\n```\n\n```python\nfrom tests.utils import compile_to_hsaco\n\nhsaco = compile_to_hsaco(mlir_module, kernel_name=\"my_kernel\")\n```\n\n```python\nfrom tests.utils import pertoken_quant, shuffle_weight\n\n# Per-token quantization (handles NaN/Inf)\nquantized, scales = pertoken_quant(tensor, dtype=torch.float8_e4m3fnuz)\n\n# Weight preshuffle for MFMA (layout 16x16)\nshuffled = shuffle_weight(weight, layout=(16, 16))\n```\n\n```python\n# tests/pyir/test_my_feature.py\nimport flydsl.expr as fx\nfrom flydsl.expr.typing import T\n\ndef test_my_layout_op(ctx, insert_point):\n    shape = fx.make_shape(4, 8)\n    stride = fx.make_stride(8, 1)\n    layout = fx.make_layout(shape, stride)\n    result = fx.size(layout)\n    ir_str = str(ctx.module)\n    assert \"fly.make_layout\" in ir_str\n```\n\n```python\n# tests/kernels/test_my_kernel.py\nimport torch\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\nfrom flydsl.expr import arith, gpu\nfrom tests.test_common import checkAllclose\n\n@flyc.kernel\ndef my_kernel(A: fx.Tensor, B: fx.Tensor, N: fx.Constexpr[int]):\n    tid = gpu.thread_idx.x\n    bid = gpu.block_idx.x\n    # ... kernel body ...\n\n@flyc.jit\ndef launch(A: fx.Tensor, B: fx.Tensor, N: fx.Constexpr[int],\n           stream: fx.Stream = fx.Stream(None)):\n    my_kernel(A, B, N).launch(grid=(N // 256,), block=(256,), stream=stream)\n\ndef test_my_kernel():\n    N = 1024\n    A = torch.randn(N, device=\"cuda\", dtype=torch.float32)\n    B = torch.empty(N, device=\"cuda\", dtype=torch.float32)\n\n    launch(A, B, N)\n\n    # Reference\n    ref = A  # or some computation\n\n    # Validate\n    err = checkAllclose(B, ref, rtol=1e-2, atol=1e-2)\n    assert err == 0, f\"Mismatch: {err * 100:.2f}%\"\n```\n\n```python\nfrom tests.kernels.benchmark_common import bench_gpu_us_torch\n\ndef benchmark_my_kernel():\n    # Setup\n    launch_fn = compile_my_kernel(...)\n\n    def run():\n        launch_fn(input_tensor, output_tensor)\n\n    # Measure\n    gpu_us = bench_gpu_us_torch(run, warmup=20, iters=200)\n\n    # Compute metrics\n    total_bytes = 2 * M * N * elem_size\n    bandwidth_tbs = total_bytes / (gpu_us * 1e-6) / 1e12\n    print(f\"Time: {gpu_us:.1f} us, Bandwidth: {bandwidth_tbs:.2f} TB/s\")\n```\n\n```bash\npython tests/kernels/test_preshuffle_gemm.py \\\n    --in_dtype fp8 \\\n    -M 16 -N 5120 -K 8192 \\\n    --tile_m 16 --tile_n 128 --tile_k 256 \\\n    --lds_stage 2 \\\n    --num_iters 20 \\\n    --num_warmup 3 \\\n    --no_aiter_bench \\\n    --test_graph        # or -tg for HIPGraph mode\n    --wfp4              # FP4 weight path (gfx950 only)\n```\n\n```bash\nFLYDSL_DUMP_IR=1 FLYDSL_DUMP_DIR=./dumps python my_test.py\n```\n\n```bash\nbash scripts/dumpir.sh\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-testing-benchmarking.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

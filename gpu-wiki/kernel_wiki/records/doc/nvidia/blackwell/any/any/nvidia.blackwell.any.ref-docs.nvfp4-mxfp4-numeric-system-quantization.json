@@ -1,0 +1,134 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.nvfp4-mxfp4-numeric-system-quantization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|nvfp4-mxfp4-numeric-system-quantization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): NVFP4/MXFP4 Numeric System: PTX, CUTLASS, Triton, and Quantization",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "NVFP4/MXFP4 Numeric System: PTX, CUTLASS, Triton, and Quantization"
+  },
+  "title": "NVFP4/MXFP4 Numeric System: PTX, CUTLASS, Triton, and Quantization",
+  "summary": "Comprehensive analysis of the NVFP4 and MXFP4 numeric systems — covering the mathematical foundations, PTX instruction paths, CUTLASS/Triton operator implementations, and quantization recipes for inference and training.",
+  "sections": [
+   {
+    "heading": "1. Background: Why Microscaling FP4 Exists",
+    "anchor": "1-background-why-microscaling-fp4-exists",
+    "gist": "INT8 quantization is mature, but pushing to 4-bit presents two paths: INT4 or FP4."
+   },
+   {
+    "heading": "2. Numeric Fundamentals: Structure and Error Intuition",
+    "anchor": "2-numeric-fundamentals-structure-and-error-intuition",
+    "gist": "Both formats use FP4 E2M1: 1-bit sign + 2-bit exponent + 1-bit mantissa."
+   },
+   {
+    "heading": "3. PTX Instruction Layer: MXFP4/NVFP4 on Blackwell",
+    "anchor": "3-ptx-instruction-layer-mxfp4-nvfp4-on-blackwell",
+    "gist": "table columns: Feature, mma.sync (SM120), tcgen05.mma (SM100)"
+   },
+   {
+    "heading": "4. CUTLASS / Triton Operator Implementation",
+    "anchor": "4-cutlass-triton-operator-implementation",
+    "gist": "**Layer 1 — Element types:**"
+   },
+   {
+    "heading": "5. Quantization Recipes: PTQ, Pretraining, FQT",
+    "anchor": "5-quantization-recipes-ptq-pretraining-fqt",
+    "gist": "Per-block INT4 (G=128) isolates outliers locally."
+   },
+   {
+    "heading": "6. Summary",
+    "anchor": "6-summary",
+    "gist": "MXFP4 and NVFP4 mark a turning point: FP4 enters the era of complete ecosystems with formats, instructions, and recipes."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nmma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale\n  .f32.e2m1.e2m1.f32.ue8m0\n  {d}, {a}, {b}, {c}, scale_a_data, scale_b_data;\n```\n\n```\nmma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::4X\n  .f32.e2m1.e2m1.f32.ue4m3\n  {d}, {a}, {b}, {c}, scale_a_data, scale_b_data;\n```\n\n```\ntcgen05.mma.cta_group::1.kind::mxf4.scale_vectorsize::block32\n  [taddr_d], [taddr_a], bdesc, idesc, [tmem_scaleA], [tmem_scaleB], p;\n```\n\n```bash\n# Quick check for FP4 instructions in binary\ncuobjdump --dump-sass your_binary | rg -n \"mxf4|mxf4nvf4|tcgen05|block_scale\"\n```\n\n```cpp\nfloat_e2m1_t  // FP4 E2M1\nfloat_e3m2_t  // FP6 E3M2\nfloat_e4m3_t  // FP8 E4M3\n```\n\n```cpp\nmx_float4_t<float_e2m1_t>   // MXFP4: FP4 + UE8M0\nnv_float4_t<float_e2m1_t>   // NVFP4: FP4 + UE4M3\n```\n\n```python\nC = tl.dot_scaled(A, B, scale_a, scale_b, acc=acc)\n```\n\n```python\nfrom microxcaling import MxSpecs\nspecs = MxSpecs(\n    w_elem_format='fp4_e2m1',\n    a_elem_format='fp4_e2m1',\n    block_size=32,  # MXFP4=32, NVFP4-style=16\n    scale_bits=8,\n    round='nearest',\n)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/nvfp4-mxfp4-numeric-system-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

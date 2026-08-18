@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.1-vt-stride-block-n-8-from-the-sageattention-recipe-regresses-bf16-by-5-12",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#1-vt-stride-block-n-8-from-the-sageattention-recipe-regresses-bf16-by-5-12|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '1. VT_STRIDE = BLOCK_N + 8 from the SageAttention recipe regresses bf16 by 5–12%' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 1. VT_STRIDE = BLOCK_N + 8 from the SageAttention recipe regresses bf16 by 5–12%",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 1. VT_STRIDE = BLOCK_N + 8 from the SageAttention recipe regresses bf16 by 5–12%"
+  },
+  "attempted": "SageAttention's V27 recipe famously gained +78% by changing `VT_STRIDE` from 66 to 72 (= BLOCK_N + 8). The doc says \"ensure 8-byte alignment for `ds_read_b64`.\" A naive port to bf16 says: my read is also `ds_read_b64`, my BLOCK_N is also 64, so VT_STRIDE = 72 must be right.",
+  "verdict": "performance-ceiling",
+  "lesson": "when porting a stride from a recipe in another dtype, redo the bank-conflict math with `gcd(byte_stride / 4, 32)`. The optimal stride depends on element width.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "the recipe is for **FP8** (1 byte/elem). Stride is in BYTES of LDS rows, and bank conflicts are computed in 4-byte dwords:"
+  },
+  "root_cause": "the recipe is for **FP8** (1 byte/elem). Stride is in BYTES of LDS rows, and bank conflicts are computed in 4-byte dwords:"
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

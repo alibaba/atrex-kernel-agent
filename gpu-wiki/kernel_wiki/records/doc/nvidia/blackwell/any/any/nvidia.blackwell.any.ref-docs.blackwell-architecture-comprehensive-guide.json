@@ -1,0 +1,126 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.blackwell-architecture-comprehensive-guide",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|blackwell-architecture-comprehensive-guide|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Comprehensive Guide to NVIDIA Blackwell Architecture",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Comprehensive Guide to NVIDIA Blackwell Architecture"
+  },
+  "title": "Comprehensive Guide to NVIDIA Blackwell Architecture",
+  "summary": "An overview of the NVIDIA Blackwell and Blackwell Ultra platforms, covering key architectural innovations, product configurations, and scaling law implications.",
+  "sections": [
+   {
+    "heading": "1. NVIDIA Blackwell and Blackwell Ultra Overview",
+    "anchor": "1-nvidia-blackwell-and-blackwell-ultra-overview",
+    "gist": "NVIDIA Blackwell and Blackwell Ultra are designed to address the escalating complexity of artificial intelligence — including growing model sizes and inference demands — incorporating multiple groundbreaking innovations."
+   },
+   {
+    "heading": "2. Eight Architectural Innovations",
+    "anchor": "2-eight-architectural-innovations",
+    "gist": "- **208 billion transistors** — over 2.5x that of the Hopper GPU - **TSMC 4NP process** (a 4nm high-performance variant, essentially part of the 5nm family) - Single-chip compute capability up to **20 petaFLOPS** - Two dies connected via *…"
+   },
+   {
+    "heading": "3. GB300 NVL72 / GB200 NVL72",
+    "anchor": "3-gb300-nvl72-gb200-nvl72",
+    "gist": "**GB300 NVL72**: 36 Grace CPUs + 72 Blackwell Ultra GPUs, liquid-cooled rack, 37 TB fast memory per rack, >1 PFlops FP4 compute."
+   },
+   {
+    "heading": "4. Real-Time Video Generation",
+    "anchor": "4-real-time-video-generation",
+    "gist": "Current state-of-the-art LLM context windows handle only 128K tokens, while 5 seconds of video requires 4 million tokens."
+   },
+   {
+    "heading": "5. HGX B300 / HGX B200",
+    "anchor": "5-hgx-b300-hgx-b200",
+    "gist": "- **HGX B300**: 7x AI compute over Hopper, 2 TB+ HBM3e, integrated ConnectX-8 SuperNIC - **HGX B200**: x86 platform, 144 PFlops AI performance, 15x over HGX H100, 12x TCO reduction, up to 1000 W per GPU"
+   },
+   {
+    "heading": "6. Three Scaling Laws",
+    "anchor": "6-three-scaling-laws",
+    "gist": "1."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/blackwell-architecture-comprehensive-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

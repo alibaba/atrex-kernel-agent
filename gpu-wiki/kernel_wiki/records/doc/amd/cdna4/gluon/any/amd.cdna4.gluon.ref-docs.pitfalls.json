@@ -1,0 +1,165 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.ref-docs.pitfalls",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|ref-docs|pitfalls|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): CDNA4 (gfx950) Practical Pitfalls",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "CDNA4 (gfx950) Practical Pitfalls"
+  },
+  "title": "CDNA4 (gfx950) Practical Pitfalls",
+  "summary": "Compilation succeeds, but runtime outputs NaN or completely wrong values.",
+  "sections": [
+   {
+    "heading": "Pitfall Index",
+    "anchor": "pitfall-index",
+    "gist": "table columns: #, Title, Mode Tags, Scope, Severity"
+   },
+   {
+    "heading": "Pitfall 1: Passing E8M0 Scale Directly Causes Precision Errors",
+    "anchor": "pitfall-1-passing-e8m0-scale-directly-causes-precision-errors",
+    "gist": "**Mode**: [MLA], [FP4] **Severity**: 🔴 Fatal (completely incorrect precision)"
+   },
+   {
+    "heading": "Pitfall 2: mask/other Inside Loop Causes v_cndmask Explosion",
+    "anchor": "pitfall-2-mask-other-inside-loop-causes-v-cndmask-explosion",
+    "gist": "**Mode**: [MLA], [Attention] **Severity**: 🔴 Fatal (~10% performance loss)"
+   },
+   {
+    "heading": "Pitfall 3: Excessive Split-K Partitioning Causes Stage2 Overhead",
+    "anchor": "pitfall-3-excessive-split-k-partitioning-causes-stage2-overhead",
+    "gist": "**Mode**: [MLA], [GEMM] **Severity**: 🟠 High (+10-20% in small kv scenarios)"
+   },
+   {
+    "heading": "Pitfall 4: Scales narrow load instruction bloat",
+    "anchor": "pitfall-4-scales-narrow-load-instruction-bloat",
+    "gist": "**Pattern**: [MLA], [FP4] **Severity**: 🟡 Medium (performance loss ~4%)"
+   },
+   {
+    "heading": "Pitfall 5: V fp8 regresses in small kv scenarios",
+    "anchor": "pitfall-5-v-fp8-regresses-in-small-kv-scenarios",
+    "gist": "**Pattern**: [MLA] **Severity**: 🟡 Medium (small kv +4-14%, large kv -3-13%)"
+   },
+   {
+    "heading": "Pitfall 6: XCD load imbalance causing low bandwidth utilization",
+    "anchor": "pitfall-6-xcd-load-imbalance-causing-low-bandwidth-utilization",
+    "gist": "**Pattern**: [MLA], [GEMM] **Severity**: 🟡 Medium (performance loss ~5%)"
+   },
+   {
+    "heading": "Pitfall 7: `warp_pipeline_stage` negatively impacts attention",
+    "anchor": "pitfall-7-warp-pipeline-stage-negatively-impacts-attention",
+    "gist": "**Pattern**: [Attention] **Severity**: 🟠 High (performance regression ~10%)"
+   },
+   {
+    "heading": "Pitfall 8: `async_copy` does not activate ping-pong scheduling",
+    "anchor": "pitfall-8-async-copy-does-not-activate-ping-pong-scheduling",
+    "gist": "**Pattern**: [GEMM] **Severity**: 🟡 Medium (performance loss ~10-20%)"
+   },
+   {
+    "heading": "Pitfall 9: order does not match memory layout",
+    "anchor": "pitfall-9-order-does-not-match-memory-layout",
+    "gist": "**Pattern**: [General] **Severity**: 🔴 Fatal (multiple times performance loss)"
+   },
+   {
+    "heading": "Pitfall 10: gfx950 in-thread transpose disabled causes layout errors",
+    "anchor": "pitfall-10-gfx950-in-thread-transpose-disabled-causes-layout-errors",
+    "gist": "**Pattern**: [General] **Severity**: 🔴 Critical (MFMA input error)"
+   },
+   {
+    "heading": "Quick Checklist",
+    "anchor": "quick-checklist",
+    "gist": "Before submitting optimization results, go through the following checklist item by item:"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **Cross-architecture Comparison**: Hopper Pitfalls — 11 Hopper-specific pitfalls - **Referenced By**: matmul references #1-5 | fused_attention"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# ❌ Wrong: direct int8 scale\nq_pe_bf16 = gl.amd.cdna4.scaled_upcast_fp4(q_pe_fp4_dot, q_pe_scales_raw, gl.bfloat16, 1)\n```\n\n```python\n# ✅ Correct: e8m0 i8 -> bf16 shifted scale\nq_pe_scales_i16 = gl.cast(q_pe_scales_reshaped, gl.int16)      # zero-extend i8→i16\nq_pe_scales_shifted = q_pe_scales_i16 << 7                      # shl 7: place exp in bf16 exp field\nq_pe_scales_bf16 = gl.cast(q_pe_scales_shifted, gl.bfloat16, bitcast=True)\nq_pe_bf16 = gl.amd.cdna4.scaled_upcast_fp4(q_pe_fp4_dot, q_pe_scale_dot, gl.bfloat16, 1)\n```\n\n```python\nsplit_len = split_end - split_start\nnum_full_blocks = split_len // BLOCK_N\nfull_end = split_start + num_full_blocks * BLOCK_N\n\n# FULL BLOCKS LOOP — no mask, no other!\nfor start_n in range(split_start, full_end, BLOCK_N):\n k_nope_fp4 = gl.amd.cdna4.buffer_load(ptr=KV_fp4, offsets=k_nope_fp4_offs) # none mask/other\n    # ... compute ...\n\n# TAIL BLOCK - requires mask\nif split_len % BLOCK_N != 0:\n    start_n = full_end\n    # ... with mask/other ...\n```\n\n```python\nmin_iters_per_split = 2\nmax_splits_by_iters = max(1, num_kv_blocks // min_iters_per_split)\ndesired_splits = max(1, target_total_blocks // batch_parallelism)\nraw = min(desired_splits, max_splits_by_iters, num_kv_blocks)\n```\n\n```python\ns1_blocked2_wide: gl.constexpr = gl.BlockedLayout(\n    size_per_thread=[1, 4], threads_per_warp=[4, 16], warps_per_cta=[4, 1], order=[1, 0])\n```\n\n```python\ndef custom_kernel(data, config):\n    max_kv_len = int((kv_indptr[1:] - kv_indptr[:-1]).max().item())\n\n    if max_kv_len >= 4096:\n        return _mla_decode_fp8(data, config)  # v7\n    else:\n        return _mla_decode_bf16(data, config)  # v6\n```\n\n```python\nNUM_XCDS = 8\npid_raw = gl.program_id(0)\nwave = pid_raw // NUM_XCDS\npos_in_wave = pid_raw % NUM_XCDS\nis_odd_wave = wave % 2\nremapped_pos = tl.where(is_odd_wave, NUM_XCDS - 1 - pos_in_wave, pos_in_wave)\npid = wave * NUM_XCDS + remapped_pos\n```\n\n```python\nfrom triton.experimental.gluon.language.amd.cdna4 import async_copy\n\n# ✅ Correct: async_copy DMA\nasync_copy.buffer_load_to_shared(smem.index(slot), ptr, offsets, mask=mask)\nasync_copy.commit_group()\nasync_copy.wait_group(num_outstanding=0)\ndata = async_copy.load_shared_relaxed(smem.index(slot), layout=dot_op)\n```\n\n```python\n# B[K, N]: stride_bk=N, stride_bn=1 -> N (dim 1) contiguous -> order=[1, 0]\nblocked_b: gl.constexpr = gl.BlockedLayout(\n size_per_thread=[*, 8], # N contiguous\n    threads_per_warp=[...],\n    warps_per_cta=[...],\n order=[1, 0]) # dim 1\n```\n\n```python\n# ✅ Correct: DotOperandLayout\ndot_op0 = gl.DotOperandLayout(operand_index=0, parent=mma, k_width=4)\na_dot = a_smem.load(dot_op0) # directCorrect layout load\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/gluon/pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

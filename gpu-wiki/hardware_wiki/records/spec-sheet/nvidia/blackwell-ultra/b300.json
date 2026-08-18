@@ -1,0 +1,116 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell-ultra.spec-sheet.b300",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell-ultra",
+  "product": "b300",
+  "sm_arch": "sm_103",
+  "compute_capability": "10.3"
+ },
+ "facts": {
+  "summary": "NVIDIA B300 GPU Hardware Compute Specification Table (Blackwell Ultra)",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 1.25,
+    "provenance": "architecture-analysis",
+    "use_case": "Compatibility only; inference-optimized design minimizes FP64"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 75,
+    "provenance": "architecture-analysis",
+    "use_case": "Official HGX B300 total (600 TFLOPS / 8 GPUs)"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1100,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2200,
+    "use_case": "Training / inference matrix multiply"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2250,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 4500,
+    "use_case": "Training / inference"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 4500,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 9000,
+    "use_case": "Inference / low-precision training"
+   },
+   {
+    "dtype": "fp4",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 13500,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 18000,
+    "use_case": "Official DGX B300 system figures divided by 8 GPUs"
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 187.5,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 375,
+    "use_case": "Official HGX B300 total (3 sparse POPS / 8 GPUs; dense is half)"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 288,
+   "l2_cache_mb": 126,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "gpcs": 8,
+   "sm_count": 160,
+   "cuda_cores": 20480,
+   "tensor_cores": 640,
+   "rt_cores": 160,
+   "texture_units": 640,
+   "cuda_cores_per_sm": 128,
+   "tensor_cores_per_sm": 4,
+   "rt_cores_per_sm": 1,
+   "register_file_kb_per_sm": 256,
+   "shared_memory_kb_per_sm": null,
+   "register_file_kb_total": 40960,
+   "provenance": "architecture-analysis"
+  },
+  "unavailable": {
+   "shared_memory_kb_per_sm": "Not published on the cited DGX B300 product page; query the CUDA device attribute at runtime instead of reusing SM120's 128 KB value"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVIDIA B300 GPU Hardware Compute Specification Table (Blackwell Ultra)",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell-ultra/hardware-specs/hardware_specs_b300.md"
+   }
+  ]
+ }
+}

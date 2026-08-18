@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-decode-pitfalls.11-increasing-bv-per-cta-can-decrease-ncu-max-bw",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-decode-pitfalls#11-increasing-bv-per-cta-can-decrease-ncu-max-bw|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '11. Increasing BV per CTA can *decrease* ncu Max BW %' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 11. Increasing BV per CTA can *decrease* ncu Max BW %",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL GDN Decode on sm_120 — Pitfalls -- 11. Increasing BV per CTA can *decrease* ncu Max BW %"
+  },
+  "attempted": "After V13 hits 87.7% Max BW, double BV (8 → 16) to amortize fixed per-CTA overhead and (you assume) push closer to peak.",
+  "verdict": "performance-ceiling",
+  "lesson": "For ncu **DRAM Throughput %** specifically, larger tiles can be a regression. To push the *metric*, push toward zero L1 hit (every load `cg`). To push *wall-clock*, follow the regular roofline rules.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "A bigger tile means more threads in the same CTA share L1 lines for boundary loads. More L1 reuse = fewer DRAM bytes attributed = lower \"DRAM throughput %\". The kernel hasn't actually slowed down; the metric just changed its denominator."
+  },
+  "observed": "Max BW drops to 87.24% (slightly worse), wall-clock unchanged. L1 hit rate jumps from 33% → 53%.",
+  "root_cause": "A bigger tile means more threads in the same CTA share L1 lines for boundary loads. More L1 reuse = fewer DRAM bytes attributed = lower \"DRAM throughput %\". The kernel hasn't actually slowed down; the metric just changed its denominator."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

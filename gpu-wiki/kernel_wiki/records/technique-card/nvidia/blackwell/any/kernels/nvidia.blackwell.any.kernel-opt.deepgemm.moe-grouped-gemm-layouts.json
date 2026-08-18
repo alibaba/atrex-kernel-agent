@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.deepgemm.moe-grouped-gemm-layouts",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|deepgemm#moe-grouped-gemm-layouts|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "moe-grouped-gemm-layouts"
+  ],
+  "triggers": [
+   "the 'MoE Grouped GEMM Layouts' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): MoE Grouped GEMM Layouts",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "DeepGEMM -- FP8 GEMM with Fine-Grained Scaling -- MoE Grouped GEMM Layouts"
+  },
+  "technique": "MoE Grouped GEMM Layouts",
+  "what": "DeepGEMM provides three grouped GEMM layouts tailored for MoE workloads, where only the M-axis varies (different token counts per expert) while N and K remain fixed:",
+  "when": "DeepGEMM provides three grouped GEMM layouts tailored for MoE workloads, where only the M-axis varies (different token counts per expert) while N and K remain fixed:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nLayout 1: Contiguous (prefill)\n  Expert 0: M0 tokens  ──┐\n  Expert 1: M1 tokens  ──┤── All packed contiguously in memory\n  Expert 2: M2 tokens  ──┘   Index array stores cumulative offsets\n\nLayout 2: Masked (decode with CUDA graphs)\n  Fixed-size M_max allocation per expert\n  Binary mask indicates valid tokens\n  Compatible with CUDA graph capture (no dynamic shapes)\n\nLayout 3: K-grouped (weight gradients)\n  Groups along K-axis instead of M-axis\n  Used for computing dW in MoE training backward\n```\n\n```cpp\n// Contiguous grouped GEMM dispatch\n// problem_sizes[i] = {M_i, N, K} for expert i\nvoid grouped_gemm_contiguous(\n    const fp8_t* A,         // All expert inputs packed\n    const fp8_t* B,         // Expert weights [num_experts, N, K]\n    float* C,               // Output packed\n    const int* offsets,     // Cumulative M offsets per expert\n    int num_experts\n) {\n    // Each thread block picks an expert via tile scheduling\n    // M-axis tiles distributed across experts using offset lookup\n    int expert_id = binary_search(offsets, num_experts, tile_m_start);\n    int local_m = tile_m_start - offsets[expert_id];\n\n    // Standard GEMM tile with expert-specific B matrix\n    compute_tile(A + offsets[expert_id] * K,\n                 B + expert_id * N * K,\n                 C + offsets[expert_id] * N,\n                 local_m, N, K);\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/deepgemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

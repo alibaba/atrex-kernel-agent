@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ncu-profile-driven-optimization-workflow",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ncu-profile-driven-optimization-workflow|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): NCU Profile-Driven Optimization Workflow",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "NCU Profile-Driven Optimization Workflow"
+  },
+  "title": "NCU Profile-Driven Optimization Workflow",
+  "summary": "This document outlines the Nsight Compute-driven GPU kernel optimization workflow: first collect reproducible profiles, then construct a reasoning chain using counter / source / PM sampling / PTX-SASS evidence, and finally select only one verifiable kernel modification.",
+  "sections": [
+   {
+    "heading": "Applicable Scenarios",
+    "anchor": "applicable-scenarios",
+    "gist": "Prioritize using NCU-driven optimization in the following scenarios:"
+   },
+   {
+    "heading": "Recommended Artifact Structure",
+    "anchor": "recommended-artifact-structure",
+    "gist": "Keep an independent directory for each optimization attempt for easy version comparison:"
+   },
+   {
+    "heading": "Standard Workflow",
+    "anchor": "standard-workflow",
+    "gist": "1."
+   },
+   {
+    "heading": "Common Collection Commands",
+    "anchor": "common-collection-commands",
+    "gist": "Once you have a complete baseline, you can collect only key metrics for candidate versions:"
+   },
+   {
+    "heading": "PM Sampling and Source Hotspots",
+    "anchor": "pm-sampling-and-source-hotspots",
+    "gist": "Aggregate metrics can only indicate \"where there might be a problem.\" Source / PM sampling is used to pinpoint \"when, which line of code, which instruction window.\""
+   },
+   {
+    "heading": "PTX / SASS Alignment Analysis",
+    "anchor": "ptx-sass-alignment-analysis",
+    "gist": "PTX / SASS inspection is needed in the following situations:"
+   },
+   {
+    "heading": "Metric Grouping and Interpretation",
+    "anchor": "metric-grouping-and-interpretation",
+    "gist": "table columns: Metric, Purpose"
+   },
+   {
+    "heading": "Mapping Diagnosis to Modifications",
+    "anchor": "mapping-diagnosis-to-modifications",
+    "gist": "table columns: Dominant Signal, Priority Edit Family"
+   },
+   {
+    "heading": "Output Rules",
+    "anchor": "output-rules",
+    "gist": "- End with exactly one next edit; do not write \"try multiple approaches.\" - Must reference the metric values that support the diagnosis."
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- NVIDIA Nsight Compute (NCU) Profiling Guide — Complete manual for NCU commands, sections, and metric system."
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nprofile first, diagnose second, optimize third\n```\n\n```text\ncounter signal → possible mechanism → exclude other hypotheses → one concrete next edit\n```\n\n```text\nprofile-artifacts/${version}/\n  report.ncu-rep\n  raw.csv\n  details.txt\n  source.csv                 # Exported when NCU supports source page\n  sampling.csv               # PM sampling or related sampling metrics export\n  kernel.ptx                 # Exported for instruction-level analysis\n  kernel.sass                # Exported for instruction-level analysis\n```\n\n```bash\nversion=v000_baseline\nout=profile-artifacts/$version\nkernel_name_regex=\"gemm|attention|decode\"\nprofile_shape=\"m=4096,n=4096,k=4096\"\nprofile_dtype=\"bf16\"\nmkdir -p \"$out\"\n\nncu --target-processes all \\\n    --kernel-name regex:\"$kernel_name_regex\" \\\n    --launch-skip 5 --launch-count 1 \\\n    --set full --import-source on \\\n    --section SpeedOfLight \\\n    --section SchedulerStats \\\n    --section WarpStateStats \\\n    --section Occupancy \\\n    --section LaunchStats \\\n    --section MemoryWorkloadAnalysis \\\n    --section SourceCounters \\\n    -o \"$out/report\" \\\n    python benchmarks/bench.py --impl baseline --shape \"$profile_shape\" --dtype \"$profile_dtype\"\n\nncu --import \"$out/report.ncu-rep\" --page raw --csv > \"$out/raw.csv\"\nncu --import \"$out/report.ncu-rep\" --page details > \"$out/details.txt\"\n```\n\n```bash\nversion=v001_candidate\nout=profile-artifacts/$version\nkernel_name_regex=\"gemm|attention|decode\"\nprofile_shape=\"m=4096,n=4096,k=4096\"\nprofile_dtype=\"bf16\"\nmkdir -p \"$out\"\n\nncu --target-processes all \\\n    --kernel-name regex:\"$kernel_name_regex\" \\\n    --launch-skip 5 --launch-count 1 \\\n    --set full --import-source on \\\n    --section SpeedOfLight \\\n    --section SchedulerStats \\\n    --section WarpStateStats \\\n    --section Occupancy \\\n    --section LaunchStats \\\n    --section MemoryWorkloadAnalysis \\\n    --section SourceCounters \\\n    -o \"$out/report\" \\\n    python benchmarks/bench.py --impl candidate --shape \"$profile_shape\" --dtype \"$profile_dtype\"\n\nncu --import \"$out/report.ncu-rep\" --page raw --csv > \"$out/raw.csv\"\nncu --import \"$out/report.ncu-rep\" --page details > \"$out/details.txt\"\n```\n\n```bash\nkernel_name_regex=\"gemm|attention|decode\"\nprofile_shape=\"m=4096,n=4096,k=4096\"\nprofile_dtype=\"bf16\"\n\nncu --target-processes all \\\n    --kernel-name regex:\"$kernel_name_regex\" \\\n    --launch-skip 10 --launch-count 1 \\\n    --import-source on \\\n    --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed,\\\nsm__inst_executed_pipe_tensor.avg.pct_of_peak_sustained_elapsed,\\\ndram__throughput.avg.pct_of_peak_sustained_elapsed,\\\nlts__t_bytes.avg.pct_of_peak_sustained_elapsed,\\\nsm__warps_active.avg.pct_of_peak_sustained_active,\\\nsmsp__warps_eligible.avg.per_cycle_active,\\\nsmsp__warp_issue_stalled_long_scoreboard.sum,\\\nsmsp__warp_issue_stalled_short_scoreboard.sum,\\\nsmsp__warp_issue_stalled_barrier.sum,\\\nsmsp__warp_issue_stalled_membar.sum,\\\nsmsp__warp_issue_stalled_mio_throttle.sum,\\\nsmsp__warp_issue_stalled_no_instruction.sum,\\\nl1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum \\\n    -o profile-artifacts/v002_fast/report \\\n    python benchmarks/bench.py --impl candidate --shape \"$profile_shape\" --dtype \"$profile_dtype\"\n```\n\n```bash\nncu --query-metrics | grep -E 'long_scoreboard|bank_conflict|pipe_tensor|throughput'\n```\n\n```bash\nncu --list-sections | grep -E '^PmSampling'\n\n# English note\n#   --section PmSampling --section PmSampling_WarpStates\n\nncu --import profile-artifacts/v001_candidate/report.ncu-rep \\\n    --page source --csv > profile-artifacts/v001_candidate/source.csv || true\nncu --import profile-artifacts/v001_candidate/report.ncu-rep \\\n    --page raw --csv | grep -Ei 'sampling|sample|stall|source' \\\n    > profile-artifacts/v001_candidate/sampling.csv || true\n```\n\n```bash\nNVCC_FLAGS=\"-lineinfo -Xptxas=-v\" python setup.py build_ext --inplace\n\nversion=v001_candidate\nout=profile-artifacts/$version\nmkdir -p \"$out\"\n\nbinary_path=\"build/libkernel_extension.so\"\ncubin_path=\"build/kernel.cubin\"\nkernel_name_regex=\"gemm|attention|decode\"\nhot_source_regex=\"load_qkv|mma_loop|store_output\"\ninline_ptx_mnemonic_regex=\"tcgen05|wgmma|ldmatrix|cp.async|mbarrier|bar.sync|ld.global|st.global|cvt|selp|pred\"\n\ncuobjdump --dump-ptx \"$binary_path\" > \"$out/kernel.ptx\" || true\ncuobjdump --dump-sass \"$binary_path\" > \"$out/kernel.sass\" || true\nnvdisasm -g \"$cubin_path\" > \"$out/kernel.nvdisasm.sass\" || true\n\ngrep -E -n \"$kernel_name_regex|$inline_ptx_mnemonic_regex\" \"$out/kernel.ptx\" \"$out/kernel.sass\"\ngrep -E -n \"$hot_source_regex|$inline_ptx_mnemonic_regex\" \"$out/source.csv\" \"$out/details.txt\" \"$out/kernel.sass\"\n```\n\n```bash\nncu --query-metrics | grep -E 'wgmma|tcgen05|tensor|tma|mbarrier|tmem|cluster'\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ncu-profile-driven-optimization-workflow.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

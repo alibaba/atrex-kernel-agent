@@ -1,0 +1,124 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.ai-kernel-agent-survey",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ai-kernel-agent-survey|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): AI Agents for Automated GPU Kernel Generation and Optimization: A Comprehensive Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "AI Agents for Automated GPU Kernel Generation and Optimization: A Comprehensive Overview"
+  },
+  "title": "AI Agents for Automated GPU Kernel Generation and Optimization: A Comprehensive Overview",
+  "summary": "A synthesis of technical discussions and system analyses from the Zhihu community on AI agents for automatically generating and optimizing GPU kernels. Covers representative systems, technical approach comparisons, performance data, and engineering practices.",
+  "sections": [
+   {
+    "heading": "1. Background and Motivation",
+    "anchor": "1-background-and-motivation",
+    "gist": "GPU kernel optimization is central to deep learning infrastructure but faces two fundamental contradictions:"
+   },
+   {
+    "heading": "2. Detailed Analysis of Representative Systems",
+    "anchor": "2-detailed-analysis-of-representative-systems",
+    "gist": "**Paper**: Agentic Variation Operators for Autonomous Evolutionary Search (2025.03)"
+   },
+   {
+    "heading": "3. Engineering Practice: The Skills Mechanism",
+    "anchor": "3-engineering-practice-the-skills-mechanism",
+    "gist": "Repository workflow modules, popularized by Claude Code, are becoming a standard configuration in kernel development repositories."
+   },
+   {
+    "heading": "4. Benchmarks and Platforms",
+    "anchor": "4-benchmarks-and-platforms",
+    "gist": "The mainstream benchmark for AI-generated kernel evaluation: - Level 1: Single operator (100 tasks) - Level 2: Operator sequences/fusion (100 tasks) - Level 3: Complete submodules (50 tasks) - Metrics: Pass Rate, Faster Rate (vs torch.comp…"
+   },
+   {
+    "heading": "5. Limitations and Outlook",
+    "anchor": "5-limitations-and-outlook",
+    "gist": "**Limited Search Space**: Current systems are primarily validated on Attention forward kernels and standard KernelBench tasks, and have not yet been extended to backward kernels, more complex production operators, or full-model optimizatio…"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- Community GPU Optimization Survey and Learning Path — GPU optimization methodology and learning path - Community CUDA Performance Fundamentals — CUDA practical experience …"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/ai-kernel-agent-survey.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

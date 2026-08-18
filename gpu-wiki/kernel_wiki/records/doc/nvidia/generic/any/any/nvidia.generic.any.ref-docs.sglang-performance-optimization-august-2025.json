@@ -1,0 +1,243 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.sglang-performance-optimization-august-2025",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|sglang-performance-optimization-august-2025|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): SGLang Performance Optimization Notes: August 2025",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "SGLang Performance Optimization Notes: August 2025"
+  },
+  "title": "SGLang Performance Optimization Notes: August 2025",
+  "summary": "A compilation of 29 performance optimization techniques applied to the SGLang inference framework during August 2025, covering kernel fusion, communication optimization, CUDA Graph improvements, and backend upgrades.",
+  "sections": [
+   {
+    "heading": "1. AllReduce-Add-RMSNorm Fusion for GPT-OSS and DeepSeek-V3/R1",
+    "anchor": "1-allreduce-add-rmsnorm-fusion-for-gpt-oss-and-deepseek-v3-r1",
+    "gist": "Applies the FlashInfer `trt-llm-allreduce-add-rmsnorm` kernel API to SGLang, achieving performance gains on GPT-OSS and DeepSeek-V3/R1 deployments."
+   },
+   {
+    "heading": "2. PDL Support for Quant and RoPE Kernels",
+    "anchor": "2-pdl-support-for-quant-and-rope-kernels",
+    "gist": "Enables Programmatic Dependent Launch (PDL) for quantization and RoPE kernels."
+   },
+   {
+    "heading": "3. Optimizing CUTLASS Fused MoE Performance on H20",
+    "anchor": "3-optimizing-cutlass-fused-moe-performance-on-h20",
+    "gist": "Configures specialized tuning parameters for the `fp8_blockwise_scaled_group_mm` kernel on H20: - MmaTileShape: 64x128x128 - ClusterShape: 1x2x1 - Uses `KernelPtrArrayTmaWarpSpecializedPingpongFP8BlockScaledAccum` schedule"
+   },
+   {
+    "heading": "4. FlashInfer CUTLASS MoE DP Communication: FP4 Quantization + Allgatherv",
+    "anchor": "4-flashinfer-cutlass-moe-dp-communication-fp4-quantization-allgatherv",
+    "gist": "Optimizes the communication bottleneck for FlashInfer CUTLASS MoE under data parallelism (DP) by performing FP4 quantization before allgather to reduce communication volume, and introduces Allgatherv and Reducescatterv collective operation…"
+   },
+   {
+    "heading": "5. Fast Math Optimization for per_token_group_quant_8bit Kernel",
+    "anchor": "5-fast-math-optimization-for-per-token-group-quant-8bit-kernel",
+    "gist": "Addresses performance discrepancy between CUDA versions by enabling Fast Math compilation for the `per_token_group_quant_8bit` kernel."
+   },
+   {
+    "heading": "6. FP4 MoE Quantization Kernel: Grid-Stride Layout + Dynamic Launch Configuration",
+    "anchor": "6-fp4-moe-quantization-kernel-grid-stride-layout-dynamic-launch-configuration",
+    "gist": "Ported from vLLM, targeting FP4 quantization performance for MoE models on Blackwell GPUs."
+   },
+   {
+    "heading": "7. Reduce-Scatter Communication for DeepSeek-V3, Qwen, and Llama4 under DP Attention",
+    "anchor": "7-reduce-scatter-communication-for-deepseek-v3-qwen-and-llama4-under-dp-attention",
+    "gist": "Extends reduce-scatter communication optimization to more model architectures, replacing all-reduce with reduce-scatter after MoE/MLP layers when DP attention max padding is enabled."
+   },
+   {
+    "heading": "8. FlashAttention-3 Backend for GPT-OSS: Attention Sinks",
+    "anchor": "8-flashattention-3-backend-for-gpt-oss-attention-sinks",
+    "gist": "Adds FA3 backend support for GPT-OSS models with attention sinks functionality."
+   },
+   {
+    "heading": "9. FP8 CUTLASS Kernel Tuning on Blackwell: Dynamic Configuration Dispatch",
+    "anchor": "9-fp8-cutlass-kernel-tuning-on-blackwell-dynamic-configuration-dispatch",
+    "gist": "Ports vLLM's FP8 GEMM performance tuning for Blackwell (SM100), using dynamic kernel dispatch based on input matrix M dimension."
+   },
+   {
+    "heading": "10. FlashInfer TensorRT-LLM FP8 Blockscale GEMM Backend",
+    "anchor": "10-flashinfer-tensorrt-llm-fp8-blockscale-gemm-backend",
+    "gist": "Upgrades SGLang's FlashInfer CUTLASS backend to the TensorRT-LLM FP8 GEMM implementation, focusing on low-latency optimization."
+   },
+   {
+    "heading": "11. Custom Set KV Buffer Kernel Fusion",
+    "anchor": "11-custom-set-kv-buffer-kernel-fusion",
+    "gist": "Develops a custom CUDA kernel fusing key and value cache storage operations, identified via nsys profiling as a bottleneck on H100."
+   },
+   {
+    "heading": "12. RoPE + Set KV Buffer Kernel Fusion",
+    "anchor": "12-rope-set-kv-buffer-kernel-fusion",
+    "gist": "Fuses the KV cache write operation directly into the RoPE kernel, eliminating separate memory operations and kernel launch overhead."
+   },
+   {
+    "heading": "13. MoE Padding and Quantization Kernel Fusion for GPT-OSS",
+    "anchor": "13-moe-padding-and-quantization-kernel-fusion-for-gpt-oss",
+    "gist": "Fuses hidden state padding into the quantization kernel for GPT-OSS MoE layers, eliminating redundant memory operations."
+   },
+   {
+    "heading": "14. Non-Padded Token Count for MoE in DP Scenarios",
+    "anchor": "14-non-padded-token-count-for-moe-in-dp-scenarios",
+    "gist": "Fixes inaccurate token counting in MoE computation under data parallelism."
+   },
+   {
+    "heading": "15. TRT-LLM MLA FP8 Support",
+    "anchor": "15-trt-llm-mla-fp8-support",
+    "gist": "Adds FlashInfer's TRT-LLM MLA FP8 KV Cache Backend support."
+   },
+   {
+    "heading": "16. MoE Routed Scaling Factor Kernel Fusion",
+    "anchor": "16-moe-routed-scaling-factor-kernel-fusion",
+    "gist": "Fuses routed scaling factor computation into `moe_fused_gate` and `select_experts` kernels, reducing standalone operation overhead."
+   },
+   {
+    "heading": "17. GPT-OSS Attention Sinks with TRT-LLM MHA Backend",
+    "anchor": "17-gpt-oss-attention-sinks-with-trt-llm-mha-backend",
+    "gist": "Adds TRT-LLM multi-head attention (MHA) backend support for GPT-OSS with attention sinks mechanism."
+   },
+   {
+    "heading": "18. TBO Optimization: Two Chunk Overlap",
+    "anchor": "18-tbo-optimization-two-chunk-overlap",
+    "gist": "Improves Two Batch Overlap (TBO) by introducing Two Chunk Overlap, which intelligently splits long sequences into two chunks for parallel execution, eliminating idle batches."
+   },
+   {
+    "heading": "19. DP Attention: LayerNorm Before AllGather",
+    "anchor": "19-dp-attention-layernorm-before-allgather",
+    "gist": "Moves LayerNorm before the allgather operation in data parallelism, performing normalization on 1/DP-count tokens to reduce computation."
+   },
+   {
+    "heading": "20. FP8 MoE Kernel Schedule Selection for H100/H200/H800",
+    "anchor": "20-fp8-moe-kernel-schedule-selection-for-h100-h200-h800",
+    "gist": "Resolves performance regression when migrating from H20 to H100/H200/H800 for `fp8_blockwise_scaled_grouped_mm`."
+   },
+   {
+    "heading": "21. FlashInfer MoE Blockscale FP8 Backend for TP MoE",
+    "anchor": "21-flashinfer-moe-blockscale-fp8-backend-for-tp-moe",
+    "gist": "Extends FlashInfer MoE blockscale FP8 backend to tensor parallel (TP) MoE configurations."
+   },
+   {
+    "heading": "22. TRT-LLM Generated MLA Decode Kernel Integration",
+    "anchor": "22-trt-llm-generated-mla-decode-kernel-integration",
+    "gist": "Integrates TensorRT-LLM generated Multi-Head Latent Attention (MLA) decode kernels for DeepSeek series models, with SM100 architecture compatibility checks."
+   },
+   {
+    "heading": "23. Disabling Python GC During CUDA Graph Capture",
+    "anchor": "23-disabling-python-gc-during-cuda-graph-capture",
+    "gist": "Disables Python garbage collector during CUDA graph capture using `gc.freeze()` to avoid GC scanning long-lived objects."
+   },
+   {
+    "heading": "24. MRoPE torch.compile Optimization",
+    "anchor": "24-mrope-torch-compile-optimization",
+    "gist": "Adds `torch.compile(dynamic=True)` to `MRotaryEmbedding.forward()`, reducing kernel launch overhead for small VLM models."
+   },
+   {
+    "heading": "25. GC Freeze for Latency Jitter Reduction",
+    "anchor": "25-gc-freeze-for-latency-jitter-reduction",
+    "gist": "Adds GC freeze functionality via `freeze_gc` API to exclude server warmup objects from garbage collection, avoiding 100ms-300ms pauses from gen2 GC."
+   },
+   {
+    "heading": "26. FlashInfer GPU-CPU Synchronization Optimization",
+    "anchor": "26-flashinfer-gpu-cpu-synchronization-optimization",
+    "gist": "Fixes unnecessary GPU-CPU synchronization in FlashInfer when page_size=1 by directly constructing a `torch.ones` tensor instead of GPU-to-CPU data transfer."
+   },
+   {
+    "heading": "27. FlashInfer GQA Tensor Core Decode Threshold",
+    "anchor": "27-flashinfer-gqa-tensor-core-decode-threshold",
+    "gist": "Lowers the GQA group size threshold for enabling Tensor Core decode in FlashInfer from >4 to >=4, allowing models like Llama3-8B with 4 GQA groups to benefit from Tensor Core acceleration."
+   },
+   {
+    "heading": "28. CUTLASS 4.2 Upgrade with K-Major Scale Factor Support",
+    "anchor": "28-cutlass-4-2-upgrade-with-k-major-scale-factor-support",
+    "gist": "Upgrades CUTLASS to 4.2, enabling K-Major Scale Factor for SM90 FP8 Blockwise Group GEMM."
+   },
+   {
+    "heading": "29. FlashInfer/FlashMLA Chunked Prefill Cache Support",
+    "anchor": "29-flashinfer-flashmla-chunked-prefill-cache-support",
+    "gist": "Adds MHA Chunked Prefill cache support for FlashInfer and FlashMLA backends, removing the page_size=1 limitation to support larger page sizes for improved memory efficiency."
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nif (is_h20 && tuning_H20_kernel) {\n    // H20-specific optimized configuration\n    using execute_gemm_config = sm90_fp8_pp_config_64_128_128_1_2_1;\n} else {\n    if (multiProcessorCount == 78 && a.size(1) > 128) {\n        // K > 128: Pingpong schedule (MmaConfig0)\n        // MmaTileShape: 64x128x128, ClusterShape: 2x1x1\n    } else {\n        // K <= 128: Cooperative schedule (MmaConfig1)\n        // MmaTileShape: 128x128x128, ClusterShape: 1x2x1\n    }\n}\n```\n\n```cmake\nset_source_files_properties(\"csrc/gemm/per_token_group_quant_8bit\"\n    PROPERTIES COMPILE_OPTIONS \"--use_fast_math\")\n```\n\n```cpp\nint const numBlocksPerSM = 2048 / block.x;\nif (grid.x < numSMs && block.x > threshold) {\n    grid.x *= 2;\n    block.x /= 2;\n}\n```\n\n```python\nif self.tp_size > 1:\n    if skip_all_reduce:\n        output = tensor_model_parallel_reduce_scatter(output)\n    else:\n        output = tensor_model_parallel_all_reduce(output)\n```\n\n```cpp\ntemplate<typename T>\nauto select_fp8_gemm_config(int M) {\n    if (M <= 16) return small_config;\n    else if (M <= 64) return medium_small_config;\n    else if (M <= 256) return medium_config;\n    else return large_config;\n}\n```\n\n```cpp\n__global__ void set_kv_buffer_kernel(\n    scalar_t* k_cache, scalar_t* v_cache,\n    const int64_t* loc,\n    const scalar_t* k, const scalar_t* v) {\n    // Fused key and value storage\n}\n```\n\n```cpp\n__global__ void BatchQKApplyRotaryPosIdsCosSinCacheEnhanced(\n    scalar_t* __restrict__ query,\n    scalar_t* __restrict__ key,\n    const scalar_t* cos_ptr, const scalar_t* sin_ptr,\n    std::optional<scalar_t*> kv_buffer = std::nullopt,\n    std::optional<int64_t*> cache_loc = std::nullopt) {\n    apply_rotary_embedding(query, key, cos, sin);\n    if (kv_buffer.has_value()) {\n        write_to_kv_cache(key, value, kv_buffer, cache_loc);\n    }\n}\n```\n\n```python\n# Before: separate pad/unpad\ndef forward(self, hidden_states):\n    hidden_states = pad(hidden_states, target_size)\n    x_quant = mxfp8_quantize(hidden_states)\n    output = moe_computation(x_quant)\n    return unpad(output, original_size)\n\n# After: fused\ndef forward(self, hidden_states):\n    x_quant = mxfp8_quantize(hidden_states, output_hidden_size=target_size)\n    return trtllm_fp4_block_scale_moe(x_quant)\n```\n\n```python\ndef get_num_token_non_padded_local(total_tokens, tp_size, tp_rank):\n    base = total_tokens // tp_size\n    extra = 1 if tp_rank < (total_tokens % tp_size) else 0\n    return base + extra\n```\n\n```python\ndef moe_fused_gate(..., apply_routed_scaling_factor_on_output=False):\n    return fused_gate_with_scaling(...) if apply else traditional(...)\n```\n\n```\n# Traditional TBO (idle batch problem):\nmicro_batch0: extend_seq_len = [3072]  # active\nmicro_batch1: extend_seq_len = [0]     # idle\n\n# Two Chunk Overlap (eliminates idle batch):\nmicro_batch0: extend_seq_len = [1536], extend_prefix_len = [0]    # chunk 1\nmicro_batch1: extend_seq_len = [1536], extend_prefix_len = [1536] # chunk 2\n```\n\n```python\ndef freeze_gc(context: str):\n    gc.freeze()  # Move current objects to permanent generation\n\ndef configure_gc_warning(warn_threshold_secs):\n    def gc_callback(phase, info):\n        if phase == \"stop\":\n            duration = time.time() - gc_start_time.get(gen, time.time())\n            if duration > warn_threshold_secs:\n                logger.warn(f\"LONG GC DETECTED | Gen {gen} | {duration:.4f}s\")\n    gc.callbacks.append(gc_callback)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/sglang-performance-optimization-august-2025.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-quantization-mx",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|gemm|ck-quantization-mx|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CK Tile Quantized GEMM and MX Format",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CK Tile Quantized GEMM and MX Format"
+  },
+  "title": "CK Tile Quantized GEMM and MX Format",
+  "summary": "Composable Kernel (CK) Tile provides a complete quantized GEMM implementation system, covering FP8/FP4 Group Quantization, MX (Microscaling) block-scale format, SmoothQuant, and fused kernels such as fused add+rmsnorm+requantize. All implementations are based on CK Tile's composable pipeline architecture, supporting multiple quantization strategy combinations via C++ template parameterization.",
+  "sections": [
+   {
+    "heading": "Quantized GEMM Overview",
+    "anchor": "quantized-gemm-overview",
+    "gist": "CK Tile's quantized GEMM implementation is located at `include/ck_tile/ops/gemm_quant/`, organized in the standard three-layer structure of kernel / pipeline / block."
+   },
+   {
+    "heading": "Quantized GEMM Pipeline Variants",
+    "anchor": "quantized-gemm-pipeline-variants",
+    "gist": "The `gemm_bquant_pipeline_ag_bg_cr_*.hpp` series implements weight-only quantization:"
+   },
+   {
+    "heading": "QuantGemmKernel Core Mechanisms",
+    "anchor": "quantgemmkernel-core-mechanisms",
+    "gist": "`gemm_quant_kernel.hpp` is the unified kernel entry point for quantized GEMM, with the following key design aspects:"
+   },
+   {
+    "heading": "MX (Microscaling) GEMM",
+    "anchor": "mx-microscaling-gemm",
+    "gist": "The MX format implementation is located at `include/ck_tile/ops/gemm_mx/`, based on `UniversalGemmKernel` extensions."
+   },
+   {
+    "heading": "SmoothQuant",
+    "anchor": "smoothquant",
+    "gist": "`include/ck_tile/ops/smoothquant/` implements SmoothQuant quantization:"
+   },
+   {
+    "heading": "Fused Add + RMSNorm + RDQuant",
+    "anchor": "fused-add-rmsnorm-rdquant",
+    "gist": "`include/ck_tile/ops/add_rmsnorm2d_rdquant/` implements a three-in-one fused kernel:"
+   },
+   {
+    "heading": "Dequantization Strategy Summary",
+    "anchor": "dequantization-strategy-summary",
+    "gist": "table columns: Strategy, Scale Shape, QuantType in Code, Applicable Scenarios"
+   },
+   {
+    "heading": "Supported Data Types",
+    "anchor": "supported-data-types",
+    "gist": "table columns: A dtype, B dtype, Scale dtype, Acc dtype, Description"
+   },
+   {
+    "heading": "Examples",
+    "anchor": "examples",
+    "gist": "CK Tile provides the following quantization-related examples (`example/ck_tile/` directory):"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- CK MoE / Norm / Conv Operators -- Scenarios using SmoothQuant in fused MoE - CK Dispatcher and Kernel Selection -- Automatic kernel selection for quantized GEMM"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\n// 128 K shared scale(per-group along K)\nusing BQuantGroupSize = QuantGroupShape<sequence<1, 1, 128>>;\n\n// 32 K x 64 N shared scale(block-wise)\nusing BQuantGroupSize = QuantGroupShape<sequence<1, 64, 32>>;\n```\n\n```cpp\n// GranularityMN > 0, GranularityK > 0: 2D block scale\nMXScalePointer<e8m0_t, 32, 32> // 32x32 block e8m0 scale\n\n// GranularityMN > 0, GranularityK = 0: row/column scale\nMXScalePointer<e8m0_t, 1, 0>    // per-row scale\n\n// GranularityMN = -1: none scale(, operator returns 1)\nMXScalePointer<e8m0_t, -1>      // disabled\n```\n\n```\nX = A + B\nY = RMSNorm(X, gamma, epsilon)\nQY = RowwiseDynamicQuant(Y) = SaturateCast(Y / YScale)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-quantization-mx.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

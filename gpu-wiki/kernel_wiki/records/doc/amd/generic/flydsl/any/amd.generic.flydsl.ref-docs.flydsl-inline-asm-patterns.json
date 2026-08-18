@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-inline-asm-patterns",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-inline-asm-patterns|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): FlyDSL inline_asm Writing Guide (AMD GFX942 / gfx1250)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "FlyDSL inline_asm Writing Guide (AMD GFX942 / gfx1250)"
+  },
+  "title": "FlyDSL inline_asm Writing Guide (AMD GFX942 / gfx1250)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "1. Minimum Skeleton (Two Equivalent APIs)",
+    "anchor": "1-minimum-skeleton-two-equivalent-apis",
+    "gist": "FlyDSL reuses MLIR LLVM dialect's inline asm."
+   },
+   {
+    "heading": "2. Constraint Strings (AMDGPU Versions)",
+    "anchor": "2-constraint-strings-amdgpu-versions",
+    "gist": "Unlike the writing style used by Triton/CUTLASS on NVIDIA, AMDGPU's LLVM backend uses only a few core constraints:"
+   },
+   {
+    "heading": "3. Eight Major Uses of AMDGPU Inline Assembly",
+    "anchor": "3-eight-major-uses-of-amdgpu-inline-assembly",
+    "gist": "Reference: ``custom_all_reduce_kernel.py:98,106``, ``hgemm_splitk.py:299``."
+   },
+   {
+    "heading": "4. Template Rules Cheat Sheet",
+    "anchor": "4-template-rules-cheat-sheet",
+    "gist": "table columns: Rule, Example"
+   },
+   {
+    "heading": "5. How to Choose `has_side_effects`",
+    "anchor": "5-how-to-choose-has-side-effects",
+    "gist": "table columns: Scenario, `has_side_effects`"
+   },
+   {
+    "heading": "6. Companion ROCDL Ops (no inline_asm needed)",
+    "anchor": "6-companion-rocdl-ops-no-inline-asm-needed",
+    "gist": "Before writing inline_asm, first confirm that the ROCDL dialect doesn't already cover it:"
+   },
+   {
+    "heading": "7. Common Pitfalls",
+    "anchor": "7-common-pitfalls",
+    "gist": "1."
+   },
+   {
+    "heading": "8. Index: Which file demonstrates which type of inline_asm",
+    "anchor": "8-index-which-file-demonstrates-which-type-of-inline-asm",
+    "gist": "table columns: File, inline_asm Usage, Learning Focus"
+   },
+   {
+    "heading": "9. Comparison with NVIDIA CuTeDSL inline PTX",
+    "anchor": "9-comparison-with-nvidia-cutedsl-inline-ptx",
+    "gist": "table columns: Dimension, FlyDSL (AMDGPU), CuTeDSL (NVIDIA)"
+   },
+   {
+    "heading": "10. Recommended Learning Path",
+    "anchor": "10-recommended-learning-path",
+    "gist": "1."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfrom flydsl._mlir.dialects import llvm\n\n# nonereturns + none operand\nllvm.InlineAsmOp(None, [], \"buffer_inv sc1\", \"\", has_side_effects=True)\n\n# returns + operand\ndata = llvm.InlineAsmOp(\n T.i32, # returnstype\n [counter_ptr_v], # input operand(MLIR Value column)\n \"global_load_dword $0, $1, off sc1\", # asm\n \"=v,v\", #\n    has_side_effects=True,\n).result # result SSA Value\n```\n\n```python\nfrom flydsl._mlir.dialects import llvm as llvm_dialect\n\nllvm_dialect.inline_asm(\n None, , # void result, none operand\n \"s_setreg_imm32_b32 hwreg(26, 4, 1), 1\", # asm\nEnglish description\n    has_side_effects=True,\n)\n```\n\n```python\n_llvm.inline_asm(\n    res=None,\n    operands_=[],\n    asm_string=\"s_wait_dscnt 0x0\\ns_wait_storecnt 0x0\\ns_barrier_signal -1\\ns_barrier_wait -1\",\n    constraints=\"\",\n    has_side_effects=True,\n)\n```\n\n```python\n# L1 scalar cache( GPU signal loop)\nllvm.InlineAsmOp(None, [], \"buffer_inv sc1\", \"\", has_side_effects=True)\n\n# L2 dirty row HBM( signal previous, GPU )\nllvm.InlineAsmOp(None, [], \"buffer_wbl2 sc0 sc1\", \"\", has_side_effects=True)\n```\n\n```python\n# Store: bypass L1+L2, split-K counter\nllvm.InlineAsmOp(\n    None, [counter_ptr_v, arith.constant(1, type=T.i32)],\n    \"global_store_dword $0, $1, off sc0 sc1\", \"v,v\",\n    has_side_effects=True,\n)\n\n# Load: bypass L2, split-K counter\ndata = llvm.InlineAsmOp(\n    T.i32, [counter_ptr_v],\n    \"global_load_dword $0, $1, off sc1\", \"=v,v\",\n    has_side_effects=True,\n).result\n```\n\n```python\n# WGP mode / wave mode\nllvm_dialect.inline_asm(\n    None, [],\n    \"s_setreg_imm32_b32 hwreg(26, 4, 1), 1\",\n    \"\",\n    has_side_effects=True,\n)\n```\n\n```python\nif arith.cmpi(arith.CmpIPredicate.eq, rocdl.wave_id(),\n              arith.constant(0, type=T.i32)):\n    _prefetch_lines = [\"s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 8, 1), 1\"]\n    for _pg in range_constexpr(10):\n        _prefetch_lines.append(\n            f\"s_prefetch_inst_pc_rel {_pg * 4096}, s0, 31\")\n    llvm_dialect.inline_asm(\n        None, [],\n        \"\\n\".join(_prefetch_lines),\n        \"\", has_side_effects=True,\n    )\n```\n\n```python\ndef _barrier():\n    _llvm.inline_asm(\n        res=None,\n        operands_=[],\n        asm_string=\"s_wait_dscnt 0x0\\ns_wait_storecnt 0x0\\ns_barrier_signal -1\\ns_barrier_wait -1\",\n        constraints=\"\",\n        has_side_effects=True,\n    )\n```\n\n```python\nfrom flydsl._mlir.dialects import rocdl\n\nrocdl.s_waitcnt(0)               # s_waitcnt 0\nrocdl.sched_barrier(0)           # sched_barrier mask\nrocdl.wave_id # current wave ID(i32 SSA)\nrocdl.s_setprio(...)             # s_setprio\n```\n\n```python\nbuffer_ops.create_buffer_resource_from_addr(addr_i64)\nbuffer_ops.create_buffer_resource(tensor, max_size=False, num_records_bytes=...)\nbuffer_ops.buffer_load(rsrc, off, vec_width=4, dtype=T.i32, cache_modifier=2)\nbuffer_ops.buffer_store(val, rsrc, off, cache_modifier=4)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-inline-asm-patterns.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,150 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-flash-attention-bf16-gqa-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|cdna3-flash-attention-bf16-gqa-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Flash Attention (bf16, MHA + GQA) Optimization on MI308X (gfx942)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Flash Attention (bf16, MHA + GQA) Optimization on MI308X (gfx942)"
+  },
+  "title": "FlyDSL Flash Attention (bf16, MHA + GQA) Optimization on MI308X (gfx942)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "table columns: Item, Value"
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "Causal flash-attention forward, head_dim=128, bf16: - Tile shape: BLOCK_M ∈ {128, 256} auto-selected; BLOCK_N=64; K_SUB_N=32 - MFMA: `mfma_f32_32x32x8bf16_1k` (gfx942's K=8 variant) - Q is preloaded once per workgroup as the B operand (reg…"
+   },
+   {
+    "heading": "Kernel resource footprint (final)",
+    "anchor": "kernel-resource-footprint-final",
+    "gist": "table columns: Item, Value"
+   },
+   {
+    "heading": "Optimization journey (head-to-head vs aiter)",
+    "anchor": "optimization-journey-head-to-head-vs-aiter",
+    "gist": "Numbers measured on MI308X bf16 causal prefill."
+   },
+   {
+    "heading": "Final perf vs aiter (MI308X, bf16, causal prefill — **post-v14**)",
+    "anchor": "final-perf-vs-aiter-mi308x-bf16-causal-prefill-post-v14",
+    "gist": "> **Note**: Specific performance values have been removed."
+   },
+   {
+    "heading": "Remaining bottlenecks (pre-v14, PMC-confirmed, B2H8S2k MHA)",
+    "anchor": "remaining-bottlenecks-pre-v14-pmc-confirmed-b2h8s2k-mha",
+    "gist": "Historical PMC (v12, before V transpose vectorization) showed `SQ_LDS_BANK_CONFLICT ≈ SQ_WAIT_INST_LDS` ⇒ LDS bank conflicts dominated."
+   },
+   {
+    "heading": "What would close the remaining gap (post-v18)",
+    "anchor": "what-would-close-the-remaining-gap-post-v18",
+    "gist": "1."
+   },
+   {
+    "heading": "Sustained recipe (do these, in this order)",
+    "anchor": "sustained-recipe-do-these-in-this-order",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Companion pitfalls: `` - FP8 sibling: `` - LDS bank conflicts: `` - Refere…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# Before\ncorr = arith.ArithValue(diff_m_scaled).exp2(fastmath=fm_fast)\n# After\ncorr = rocdl.exp2(T.f32, diff_m_scaled)\n```\n\n```python\n# Pre-compute every V vector before the MFMA loop body\nv_los = [None] * TOTAL_PV\nv_his = [None] * TOTAL_PV\nfor si in range_constexpr(TOTAL_PV):\n    v_los[si], v_his[si] = _read_v_pack(si)\n\n# Upfront rescale of o_accs[1..D_CHUNKS-1]\nfor dc_r in range_constexpr(D_CHUNKS - 1):\n    o_accs[dc_r + 1] = mul(o_accs[dc_r + 1], corr_vec)\n\n# Pure-MFMA inner loop (no interleaved ds_read)\nfor si in range_constexpr(TOTAL_PV):\n    dc, pks = _steps[si]\n    o_accs[dc] = mfma(v_los[si], p_packs_lo[pks], o_accs[dc])\n    o_accs[dc] = mfma(v_his[si], p_packs_hi[pks], o_accs[dc])\n```\n\n```python\nKV_STRIDE_TOKEN = NUM_KV_HEADS * HEAD_DIM      # vs Q_STRIDE = NUM_HEADS * HEAD_DIM\nGQA_GROUP_SIZE = NUM_HEADS // NUM_KV_HEADS\n\nif GQA_GROUP_SIZE == 1:\n    kv_head_idx = head_idx                      # MHA: identity\nelse:\n    kv_head_idx = head_idx // arith.index(GQA_GROUP_SIZE)\n\ndef kv_global_idx(token_idx, col):\n    token = batch_idx * seq_len_v + token_idx\n    return token * KV_STRIDE_TOKEN + kv_head_idx * HEAD_DIM + col\n```\n\n```python\ndef _ds_swizzle_xor8_inline(src):\n    return _llvm.inline_asm(\n        T.i32, [src],\n        \"ds_swizzle_b32 $0, $1 offset:0x201F\\n\\ts_waitcnt lgkmcnt(0)\",\n        \"=v,v\", has_side_effects=True,\n    )\n\n# In _v_store_transposed_perm:\nfor k in range_constexpr(num_dwords):\n    own_dw = vector.extract(own_vNi32, static_position=[k], ...)\n    peer_dwords[k] = _swz_inline(own_dw)\npeer_vec = vector.bitcast(vxf16_type,\n    vector.from_elements(_vN_i32_type, peer_dwords))\n\nif lds_row & 1 == 0:  # even-row lanes only\n    for _e in range_constexpr(VEC_WIDTH):\n        own_elem = vector.extract(vec, static_position=[_e], ...)\n        peer_elem = vector.extract(peer_vec, static_position=[_e], ...)\n        pair = vector.from_elements(_v2_type, [own_elem, peer_elem])\n        vt_idx = v_base + (load_col_base + _e) * VT_STRIDE + lds_row\n        vector.store(pair, lds_kv, [vt_idx])  # ds_write_b32\n```\n\n```python\n# Before (v14)\ndef _ds_swizzle_xor16_inline(src):\n    return _llvm.inline_asm(\n        T.i32, [src],\n        \"ds_swizzle_b32 $0, $1 offset:0x401F\\n\\ts_waitcnt lgkmcnt(0)\",\n        \"=v,v\", has_side_effects=True,\n    )\n\n# After (v15)\ndef _ds_swizzle_xor16_inline(src):\n    return _llvm.inline_asm(\n        T.i32, [src],\n        \"ds_swizzle_b32 $0, $1 offset:0x401F\",\n        \"=v,v\", has_side_effects=False,\n    )\n```\n\n```python\n# At end of KV iteration N (after GEMM1, before barrier):\nk_interblock_vecs = coop_load_k_global(kv_block_start + BLOCK_N)  # next iter's K\n\ngpu.barrier()\n\n# Start of iteration N+1 (K data already in registers):\n_waitcnt_vm_n(0)\ncoop_store_k_lds(k_interblock_vecs, buf_id)\n```\n\n```python\n# Pass 1: all exp2 (independent per element)\np_vals_lo = []\nfor r in range_constexpr(16):\n    d = math_dialect.fma(s_raw_lo[r], c_sm_scale_log2e, neg_sm_new)\n    p_vals_lo.append(rocdl.exp2(T.f32, d))\np_vals_hi = []\nfor r in range_constexpr(16):\n    d = math_dialect.fma(s_raw_hi[r], c_sm_scale_log2e, neg_sm_new)\n    p_vals_hi.append(rocdl.exp2(T.f32, d))\n\n# Pass 2: sum (serial but short)\nl_sum = c_zero_f\nfor r in range_constexpr(16):\n    l_sum = arith.AddFOp(l_sum, p_vals_lo[r], fastmath=fm_fast).result\nfor r in range_constexpr(16):\n    l_sum = arith.AddFOp(l_sum, p_vals_hi[r], fastmath=fm_fast).result\n```\n\n```python\ndef bf16_trunc_pack_v4(f32_vals):\n    sel = arith.constant(0x07060302, type=T.i32)\n    a = arith.bitcast(T.i32, f32_vals[0])\n    b = arith.bitcast(T.i32, f32_vals[1])\n    lo = rocdl.v_perm_b32_i32(b, a, sel)\n    c = arith.bitcast(T.i32, f32_vals[2])\n    d = arith.bitcast(T.i32, f32_vals[3])\n    hi = rocdl.v_perm_b32_i32(d, c, sel)\n    return vector.from_elements(v2i32_type, [lo, hi])\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-gqa-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

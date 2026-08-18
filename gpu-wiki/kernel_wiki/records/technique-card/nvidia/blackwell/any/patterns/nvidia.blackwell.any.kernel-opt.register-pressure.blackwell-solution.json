@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-pressure.blackwell-solution",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|patterns|register-pressure#blackwell-solution|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "patterns",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "register-pressure"
+   ]
+  },
+  "technique_tags": [
+   "blackwell-solution"
+  ],
+  "triggers": [
+   "the 'Blackwell Solution' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Blackwell Solution",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Pressure -- Low Occupancy -- Blackwell Solution"
+  },
+  "technique": "Blackwell Solution",
+  "what": "Hopper: 64×256 MMA tile accumulator = 64*256*4 bytes in registers per warp group",
+  "when": "Hopper: 64×256 MMA tile accumulator = 64*256*4 bytes in registers per warp group",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\n// Hopper: 64×256 MMA tile accumulator = 64*256*4 bytes in registers per warp group\n//   → ~128 registers per thread just for accumulators\n//\n// Blackwell: TMEM holds accumulators\n//   → 0 registers for accumulators\n//   → ~128 registers freed for other work or higher occupancy\n//\n// TMEM: 256 KB per SM, 128 rows × 512 columns × 32-bit\n// Largest 1-SM MMA uses half → double-buffering possible\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/patterns/register-pressure.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

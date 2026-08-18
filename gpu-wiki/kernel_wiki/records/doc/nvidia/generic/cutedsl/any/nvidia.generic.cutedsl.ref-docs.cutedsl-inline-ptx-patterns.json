@@ -1,0 +1,158 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutedsl-inline-ptx-patterns",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutedsl-inline-ptx-patterns|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CuTeDSL Inline PTX Writing Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CuTeDSL Inline PTX Writing Overview"
+  },
+  "title": "CuTeDSL Inline PTX Writing Overview",
+  "summary": "Corresponding reference-kernels: `reference-kernels/nvidia/hopper/cutedsl/tilelang/`.",
+  "sections": [
+   {
+    "heading": "1. Minimal Skeleton",
+    "anchor": "1-minimal-skeleton",
+    "gist": "Key points: - Must use the `@dsl_user_op` decorator so that CuTeDSL injects `loc`/`ip`, enabling inline asm to be embedded into the JIT-compiled MLIR."
+   },
+   {
+    "heading": "2. Constraint String Conventions",
+    "anchor": "2-constraint-string-conventions",
+    "gist": "LLVM inline asm constraint syntax is consistent with CUDA inline asm:"
+   },
+   {
+    "heading": "3. Multiple Outputs (Struct Return)",
+    "anchor": "3-multiple-outputs-struct-return",
+    "gist": "PTX `ldmatrix.x4` produces 4 `i32` at once:"
+   },
+   {
+    "heading": "4. Getting Pointers / Tensor Elements",
+    "anchor": "4-getting-pointers-tensor-elements",
+    "gist": "CuTeDSL wraps pointers as `cute.Pointer`; inline asm uses the underlying `llvm_ptr`:"
+   },
+   {
+    "heading": "5. fp16 / bf16 via i16 bitcast",
+    "anchor": "5-fp16-bf16-via-i16-bitcast",
+    "gist": "LLVM inline asm does not support ``f16`` directly as an operand, but PTX does."
+   },
+   {
+    "heading": "6. Multi-line PTX + temporary registers",
+    "anchor": "6-multi-line-ptx-temporary-registers",
+    "gist": "PTX allows declaring ``.reg``/``.pred``/labels inside ``{ ..."
+   },
+   {
+    "heading": "7. Templates + factory functions",
+    "anchor": "7-templates-factory-functions",
+    "gist": "inline asm templates have many variants (layout=row/col, shape=m16n8k16/m16n8k32 …)."
+   },
+   {
+    "heading": "8. Prefer NVVM dialect, then inline asm",
+    "anchor": "8-prefer-nvvm-dialect-then-inline-asm",
+    "gist": "Many instructions already have ops in ``cutlass._mlir.dialects.nvvm`` and should be preferred to avoid maintaining PTX strings:"
+   },
+   {
+    "heading": "9. How to Choose `has_side_effects`",
+    "anchor": "9-how-to-choose-has-side-effects",
+    "gist": "table columns: Scenario, `has_side_effects`"
+   },
+   {
+    "heading": "10. Common Pitfalls",
+    "anchor": "10-common-pitfalls",
+    "gist": "1."
+   },
+   {
+    "heading": "11. Index: Which file demonstrates which pattern",
+    "anchor": "11-index-which-file-demonstrates-which-pattern",
+    "gist": "table columns: File, Primary Pattern"
+   },
+   {
+    "heading": "12. Relationship with SM120 NVFP4 Inline PTX",
+    "anchor": "12-relationship-with-sm120-nvfp4-inline-ptx",
+    "gist": "`` uses the same `llvm.inline_asm` approach described in this article to issue `mma.…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfrom cutlass._mlir.dialects import llvm\nfrom cutlass.cutlass_dsl import T, dsl_user_op\nfrom cutlass.base_dsl.typing import Float32, Int32, Uint32\n\n@dsl_user_op\ndef my_op(a, b, *, loc=None, ip=None) -> Float32:\n    return Float32(\n        llvm.inline_asm(\n T.f32, # 1. returnstype (MLIR Type or None)\n [Float32(a).ir_value, # 2. input (MLIR Value column)\n             Float32(b).ir_value()],\n \"add.rn.f32 $0, $1, $2;\", # 3. PTX , $0..$N operand\n \"=f,f,f\", # 4. (LLVM constraint string)\n has_side_effects=False, # 5. none CSE/DCE\n            is_align_stack=False,\n            asm_dialect=llvm.AsmDialect.AD_ATT,\n            loc=loc,\n            ip=ip,\n        )\n    )\n```\n\n```python\nret_type = llvm.StructType.get_literal([T.i32()] * 4)\nout_struct = llvm.inline_asm(\n    ret_type,\n    [smem_ptr.llvm_ptr],\n    \"ldmatrix.sync.aligned.m8n8.x4.shared.b16 {$0,$1,$2,$3}, [$4];\",\n    \"=r,=r,=r,=r,l\",\n    has_side_effects=True,\n    ...\n)\nfor i in range(4):\n    out_tensor[i] = cute.Int32(\n        llvm.extractvalue(T.i32(), out_struct, [i], loc=loc, ip=ip)\n    )\n```\n\n```python\nnvvm.cp_async_shared_global(dst=dst.llvm_ptr, src=src.llvm_ptr, ...)\nllvm.inline_asm(..., [ptr.llvm_ptr, val_ir], \"atom.add.f32 ...\", ...)\n```\n\n```python\na_base = cute.recast_ptr(a_ptr + a_offset, dtype=cute.Int32)\na_tensor = cute.make_tensor(a_base, (n_a,))\na_vals = [cute.Int32(a_tensor[i]).ir_value(loc=loc, ip=ip) for i in range(n_a)]\n```\n\n````python\nval_ir  = cutlass.Float16(value).ir_value(loc=loc, ip=ip)\nval_i16 = llvm.bitcast(T.i16(), val_ir, loc=loc, ip=ip)\n\nres_i16 = llvm.inline_asm(\n    T.i16(),\n    [ptr.llvm_ptr, val_i16],\n    \"atom.add.noftz.f16 $0, [$1], $2;\",\n    \"=h,l,h\",\n    has_side_effects=True,\n    ...\n)\nresult = llvm.bitcast(T.f16(), res_i16, loc=loc, ip=ip)\nreturn cutlass.Float16(result)\n```\n\n````python\nllvm.inline_asm(\n    T.f32(),\n    [ptr.llvm_ptr, val_ir],\n    \"\"\"\n    {\n        .reg .pred p;\n        .reg .f32 expected, new_val;\n        .reg .b32 expected_bits, new_bits, result_bits;\n        ld.f32 expected, [$1];\n    retry:\n        max.f32 new_val, expected, $2;\n        mov.b32 expected_bits, expected;\n        mov.b32 new_bits, new_val;\n        atom.cas.b32 result_bits, [$1], expected_bits, new_bits;\n        setp.ne.b32 p, result_bits, expected_bits;\n        mov.b32 expected, result_bits;\n        @p bra retry;\n        mov.f32 $0, expected;\n    }\n    \"\"\",\n    \"=f,l,f\",\n    ...\n)\n```\n\n````python\ndef _make_ptx_mma(ptx_shape, ptx_dtypes, n_a, n_b, n_c, flavor):\n    constraints = \",\".join(\n        [f\"={c_con}\"] * n_c +\n        [ab_con] * (n_a + n_b) +\n        [c_con] * n_c\n    )\n    ptx_template = (\n        f\"mma.sync.aligned.{ptx_shape}.{{a_layout}}.{{b_layout}}.{ptx_dtypes}\"\n        f\" {{{{{d_regs}}}}}, {{{{{a_regs}}}}}, {{{{{b_regs}}}}}, {{{{{c_regs}}}}};\"\n    )\n\n    @dsl_user_op\n    def mma_op(... a_layout=\"row\", b_layout=\"col\", ...):\n        ptx_asm = ptx_template.format(a_layout=a_layout, b_layout=b_layout)\n        result = llvm.inline_asm(res_type, a_vals + b_vals + c_vals,\n                                 ptx_asm, constraints, ...)\n        ...\n\n    return mma_op\n\nptx_mma_m16n8k16_f16_f16_f32 = _make_ptx_mma(\"m16n8k16\", \"f32.f16.f16.f32\", 4, 2, 4, \"f32\")\n```\n\n````python\nnvvm.cp_async_shared_global(...)\nnvvm.cp_async_bulk_tensor_shared_cluster_global(...)  # TMA load\nnvvm.cp_async_bulk_tensor_global_shared_cta(...)      # TMA store\nnvvm.ldmatrix(ret_type, smem_ptr.llvm_ptr, num=4, layout=nvvm.MMALayout.row, ...)\nnvvm.stmatrix(smem_ptr.llvm_ptr, ir_values, layout=...)\nnvvm.atomicrmw(T.f32(), AtomicOpKind.FADD, ptr.llvm_ptr, val, ...)\nnvvm.fmin / nvvm.fmax / nvvm.prefetch_tensormap / nvvm.cp_async_bulk_commit_group\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutedsl-inline-ptx-patterns.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

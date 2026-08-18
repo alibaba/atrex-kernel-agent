@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.nvfp4-two-level-scaling",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#nvfp4-two-level-scaling|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "nvfp4-two-level-scaling",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'NVFP4 Two-Level Scaling' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): NVFP4 Two-Level Scaling",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- NVFP4 Two-Level Scaling"
+  },
+  "technique": "NVFP4 Two-Level Scaling",
+  "what": "The NVFP4 format used in the GPU Mode hackathon has its own scaling scheme:",
+  "when": "The NVFP4 format used in the GPU Mode hackathon has its own scaling scheme:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// NVFP4 dequantization with two-level scaling\n// Level 1: per-block FP8 E4M3 scale (every 16 FP4 elements)\n// Level 2: per-tensor FP32 global scale\n\n__device__ float dequant_nvfp4(\n    uint8_t fp4_packed,    // Two FP4 values packed in one byte\n    fp8_e4m3 block_scale,  // Per-block scale (every 16 elements)\n    float global_scale)    // Per-tensor global scale\n{\n    // Extract one FP4 value (E2M1 format)\n    // Representable: 0, 0.5, 1, 1.5, 2, 3, 4, 6\n    float fp4_val = decode_e2m1(fp4_packed & 0x0F);\n\n    // Two-level dequantization\n    float result = global_scale * float(block_scale) * fp4_val;\n    return result;\n}\n\n// Block scale layout for NVFP4:\n// For matrix A of shape [M, K]:\n//   scale_A shape: [M, K/16] -- one FP8 E4M3 per 16 FP4 elements\n//   Finer granularity than MXFP4 (block size 32) or DeepGEMM (block size 128)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

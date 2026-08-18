@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.scratch-elimination-vgpr-spill.vgpr-limits",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|scratch-elimination-vgpr-spill#vgpr-limits|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "register-pressure"
+   ]
+  },
+  "technique_tags": [
+   "vgpr-limits"
+  ],
+  "triggers": [
+   "the 'VGPR Limits' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): VGPR Limits",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Eliminating Scratch Operations (Register Spills) -- VGPR Limits"
+  },
+  "technique": "VGPR Limits",
+  "what": "| Architecture | Max VGPRs per Wave | Total VGPRs per CU | Notes | |------|-------------------|-------------------|----| | CDNA3 (gfx942) | 512 | 512 × max_waves | architectural limit | | CDNA4 (gfx950) | 512 | 512 × max_waves | architectural limit |",
+  "when": "| Architecture | Max VGPRs per Wave | Total VGPRs per CU | Notes | |------|-------------------|-------------------|----| | CDNA3 (gfx942) | 512 | 512 × max_waves | architectural limit | | CDNA4 (gfx950) | 512 | 512 × max_waves | architectu…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/scratch-elimination-vgpr-spill.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

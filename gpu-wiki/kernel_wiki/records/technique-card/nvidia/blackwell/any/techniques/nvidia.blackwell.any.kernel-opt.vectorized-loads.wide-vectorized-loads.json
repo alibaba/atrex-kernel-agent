@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.vectorized-loads.wide-vectorized-loads",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|vectorized-loads#wide-vectorized-loads|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "wide-vectorized-loads"
+  ],
+  "triggers": [
+   "the 'Wide Vectorized Loads' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Wide Vectorized Loads",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "nvcc compilation with register budgeting -- Wide Vectorized Loads"
+  },
+  "technique": "Wide Vectorized Loads",
+  "what": "Standard 32-bit loads waste memory bus bandwidth. Wider loads amortize the instruction overhead and saturate the 8 TB/s HBM bandwidth of B200:",
+  "when": "Standard 32-bit loads waste memory bus bandwidth.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Vectorized load widths comparison for FP4 GEMV\n// Each thread loads more data per instruction\n\n// 32-bit load: 4 bytes per thread per instruction\nfloat val;\nasm volatile(\"ld.global.b32 %0, [%1];\" : \"=f\"(val) : \"l\"(ptr));\n\n// 64-bit load: 8 bytes per thread per instruction\nuint2 val64;\nasm volatile(\"ld.global.v2.u32 {%0,%1}, [%2];\"\n    : \"=r\"(val64.x), \"=r\"(val64.y) : \"l\"(ptr));\n\n// 128-bit load: 16 bytes per thread per instruction (preferred)\nuint4 val128;\nasm volatile(\"ld.global.v4.u32 {%0,%1,%2,%3}, [%4];\"\n    : \"=r\"(val128.x), \"=r\"(val128.y), \"=r\"(val128.z), \"=r\"(val128.w)\n    : \"l\"(ptr));\n\n// 256-bit load: 32 bytes per thread per instruction\n// Requires v4.u64 (4 x 64-bit)\nuint64_t v256[4];\nasm volatile(\"ld.global.v4.u64 {%0,%1,%2,%3}, [%4];\"\n    : \"=l\"(v256[0]), \"=l\"(v256[1]), \"=l\"(v256[2]), \"=l\"(v256[3])\n    : \"l\"(ptr));\n```\n\n```cuda\n// NVFP4 GEMV: each thread loads 64 FP4 values via 256-bit load\n// Then unpacks using PTX byte manipulation instead of bitwise ops\n__device__ void load_and_unpack_nvfp4_256bit(\n    const uint8_t* fp4_data,  // Packed FP4 data (2 values per byte)\n    float* unpacked,          // Output: 64 FP32 values\n    int offset)\n{\n    // 256-bit load: 32 bytes = 64 FP4 values\n    uint64_t raw[4];\n    const uint64_t* ptr = reinterpret_cast<const uint64_t*>(fp4_data + offset);\n    asm volatile(\n        \"ld.global.v4.u64 {%0,%1,%2,%3}, [%4];\"\n        : \"=l\"(raw[0]), \"=l\"(raw[1]), \"=l\"(raw[2]), \"=l\"(raw[3])\n        : \"l\"(ptr)\n    );\n\n    // Unpack using PTX mov.b32 byte extraction\n    // This avoids the bitwise shift-and-mask overhead\n    for (int i = 0; i < 4; i++) {\n        uint32_t lo = (uint32_t)(raw[i]);\n        uint32_t hi = (uint32_t)(raw[i] >> 32);\n\n        // PTX byte unpack: extract individual bytes from 32-bit word\n        uint32_t b0, b1, b2, b3;\n        asm volatile(\"mov.b32 {%0,%1,%2,%3}, %4;\"\n            : \"=r\"(b0), \"=r\"(b1), \"=r\"(b2), \"=r\"(b3) : \"r\"(lo));\n\n        // Each byte contains 2 FP4 values -- decode low word (8 values)\n        for (int b = 0; b < 4; b++) {\n            uint32_t byte_val = (b == 0) ? b0 : (b == 1) ? b1 : (b == 2) ? b2 : b3;\n            unpacked[i * 16 + b * 2]     = decode_fp4(byte_val & 0xF);\n            unpacked[i * 16 + b * 2 + 1] = decode_fp4((byte_val >> 4) & 0xF);\n        }\n\n        // Unpack high word (next 8 values from same 64-bit element)\n        uint32_t hb0, hb1, hb2, hb3;\n        asm volatile(\"mov.b32 {%0,%1,%2,%3}, %4;\"\n            : \"=r\"(hb0), \"=r\"(hb1), \"=r\"(hb2), \"=r\"(hb3) : \"r\"(hi));\n        for (int b = 0; b < 4; b++) {\n            uint32_t byte_val = (b == 0) ? hb0 : (b == 1) ? hb1 : (b == 2) ? hb2 : hb3;\n            unpacked[i * 16 + 8 + b * 2]     = decode_fp4(byte_val & 0xF);\n            unpacked[i * 16 + 8 + b * 2 + 1] = decode_fp4((byte_val >> 4) & 0xF);\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/vectorized-loads.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

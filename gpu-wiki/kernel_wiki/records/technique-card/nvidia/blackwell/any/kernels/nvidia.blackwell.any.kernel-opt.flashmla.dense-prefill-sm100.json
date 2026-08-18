@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.flashmla.dense-prefill-sm100",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|mla|flashmla#dense-prefill-sm100|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "mla",
+   "operators": [
+    "mla"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "dense-prefill-sm100",
+   "mla"
+  ],
+  "triggers": [
+   "the 'Dense Prefill (SM100)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Dense Prefill (SM100)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FlashMLA -- Multi-head Latent Attention -- Dense Prefill (SM100)"
+  },
+  "technique": "Dense Prefill (SM100)",
+  "what": "The SM100 prefill kernel leverages tcgen05.mma and TMEM for the compute-heavy forward and backward passes, achieving 1460 TFLOPS forward and 1000 TFLOPS backward on B200.",
+  "when": "The SM100 prefill kernel leverages tcgen05.mma and TMEM for the compute-heavy forward and backward passes, achieving 1460 TFLOPS forward and 1000 TFLOPS backward on B200.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// SM100 dense prefill: tcgen05.mma with TMEM accumulation\n// Uses warp specialization: TMA warps + MMA warps + softmax warps\n\n// Forward pass structure:\n// 1. TMA loads Q, K, V tiles into SMEM\n// 2. tcgen05.mma computes S = Q @ K^T into TMEM\n// 3. Softmax warpgroup applies online softmax on TMEM data\n// 4. tcgen05.mma computes O = softmax(S) @ V into TMEM\n// 5. TMEM -> SMEM -> Global memory for output\n\n// Key: TMEM holds both S matrix and O accumulator\n// No register spill for large tile sizes\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/flashmla.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

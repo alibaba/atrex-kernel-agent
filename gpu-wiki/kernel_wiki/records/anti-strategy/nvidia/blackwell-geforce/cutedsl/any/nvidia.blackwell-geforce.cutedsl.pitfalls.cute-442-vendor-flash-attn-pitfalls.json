@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.cute-442-vendor-flash-attn-pitfalls",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|flash-attention|cute-442-vendor-flash-attn-pitfalls|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the 'Vendoring `flash_attn.cute` on cutlass <4.5: API private-name rename trap' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Vendoring `flash_attn.cute` on cutlass <4.5: API private-name rename trap",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "Vendoring `flash_attn.cute` on cutlass <4.5: API private-name rename trap"
+  },
+  "attempted": "`flash_attn.cute` (Dao-AILab) targets cutlass-dsl 4.5+. If your cluster has cutlass 4.4.2 installed (typical as of 2026-04), vendoring `flash_attn.cute` into the project working dir hits a chain of **progressively-deeper `ImportError`s**, each requiring a custom shim. Patches stack faster than the gaps close — there is no end-state visible from the first patch.",
+  "verdict": "api-limitation",
+  "lesson": "1. **Before vendoring any cute-DSL kernel from upstream, check the upstream's `setup.py` / `pyproject.toml` for the required cutlass version.** If cluster's `nvidia_cutlass_dsl.__version__ < required`, vendoring will hit unbounded API gaps. This check takes 1 minute and saves half a day.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "cutlass-dsl evolved its public API between 4.4 and 4.5: - **Private-name convention introduced**: many public classes got `_`-prefixed versions for upstream `flash_attn.cute` to hold (presumably to allow API breakage between minor versions without downstream churn) - **`cutlass.utils` namespace**: 4.5 added re-exports of pipeline / arch / helper symbols under `cutlass.utils.*`. 4.4.2 has only the original module locations. - **New submodules**: `cutlass.utils.pipeline`, `cutlass.utils.ampere_helpers`, `cutlass.utils.smem_capacity` all introduced in 4.5."
+  },
+  "observed": "Vendor `/path/to/flash-attention/flash_attn/cute/*` into `working_dir/flash_attn/cute/`, then attempt remote `python -c \"from flash_attn.cute.flash_fwd import FlashAttentionForwardSm80\"` on a cluster with cutlass 4.4.2:",
+  "root_cause": "cutlass-dsl evolved its public API between 4.4 and 4.5: - **Private-name convention introduced**: many public classes got `_`-prefixed versions for upstream `flash_attn.cute` to hold (presumably to allow API breakage between minor versions without downstream churn) - **`cutlass.utils` namespace**: 4.5 added re-exports of pipeline / arch / helper symbols under `cutlass.utils.*`. 4.4.2 has only the original module locations. - **New submodules**: `cutlass.utils.pipeline`, `cutlass.utils.ampere_helpers`, `cutlass.utils.smem_capacity` all introduced in 4.5.",
+  "implementation": {
+   "snippet": "```\nP1:  ModuleNotFoundError: No module named 'cutlass.utils.ampere_helpers'\n        → write 26-line shim with SMEM_CAPACITY dict + arch enum\n\nP2:  AttributeError: module 'cutlass.utils' has no attribute 'get_smem_capacity_in_bytes'\n        → write 7-arch lookup function shim\n\nP3:  ImportError: cannot import name 'PipelineUserType' from 'cutlass.utils'\n        → write re-export shim mapping 12 names from cutlass.pipeline → cutlass.utils\n        → also register cutlass.utils.pipeline as a submodule (not present in 4.4.2)\n\nP4:  ImportError: cannot import name '_PipelineOp' from 'cutlass.utils.pipeline'\n        ↑ note the underscore (private name)\n        cutlass 4.4.2 has only public 'PipelineOp', no private '_PipelineOp'\n        Estimated 5-10 more similar private-name renames ahead.\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/cute-442-vendor-flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

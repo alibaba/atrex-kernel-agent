@@ -1,0 +1,137 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.qwen3.5-gdn-principle-code-analysis",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|gdn|qwen3.5-gdn-principle-code-analysis|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Qwen3.5 GDN (Gated Delta Networks): Principle and Code Analysis",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Qwen3.5 GDN (Gated Delta Networks): Principle and Code Analysis"
+  },
+  "title": "Qwen3.5 GDN (Gated Delta Networks): Principle and Code Analysis",
+  "summary": "Comprehensive analysis of Gated Delta Networks from mathematical foundations through chunk-wise parallel algorithms to production kernel implementation, with code-level walkthrough of the flash-linear-attention implementation.",
+  "sections": [
+   {
+    "heading": "1. Overview: From Standard Attention to Linear Attention",
+    "anchor": "1-overview-from-standard-attention-to-linear-attention",
+    "gist": "Standard Attention has computational complexity O(L^2 d) and IO complexity O(L^2 + Ld)."
+   },
+   {
+    "heading": "2. Prerequisites",
+    "anchor": "2-prerequisites",
+    "gist": "The recurrent form of linear attention:"
+   },
+   {
+    "heading": "3. Gated Delta Rule",
+    "anchor": "3-gated-delta-rule",
+    "gist": "S_t = S_{t-1} (α_t (I - β_t k_t k_t^T)) + β_t v_t k_t^T"
+   },
+   {
+    "heading": "4. Model Integration: Qwen3.5 GatedDeltaNet",
+    "anchor": "4-model-integration-qwen3-5-gateddeltanet",
+    "gist": "Qwen3.5 uses a hybrid architecture with GDN layers (linear complexity for long sequences) and Gated Attention layers (precise global attention to compensate linear attention's retrieval limitations)."
+   },
+   {
+    "heading": "5. Chunk-Wise Algorithm Code Analysis",
+    "anchor": "5-chunk-wise-algorithm-code-analysis",
+    "gist": "Six stages, each corresponding to a Triton kernel:"
+   },
+   {
+    "heading": "6. Recurrent Algorithm (Decode)",
+    "anchor": "6-recurrent-algorithm-decode",
+    "gist": "For autoregressive inference, the recurrent form processes one token at a time:"
+   },
+   {
+    "heading": "7. Summary",
+    "anchor": "7-summary",
+    "gist": "- GDN combines gating decay (global forgetting) with delta rule (targeted replacement) in a unified recurrence - The chunk-wise algorithm enables hardware-efficient parallel training with O(Ld^2 + LCd) complexity - Production implementatio…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nclass Qwen3_5MoeGatedDeltaNet(nn.Module):\n    def __init__(self, config, layer_idx):\n        self.num_v_heads = config.linear_num_value_heads\n        self.num_k_heads = config.linear_num_key_heads  # GVA: can be < num_v_heads\n        self.head_k_dim = config.linear_key_head_dim\n        self.head_v_dim = config.linear_value_head_dim\n\n        self.in_proj_qkv = nn.Linear(hidden_size, key_dim * 2 + value_dim, bias=False)\n        self.in_proj_z = nn.Linear(hidden_size, value_dim, bias=False)  # output gate\n        self.in_proj_b = nn.Linear(hidden_size, num_v_heads, bias=False)  # beta\n        self.in_proj_a = nn.Linear(hidden_size, num_v_heads, bias=False)  # alpha\n\n        # g = -exp(A_log) * softplus(in_proj_a(x) + dt_bias)\n        # alpha = exp(g) in (0, 1)\n        A = torch.empty(num_v_heads).uniform_(0, 16)\n        self.A_log = nn.Parameter(torch.log(A))\n        self.dt_bias = nn.Parameter(torch.ones(num_v_heads))\n\n        # Depthwise causal conv1d on QKV\n        self.conv1d = nn.Conv1d(\n            in_channels=key_dim * 2 + value_dim,\n            out_channels=key_dim * 2 + value_dim,\n            kernel_size=conv_kernel_size,\n            groups=key_dim * 2 + value_dim, ...)\n```\n\n```python\ndef chunk_gated_delta_rule_fwd(q, k, v, g, beta, scale, initial_state, ...):\n    # (a) Chunk-local cumulative gate values\n    g = chunk_local_cumsum(g, chunk_size=64)\n    # (b) Scaled dot product: A = strictLower(diag(beta) * (Gamma * K @ K^T))\n    A = chunk_scaled_dot_kkt_fwd(k, g, beta)\n    # (c) Solve lower-triangular system: (I + A)^{-1}\n    A = solve_tril(A)\n    # (d) Compute W and U (extended WY representation)\n    w, u = recompute_w_u_fwd(k, v, beta, A, g)\n    # (e) Recurrent hidden state h and v_new\n    h, v_new, final_state = chunk_gated_delta_rule_fwd_h(k, w, u, g, initial_state)\n    # (f) Compute final output\n    o = chunk_fwd_o(q, k, v_new, h, g, scale)\n    return g, o, A, final_state, initial_state\n```\n\n```python\nS = alpha * S  # global decay\nS = S - alpha * beta * outer(S @ k, k)  # erase old value\nS = S + beta * outer(v, k)  # write new value\no = S @ q  # read output\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/qwen3.5-gdn-principle-code-analysis.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

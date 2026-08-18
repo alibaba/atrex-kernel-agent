@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.4-sched-mfma-4-regresses-the-interleaved-loadv-pv-loop-but-helps-the-pure-mfma-variant",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#4-sched-mfma-4-regresses-the-interleaved-loadv-pv-loop-but-helps-the-pure-mfma-variant|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '4. `sched_mfma(4)` regresses the interleaved-loadV PV loop but helps the pure-MFMA variant' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 4. `sched_mfma(4)` regresses the interleaved-loadV PV loop but helps the pure-MFMA variant",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 4. `sched_mfma(4)` regresses the interleaved-loadV PV loop but helps the pure-MFMA variant"
+  },
+  "attempted": "`rocdl.sched_mfma(N)` is documented as a hint to interleave ds_read with MFMA. Adding it to the PV inner loop \"should\" help.",
+  "verdict": "performance-ceiling",
+  "lesson": "scheduling hints assume a specific loop shape. Verify the shape before adding them. SageAttention's V27 sched_mfma(4) win was specifically on its pre-loaded-V structure.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "in the \"load + MFMA interleaved\" loop, the hint conflicts with the explicit ds_reads inside the loop body, forcing the scheduler into a suboptimal arrangement. In the \"all-V-pre-loaded + pure MFMA\" loop, the hint is decoration — the body is already what `sched_mfma(N)` aims for."
+  },
+  "root_cause": "in the \"load + MFMA interleaved\" loop, the hint conflicts with the explicit ds_reads inside the loop body, forcing the scheduler into a suboptimal arrangement. In the \"all-V-pre-loaded + pure MFMA\" loop, the hint is decoration — the body is already what `sched_mfma(N)` aims for."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

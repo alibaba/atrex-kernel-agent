@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.23-pv-pipeline-interleaved-v-reads-within-mfma-loop-increases-vgprs-not-decreases",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#23-pv-pipeline-interleaved-v-reads-within-mfma-loop-increases-vgprs-not-decreases|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '23. PV pipeline (interleaved V reads within MFMA loop) increases VGPRs, not decreases' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 23. PV pipeline (interleaved V reads within MFMA loop) increases VGPRs, not decreases",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 23. PV pipeline (interleaved V reads within MFMA loop) increases VGPRs, not decreases"
+  },
+  "attempted": "The pre-load-all-V approach (recipe item 5) keeps all V vectors in SSA before the MFMA loop. This uses ~32 VGPRs for the V data. A \"PV pipeline\" with depth-N double buffering should reduce this to N buffer slots (e.g., depth-2 = 4 VGPRs for 2 lo + 2 hi), freeing ~28 VGPRs. \"Pipeline reduces register pressure — basic CS.\"",
+  "verdict": "api-limitation",
+  "lesson": "Software pipelining reduces register pressure only when the pipeline REPLACES a blocking wait. If the original code already has good ILP (pre-loaded V + pure MFMA loop), adding a pipeline just adds bookkeeping registers. Verify VGPR count before and after — don't assume \"pipeline = fewer registers.\"",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Interleaving V reads inside the MFMA loop creates MORE live values, not fewer. Each in-flight `ds_read` result must stay live until its consumer MFMA executes, but the MFMA it feeds is N steps away (where N = pipeline depth). Meanwhile, the current MFMA's V operands are ALSO live. The net effect is `depth × 2` extra live vectors (lo + hi per slot) on top of the current iteration's operands. The compiler cannot collapse the pipeline stages because the MFMA latency forces the prefetched data to stay live across multiple loop iterations."
+  },
+  "observed": "VGPRs increased from 214 to 220 (6 more, not 28 fewer). Performance regressed −1.3%. Tested at depth 1, 2, and 4 — all worse.",
+  "root_cause": "Interleaving V reads inside the MFMA loop creates MORE live values, not fewer. Each in-flight `ds_read` result must stay live until its consumer MFMA executes, but the MFMA it feeds is N steps away (where N = pipeline depth). Meanwhile, the current MFMA's V operands are ALSO live. The net effect is `depth × 2` extra live vectors (lo + hi per slot) on top of the current iteration's operands. The compiler cannot collapse the pipeline stages because the MFMA latency forces the prefetched data to stay live across multiple loop iterations."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

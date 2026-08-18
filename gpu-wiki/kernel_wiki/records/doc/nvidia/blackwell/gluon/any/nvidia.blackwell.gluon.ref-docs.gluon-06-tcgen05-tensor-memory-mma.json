@@ -1,0 +1,135 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.gluon.ref-docs.gluon-06-tcgen05-tensor-memory-mma",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|gluon|ref-docs|gluon-06-tcgen05-tensor-memory-mma|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Gluon Tutorial 06: Tensor Memory and tcgen05_mma",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Gluon Tutorial 06: Tensor Memory and tcgen05_mma"
+  },
+  "title": "Gluon Tutorial 06: Tensor Memory and tcgen05_mma",
+  "summary": "This tutorial covers Blackwell's Tensor Memory (TMEM) — a dedicated on-chip memory space for asynchronous MMA instructions — and demonstrates how to use tcgen05_mma to build tiled matrix multiplication kernels with pipeline optimization.",
+  "sections": [
+   {
+    "heading": "1. Tensor Memory Introduction",
+    "anchor": "1-tensor-memory-introduction",
+    "gist": "Tensor Memory is a 2D memory space with 128 rows × 512 columns of 32-bit cells per CTA in the Blackwell architecture."
+   },
+   {
+    "heading": "2. TMEM Usage Example",
+    "anchor": "2-tmem-usage-example",
+    "gist": "The following kernel demonstrates reading and writing 2D data through Tensor Memory: `input: global memory → registers → Tensor Memory → output: registers → global memory`"
+   },
+   {
+    "heading": "3. tcgen05_mma: Single-Tile Matrix Multiply",
+    "anchor": "3-tcgen05-mma-single-tile-matrix-multiply",
+    "gist": "The `tcgen05_mma` API computes D = A @ B + C on a single tensor block."
+   },
+   {
+    "heading": "4. Blocked Matrix Multiplication with tcgen05_mma",
+    "anchor": "4-blocked-matrix-multiplication-with-tcgen05-mma",
+    "gist": "Each program computes one output tile: C = A @ B."
+   },
+   {
+    "heading": "5. Implicit Pipeline Property of tcgen05_mma",
+    "anchor": "5-implicit-pipeline-property-of-tcgen05-mma",
+    "gist": "Since `tcgen05_mma` is asynchronous, hardware guarantees in-order execution without explicit synchronization in these cases:"
+   },
+   {
+    "heading": "6. Pipelined Matrix Multiplication",
+    "anchor": "6-pipelined-matrix-multiplication",
+    "gist": "The pipelined kernel processes two vertically adjacent output tiles (Upper and Lower) simultaneously, using double-buffered operands to overlap TMA loads with MMA computation."
+   },
+   {
+    "heading": "7. Future Directions",
+    "anchor": "7-future-directions",
+    "gist": "Warp specialization enables more effective fine-grained pipeline optimization by dedicating different warps to load, compute, and store tasks, further reducing idle time."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nTensorMemoryLayout(\n    block=(blockM, blockN),\n    unpacked=True,\n)\n```\n\n```python\n@gluon.jit\ndef tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_warps: gl.constexpr):\n    global_memory_layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])\n    offs_m = gl.arange(0, M, gl.SliceLayout(1, global_memory_layout))\n    offs_n = gl.arange(0, N, gl.SliceLayout(0, global_memory_layout))\n    offs = offs_m[:, None] * N + offs_n[None, :]\n\n    # global memory -> registers\n    input = gl.load(in_ptr + offs)\n\n    # Define Tensor memory layout\n    tmem_layout: gl.constexpr = TensorMemoryLayout(\n        block=(64, 64),\n        col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,\n    )\n\n    # Allocate Tensor memory\n    tmem = allocate_tensor_memory(\n        element_ty=in_ptr.dtype.element_ty, shape=[M, N], layout=tmem_layout,\n    )\n\n    # Get register layout required for TMEM access\n    tmem_reg_layout: gl.constexpr = get_tmem_reg_layout(\n        in_ptr.dtype.element_ty, (M, N), tmem_layout, num_warps=num_warps,\n    )\n\n    # Convert register layout for TMEM access\n    input = gl.convert_layout(input, tmem_reg_layout)\n\n    # registers -> Tensor memory\n    tmem.store(input)\n\n    # Tensor memory -> registers\n    output = tmem.load(tmem_reg_layout)\n\n    # Convert to global memory layout\n    output = gl.convert_layout(output, global_memory_layout)\n\n    # registers -> global memory\n    gl.store(out_ptr + offs, output)\n```\n\n```python\n@gluon.jit\ndef small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,\n                     LHS_IN_TMEM: gl.constexpr, USE_COMMIT: gl.constexpr, num_warps: gl.constexpr):\n    # Load A, B, C tiles via TMA\n    bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())\n    mbarrier.init(bar, count=1)\n\n    a_smem = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)\n    b_smem = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)\n    c_smem = gl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)\n\n    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes + c_desc.block_type.nbytes)\n    tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)\n    tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)\n    tma.async_copy_global_to_shared(c_desc, [0, 0], bar, c_smem)\n    mbarrier.wait(bar, phase=0)\n\n    # Reinitialize barrier (reusing between TMA and tcgen05_mma may cause UB)\n    mbarrier.invalidate(bar)\n    mbarrier.init(bar, count=1)\n\n    # Set up accumulator in TMEM\n    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, col_stride=32 // d_desc.dtype.primitive_bitwidth)\n    acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)\n    acc_reg_layout: gl.constexpr = get_tmem_reg_layout(d_desc.dtype, (M, N), acc_tmem_layout, num_warps)\n\n    # Initialize accumulator from C (via tcgen05_copy or register transfer)\n    if M == 128:\n        tcgen05_copy(c_smem, acc_tmem)\n        tcgen05_commit(bar)\n        mbarrier.wait(bar, phase=0)\n        mbarrier.invalidate(bar)\n        mbarrier.init(bar, count=1)\n    else:\n        acc = c_smem.load(acc_reg_layout)\n        acc_tmem.store(acc)\n\n    # Optionally place LHS in TMEM\n    if LHS_IN_TMEM:\n        lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)\n        lhs = a_smem.load(lhs_reg_layout)\n        lhs_tmem.store(lhs)\n        a = lhs_tmem\n    else:\n        a = a_smem\n\n    # Issue async MMA and wait\n    if USE_COMMIT:\n        tcgen05_mma(a, b_smem, acc_tmem)\n        tcgen05_commit(bar)\n    else:\n        tcgen05_mma(a, b_smem, acc_tmem, mbarriers=[bar], mbarrier_preds=[True])\n    mbarrier.wait(bar, phase=0)\n    mbarrier.invalidate(bar)\n\n    # Store result via TMA\n    d_smem = gl.allocate_shared_memory(d_desc.dtype, d_desc.block_type.shape, d_desc.layout)\n    acc = acc_tmem.load(acc_reg_layout)\n    d_smem.store(acc)\n    fence_async_shared()\n    tma.async_copy_shared_to_global(d_desc, [0, 0], d_smem)\n    tma.store_wait(pendings=0)\n```\n\n```python\n@gluon.jit\ndef blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num_warps: gl.constexpr):\n    BLOCK_M: gl.constexpr = c_desc.block_type.shape[0]\n    BLOCK_N: gl.constexpr = c_desc.block_type.shape[1]\n    BLOCK_K: gl.constexpr = a_desc.block_type.shape[1]\n    K = a_desc.shape[1]\n\n    pid_m = gl.program_id(axis=0)\n    pid_n = gl.program_id(axis=1)\n    off_m = pid_m * BLOCK_M\n    off_n = pid_n * BLOCK_N\n\n    a_smem = gl.allocate_shared_memory(dtype, a_desc.block_type.shape, a_desc.layout)\n    b_smem = gl.allocate_shared_memory(dtype, b_desc.block_type.shape, b_desc.layout)\n    tma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())\n    mma_bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())\n\n    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)\n    acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)\n\n    use_acc = False\n    for k in range(0, K, BLOCK_K):\n        mbarrier.expect(tma_bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes)\n        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)\n        tma.async_copy_global_to_shared(b_desc, [k, off_n], tma_bar, b_smem)\n        mbarrier.wait(tma_bar, phase=phase)\n\n        # Transpose B via permuted SMEM view (hardware handles transposition)\n        b = b_smem.permute((1, 0)) if TRANSPOSE_B else b_smem\n\n        tcgen05_mma(a_smem, b, acc_tmem, use_acc=use_acc)\n        tcgen05_commit(mma_bar)\n        mbarrier.wait(mma_bar, phase=phase)\n        use_acc = True\n        phase ^= 1\n\n    # Epilogue: store result\n    acc = acc_tmem.load(acc_reg_layout)\n    c_smem.store(acc.to(dtype))\n    fence_async_shared()\n    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)\n    tma.store_wait(pendings=0)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/gluon/gluon-06-tcgen05-tensor-memory-mma.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

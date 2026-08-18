@@ -1,0 +1,155 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-flash-attention-bf16-nomask-isa-scheduling",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|cdna3-flash-attention-bf16-nomask-isa-scheduling|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Flash Attention Forward (bf16, no-mask ISA scheduling) on MI308X",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Flash Attention Forward (bf16, no-mask ISA scheduling) on MI308X"
+  },
+  "title": "FlyDSL Flash Attention Forward (bf16, no-mask ISA scheduling) on MI308X",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "- Hardware: AMD MI308X, CDNA3 / gfx942."
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "The no-mask path inherits the MI308X FlashAttention structure:"
+   },
+   {
+    "heading": "Kernel resource footprint (final)",
+    "anchor": "kernel-resource-footprint-final",
+    "gist": "Authoritative profile: `profiles/nomask_v6_final_lgkm_sum_default/rocprof/`."
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "The retained no-mask baseline before this round measured:"
+   },
+   {
+    "heading": "Final perf vs baseline",
+    "anchor": "final-perf-vs-baseline",
+    "gist": "table columns: Implementation, P50, TFLOPS, Relative"
+   },
+   {
+    "heading": "Remaining optimization headroom",
+    "anchor": "remaining-optimization-headroom",
+    "gist": "The final schedule removes one avoidable VMEM drain."
+   },
+   {
+    "heading": "What would improve further",
+    "anchor": "what-would-improve-further",
+    "gist": "- A full CK-like core-loop schedule for the FlyDSL no-mask path, not just local wait splitting."
+   },
+   {
+    "heading": "Sustained recipe",
+    "anchor": "sustained-recipe",
+    "gist": "1."
+   },
+   {
+    "heading": "Conflict and difference notes",
+    "anchor": "conflict-and-difference-notes",
+    "gist": "- The existing mask report lists \"FlyDSL no mask\" as `3.88 ms / 54.0 TFLOPS`."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Reference kernel: `flash_attn_func_nomask_mi308x.py` - Related mask journey:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```asm\ns_waitcnt vmcnt(0) lgkmcnt(0)\n```\n\n```text\nFLYDSL_FLASH_ATTN_FUNC_REDUCE_MODE=ds_bpermute_lgkm_sum\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attention-bf16-nomask-isa-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

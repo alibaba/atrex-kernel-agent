@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.roofline-analysis-methodology.5-theoretical-performance-upper-bound-assessment",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|roofline-analysis-methodology#5-theoretical-performance-upper-bound-assessment|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "5-theoretical-performance-upper-bound-assessment"
+  ],
+  "triggers": [
+   "the '5. Theoretical Performance Upper Bound Assessment' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): 5. Theoretical Performance Upper Bound Assessment",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "AMD GPU Roofline Analysis Methodology -- 5. Theoretical Performance Upper Bound Assessment"
+  },
+  "technique": "5. Theoretical Performance Upper Bound Assessment",
+  "what": "After determining the bottleneck type and tile size, **you must assess the theoretical performance upper bound achievable by the current operator under the current configuration**. This upper bound integrates CU utilization, tiling strategy, and bandwidth upper bound, and is the key basis for judging \"how much optimization headroom remains.\"",
+  "when": "After determining the bottleneck type and tile size, **you must assess the theoretical performance upper bound achievable by the current operator under the current configuration**.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\n1. Determine per-tile theoretical minimum time under bottleneck type:\n   - Compute Bound: tile_time_min = Tile_FLOPs / Peak Compute\n   - Memory Bound:  tile_time_min = Tile_Bytes / Bandwidth Upper Bound (measured or theoretical)\n\n2. Calculate CU scheduling rounds:\n   num_waves = ceil(grid_blocks / num_CUs)\n\n3. Theoretical minimum kernel time:\n   theoretical_time = num_waves × tile_time_min\n\n4. Theoretical performance upper bound:\n   theoretical_TFLOPS = (Tile_FLOPs × grid_blocks) / theoretical_time\n```\n\n```\nTile_FLOPs = 2 × 64 × 64 × 4096 = 33.6M\nTile_Bytes = (64×4096 + 64×4096 + 64×64) × 2 = 1.05MB\nTile AI    = 33.6M / 1.05MB = 32 → Memory Bound (< 43.8)\n\ngrid_blocks = 8 × 8 = 64\nnum_waves   = ceil(64 / 80) = 1\n\ntile_time_min = 1.05MB / 3.2 TB/s = 0.328 μs (usebandwidthupper bound)\ntheoretical_time = 1 × 0.328 μs = 0.328 μs\ntheoretical_TFLOPS = 33.6M × 64 / 0.328 μs = 6.55 TFLOPS\n\n→ Theoretical performance upper bound 6.55 TFLOPS (2.8% of peak 232 TFLOPS)\n→ Indicates the operator cannot efficiently utilize hardware under this configuration; optimization space is limited\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/roofline-analysis-methodology.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

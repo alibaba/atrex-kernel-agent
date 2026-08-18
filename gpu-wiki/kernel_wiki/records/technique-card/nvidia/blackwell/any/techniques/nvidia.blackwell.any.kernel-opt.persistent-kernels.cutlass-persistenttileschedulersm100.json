@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.persistent-kernels.cutlass-persistenttileschedulersm100",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|persistent-kernels#cutlass-persistenttileschedulersm100|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [
+   "cutlass-persistenttileschedulersm100"
+  ],
+  "triggers": [
+   "the 'CUTLASS PersistentTileSchedulerSm100' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): CUTLASS PersistentTileSchedulerSm100",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Persistent Kernels with CLC -- CUTLASS PersistentTileSchedulerSm100"
+  },
+  "technique": "CUTLASS PersistentTileSchedulerSm100",
+  "what": "CUTLASS 4.5.0 provides `PersistentTileSchedulerSm100` that wraps the CLC hardware:",
+  "when": "CUTLASS 4.5.0 provides `PersistentTileSchedulerSm100` that wraps the CLC hardware:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// CUTLASS SM100 persistent tile scheduler (simplified)\ntemplate <class TileShape>\nstruct PersistentTileSchedulerSm100 {\n\n    // Initialize the CLC with the problem geometry\n    CUTLASS_DEVICE static void init(\n        dim3 problem_tiles,\n        void* clc_smem_buffer)\n    {\n        if (threadIdx.x == 0) {\n            // Program CLC with total tile count and scheduling policy\n            clc_init(clc_smem_buffer,\n                     problem_tiles.x,  // tiles along M\n                     problem_tiles.y,  // tiles along N\n                     ClcPolicy::SwizzledRaster);\n        }\n        __syncthreads();\n    }\n\n    // Shared storage for CTA-wide CLC result broadcast\n    // __shfl_sync is warp-local and cannot reach warps 1-15.\n    struct SharedClcState {\n        int tile_m, tile_n;\n        int valid;       // 1 = got tile, 0 = no more work\n        int cancelled;\n    };\n\n    // Get next tile assignment from CLC\n    CUTLASS_DEVICE static bool get_next_tile(\n        void* clc_smem_buffer,\n        SharedClcState& shared_clc,\n        int& tile_m,\n        int& tile_n)\n    {\n        if (threadIdx.x == 0) {\n            int m, n;\n            bool v = clc_query_tile(clc_smem_buffer, m, n);\n            shared_clc.tile_m = m;\n            shared_clc.tile_n = n;\n            shared_clc.valid  = v ? 1 : 0;\n        }\n        __syncthreads();  // All warps see the result\n        tile_m = shared_clc.tile_m;\n        tile_n = shared_clc.tile_n;\n        return shared_clc.valid != 0;\n    }\n\n    // Try to cancel the CTA when no more work\n    CUTLASS_DEVICE static bool try_cancel(\n        void* clc_smem_buffer,\n        SharedClcState& shared_clc)\n    {\n        if (threadIdx.x == 0) {\n            shared_clc.cancelled = clc_try_cancel(clc_smem_buffer) ? 1 : 0;\n        }\n        __syncthreads();\n        return shared_clc.cancelled != 0;\n    }\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/persistent-kernels.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

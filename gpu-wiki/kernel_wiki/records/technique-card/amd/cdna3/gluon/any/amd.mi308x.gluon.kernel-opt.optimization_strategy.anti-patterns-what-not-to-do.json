@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization_strategy.anti-patterns-what-not-to-do",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|sort|optimization_strategy#anti-patterns-what-not-to-do|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": "sort",
+   "operators": [
+    "sort"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "mask-index"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "anti-patterns-what-not-to-do",
+   "sort"
+  ],
+  "triggers": [
+   "the 'Anti-Patterns (What NOT to Do)' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Anti-Patterns (What NOT to Do)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Optimization Strategies (Sorted by Priority) -- Anti-Patterns (What NOT to Do)"
+  },
+  "technique": "Anti-Patterns (What NOT to Do)",
+  "what": "- ❌ **Do NOT use `warp_pipeline_stage` on small matrices** — harmful when loop count < 4 - ❌ **Do NOT increase `num_warps` to 8** — ineffective when grid blocks are far fewer than the number of CUs - ❌ **Do NOT use `value=` pattern** — per-iteration allocation adds overhead - ❌ **Best practices for large matrices may be harmful for small matrices** — e.g., warp_pipeline_stage, num_warps=8",
+  "when": "- ❌ **Do NOT use `warp_pipeline_stage` on small matrices** — harmful when loop count < 4 - ❌ **Do NOT increase `num_warps` to 8** — ineffective when grid blocks are far fewer than the number of CUs - ❌ **Do NOT use `value=` pattern** — per…",
+  "caveats": [
+   "❌ **Do NOT use `warp_pipeline_stage` on small matrices** — harmful when loop count < 4",
+   "❌ **Do NOT increase `num_warps` to 8** — ineffective when grid blocks are far fewer than the number of CUs",
+   "❌ **Do NOT use `value=` pattern** — per-iteration allocation adds overhead"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization_strategy.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

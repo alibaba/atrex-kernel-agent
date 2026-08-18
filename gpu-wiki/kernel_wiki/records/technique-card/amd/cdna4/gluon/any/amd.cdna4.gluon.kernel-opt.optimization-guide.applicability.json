@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.kernel-opt.optimization-guide.applicability",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|kernel-opt|optimization-guide#applicability|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "applicability"
+  ],
+  "triggers": [
+   "the 'Applicability' technique is being considered on AMD CDNA4 (gfx950 / MI355X)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD CDNA4 (gfx950 / MI355X): Applicability",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "Gluon Kernel Performance Optimization Guide (AMD CDNA4) -- Applicability"
+  },
+  "technique": "Applicability",
+  "what": "This guide covers: - \"Optimize the performance of this Gluon kernel\" - \"This kernel is too slow, help me analyze it\" - \"Help me improve the compute utilization of this GPU kernel\" - \"Analyze where the bottleneck of this kernel is\" - \"Profile this Gluon operator\"",
+  "when": "This guide covers: - \"Optimize the performance of this Gluon kernel\" - \"This kernel is too slow, help me analyze it\" - \"Help me improve the compute utilization of this GPU kernel\" - \"Analyze where the bottleneck of this kernel is\" - \"Profi…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

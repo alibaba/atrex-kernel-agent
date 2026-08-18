@@ -1,0 +1,772 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alibaba/atrex-kernel-agent/gpu-wiki/schema/hardware/schema.json",
+  "title": "GPU hardware reference record (hw-1.0)",
+  "description": "A hardware FACT, not an optimization experience. Facts are defined by the vendor and the ISA: they are not falsifiable by our benchmarks, carry no success rate, and are never ranked. That is why this store is separate from kernel_wiki and why its retrieval is an exact lookup instead of a ranked search. Measured, device-dependent findings (microbenchmarks, 'which legal choice is faster') belong in the experience wiki, not here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "type",
+    "status",
+    "identity",
+    "facts",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hw-1.0"
+    },
+    "id": {
+      "type": "string",
+      "description": "Deterministic: <vendor>.<arch>.<type>.<slug>, and the record path must match it. Rebuilding the store must not change an id.",
+      "pattern": "^[a-z0-9-]+\\.[a-z0-9-]+\\.(spec-sheet|instruction|arch-feature)\\.[a-z0-9.-]+$"
+    },
+    "type": {
+      "enum": [
+        "spec-sheet",
+        "instruction",
+        "arch-feature"
+      ],
+      "description": "spec-sheet: one silicon product's numbers. instruction: one ISA instruction family. arch-feature: one architectural capability."
+    },
+    "status": {
+      "enum": [
+        "current",
+        "superseded"
+      ],
+      "description": "superseded when a newer vendor publication replaces these numbers; kept so a stale citation can still be resolved."
+    },
+    "identity": {
+      "type": "object",
+      "description": "How this record is addressed. The lookup tool filters on these keys ONLY -- an unknown value must fail loudly, never resolve to a near match.",
+      "additionalProperties": false,
+      "required": [
+        "vendor",
+        "arch"
+      ],
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "examples": [
+            "nvidia"
+          ]
+        },
+        "arch": {
+          "type": "string",
+          "examples": [
+            "blackwell",
+            "blackwell-ultra"
+          ]
+        },
+        "product": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set for spec-sheet. null for instruction/arch-feature, which belong to an architecture and may span products.",
+          "examples": [
+            "b200",
+            "b300"
+          ]
+        },
+        "compute_capability": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "10.0",
+            "10.3"
+          ]
+        },
+        "sm_arch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "sm_100",
+            "sm_103"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "examples": [
+            "inference-optimized"
+          ]
+        },
+        "isa": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "ptx",
+            "sass",
+            null
+          ]
+        },
+        "mnemonic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set for instruction records: the instruction family, e.g. tcgen05.mma. Sub-forms live in facts.syntax.",
+          "examples": [
+            "tcgen05.ld.red",
+            "clusterlaunchcontrol.try_cancel"
+          ]
+        },
+        "feature": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set for arch-feature records: the capability slug, e.g. tensor-memory.",
+          "examples": [
+            "tensor-memory",
+            "cluster-launch-control"
+          ]
+        },
+        "availability": {
+          "type": "object",
+          "description": "Where the instruction or feature actually exists. Required for instruction/arch-feature because ISA availability is version-exclusive: an sm_90a instruction runs on nothing else.",
+          "additionalProperties": false,
+          "properties": {
+            "sm_arch": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "products": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "constraints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Hard preconditions, e.g. '2CTA mode only', 'requires cta_group::2'."
+            }
+          }
+        }
+      }
+    },
+    "facts": {
+      "type": "object",
+      "description": "The agent-facing content. Shape depends on type; see the allOf branches. Numbers only, no advice: 'what the hardware is', never 'what you should do about it'."
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Where every fact came from and how much to trust it. Record-level default; a spec-sheet group may override it per group, because one vendor page routinely mixes published and derived numbers.",
+      "additionalProperties": false,
+      "required": [
+        "evidence_class",
+        "sources"
+      ],
+      "properties": {
+        "evidence_class": {
+          "enum": [
+            "vendor-published",
+            "derived-from-system-total",
+            "architecture-analysis"
+          ],
+          "description": "vendor-published: printed by the vendor for this part. derived-from-system-total: computed from an n-GPU system figure (state the divisor in derivation). architecture-analysis: third-party or inferred -- treat as provisional and prefer a runtime device attribute."
+        },
+        "derivation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Required in spirit whenever evidence_class is derived-from-system-total: say exactly what was divided by what."
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "title",
+              "kind"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "vendor-product-page",
+                  "vendor-doc",
+                  "ptx-isa",
+                  "internal-note",
+                  "third-party-analysis"
+                ]
+              },
+              "ref": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "URL or document section."
+              }
+            }
+          }
+        },
+        "last_verified": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "ISO date the numbers were last checked against the source. Hardware facts go stale by publication, not by use.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "spec-sheet"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity": {
+            "required": [
+              "product",
+              "compute_capability",
+              "sm_arch"
+            ]
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "summary",
+              "peak_compute",
+              "memory",
+              "compute_units"
+            ],
+            "properties": {
+              "summary": {
+                "type": "string",
+                "description": "One line: what this part is for."
+              },
+              "usage_notes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "How to use these numbers correctly, e.g. the utilization formula and which peak to pick as the denominator."
+              },
+              "peak_compute": {
+                "type": "array",
+                "description": "One entry per precision. This is the roofline denominator, so a wrong number is worse than a missing one.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "dtype",
+                    "unit",
+                    "unit_kind",
+                    "dense",
+                    "provenance"
+                  ],
+                  "properties": {
+                    "dtype": {
+                      "type": "string",
+                      "examples": [
+                        "fp4",
+                        "bf16",
+                        "int8",
+                        "fp64"
+                      ]
+                    },
+                    "unit": {
+                      "enum": [
+                        "TFLOPS",
+                        "TOPS"
+                      ]
+                    },
+                    "unit_kind": {
+                      "enum": [
+                        "tensor-core",
+                        "cuda-core"
+                      ]
+                    },
+                    "dense": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "sparse_2to4": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "accumulate": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "examples": [
+                        "fp32"
+                      ]
+                    },
+                    "use_case": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "provenance": {
+                      "$ref": "#/$defs/group_provenance"
+                    },
+                    "derivation": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "memory": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "provenance"
+                ],
+                "properties": {
+                  "capacity_gb": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "bandwidth_tb_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "bus_width_bits": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "l2_cache_mb": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "provenance": {
+                    "$ref": "#/$defs/group_provenance"
+                  },
+                  "provenance_overrides": {
+                    "type": "object",
+                    "description": "Per-field exceptions to the group's evidence class. Needed because one vendor page routinely mixes classes inside a single table -- e.g. capacity and bandwidth are published while L2 size is third-party analysis.",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/group_provenance"
+                    }
+                  }
+                }
+              },
+              "compute_units": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "provenance"
+                ],
+                "properties": {
+                  "sm_count": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "gpcs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "cuda_cores": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "cuda_cores_per_sm": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "tensor_cores": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "tensor_cores_per_sm": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "tensor_core_gen": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "register_file_kb_per_sm": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "shared_memory_kb_per_sm": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "provenance": {
+                    "$ref": "#/$defs/group_provenance"
+                  },
+                  "provenance_overrides": {
+                    "type": "object",
+                    "description": "Per-field exceptions to the group's evidence class. Needed because one vendor page routinely mixes classes inside a single table -- e.g. capacity and bandwidth are published while L2 size is third-party analysis.",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/group_provenance"
+                    }
+                  }
+                }
+              },
+              "interconnect": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "power": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "deltas_vs": {
+                "type": "array",
+                "description": "Explicit cross-part deltas. Present because generational intuition fails: a newer part can be far WEAKER on a given precision, and that surprise must be stated, not inferred.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "product",
+                    "changes"
+                  ],
+                  "properties": {
+                    "product": {
+                      "type": "string"
+                    },
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "field"
+                        ],
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "description": "Dotted path into facts, e.g. peak_compute.int8.dense."
+                          },
+                          "from": {
+                            "type": [
+                              "number",
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "to": {
+                            "type": [
+                              "number",
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "delta_pct": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "unavailable": {
+                "type": "object",
+                "description": "Fields the source does NOT publish, mapped to what to do instead. Never guess a peak or a capacity: a fabricated denominator silently corrupts every utilization number computed from it.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "instruction"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity": {
+            "required": [
+              "isa",
+              "mnemonic",
+              "availability"
+            ]
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "syntax",
+              "semantics"
+            ],
+            "properties": {
+              "syntax": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                },
+                "description": "Verbatim ISA syntax forms, copied from the ISA document -- never paraphrased, because a paraphrased instruction does not assemble."
+              },
+              "modifiers": {
+                "type": "object",
+                "description": "Closed vocabulary per modifier, e.g. redOp: ['.min', '.max']. This is what makes the record usable without opening the manual.",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "operands": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "role"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "space": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "examples": [
+                        "tmem",
+                        "shared",
+                        "register"
+                      ]
+                    }
+                  }
+                }
+              },
+              "semantics": {
+                "type": "string",
+                "description": "What the hardware does, stated without recommendation."
+              },
+              "accelerates": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Which computation it exists to speed up."
+              },
+              "shapes": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Legal MNK / shape combinations where the ISA defines them."
+              },
+              "synchronization": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Completion mechanism: which wait/mbarrier the programmer owns."
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Hard rules, including undefined-behaviour cases."
+              },
+              "verification": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "How to confirm it is actually in the emitted code, e.g. which SASS mnemonic to look for."
+              },
+              "related": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Sibling mnemonics or features, by name -- never by record id, so a reader never needs a second lookup."
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "arch-feature"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "identity": {
+            "required": [
+              "feature",
+              "availability"
+            ]
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "what",
+              "why_it_matters"
+            ],
+            "properties": {
+              "what": {
+                "type": "string",
+                "description": "What the capability is, mechanically."
+              },
+              "why_it_matters": {
+                "type": "string",
+                "description": "Which kernel decision it changes -- still a fact, not a ranked recommendation."
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Hard numbers that define the feature, e.g. tensor memory 256 KB per SM as 128 rows x 512 columns."
+              },
+              "programming_model": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The order of operations the hardware requires."
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "verification": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "related_instructions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Including the boundary to the experience wiki: if a claim is 'this is usually faster', it is measured evidence and does not belong in this store."
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "group_provenance": {
+      "enum": [
+        "vendor-published",
+        "derived-from-system-total",
+        "architecture-analysis"
+      ],
+      "description": "Per-group override of the record-level evidence class."
+    }
+  }
+}

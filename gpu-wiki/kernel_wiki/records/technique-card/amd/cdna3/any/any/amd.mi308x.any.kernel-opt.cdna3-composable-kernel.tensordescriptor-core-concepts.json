@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.any.kernel-opt.cdna3-composable-kernel.tensordescriptor-core-concepts",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|any|kernel-opt|cdna3-composable-kernel#tensordescriptor-core-concepts|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tensordescriptor-core-concepts"
+  ],
+  "triggers": [
+   "the 'TensorDescriptor Core Concepts' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): TensorDescriptor Core Concepts",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Composable Kernel (CK) Programming Model (MI308X) -- TensorDescriptor Core Concepts"
+  },
+  "technique": "TensorDescriptor Core Concepts",
+  "what": "CK uses a transformation tree to manage multidimensional data layout:",
+  "when": "CK uses a transformation tree to manage multidimensional data layout:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Create a base tensor descriptor\nauto desc = make_naive_tensor_descriptor(\n    make_tuple(M, K),    // shape: (256, 128)\n    make_tuple(K, 1)     // strides: row-major\n);\n\n// Apply transformations\nauto transformed = transform_tensor_descriptor(\n    desc,\n    make_tuple(unmerge, passthrough),\n    make_tuple(Sequence<0>{}, Sequence<1>{}),       // lower dim ids\n    make_tuple(Sequence<0, 1>{}, Sequence<2>{})     // upper dim ids\n);\n// Result shape: (4, 64, 128)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/cdna3-composable-kernel.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

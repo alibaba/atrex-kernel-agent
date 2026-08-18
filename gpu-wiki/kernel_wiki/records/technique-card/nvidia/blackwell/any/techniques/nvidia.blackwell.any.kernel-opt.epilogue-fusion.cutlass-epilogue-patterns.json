@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.epilogue-fusion.cutlass-epilogue-patterns",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|epilogue-fusion#cutlass-epilogue-patterns|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "cutlass-epilogue-patterns"
+  ],
+  "triggers": [
+   "the 'CUTLASS Epilogue Patterns' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): CUTLASS Epilogue Patterns",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Epilogue Fusion -- CUTLASS Epilogue Patterns"
+  },
+  "technique": "CUTLASS Epilogue Patterns",
+  "what": "CUTLASS 4.5.0 provides composable epilogue visitors that fuse arbitrary element-wise operations after GEMM:",
+  "when": "CUTLASS 4.5.0 provides composable epilogue visitors that fuse arbitrary element-wise operations after GEMM:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// CUTLASS SM100 epilogue with fused scale + bias + activation\n// Uses the EVT (Epilogue Visitor Tree) pattern\n\nusing EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<\n    cutlass::epilogue::thread::ReLU,   // Activation function\n    float,                              // Compute type\n    float,                              // Scale type\n    cutlass::half_t                     // Output type\n>;\n\n// The epilogue descriptor tells CUTLASS how to partition work\n// across the 14 epilogue warps\nusing CollectiveEpilogue = cutlass::epilogue::collective::Sm100EpilogueTmaWarpSpecialized<\n    cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>,\n    cutlass::gemm::TagToStrideC_t<cutlass::layout::RowMajor>,\n    EpilogueOp,\n    cutlass::gemm::EpilogueDefault  // Default tiling\n>;\n\n// In the kernel, the epilogue is invoked after the mainloop:\n// epilogue(\n//     problem_shape,\n//     collective_mainloop.get_accumulator(),  // TMEM reference\n//     epilogue_params,                         // scale, bias pointers\n//     shared_storage                           // SMEM for TMA stores\n// );\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/epilogue-fusion.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

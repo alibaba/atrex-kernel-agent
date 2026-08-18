@@ -134,37 +134,31 @@ option before `--`, which routes the job through the dev interface.
 
 Search in this order and stop when one actionable direction is supported:
 
-1. `gpu-wiki/docs/` and `gpu-wiki/reference-kernels/`, filtered by real architecture, vendor, DSL,
-   operator, and profiler symptom. Use the architecture-scoped index before any broad grep:
+1. **GPU Wiki through the natural-language front door.** Profile first, then describe the measured
+   problem rather than trying to guess query flags:
 
    ```bash
-   python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
-     --area docs --section kernel-opt --symptom <controlled-symptom>
-   python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
-     --area docs --dsl <dsl> --operator <operator> --section ref-docs --section pitfalls
-   python3 gpu-wiki/scripts/query.py <operator-or-mechanism> --arch <arch> \
-     --vendor <nvidia|amd> --dsl <dsl> --area reference-kernels --kind kernel
+   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
+   python3 gpu-wiki/tools/query_nl.py --file research_request.txt
    ```
 
-   Open the returned pages and follow their local links. `--symptom` accepts a controlled vocabulary:
-   `compute-bound`, `memory-bound`, `low-sm-utilization`, `pipeline-stalls`, `register-pressure`,
-   `tail-effect`, `moe-load-imbalance`. Omit `--area` only when combined docs/reference results are
-   useful. Narrow reference hits with `--source`, `--status`, or `--kind`; test/build/package files
-   require `--include-auxiliary`. Retry uncertain spellings with `--fuzzy` while keeping the same
-   architecture/vendor/DSL filters. Unknown filters fail closed — never drop `--arch` to turn an empty
-   result into a successful-looking one. On NVIDIA SM90/SM100, `gpu-wiki/3rdparty/` and the
-   `KernelWiki` skill are last-resort local sources, used only after the indexed pages fall short.
+   Include the true target product and authoritative runtime architecture exactly as supplied. Ask for
+   the full product specification and relevant architecture/ISA facts so the response contains isolated
+   `hardware_wiki` and `kernel_wiki` records. Also include the operator, framework, shapes, dtypes,
+   profile numbers, what was already tried, exact failures, competing hypotheses, and the fact that would
+   end this line of work. Do not translate the hardware identity or pre-compress the prose into keywords.
 
-   `--arch` takes an index token, which is not always the runtime arch string: `sm_90`, `sm_100`, and
-   `sm_103` are rejected as `unknown-arch`. Pass the underscore-free form (`sm90`, `sm100`, `sm103`,
-   `sm120`, `gfx942`, `gfx950`) or the family name (`hopper`, `blackwell`, `cdna3`, `cdna4`), and run
-   `--list-arch` when a token is uncertain. An `unknown-arch` error is a token problem, never a reason
-   to retry without `--arch`.
+   Read the compact response before acting: records are keyed by stable id, every `payload` is isolated,
+   `store` distinguishes `gpu_wiki` from namespaced `internal_gpu_wiki` records,
+   `match.arch` states its reach, and `notes` reports deterministic normalization, widening, truncation,
+   or store gaps. Pass `--exclude <ids-already-read>` on later queries and use `--max-bytes` for a hard
+   context bound. The structured `query_wiki.py` and `query_hardware.py` tools remain available when the
+   exact address is already known; never drop architecture scope to manufacture a match.
 2. `reference-projects/` only when the local wiki is insufficient.
 3. Public primary sources only when local sources do not answer the question.
 
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
-repeating local parameter tweaks. Record source paths and the evidence-to-action chain.
+repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-action chain.
 
 ### 4. Plan a coherent direction
 

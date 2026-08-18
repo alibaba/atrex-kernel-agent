@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.triton.pitfalls.sm120-fused-rmsnorm-gated-pitfalls.3-block-m-sweep-can-show-27-max-min-spread-at-the-same-shape",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|triton|norm|sm120-fused-rmsnorm-gated-pitfalls#3-block-m-sweep-can-show-27-max-min-spread-at-the-same-shape|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": "norm",
+   "operators": [
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "triton",
+   "workload_family": "norm"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "norm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '3. `BLOCK_M` sweep can show **27× max/min spread** at the same shape' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 3. `BLOCK_M` sweep can show **27× max/min spread** at the same shape",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 Triton fused-RMSNormGated pitfalls -- 3. `BLOCK_M` sweep can show **27× max/min spread** at the same shape"
+  },
+  "attempted": "Once you have a working Triton kernel, it's tempting to keep `BLOCK_M` at whatever value worked first and tune other knobs.",
+  "verdict": "performance-ceiling",
+  "lesson": "For elementwise/normalisation kernels at \"many small rows\" shapes on sm_120, **always sweep `BLOCK_M ∈ {1, 2, 4, 8, 16}` early**. The cost is one minute, the payoff can be 4-27×. Default to **`BLOCK_M = 1, 2, or 4`** when each row already has > 1k elements; only go larger if rows are tiny.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "triton"
+   },
+   "mechanism": "Per-program work × in-flight programs per SM is a U-shaped curve. `BM=1/2/4` saturates the SM with concurrent programs (3072 / 110 ≈ 28 waves); `BM=8` already collapses concurrency (768 / 110 ≈ 7 waves, partial wave tail); `BM ≥ 16` further halves concurrency AND likely starts triggering SMEM / register pressure issues that don't show as spill but stall the scheduler."
+  },
+  "observed": "(canonical shape [N=6144, H_V=32, D=128] bf16, num_warps=4, num_stages=2, on sm_120):",
+  "root_cause": "Per-program work × in-flight programs per SM is a U-shaped curve. `BM=1/2/4` saturates the SM with concurrent programs (3072 / 110 ≈ 28 waves); `BM=8` already collapses concurrency (768 / 110 ≈ 7 waves, partial wave tail); `BM ≥ 16` further halves concurrency AND likely starts triggering SMEM / register pressure issues that don't show as spill but stall the scheduler."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/triton/sm120-fused-rmsnorm-gated-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

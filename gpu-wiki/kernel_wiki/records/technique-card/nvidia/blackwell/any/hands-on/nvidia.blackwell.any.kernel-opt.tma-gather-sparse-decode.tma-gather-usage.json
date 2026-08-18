@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.tma-gather-sparse-decode.tma-gather-usage",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|tma-gather-sparse-decode#tma-gather-usage|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tma-gather-usage"
+  ],
+  "triggers": [
+   "the 'TMA Gather Usage' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): TMA Gather Usage",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "TMA Gather Sparse Decode -- TMA Gather Usage"
+  },
+  "technique": "TMA Gather Usage",
+  "what": "Blackwell's MLA decode complete pipeline:",
+  "when": "Blackwell's MLA decode complete pipeline:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// SM100 TMA Gather: Collect KV data for 4 tokens in a single operation\n// Input: Global memory addresses for 4 tokens (can be non-contiguous)\n// Output: Continuous shared memory area\n\nku::tma_gather4(\n    smem_kv,           // Target shared memory\n    tma_descriptor,    // TMA descriptor\n    token_indices,     // Global indices for 4 tokens\n    mbarrier           // Synchronization barrier\n);\n\n// Wait for TMA to complete\ncute::arrive_and_expect_tx(mbarrier, expected_bytes);\n```\n\n```\n1. TMA Gather → KV data to SMEM (non-contiguous → continuous)\n2. UTCCP → Q data to TMEM\n3. UMMA TS → QK^T GEMM (Q from TMEM, K from SMEM)\n4. Softmax → In registers\n5. UMMA SS → PV GEMM (P from SMEM, V from SMEM)\n```\n\n```cpp\n// TMEM allocation\ncute::TMEM::Allocator1Sm().allocate(512, &tmem_Q);\n\n// Q copy from SMEM to TMEM (UTCCP instruction)\nSM100_UTCCP_128dp256bit_1cta::copy(smem_Q, tmem_Q);\n\n// QK GEMM: Q in TMEM, K in SMEM (TS = Tensor-Shared)\nku::utcmma_ts(tmem_Q, smem_K, acc_S);\n\n// PV GEMM: P and V both in SMEM (SS = Shared-Shared)\nku::utcmma_ss(smem_P, smem_V, acc_O);\n```\n\n```cpp\n// SM100_MMA_F16BF16_WS_TS_NOELECT:\n// WS = Warp Specialized, TS = Tensor-Shared\n// UMMA 2 batch QK GEMM\n```\n\n```cpp\n// Blackwell : E8M0 -> BF16 scale pair\n__nv_bfloat162 scale = __nv_cvt_e8m0x2_to_bf162raw(e8m0_scale);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/tma-gather-sparse-decode.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

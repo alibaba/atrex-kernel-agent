@@ -1,0 +1,134 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.megatron-lm-limitations-next-generation",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|megatron-lm-limitations-next-generation|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Megatron-LM Limitations Deep Analysis and Next-Generation Architecture",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Megatron-LM Limitations Deep Analysis and Next-Generation Architecture"
+  },
+  "title": "Megatron-LM Limitations Deep Analysis and Next-Generation Architecture",
+  "summary": "Analysis of Megatron-LM's static 3D parallelism limitations when facing Blackwell NVL72, multimodal models, and RLHF workloads, with predictions for next-generation compiler-driven frameworks.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "Three tectonic shifts in the 2024-2025 technology stack:"
+   },
+   {
+    "heading": "2. Megatron-LM Core Architecture Deep Analysis",
+    "anchor": "2-megatron-lm-core-architecture-deep-analysis",
+    "gist": "**MLP partitioning**: First FC layer A is column-split, second layer B is row-split."
+   },
+   {
+    "heading": "3. Blackwell GB200 NVL72: Fundamental Challenges to Megatron",
+    "anchor": "3-blackwell-gb200-nvl72-fundamental-challenges-to-megatron",
+    "gist": "table columns: Feature, H100 (Hopper), B200 (Blackwell), Change, Impact on Megatron-LM"
+   },
+   {
+    "heading": "4. Multimodal (MLLM) Evolution Limitations",
+    "anchor": "4-multimodal-mllm-evolution-limitations",
+    "gist": "A single batch may contain pure text (hundreds of tokens) + high-resolution images (thousands of tokens) + long video (hundreds of thousands of tokens)."
+   },
+   {
+    "heading": "5. SFT and RLHF Stage Requirements",
+    "anchor": "5-sft-and-rlhf-stage-requirements",
+    "gist": "PPO involves 4 models: **Actor (Policy) / Critic (Value) / Reward Model / Reference Model**."
+   },
+   {
+    "heading": "6. Long Context and Sequence Parallelism Evolution",
+    "anchor": "6-long-context-and-sequence-parallelism-evolution",
+    "gist": "Attention complexity O(N^2); at N=100K-1M, activation values grow quadratically and overwhelm HBM."
+   },
+   {
+    "heading": "7. Four Architectural Features of Next-Generation Frameworks",
+    "anchor": "7-four-architectural-features-of-next-generation-frameworks",
+    "gist": "**Input**: Model graph + Cluster graph (bandwidth/latency/compute)."
+   },
+   {
+    "heading": "8. Conclusion",
+    "anchor": "8-conclusion",
+    "gist": "Future high-performance distributed training frameworks will inevitably be **compiler-driven + dataflow-aware + highly elastic** intelligent systems: - Reclaim parallelism strategy formulation from engineers, delegating to automated solver…"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/megatron-lm-limitations-next-generation.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

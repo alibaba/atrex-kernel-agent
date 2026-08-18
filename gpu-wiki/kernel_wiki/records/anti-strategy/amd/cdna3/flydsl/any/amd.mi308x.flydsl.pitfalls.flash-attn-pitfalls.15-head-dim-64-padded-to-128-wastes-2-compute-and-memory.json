@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.15-head-dim-64-padded-to-128-wastes-2-compute-and-memory",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#15-head-dim-64-padded-to-128-wastes-2-compute-and-memory|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '15. head_dim=64 padded to 128 wastes 2× compute and memory' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 15. head_dim=64 padded to 128 wastes 2× compute and memory",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 15. head_dim=64 padded to 128 wastes 2× compute and memory"
+  },
+  "attempted": "The MI308X causal+GQA kernel (`flash_attn_func_mi308x.py`) requires `head_dim % 128 == 0` (uses `D_CHUNKS=4` with `mfma_f32_32x32x16_bf16`). When given D=64, the obvious fix is to pad K/V to D=128 and set `K_PAD` accordingly. \"It'll just waste a bit of LDS.\"",
+  "verdict": "performance-ceiling",
+  "lesson": "Never pad head_dim to the next power-of-two. Adjust `D_CHUNKS` and MFMA tile to match actual head_dim. For D=64: `D_CHUNKS=2`, `mfma_f32_32x32x8_bf16`. For D=128: `D_CHUNKS=4`, `mfma_f32_32x32x16_bf16`.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The MFMA tile `32x32x16` processes 16 columns per instruction. With D=128, you need 4 chunks (D_CHUNKS=4). With D=64, you only need 2 chunks using `mfma_f32_32x32x8` — which processes 8 columns per instruction and is the correct tile for D=64. The entire datapath (Q load, K load, V load, MFMA, O store) scales linearly with D_CHUNKS."
+  },
+  "observed": "20.3 ms for B1024×H8×S316×D64 — **2× slower** than necessary. The kernel computes 4 D-chunks of MFMA where only 2 contain real data. Every VMEM load, LDS read, and MFMA instruction is doubled. VGPR pressure also doubles, forcing occupancy down to 1 wave/SIMD.",
+  "root_cause": "The MFMA tile `32x32x16` processes 16 columns per instruction. With D=128, you need 4 chunks (D_CHUNKS=4). With D=64, you only need 2 chunks using `mfma_f32_32x32x8` — which processes 8 columns per instruction and is the correct tile for D=64. The entire datapath (Q load, K load, V load, MFMA, O store) scales linearly with D_CHUNKS."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

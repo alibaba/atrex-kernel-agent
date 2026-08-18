@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.flash-attention-hopper.pattern-tma-wgmma-based-fmha",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|flash-attention|flash-attention-hopper#pattern-tma-wgmma-based-fmha|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "pattern-tma-wgmma-based-fmha"
+  ],
+  "triggers": [
+   "the 'Pattern: TMA + WGMMA-based FMHA' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Pattern: TMA + WGMMA-based FMHA",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Flash Attention Hopper Specialization -- Pattern: TMA + WGMMA-based FMHA"
+  },
+  "technique": "Pattern: TMA + WGMMA-based FMHA",
+  "what": "**Source**: `cutedsl/cutlass/fmha.py`, `cutedsl/flash-attention/`",
+  "when": "**Source**: `cutedsl/cutlass/fmha.py`, `cutedsl/flash-attention/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# The core differences between Hopper FMHA and the generic Triton version:\n# 1. Q/K/V are loaded into shared memory via TMA (automatic padding/OOB handling)\n# 2. Both QK^T and PV are computed with WGMMA (read directly from shared memory)\n# 3. Softmax is performed in registers\n\n# TMA loads Q (loaded only once)\ncute.copy(tma_q, q_gmem, q_smem)\n\nfor kv_block in range(num_kv_blocks):\n    # TMA loads K (automatic padding/OOB handling)\n    cute.copy(tma_k, k_gmem[kv_block], k_smem)\n    cute.copy(tma_v, v_gmem[kv_block], v_smem)\n\n    # WGMMA: S = Q @ K^T (SS mode, both Q/K read from shared memory)\n    s = cute.gemm(qk_mma, q_smem, k_smem)\n\n    # Online softmax in registers\n    m_new = cute.max(s, axis=1)\n    p = cute.exp2((s - m_new) * log2e)\n\n    # WGMMA: O += P @ V\n    acc = cute.gemm(pv_mma, p_smem, v_smem, acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/flash-attention-hopper.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

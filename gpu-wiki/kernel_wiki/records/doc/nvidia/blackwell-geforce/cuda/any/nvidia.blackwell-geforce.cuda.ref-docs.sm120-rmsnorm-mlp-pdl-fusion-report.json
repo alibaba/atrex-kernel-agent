@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cuda.ref-docs.sm120-rmsnorm-mlp-pdl-fusion-report",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cuda|norm|sm120-rmsnorm-mlp-pdl-fusion-report|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cuda",
+   "operator_family": "norm",
+   "operators": [
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cuda",
+   "workload_family": "norm"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "norm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): SM120 RMSNorm-MLP NVFP4 Fusion and PDL Handoff Report",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 RMSNorm-MLP NVFP4 Fusion and PDL Handoff Report"
+  },
+  "title": "SM120 RMSNorm-MLP NVFP4 Fusion and PDL Handoff Report",
+  "summary": "This report summarizes the reusable findings from SM120 RMSNorm, NVFP4 input quantization, parent MLP, and Programmatic Dependent Launch experiments. It is written as an English knowledge report and omits project task numbering.",
+  "sections": [
+   {
+    "heading": "Scope",
+    "anchor": "scope",
+    "gist": "- Hardware: RTX PRO 5000 / 4000 Blackwell-GeForce, `sm_120`."
+   },
+   {
+    "heading": "Programmatic Dependent Launch Facts",
+    "anchor": "programmatic-dependent-launch-facts",
+    "gist": "CUDA 13 headers expose the relevant device-side APIs on the local SM120 stack:"
+   },
+   {
+    "heading": "Route Summary",
+    "anchor": "route-summary",
+    "gist": "table columns: Route, Correctness, Performance outcome, Decision"
+   },
+   {
+    "heading": "No-PDL Boundary Fusion",
+    "anchor": "no-pdl-boundary-fusion",
+    "gist": "The no-PDL route fuses residual/RMSNorm and input NVFP4 quantization before the parent MLP path."
+   },
+   {
+    "heading": "Whole-A PDL Handoff",
+    "anchor": "whole-a-pdl-handoff",
+    "gist": "Whole-A PDL releases the dependent C1 launch only after the full A payload and scale have been produced."
+   },
+   {
+    "heading": "Row-Chunk PDL Pipeline",
+    "anchor": "row-chunk-pdl-pipeline",
+    "gist": "Row-chunk PDL tries to overlap quantization for one row chunk with C1/C2 work for another chunk."
+   },
+   {
+    "heading": "C1 Wait-Cache",
+    "anchor": "c1-wait-cache",
+    "gist": "The row-ready C1 route publishes per-row or per-chunk readiness and makes C1 wait before loading A/input scale."
+   },
+   {
+    "heading": "Practical Boundary",
+    "anchor": "practical-boundary",
+    "gist": "Do not promote these PDL routes without a non-negative operator gate on clean repeated runs."
+   },
+   {
+    "heading": "Plausible Future Directions",
+    "anchor": "plausible-future-directions",
+    "gist": "The remaining viable routes require a different C1 dataflow:"
+   },
+   {
+    "heading": "Related",
+    "anchor": "related",
+    "gist": "- Pitfalls: - General Blackwell PDL card: - Triton RMSNorm/GDN post-processing repor…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nresidual add -> RMSNorm -> MLP input NVFP4 quant -> parent MLP C1 GEMM\n```\n\n```cuda\ncudaTriggerProgrammaticLaunchCompletion();\ncudaGridDependencySynchronize();\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cuda/sm120-rmsnorm-mlp-pdl-fusion-report.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

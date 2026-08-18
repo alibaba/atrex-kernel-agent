@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.sm120-gdn-decode-fp32state-bf16qkv-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|sm120-gdn-decode-fp32state-bf16qkv-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): CuteDSL GDN Decode (fp32 state, bf16 q/k/v) on sm_120 — Optimization Journey",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuteDSL GDN Decode (fp32 state, bf16 q/k/v) on sm_120 — Optimization Journey"
+  },
+  "title": "CuteDSL GDN Decode (fp32 state, bf16 q/k/v) on sm_120 — Optimization Journey",
+  "summary": "End-to-end journey of bringing a CuteDSL implementation of FLA's `fused_recurrent_gated_delta_rule_fwd` from naive (1.97× slower than FLA Triton at B=8) to wall-clock parity (1.00×) on NVIDIA RTX PRO 5000 Blackwell. 18 versions iterated.",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "table columns: Item, Value"
+   },
+   {
+    "heading": "Algorithm baseline (one CTA = one (n, hv, v_chunk))",
+    "anchor": "algorithm-baseline-one-cta-one-n-hv-v-chunk",
+    "gist": "T=1 → no chunk loop."
+   },
+   {
+    "heading": "Kernel resource footprint (final V13)",
+    "anchor": "kernel-resource-footprint-final-v13",
+    "gist": "table columns: Item, Value"
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "Format: **vN — change → measured B=64 → ncu Max BW → notes**."
+   },
+   {
+    "heading": "Final perf vs baseline",
+    "anchor": "final-perf-vs-baseline",
+    "gist": "table columns: B, V1 (1.97× FLA), **V13**, FLA Triton, V13/FLA, V13 throughput, % memcpy ceiling"
+   },
+   {
+    "heading": "Remaining bottlenecks (PMC evidence on V13, B=64)",
+    "anchor": "remaining-bottlenecks-pmc-evidence-on-v13-b-64",
+    "gist": "table columns: ncu Section / Metric, Value, Interpretation"
+   },
+   {
+    "heading": "What would close the remaining gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "1."
+   },
+   {
+    "heading": "Sustained recipe (do these, in this order, for any sm_120 BW-bound kernel)",
+    "anchor": "sustained-recipe-do-these-in-this-order-for-any-sm-120-bw-bound-kernel",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- **Pitfalls** (the 9+ traps from this 18-version journey): `` - **Final kernel + reference**: [`reference-kernels/nvidia…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nstate ← h0[n, hv, :, v_chunk]              # 4KB fp32 tile per CTA (BK=128, BV=8)\nload q[n,h,:], k[n,h,:], v[n,hv,v_chunk], g[n,hv], beta[n,hv]\nq,k ← L2-norm(q,k); q ← q * scale\nstate ← state * exp(g)                     # scalar gate\nhk     ← state^T @ k                       # GEMV  (BV)\nv_new  ← beta * (v - hk)                   # delta-rule remove\nstate += k ⊗ v_new                         # rank-1 update\no      ← state^T @ q                       # GEMV  (BV)\nstore o, store state→ht\n```\n\n```python\n# 1. Tell CuTeDSL the gmem ptr is 16-byte aligned\nmH0 = from_dlpack(h0.contiguous(), assumed_align=16)\nmHt = from_dlpack(ht, assumed_align=16)\n\n# 2. cp.async with cache_mode=GLOBAL bypasses L1\ncp_atom = cute.make_copy_atom(\n    cpasync.CopyG2SOp(cache_mode=cpasync.LoadCacheMode.GLOBAL),\n    cutlass.Float32, num_bits_per_copy=128,\n)\n\n# 3. Thread layout that gives each thread 4 contiguous V cols (16-byte vec)\nthr_layout = cute.make_layout((32, 2), stride=(2, 1))   # 64 threads\nval_layout = cute.make_layout((4, 4), stride=(4, 1))    # 4K × 4V per thread\n\n# 4. Compute pipeline: cp.async commits, then q/k/v + L2norm, then wait+barrier\ncute.copy(tiled_copy, thr_gH0, thr_sH0)\ncute.arch.cp_async_commit_group()\n# (latency-hide window: q/k/v autovec_copy, L2 norm warp shuffle)\ncute.arch.cp_async_wait_group(0)\ncute.arch.barrier()\nstate[ki, vi] = sH0[k_off + ki, v_smem_base + vi]   # cheap SMEM→register\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-decode-fp32state-bf16qkv-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

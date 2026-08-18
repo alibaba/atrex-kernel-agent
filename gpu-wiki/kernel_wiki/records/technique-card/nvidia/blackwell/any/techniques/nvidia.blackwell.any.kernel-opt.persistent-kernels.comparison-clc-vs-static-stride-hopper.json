@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.persistent-kernels.comparison-clc-vs-static-stride-hopper",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|persistent-kernels#comparison-clc-vs-static-stride-hopper|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [
+   "comparison-clc-vs-static-stride-hopper"
+  ],
+  "triggers": [
+   "the 'Comparison: CLC vs Static Stride (Hopper)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Comparison: CLC vs Static Stride (Hopper)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Persistent Kernels with CLC -- Comparison: CLC vs Static Stride (Hopper)"
+  },
+  "technique": "Comparison: CLC vs Static Stride (Hopper)",
+  "what": "On Hopper (SM90), persistent kernels use a static stride pattern where each CTA computes tiles at fixed intervals:",
+  "when": "On Hopper (SM90), persistent kernels use a static stride pattern where each CTA computes tiles at fixed intervals:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper-style static stride persistent kernel\n__global__ void hopper_persistent_gemm(GemmParams params)\n{\n    int cta_id = blockIdx.x;\n    int total_ctas = gridDim.x;\n    int total_tiles = params.num_tiles_m * params.num_tiles_n;\n\n    // Static stride: CTA i handles tiles i, i+total_ctas, i+2*total_ctas, ...\n    for (int tile_idx = cta_id; tile_idx < total_tiles; tile_idx += total_ctas) {\n        int tile_m = tile_idx / params.num_tiles_n;\n        int tile_n = tile_idx % params.num_tiles_n;\n        compute_gemm_tile(params, tile_m, tile_n);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/persistent-kernels.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

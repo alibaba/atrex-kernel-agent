@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.ref-docs.mla_decode",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|mla|mla_decode|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": "mla",
+   "operators": [
+    "mla"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "mla"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): MLA Decode Attention Optimization Guide",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "MLA Decode Attention Optimization Guide"
+  },
+  "title": "MLA Decode Attention Optimization Guide",
+  "summary": "> This document focuses on optimizations specific to the **MLA (Multi-Head Latent Attention) Decode** kernel. > For the general ISA optimization checklist, see ``.",
+  "sections": [
+   {
+    "heading": "⚠️ Lossy Optimization Notice",
+    "anchor": "lossy-optimization-notice",
+    "gist": "**OPT-9 (V FP8 Load)** is a **lossy optimization** (reduced precision): - V is reduced from bf16 to fp8, introducing quantization error - Before implementing this optimization, **you must explicitly ask the user whether they accept precisi…"
+   },
+   {
+    "heading": "Pattern Characteristics",
+    "anchor": "pattern-characteristics",
+    "gist": "table columns: Feature, Description"
+   },
+   {
+    "heading": "Bottleneck Analysis",
+    "anchor": "bottleneck-analysis",
+    "gist": "Data volume per iteration:"
+   },
+   {
+    "heading": "Optimization Strategy Priority",
+    "anchor": "optimization-strategy-priority",
+    "gist": "table columns: Priority, Optimization, Description, Expected Gain"
+   },
+   {
+    "heading": "Detailed Optimization Techniques",
+    "anchor": "detailed-optimization-techniques",
+    "gist": "**Problem**: In the original code, all `buffer_load` carry `mask` and `other=0`, causing the compiler to generate a large number of `v_cndmask_b32` instructions (~174), which is the #1 bottleneck identified by ASM profiling."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nTile_FLOPs = 2 × BLOCK_H × BLOCK_N × (BLOCK_C + BLOCK_R)\n           = 2 × 16 × 64 × (512 + 64) = 1.18M\nTile_Bytes = 83 KB\nTile_AI    = 1.18M / 83KB ≈ 14 FLOPs/Byte\n```\n\n```python\nsplit_len = split_end - split_start\nnum_full_blocks = split_len // BLOCK_N\nfull_end = split_start + num_full_blocks * BLOCK_N\nhas_tail = split_len % BLOCK_N != 0\n\n# FULL BLOCKS LOOP — no mask, no other, no v_cndmask!\nfor start_n in range(split_start, full_end, BLOCK_N):\n k_nope_fp4 = gl.amd.cdna4.buffer_load(ptr=KV_fp4, offsets=k_nope_fp4_offs) # none mask/other\n    # ... compute ...\n\n# TAIL BLOCK - requires mask\nif has_tail:\n    start_n = full_end\n    # ... with mask/other ...\n```\n\n```python\nNUM_XCDS = 8\npid_raw = gl.program_id(0)\nwave = pid_raw // NUM_XCDS\npos_in_wave = pid_raw % NUM_XCDS\nis_odd_wave = wave % 2\nremapped_pos = tl.where(is_odd_wave, NUM_XCDS - 1 - pos_in_wave, pos_in_wave)\npid = wave * NUM_XCDS + remapped_pos\npid = tl.minimum(pid, total_blocks - 1)\n```\n\n```python\n# ❌ : size_per_thread=[1,1] -> buffer_load_ubyte (1B/thread)\ns1_blocked2: gl.constexpr = gl.BlockedLayout(\n    size_per_thread=[1, 1], threads_per_warp=[4, 16], warps_per_cta=[4, 1], order=[1, 0])\n\n# ✅ : size_per_thread=[1,4] -> buffer_load_dword (4B/thread)\ns1_blocked2_wide: gl.constexpr = gl.BlockedLayout(\n    size_per_thread=[1, 4], threads_per_warp=[4, 16], warps_per_cta=[4, 1], order=[1, 0])\n```\n\n```python\n# load fp8 (1B/elem) bf16 (2B/elem)\nv_fp8 = gl.amd.cdna4.buffer_load(ptr=KV_fp8, offsets=v_offs)\nv_bf16 = v_fp8.to(gl.bfloat16)\n\n# PV dot , outputstage per-tensor scale\nout_val = acc * kv_fp8_scale / e_sum_broadcast\n```\n\n```python\nfor start_n in range(split_start, full_end, BLOCK_N):\n # 1. Prefetch next K nope, K pe\n    next_k_nope = gl.amd.cdna3.buffer_load(...)\n    next_k_pe = gl.amd.cdna3.buffer_load(...)\n\n    # 2. [OPT-12] Prefetch next V EARLY — overlap with QK MFMA\n    next_v = gl.amd.cdna3.buffer_load(...)\n\n    # 3. sched_barrier: prevent compiler reordering\n    gl.amd.cdna3.sched_barrier(0x0)\n\n    # 4. QK MFMA (V load is in flight, overlapping with this)\n    qk = gl.amd.cdna4.mfma(q_nope_dot, k_nope_dot, ...)\n    qk = gl.amd.cdna4.mfma(q_pe_dot, k_pe_dot, qk)\n\n    # 5. Softmax\n    ...\n\n    # 6. PV MFMA (V data should be ready by now)\n    v_dot = v_smem.load(dot_op1_mma1)\n    acc = gl.amd.cdna4.mfma(p_dot, v_dot, acc)\n```\n\n```python\n# loopcompute\nk_nope_fp4_cur = kv_token_base * stride_kv_fp4_row\nstep_fp4 = BLOCK_N * stride_kv_fp4_row\n\n# loopaddition\nfor start_n in range(split_start, full_end, BLOCK_N):\n    k_nope_fp4_offs = gl.cast(k_nope_fp4_cur + offs_kn_cols_2d * stride_kv_fp4_row + ..., gl.int32)\n    # ... compute ...\n k_nope_fp4_cur = k_nope_fp4_cur + step_fp4 # additionmultiplication\n```\n\n```\n§3.0 order check -> OPT-3 full/tail split -> OPT-9 V fp8 -> OPT-12 V prefetch -> OPT-7 split-K -> OPT-8 scales merge\n```\n\n```\n§3.0 order check -> OPT-3 full/tail split -> OPT-12 V prefetch -> OPT-7 split-K -> OPT-6 XCD remap\n( OPT-9 V fp8, kv )\n```\n\n```python\ndef custom_kernel(data, config):\n    max_kv_len = int((kv_indptr[1:] - kv_indptr[:-1]).max().item())\n\n    if max_kv_len >= 4096:\n        return _mla_decode_fp8(data, config)  # v7\n    else:\n        return _mla_decode_bf16(data, config)  # v6\n```\n\n```python\nq_pe_scales_i16 = gl.cast(q_pe_scales_reshaped, gl.int16)\nq_pe_scales_shifted = q_pe_scales_i16 << 7\nq_pe_scales_bf16 = gl.cast(q_pe_scales_shifted, gl.bfloat16, bitcast=True)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/gluon/mla_decode.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

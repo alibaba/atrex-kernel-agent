@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-decode-pitfalls.10-get-value-needs-both-coord-and-component",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-decode-pitfalls#10-get-value-needs-both-coord-and-component|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '10. `get_value()` needs both `coord` AND `component`' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 10. `get_value()` needs both `coord` AND `component`",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL GDN Decode on sm_120 — Pitfalls -- 10. `get_value()` needs both `coord` AND `component`"
+  },
+  "attempted": "Extract element `i` from a vector value:",
+  "verdict": "performance-ceiling",
+  "lesson": "Avoid `lang.vector.static_position` for now. If you need to unpack a loaded vec back into per-element compute, easier paths: 1. Issue per-element loads (slow — V11 was 2.6× slower) 2. Use cp.async + SMEM staging (V13's chosen path) 3. Wait for a stable `lang.vector.dynamic_position` API in newer CuTeDSL",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "The static_position list semantics aren't stable across CuTeDSL versions; `lang.vector.static_position` looks valid syntactically but generates malformed PTX in this build."
+  },
+  "root_cause": "The static_position list semantics aren't stable across CuTeDSL versions; `lang.vector.static_position` looks valid syntactically but generates malformed PTX in this build.",
+  "implementation": {
+   "snippet": "```python\nv_i = cute.arch.vector.extract(v_vec, static_position=[i])\n```\n\n```\nTypeError: extract() missing 1 required positional argument: 'dynamic_position'\n```\n\n```python\nv_i = cute.arch.vector.extract(v_vec, dynamic_position=[], static_position=[i])\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

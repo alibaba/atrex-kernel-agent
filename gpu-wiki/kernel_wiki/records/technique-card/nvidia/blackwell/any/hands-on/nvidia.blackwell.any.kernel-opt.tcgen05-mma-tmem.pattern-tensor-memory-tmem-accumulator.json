@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.tcgen05-mma-tmem.pattern-tensor-memory-tmem-accumulator",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|tcgen05-mma-tmem#pattern-tensor-memory-tmem-accumulator|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-tensor-memory-tmem-accumulator"
+  ],
+  "triggers": [
+   "the 'Pattern: Tensor Memory (TMEM) Accumulator' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Pattern: Tensor Memory (TMEM) Accumulator",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "tcgen05 MMA and TMEM -- Pattern: Tensor Memory (TMEM) Accumulator"
+  },
+  "technique": "Pattern: Tensor Memory (TMEM) Accumulator",
+  "what": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm100.py`, `cutedsl/cutlass/tutorial_gemm/`",
+  "when": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm100.py`, `cutedsl/cutlass/tutorial_gemm/`",
+  "caveats": [
+   "TMEM capacity is similar to shared memory (~256 KB/SM), but with higher bandwidth",
+   "TMEM can only be read/written by tcgen05 MMA instructions and cannot be directly loaded/stored"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# Blackwell introduces Tensor Memory (TMEM): High-bandwidth memory dedicated for MMA accumulators\n# No longer uses register file to store accumulators, freeing up a large number of VGPRs\n\ntiled_mma = cute.make_tiled_mma(\n    cute.SM100_MMA_F32BF16BF16F32_SS_TN,  # tcgen05 MMA\n    # Accumulator is automatically allocated in TMEM\n)\n\n# Accumulator is in TMEM, does not occupy registers\nacc = cute.make_fragment_like(tiled_mma.accumulator())\ncute.clear(acc)  # TMEM clear\n\nfor k_tile in range(num_k_tiles):\n    acc = cute.gemm(tiled_mma, smem_a[stage], smem_b[stage], acc)\n    # acc remains in TMEM, register pressure is zero\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/tcgen05-mma-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

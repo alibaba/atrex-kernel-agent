@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.wgmma-to-tcgen05.step-by-step-migration",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|wgmma-to-tcgen05#step-by-step-migration|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "step-by-step-migration"
+  ],
+  "triggers": [
+   "the 'Step-by-Step Migration' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Step-by-Step Migration",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Migrating from wgmma to tcgen05 -- Step-by-Step Migration"
+  },
+  "technique": "Step-by-Step Migration",
+  "what": "**Before (Hopper):** Accumulators live in registers.",
+  "when": "**Before (Hopper):** Accumulators live in registers.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper: 128 FP32 registers for a 64x256 accumulator fragment\nfloat acc[4][32];  // Per-thread fragment of the warpgroup accumulator\n```\n\n```cuda\n// Blackwell: TMEM address replaces register array\nuint32_t tmem_acc = tmem_alloc(256);  // 128 rows x 256 cols in TMEM\n```\n\n```cuda\n// Hopper: ldmatrix loads 8x8 matrix fragments into registers\nuint32_t a_frag[4];\nasm volatile(\n    \"ldmatrix.sync.aligned.m8n8.x4.shared.b16 \"\n    \"{%0,%1,%2,%3}, [%4];\"\n    : \"=r\"(a_frag[0]), \"=r\"(a_frag[1]),\n      \"=r\"(a_frag[2]), \"=r\"(a_frag[3])\n    : \"r\"(smem_addr)\n);\n```\n\n```cuda\n// Blackwell: just construct the SMEM descriptor\nuint64_t desc_a = make_smem_desc_128b(smem_a_ptr);\n// Pass desc_a directly to tcgen05.mma -- no register staging\n```\n\n```cuda\n// Hopper TMA descriptor: 64B swizzle is common\nCUtensorMap desc = create_tma_desc(ptr, M, N, tile_m, tile_n,\n                                    CU_TENSOR_MAP_SWIZZLE_64B);\n```\n\n```cuda\n// Blackwell TMA descriptor: MUST use 128B swizzle\nCUtensorMap desc = create_tma_desc(ptr, M, N, tile_m, tile_n,\n                                    CU_TENSOR_MAP_SWIZZLE_128B);\n```\n\n```cuda\n// Hopper: all 128 threads in warpgroup issue wgmma\nasm volatile(\n    \"wgmma.mma_async.sync.aligned.m64n256k16.f32.bf16.bf16 \"\n    \"{%0,%1,...}, {%N,...}, desc_b, ...;\"\n    : \"+f\"(acc[0]), \"+f\"(acc[1]), ...\n    : \"r\"(a_frag[0]), ...\n);\nasm volatile(\"wgmma.commit_group.sync.aligned;\");\n```\n\n```cuda\n// Blackwell: single thread issues tcgen05\nif (threadIdx.x == 0) {\n    asm volatile(\n        \"tcgen05.mma.cta_group::1.kind::f16 \"\n        \"[%0], %1, %2, %3, 1;\"\n        :\n        : \"r\"(tmem_acc), \"l\"(desc_a), \"l\"(desc_b), \"r\"(0)\n    );\n}\n// No commit needed -- fully async\n```\n\n```cuda\n// Hopper: wait for outstanding wgmma groups\nasm volatile(\"wgmma.wait_group.sync.aligned 0;\");\n// Accumulators now ready in registers\n```\n\n```cuda\n// Blackwell: fence before reading TMEM\nasm volatile(\"tcgen05.mma.fence::before_thread_sync;\");\n__syncthreads();\n// TMEM accumulators now ready for reading\n```\n\n```cuda\n// Hopper: accumulators in registers, directly usable\nfloat result = acc[frag_m][frag_n];\n// Apply bias\nresult += bias[col];\n// Apply activation\nresult = relu(result);\n// Store to GMEM\nC[row * N + col] = (half)result;\n```\n\n```cuda\n// Blackwell: must read from TMEM first\nfloat result = tmem_load_f32(tmem_acc + col_offset);\n// Apply bias\nresult += bias[col];\n// Apply activation\nresult = relu(result);\n// Store to GMEM\nC[row * N + col] = (half)result;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/wgmma-to-tcgen05.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

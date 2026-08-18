@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.1-passing-seq-len-padded-to-kernel-after-removing-f-pad-crashes-silently-with-wrong-gradients",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#1-passing-seq-len-padded-to-kernel-after-removing-f-pad-crashes-silently-with-wrong-gradients|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '1. Passing `seq_len_padded` to kernel after removing F.pad crashes silently with wrong gradients' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 1. Passing `seq_len_padded` to kernel after removing F.pad crashes silently with wrong gradients",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 1. Passing `seq_len_padded` to kernel after removing F.pad crashes silently with wrong gradients"
+  },
+  "attempted": "Kernel was designed with padded tensors (F.pad to multiple of BLOCK_N=32). To eliminate F.pad overhead, you add OOB guards (arith.select to row 0) in the kernel and pass unpadded tensors directly. The kernel still needs `seq_len` for its grid computation (`ceil(seq_len / BLOCK)`). The \"obvious\" parameter to pass is `seq_len_padded` (320) since that's what the loop bounds were computed with.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "When removing explicit padding, pass the **actual** `seq_len` (tensor dimension) to the kernel for stride computation. The padded value is only needed for loop bounds (which are precomputed on host anyway). Always distinguish between \"padded seq_len for tiling\" and \"actual seq_len for memory addressing.\"",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The kernel uses `seq_len` to compute memory strides: `base_ptr = (batch * H + head) * seq_len * D`. If you pass 320 but the actual tensor stride is 316, every batch/head beyond the first reads from the wrong address. `ceil(316/32) == ceil(320/32) == 10` — the grid size is identical either way, so the kernel launches correctly but accesses wrong memory."
+  },
+  "observed": "All gradients wrong (garbage values), no error raised.",
+  "root_cause": "The kernel uses `seq_len` to compute memory strides: `base_ptr = (batch * H + head) * seq_len * D`. If you pass 320 but the actual tensor stride is 316, every batch/head beyond the first reads from the wrong address. `ceil(316/32) == ceil(320/32) == 10` — the grid size is identical either way, so the kernel launches correctly but accesses wrong memory."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

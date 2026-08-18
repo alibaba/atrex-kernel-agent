@@ -1,0 +1,159 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-fused-moe-fp8-ptpc-pause-checkpoint",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|cdna3-fused-moe-fp8-ptpc-pause-checkpoint|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Fused MoE FP8 PTPC Pause Checkpoint on MI308X",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Fused MoE FP8 PTPC Pause Checkpoint on MI308X"
+  },
+  "title": "FlyDSL Fused MoE FP8 PTPC Pause Checkpoint on MI308X",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target Hardware And Scope",
+    "anchor": "target-hardware-and-scope",
+    "gist": ""
+   },
+   {
+    "heading": "Acceptance And Byte Contract",
+    "anchor": "acceptance-and-byte-contract",
+    "gist": "The task66 gate is:"
+   },
+   {
+    "heading": "Bandwidth Target Method",
+    "anchor": "bandwidth-target-method",
+    "gist": "The `target_5pct_us` column is generated from a same-byte load-only bandwidth proxy before comparing kernel timings."
+   },
+   {
+    "heading": "Checkpoint State",
+    "anchor": "checkpoint-state",
+    "gist": ""
+   },
+   {
+    "heading": "Current Performance Table",
+    "anchor": "current-performance-table",
+    "gist": "table columns: Stage, Token, Current us, Target 5pct us, Need improve us, Gap to target, Theoretical HBM MB, Measured HBM MB"
+   },
+   {
+    "heading": "Retained Source State",
+    "anchor": "retained-source-state",
+    "gist": "The archived source package is:"
+   },
+   {
+    "heading": "Optimization Journey Summary",
+    "anchor": "optimization-journey-summary",
+    "gist": "The task66 checkpoint inherits the task64 promoted source table."
+   },
+   {
+    "heading": "Remaining Bottleneck",
+    "anchor": "remaining-bottleneck",
+    "gist": "The primary unresolved bottleneck is stage2 BF16 atomic/output cost."
+   },
+   {
+    "heading": "Do Not Reuse As Positive Evidence",
+    "anchor": "do-not-reuse-as-positive-evidence",
+    "gist": "- BF16/F16-derived references."
+   },
+   {
+    "heading": "Continuation Recipe",
+    "anchor": "continuation-recipe",
+    "gist": "1."
+   },
+   {
+    "heading": "Source Provenance",
+    "anchor": "source-provenance",
+    "gist": "omoExplore source of truth:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nhardware: AMD MI308X / CDNA3 / gfx942\nframework: FlyDSL\nkernel: Fused MoE two-stage GEMM\ndtype: FP8 PTPC input, BF16 stage/output activation, F32 scales, I32 metadata\nshape: E=512, topk=10, model_dim=4096, inter_dim=256\ntokens: 1/16/32/64/128/256/512\n```\n\n```text\nstage1: profile_top_us   <= target_5pct_us\nstage2: profile_gemm2_us <= target_5pct_us\ntarget_5pct_us = 1.05 * fp8_loadonly_ref_us_cm2\ncorrectness: passed == 1 and max_delta <= 0.01\n```\n\n```bash\ncd reference-kernels/amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x\n\n${PYTHON:-python3} - <<'PY'\nimport flydsl\nPY\n\n${PYTHON:-python3} bandwidth_reference.py \\\n  --out artifacts/task66_bandwidth_reference.csv \\\n  --markdown-out artifacts/task66_bandwidth_reference.md\n```\n\n```python\nmeasure_flydsl_load(\n    measured_hbm_bytes,\n    cache_modifier=2,\n    mode=\"loadonly\",\n    tiles_per_thread=4,\n    warmup=10,\n    iters=50,\n    cold=True,\n)\n```\n\n```text\ninlined profile_cuda_kernels -> bw_kernel device time\n```\n\n```text\ntarget_us = 1.05 * measured_ref_us\n```\n\n```text\nrows: 14\nrows within 1% target delta: 10/14\nmax absolute target delta: 3.10%\n```\n\n```text\nfull-scope gate pass: 1/14\nstage1 gate pass: 1/7\nstage2 gate pass: 0/7\nunfinished cases: 13/14\nsource state: task64 promoted source + task65 documentation only\nretained kernel changes after task65: none\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-pause-checkpoint.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

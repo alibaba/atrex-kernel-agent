@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.11-rocdl-ds-swizzle-res-ty-src-imm-value-doesn-t-emit-the",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#11-rocdl-ds-swizzle-res-ty-src-imm-value-doesn-t-emit-the|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '11. `rocdl.ds_swizzle(res_ty, src, imm_value)` doesn't emit the' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 11. `rocdl.ds_swizzle(res_ty, src, imm_value)` doesn't emit the",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 11. `rocdl.ds_swizzle(res_ty, src, imm_value)` doesn't emit the"
+  },
+  "attempted": "`rocdl.ds_swizzle(T.i32, src, arith.constant(0x401F, type=T.i32))` — the MLIR op takes offset as `I32:$offset`, looks just like any other value. The `arith.constant` should fold away.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "for instructions whose operand encodes in the instruction word (ds_swizzle offset, DPP ctrl, s_waitcnt imm, etc.) use `_llvm.inline_asm` with the literal in the asm string:",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "`ds_swizzle_b32` encodes the offset as part of the **instruction word** — it's a hardware immediate, not an operand. The MLIR ODS wrapper and LLVM IR intrinsic accept an `i32` SSA value, but the backend requires a `ConstantInt` at ISel time; on this LLVM revision the constant doesn't always propagate through the intrinsic lowering. The result is a swizzle with whatever offset bits happened to land in the encoding — usually wrong."
+  },
+  "observed": "kernel runs without error but produces garbage — correctness error ~0.48 on bf16 outputs scaled 0.1. Same output whether you pass 0x401F or 0x201F or any other value; the offset is effectively ignored.",
+  "root_cause": "`ds_swizzle_b32` encodes the offset as part of the **instruction word** — it's a hardware immediate, not an operand. The MLIR ODS wrapper and LLVM IR intrinsic accept an `i32` SSA value, but the backend requires a `ConstantInt` at ISel time; on this LLVM revision the constant doesn't always propagate through the intrinsic lowering. The result is a swizzle with whatever offset bits happened to land in the encoding — usually wrong.",
+  "implementation": {
+   "snippet": "```python\ndef _ds_swizzle_xor16_inline(src):\n    return _llvm.inline_asm(\n        ir.IntegerType.get_signless(32),\n        [src],\n        \"ds_swizzle_b32 $0, $1 offset:0x401F\\n\\ts_waitcnt lgkmcnt(0)\",\n        \"=v,v\",\n        has_side_effects=True,\n    )\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

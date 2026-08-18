@@ -1,0 +1,140 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutedsl-pipeline-patterns",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutedsl-pipeline-patterns|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CuTeDSL Software Pipeline and Synchronization Patterns",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CuTeDSL Software Pipeline and Synchronization Patterns"
+  },
+  "title": "CuTeDSL Software Pipeline and Synchronization Patterns",
+  "summary": "Each pipeline entry (mbarrier) goes through the following state transitions:",
+  "sections": [
+   {
+    "heading": "Pipeline State Machine",
+    "anchor": "pipeline-state-machine",
+    "gist": "Each pipeline entry (mbarrier) goes through the following state transitions:"
+   },
+   {
+    "heading": "Producer/Consumer High-Level Wrappers",
+    "anchor": "producer-consumer-high-level-wrappers",
+    "gist": "**Methods:** - `try_acquire() → Boolean` — Non-blocking try-acquire - `acquire(try_acquire_token) → ImmutableResourceHandle` — Blocking acquire empty buffer - `acquire_and_advance(...)` — Acquire and advance state - `commit(handle)` — Mark…"
+   },
+   {
+    "heading": "PipelineState",
+    "anchor": "pipelinestate",
+    "gist": "Tracks position in the loop buffer: - `index: Int32` — Current slot index - `phase: Int32` — Current phase bit (0 or 1, for mbarrier flip) - `stages: int` — Total number of stages - `advance()` — Advance to next slot - `reverse()` — Retrea…"
+   },
+   {
+    "heading": "Synchronization Primitives",
+    "anchor": "synchronization-primitives",
+    "gist": "Array of barriers in shared memory for producer-consumer synchronization:"
+   },
+   {
+    "heading": "Pipeline Variants",
+    "anchor": "pipeline-variants",
+    "gist": "General-purpose pipeline, both producer and consumer are `AsyncThread` type."
+   },
+   {
+    "heading": "Automatic Software Pipelining",
+    "anchor": "automatic-software-pipelining",
+    "gist": "The compiler automatically generates: 1."
+   },
+   {
+    "heading": "PipelineOrder: Ordered Execution of Multiple Groups",
+    "anchor": "pipelineorder-ordered-execution-of-multiple-groups",
+    "gist": "Manages ordered execution of multiple groups within a pipeline stage."
+   },
+   {
+    "heading": "Pipeline Initialization Patterns",
+    "anchor": "pipeline-initialization-patterns",
+    "gist": "table columns: Scenario, Pipeline Type, Producer, Consumer"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n         Producer                Consumer\n         ┌──────┐               ┌──────┐\nempty ──→│acquire│──→ writing ──→│commit│──→ full\n         └──────┘               └──────┘\n  ↑                                          │\n  │         ┌──────┐               ┌────┐    │\n  └─────────│release│←── reading ←─│wait│←───┘\n            └──────┘               └────┘\n```\n\n```python\nproducer = pipeline.make_producer()\n\n# usemode\ntry_acquire_token = producer.try_acquire()\nhandle = producer.acquire_and_advance(try_acquire_token)\n# ... data ...\nhandle.commit()\n```\n\n```python\nconsumer = pipeline.make_consumer()\n\ntry_wait_token = consumer.try_wait()\nhandle = consumer.wait_and_advance(try_wait_token)\n# ... data ...\nhandle.release()\n```\n\n```python\nstate = make_pipeline_state(PipelineUserType.Producer, stages=4)\n```\n\n```python\nmbar_array = MbarrierArray(\n    barrier_storage=ptr,\n    num_stages=4,\n    agent=(PipelineOp.TmaLoad, CooperativeGroup(Agent.ThreadBlock)),\n tx_count=1024 # bytes\n)\n\nmbar_array.mbarrier_init # warp 0\nmbar_array.arrive(index, dst) #\nmbar_array.arrive_and_expect_tx(index, tx_count) #\nmbar_array.wait(index, phase) # wait\nmbar_array.try_wait(index, phase) -> Boolean # wait\n```\n\n```python\nnamed_bar = NamedBarrier(barrier_id=1, num_threads=128)\nnamed_bar.arrive()\nnamed_bar.wait()\nnamed_bar.arrive_and_wait # coalesced\nnamed_bar.sync()\n```\n\n```python\n# Agent type\nAgent.Thread #\nAgent.ThreadBlock      # CTA\nAgent.ThreadBlockCluster  # Cluster\n\n# create cooperative group\ngroup = CooperativeGroup(Agent.ThreadBlock, size=128, alignment=32)\n```\n\n```python\npipeline = PipelineAsync.create(\n    num_stages=4,\n    producer_group=CooperativeGroup(Agent.ThreadBlock, size=32),\n    consumer_group=CooperativeGroup(Agent.ThreadBlock, size=128),\n    barrier_storage=smem_ptr,\n    defer_sync=False\n)\n```\n\n```python\npipeline = PipelineTmaAsync.create(\n    num_stages=4,\n    producer_group=producer_group,\n    consumer_group=consumer_group,\n tx_count=1024, # stage bytes\n    barrier_storage=smem_ptr,\n cta_layout_vmnk=cta_layout, # cluster\n mcast_mode_mn=(1, 1), # multicast mode\n)\n```\n\n```python\npipeline = PipelineTmaUmma.create(\n    num_stages=4,\n    producer_group=producer_group,\n    consumer_group=consumer_group,\n    tx_count=1024,\n    cta_layout_vmnk=cta_layout,\n    mcast_mode_mn=(1, 1),\n)\n```\n\n```python\npipeline = PipelineTmaMultiConsumersAsync.create(\n    num_stages=4,\n    producer_group=producer_group,\n    consumer_group_umma=umma_group,\n    consumer_group_async=async_group,\n    tx_count=1024,\n)\n```\n\n```python\nfor i in cutlass.range(bound, prefetch_stages=3):\n    cute.copy(atom, gmem[i], buffer[i % total_stages], ...)\n    use(buffer[i % total_stages])\n```\n\n```python\norder = PipelineOrder.create(\n    barrier_storage=smem_ptr,\n depth=4, # stage\n length=2, # group total count\n    group_id=my_id,\n    producer_group=group,\n)\n\norder.arrive # current stage\norder.wait # wait group complete\n```\n\n```python\n# mbarrier synchronous\npipeline.init_arrive(cluster_shape_mn=None)  # fence + cluster arrive\npipeline.init_wait(cluster_shape_mn=None)    # sync threadblock/cluster\n\n# Agent synchronous\nagent_sync(Agent.ThreadBlock)  # __syncthreads()\nagent_sync(Agent.ThreadBlockCluster)  # cluster barrier\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutedsl-pipeline-patterns.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

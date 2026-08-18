@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.ref-docs.flash-attention-4-hands-on-without-b200",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|flash-attention|flash-attention-4-hands-on-without-b200|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): FlashAttention-4 Hands-On Without B200 Hardware",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "FlashAttention-4 Hands-On Without B200 Hardware"
+  },
+  "title": "FlashAttention-4 Hands-On Without B200 Hardware",
+  "summary": "A practical guide to experimenting with FlashAttention-4 on cloud platforms without owning Blackwell hardware, including benchmarking and code modification workflows.",
+  "sections": [
+   {
+    "heading": "1. Running FA4 Without B200",
+    "anchor": "1-running-fa4-without-b200",
+    "gist": "FlashAttention-4 targets the Blackwell architecture (sm_100)."
+   },
+   {
+    "heading": "2. Benchmark Script",
+    "anchor": "2-benchmark-script",
+    "gist": "Usage is straightforward:"
+   },
+   {
+    "heading": "3. Modifying the Code",
+    "anchor": "3-modifying-the-code",
+    "gist": "Start with the official FlashAttention-4 implementation."
+   },
+   {
+    "heading": "4. Learning Resources",
+    "anchor": "4-learning-resources",
+    "gist": "For those unfamiliar with CuTe DSL, Simon's blog (veitner.bearblog.dev) provides an accessible introduction to the concepts underlying the DSL."
+   },
+   {
+    "heading": "5. Practical Notes",
+    "anchor": "5-practical-notes",
+    "gist": "- **Nsight Compute profiling:** Modal does not support ncu — cloud platforms lack hardware counter permissions."
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\npip install modal\nmodal run fa4_benchmark.py\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/flash-attention-4-hands-on-without-b200.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

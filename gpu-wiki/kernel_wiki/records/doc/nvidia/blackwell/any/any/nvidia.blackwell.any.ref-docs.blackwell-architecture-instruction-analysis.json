@@ -1,0 +1,145 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.blackwell-architecture-instruction-analysis",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|blackwell-architecture-instruction-analysis|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): GPGPU Architecture: Blackwell Instruction Analysis",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "GPGPU Architecture: Blackwell Instruction Analysis"
+  },
+  "title": "GPGPU Architecture: Blackwell Instruction Analysis",
+  "summary": "A comprehensive analysis of Blackwell (B200, SM100) architecture features, instruction set, and GEMM design — covering hardware specifications, tcgen05 ISA, Tensor Memory, SMEM layout, and CUTLASS tiling strategies.",
+  "sections": [
+   {
+    "heading": "1. Hardware Architecture",
+    "anchor": "1-hardware-architecture",
+    "gist": "The GB200 (B200 dual-die) key parameters:"
+   },
+   {
+    "heading": "2. Preferred Thread Block Clusters",
+    "anchor": "2-preferred-thread-block-clusters",
+    "gist": "Hopper introduced Thread Block Clusters with TMA multicast load and higher-bandwidth L2 cache mediation to reduce global memory bandwidth pressure."
+   },
+   {
+    "heading": "3. Dynamic Tile Scheduling",
+    "anchor": "3-dynamic-tile-scheduling",
+    "gist": "CUTLASS designed persistent kernels for Hopper GEMM (persistent WASP pingpong/cooperative kernels)."
+   },
+   {
+    "heading": "4. tcgen05 ISA Overview",
+    "anchor": "4-tcgen05-isa-overview",
+    "gist": "Blackwell's 5th-generation Tensor Cores represent NVIDIA's most aggressive GPGPU DSA step:"
+   },
+   {
+    "heading": "5. Tensor Memory",
+    "anchor": "5-tensor-memory",
+    "gist": "Tensor Memory is a dedicated 2D on-SM memory ([rows/lanes, columns]) accessible only by tcgen05 instructions — not by thread-level SIMT instructions."
+   },
+   {
+    "heading": "6. tcgen05.mma Instruction",
+    "anchor": "6-tcgen05-mma-instruction",
+    "gist": "The MMA shape depends on precision, `.ws` mode, CTA group count, and sparsity:"
+   },
+   {
+    "heading": "7. Instruction Dispatch and Synchronization",
+    "anchor": "7-instruction-dispatch-and-synchronization",
+    "gist": "Key differences from Hopper WGMMA: - Both are asynchronous requiring explicit synchronization - WGMMA: all threads in a warpgroup participate in dispatch and sync (single SM) - UMMA: **single thread** dispatches — more lightweight, enables…"
+   },
+   {
+    "heading": "8. GEMM on Blackwell",
+    "anchor": "8-gemm-on-blackwell",
+    "gist": "Unlike Hopper's pingpong design (WG1 Epilogue overlaps with WG2 WGMMA), Blackwell's mainloop Tensor Core execution is single-thread dispatched and fully async."
+   },
+   {
+    "heading": "9. References",
+    "anchor": "9-references",
+    "gist": "- NVIDIA GTC 2025 Keynote - CUTLASS Blackwell Cluster Launch Control documentation - CUTLASS Blackwell Functionality documentation - Dissecting the NVIDIA Hopper Architecture through Microbenchmarking and Multiple Level Analysis - NVIDIA P…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\n/// Launches a kernel using the CUDA Extensible Launch API and Threadblock Clusters.\n/// This API is for preferred cluster launch; a preferred and a fallback cluster shapes are\n/// considered for launch respectively.\nvirtual Status launch(\n    dim3 const grid_dims,\n    dim3 const cluster_dims,\n    dim3 const fallback_cluster_dims,\n    dim3 const block_dims,\n    size_t const smem_size,\n    cudaStream_t cuda_stream,\n    void** kernel_params,\n    int32_t kernel_index) const = 0;\n```\n\n```\n// Single-CTA version:\ntcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [sMemAddr1], 32;\nld.shared.b32 taddr, [sMemAddr1];\n// use taddr ...\ntcgen05.dealloc.cta_group::1.sync.aligned.b32 taddr, 32;\ntcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;\n\n// CTA-pair version:\ntcgen05.alloc.cta_group::2.sync.aligned.shared::cta.b32 [sMemAddr2], 32;\nld.shared.b32 taddr, [sMemAddr2];\n// use taddr ...\ntcgen05.dealloc.cta_group::2.sync.aligned.b32 taddr, 32;\ntcgen05.relinquish_alloc_permit.cta_group::2.sync.aligned;\n```\n\n```cpp\nint cta_rank = static_cast<int>(cute::block_rank_in_cluster());\nauto cta_in_cluster_coord_vmnk = cluster_layout_vmnk.get_flat_coord(cta_rank);\nauto elect_one_cta = cute::get<0>(cta_in_cluster_coord_vmnk) == cute::Int<0>{};\nif (elect_one_cta) {\n    // Issue pair-UMMA from single thread\n}\n```\n\n```cpp\nTiledMMA tiled_mma = make_tiled_mma(\n    cute::SM100_MMA_F16BF16_SS<\n        TypeA, TypeB, TypeC,\n        MmaM, MmaN,\n        cute::UMMA::Major::K,\n        cute::UMMA::Major::K>{}\n);\n```\n\n```cpp\nuint16_t tma_mcast_mask_a = create_tma_multicast_mask<2>(cluster_layout_vmnk, cta_coord);\nuint16_t tma_mcast_mask_b = create_tma_multicast_mask<1>(cluster_layout_vmnk, cta_coord);\nuint16_t mma_mcast_mask_c = create_tma_multicast_mask<0,1>(...) |\n                             create_tma_multicast_mask<0,2>(...);\n```\n\n```cpp\n// Init MMA barrier\nif (elect_one_warp && elect_one_thr) {\n    cute::initialize_barrier(shared_storage.mma_barrier, 1);\n}\nint mma_barrier_phase_bit = 0;\n__syncthreads();\n\ntiled_mma.accumulate_ = UMMA::ScaleOut::Zero;\nfor (int k_tile = 0; k_tile < size<3>(tCgA); ++k_tile) {\n    // ... copy data in ...\n    if (elect_one_warp) {\n        for (int k_block = 0; k_block < size<2>(tCrA); ++k_block) {\n            gemm(tiled_mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCtAcc);\n            tiled_mma.accumulate_ = UMMA::ScaleOut::One;\n        }\n        cutlass::arch::umma_arrive(&shared_storage.mma_barrier);\n    }\n    cute::wait_barrier(shared_storage.mma_barrier, mma_barrier_phase_bit);\n    mma_barrier_phase_bit ^= 1;\n}\n// ... copy data out ...\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/blackwell-architecture-instruction-analysis.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

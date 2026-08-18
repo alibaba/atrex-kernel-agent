@@ -1,0 +1,164 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|gdn|cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): MI308 Chunk-GDN Wave-Specialized Megakernel Playbook",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "MI308 Chunk-GDN Wave-Specialized Megakernel Playbook"
+  },
+  "title": "MI308 Chunk-GDN Wave-Specialized Megakernel Playbook",
+  "summary": "pattern: flydsl_wave_specialized_megakernel framework: FlyDSL arch: cdna3/gfx942 gpu: MI308X operator: Chunk-GDN fused forward profiling: rocprofv3 knowledge_use: warp-specialization megakernel porting playbook",
+  "sections": [
+   {
+    "heading": "Applicability Card",
+    "anchor": "applicability-card",
+    "gist": "When a linear attention / SSM / recurrent-state kernel satisfies the following conditions simultaneously, this experience can be applied as a warp-specialization megakernel porting method:"
+   },
+   {
+    "heading": "One-Page Summary",
+    "anchor": "one-page-summary",
+    "gist": "- The final pipeline is not a fully single kernel, but rather 3 kernels:"
+   },
+   {
+    "heading": "FlashQLA to MI308 Migration Model",
+    "anchor": "flashqla-to-mi308-migration-model",
+    "gist": "FlashQLA's Hopper/SM90 megakernel fuses the latter half as:"
+   },
+   {
+    "heading": "Algorithm Boundary",
+    "anchor": "algorithm-boundary",
+    "gist": "Chunk-GDN has 6 GEMMs per `BT=64` chunk:"
+   },
+   {
+    "heading": "Final Implementation Structure",
+    "anchor": "final-implementation-structure",
+    "gist": "table columns: File, Purpose"
+   },
+   {
+    "heading": "Performance Results",
+    "anchor": "performance-results",
+    "gist": "Configuration:"
+   },
+   {
+    "heading": "Optimization Journey (Condensed)",
+    "anchor": "optimization-journey-condensed",
+    "gist": "table columns: Stage, Decision, Result"
+   },
+   {
+    "heading": "Tuning Workflow",
+    "anchor": "tuning-workflow",
+    "gist": "1."
+   },
+   {
+    "heading": "Rejected Patterns",
+    "anchor": "rejected-patterns",
+    "gist": "table columns: Attempt, Why It Failed, Design Rule"
+   },
+   {
+    "heading": "Relationship with Other AMD Documents",
+    "anchor": "relationship-with-other-amd-documents",
+    "gist": "- For Tile/Grid decisions, refer to `` and ``."
+   },
+   {
+    "heading": "Path Index",
+    "anchor": "path-index",
+    "gist": "table columns: Content, Path"
+   },
+   {
+    "heading": "Open Issues",
+    "anchor": "open-issues",
+    "gist": "- tiny suffix `input_len=1/17` still requires separate optimization and profiling; - 0.8B/2B shapes are outside the scope of this round of strategy; - `(16,48)/(16,64)` Triton long normal `input_len=200000` memory fault requires independen…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nchunk_local_cumsum\n  -> chunk_gated_delta_rule_fwd_kkt_solve_kernel\n  -> FlyDSL megakernel(recompute_w_u + fwd_h + fwd_o)\n```\n\n```text\ncumsum -> kkt_solve -> megakernel(recompute_w_u + fwd_h + fwd_o)\n```\n\n```text\n8 waves = 4 compute waves + 4 producer waves\nsingle-buffer LDS + lifetime alias\nh_acc stays in fp32 fragments\nproducer stages Q/K^T/A/g/beta in barrier windows\nO direct GMEM store, not O-through-LDS\n```\n\n```text\nrecompute_w_u -> fwd_h -> fwd_o\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-chunk-gdn-mi308x-wave-specialized-megakernel-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

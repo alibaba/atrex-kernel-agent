@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.double-buffering.tmem-double-buffering",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|double-buffering#tmem-double-buffering|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tmem-double-buffering"
+  ],
+  "triggers": [
+   "the 'TMEM Double-Buffering' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): TMEM Double-Buffering",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Double/Multi-Buffering Patterns -- TMEM Double-Buffering"
+  },
+  "technique": "TMEM Double-Buffering",
+  "what": "Tensor Memory (TMEM) on Blackwell has 128 rows x 512 columns of 32-bit elements (256 KB per SM). For a standard GEMM with TILE_M=128, TILE_N=256, the accumulator requires 128 x 256 = 32,768 elements, which fits in half the TMEM column space (256 out of 512 columns). The other 256 columns serve as the second buffer.",
+  "when": "Tensor Memory (TMEM) on Blackwell has 128 rows x 512 columns of 32-bit elements (256 KB per SM).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// TMEM double-buffering: ping-pong between two 128x256 accumulator regions\n//\n// TMEM physical layout (per SM):\n// +------ 256 cols ------+------ 256 cols ------+\n// |                      |                      |\n// |   Buffer A (active)  |   Buffer B (drain)   |  128 rows\n// |   MMA writes here    |   Epilogue reads     |\n// |                      |                      |\n// +----------------------+----------------------+\n//\n// After tile completes, roles swap:\n// Buffer A becomes \"drain\", Buffer B becomes \"active\"\n\n#define TMEM_BUF_A_OFFSET  0\n#define TMEM_BUF_B_OFFSET  256\n#define TMEM_COLS_PER_BUF  256\n\n__device__ void tmem_double_buffer_mainloop(\n    const GemmParams& params,\n    int num_output_tiles)\n{\n    int warp_id = threadIdx.x / 32;\n    int lane_id = threadIdx.x % 32;\n\n    // Synchronization between MMA warp and epilogue warps\n    __shared__ uint64_t mbar_acc_ready[2];   // MMA done, epilogue can read\n    __shared__ uint64_t mbar_acc_drained[2]; // Epilogue done, MMA can reuse\n\n    if (threadIdx.x == 0) {\n        mbarrier_init(&mbar_acc_ready[0], 1);\n        mbarrier_init(&mbar_acc_ready[1], 1);\n        mbarrier_init(&mbar_acc_drained[0], 1);\n        mbarrier_init(&mbar_acc_drained[1], 1);\n    }\n    __syncthreads();\n\n    for (int tile = 0; tile < num_output_tiles; tile++) {\n        int buf = tile % 2;\n        int tmem_offset = buf ? TMEM_BUF_B_OFFSET : TMEM_BUF_A_OFFSET;\n\n        if (warp_id == 1) {\n            // === MMA WARP ===\n            // Wait for epilogue to finish draining this buffer\n            if (tile >= 2) {\n                mbarrier_wait(&mbar_acc_drained[buf]);\n            }\n\n            // Clear accumulator region before new tile\n            if (lane_id == 0) {\n                tmem_clear(tmem_offset, TMEM_COLS_PER_BUF);\n            }\n            __syncwarp();\n\n            // Accumulate K-tiles into this TMEM buffer\n            for (int k = 0; k < num_k_tiles; k++) {\n                // (TMA load sync omitted -- see pipeline-stages)\n                if (lane_id == 0) {\n                    tcgen05_mma_accumulate(tmem_offset);\n                }\n                __syncwarp();\n            }\n\n            // Signal epilogue that accumulator is ready\n            if (lane_id == 0) {\n                mbarrier_arrive(&mbar_acc_ready[buf]);\n            }\n\n        } else if (warp_id >= 2) {\n            // === EPILOGUE WARPS ===\n            // Wait for MMA to finish accumulating\n            mbarrier_wait(&mbar_acc_ready[buf]);\n\n            // Read TMEM and store to global memory\n            int rows_per_warp = TILE_M / 14;\n            int my_row = (warp_id - 2) * rows_per_warp;\n            for (int r = my_row; r < my_row + rows_per_warp; r++) {\n                for (int c = lane_id; c < TMEM_COLS_PER_BUF; c += 32) {\n                    float val = tmem_load_f32(r, tmem_offset + c);\n                    // Apply epilogue and store...\n                    params.C_ptr[r * params.N + c] = __float2half(val);\n                }\n            }\n\n            // All epilogue warps must finish reading TMEM before the MMA\n            // warp can overwrite this half-buffer. Each epilogue warp arrives\n            // on a shared mbarrier; the mbarrier is initialized with\n            // arrival_count = NUM_EPILOGUE_WARPS (e.g. 14 for warps 2-15).\n            // The MMA warp waits on this mbarrier before reusing the buffer.\n            if (lane_id == 0) {\n                mbarrier_arrive(&mbar_acc_drained[buf]);\n            }\n            // mbar_acc_drained[buf] fires only after ALL epilogue warps arrive\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/double-buffering.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

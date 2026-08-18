@@ -1,0 +1,47 @@
+{
+ "schema": "hw-1.0",
+ "id": "amd.generic.spec-sheet.generic",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "amd",
+  "arch": "generic",
+  "product": null,
+  "sm_arch": null,
+  "compute_capability": null
+ },
+ "facts": {
+  "summary": "Hardware Specification Comparison: CDNA3 vs CDNA4 vs RDNA4 Architecture Parameters",
+  "peak_compute": [
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 247,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 39,
+    "use_case": "~312.5 dense / ~625 sparse"
+   }
+  ],
+  "memory": {
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Hardware Specification Comparison: CDNA3 vs CDNA4 vs RDNA4 Architecture Parameters",
+    "kind": "third-party-analysis",
+    "ref": "amd/common/hardware-specs/hardware-comparison-cdna3-cdna4.md"
+   }
+  ]
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.swizzling.tma-swizzle-encoding",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|swizzling#tma-swizzle-encoding|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tma-swizzle-encoding"
+  ],
+  "triggers": [
+   "the 'TMA Swizzle Encoding' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): TMA Swizzle Encoding",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Nsight Compute command to check shared memory bank conflicts -- TMA Swizzle Encoding"
+  },
+  "technique": "TMA Swizzle Encoding",
+  "what": "The TMA descriptor encodes the swizzle mode when creating a tensor map. The swizzle mode must match what the consumer (tcgen05.mma or wgmma) expects:",
+  "when": "The TMA descriptor encodes the swizzle mode when creating a tensor map.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Creating a TMA descriptor with 128-byte swizzle\n#include <cuda.h>\n\nCUtensorMap tensor_map;\n\n// Swizzle mode: CU_TENSOR_MAP_SWIZZLE_128B\n// This tells TMA to apply the 128-byte XOR swizzle pattern\n// when writing data into shared memory\ncuTensorMapEncodeTiled(\n    &tensor_map,\n    CU_TENSOR_MAP_DATA_TYPE_FLOAT16,\n    2,                                    // 2D tensor\n    global_ptr,                           // global memory base\n    global_dims,                          // {N, M} dimensions\n    global_strides,                       // {N * sizeof(half), sizeof(half)}\n    tile_dims,                            // {TILE_N, TILE_M}\n    element_strides,                      // {1, 1}\n    CU_TENSOR_MAP_INTERLEAVE_NONE,\n    CU_TENSOR_MAP_SWIZZLE_128B,           // 128-byte swizzle\n    CU_TENSOR_MAP_L2_PROMOTION_NONE,\n    CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE\n);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/swizzling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

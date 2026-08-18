@@ -1,0 +1,38 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.ld-global",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "ld.global",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "ld.global.L1::no_allocate.v2.u64  {r0, r1}, [addr];",
+   "ld.global.L1::evict_last.v2.u64  {r0, r1}, [addr];",
+   "ld.global.v4.u64  {r0, r1, r2, r3}, [addr];  // 256-bit"
+  ],
+  "semantics": "Streaming data (use once): bypass L1; Reused data: keep in L1; Wide vectorized loads"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Cache Control for Memory-Bound Kernels",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

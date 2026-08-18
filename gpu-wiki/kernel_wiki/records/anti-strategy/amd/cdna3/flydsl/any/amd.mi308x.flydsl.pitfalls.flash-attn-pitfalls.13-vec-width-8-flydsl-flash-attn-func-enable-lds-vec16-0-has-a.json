@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.13-vec-width-8-flydsl-flash-attn-func-enable-lds-vec16-0-has-a",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#13-vec-width-8-flydsl-flash-attn-func-enable-lds-vec16-0-has-a|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '13. VEC_WIDTH=8 (FLYDSL_FLASH_ATTN_FUNC_ENABLE_LDS_VEC16=0) has a' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 13. VEC_WIDTH=8 (FLYDSL_FLASH_ATTN_FUNC_ENABLE_LDS_VEC16=0) has a",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 13. VEC_WIDTH=8 (FLYDSL_FLASH_ATTN_FUNC_ENABLE_LDS_VEC16=0) has a"
+  },
+  "attempted": "`VEC_WIDTH=16` (default) makes `THREADS_PER_ROW_LOAD=8`, which puts the \"adjacent-row peer\" at `lane XOR 8` — awkward for `permlanex16` (XOR-16). Switching to `VEC_WIDTH=8` gives `THREADS_PER_ROW_LOAD=16`, so peer is at `lane XOR 16` — clean. So just flip the env var and iterate.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "**always verify the baseline first** when a config knob promises to simplify your optimization. The env gate `FLYDSL_FLASH_ATTN_FUNC_ENABLE_LDS_VEC16=0` is marked in comments as \"for legacy compatibility\" but is effectively **broken for production**. v14 uses VEC_WIDTH=16 + `ds_swizzle` XOR-8 instead (offset:0x201F) to avoid touching VEC_WIDTH at all.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "not diagnosed yet. `VEC_WIDTH=8` changes K_STRIDE, LDS tile sizes, load/store granularity — somewhere in those derived constants there's an off-by-something that the VEC_WIDTH=16 path doesn't hit."
+  },
+  "observed": "baseline (NO v14 changes) at VEC_WIDTH=8 has max abs error 0.030 — way above bf16 noise (~1e-3). The whole kernel is subtly wrong at this setting. Adding any v14 change stacks a second bug on top and obscures debugging (err 0.477 reported for a while because both bugs combined).",
+  "root_cause": "not diagnosed yet. `VEC_WIDTH=8` changes K_STRIDE, LDS tile sizes, load/store granularity — somewhere in those derived constants there's an off-by-something that the VEC_WIDTH=16 path doesn't hit."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

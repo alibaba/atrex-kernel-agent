@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.swizzling.how-128-byte-swizzling-works",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|swizzling#how-128-byte-swizzling-works|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "how-128-byte-swizzling-works"
+  ],
+  "triggers": [
+   "the 'How 128-Byte Swizzling Works' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): How 128-Byte Swizzling Works",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Nsight Compute command to check shared memory bank conflicts -- How 128-Byte Swizzling Works"
+  },
+  "technique": "How 128-Byte Swizzling Works",
+  "what": "The swizzle function XORs a portion of the column address with the row address to scatter accesses across banks:",
+  "when": "The swizzle function XORs a portion of the column address with the row address to scatter accesses across banks:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// 128-byte swizzle: XOR bits [4:6] of the byte offset with the row index\n// This ensures that consecutive rows accessing the same logical column\n// map to different physical SMEM banks.\n//\n// For a tile stored in SMEM with TILE_N columns of 2-byte elements:\n//   byte_offset = row * (TILE_N * sizeof(half)) + col * sizeof(half)\n//   swizzled_offset = byte_offset ^ ((row & 0x7) << 4)\n//\n// The mask 0x7 = 3 bits, shift 4 = bits [4:6], giving 8-row periodicity\n// across the 128-byte bank group.\n\n__device__ int swizzle_128B(int row, int col, int stride_bytes) {\n    int byte_offset = row * stride_bytes + col * sizeof(half);\n    // XOR bits [4:6] of byte offset with low 3 bits of row\n    int swizzled = byte_offset ^ ((row & 0x7) << 4);\n    return swizzled;\n}\n```\n\n```\nWithout swizzle (row-major):\n  Row 0: bank 0,1,2,...,31  bank 0,1,2,...,31\n  Row 1: bank 0,1,2,...,31  bank 0,1,2,...,31\n  Row 2: bank 0,1,2,...,31  bank 0,1,2,...,31\n  -> Column access = 8-way bank conflict\n\nWith 128B swizzle (XOR pattern):\n  Row 0: bank 0,1,2,...,31  bank 0,1,2,...,31\n  Row 1: bank 1,2,3,...,0   bank 1,2,3,...,0    (rotated by 1)\n  Row 2: bank 2,3,4,...,1   bank 2,3,4,...,1    (rotated by 2)\n  -> Column access = conflict-free\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/swizzling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

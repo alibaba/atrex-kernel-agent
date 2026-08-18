@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-to-tmem.the-register-pressure-problem-on-hopper",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|register-to-tmem#the-register-pressure-problem-on-hopper|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "the-register-pressure-problem-on-hopper"
+  ],
+  "triggers": [
+   "the 'The Register Pressure Problem on Hopper' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): The Register Pressure Problem on Hopper",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Accumulators to TMEM -- The Register Pressure Problem on Hopper"
+  },
+  "technique": "The Register Pressure Problem on Hopper",
+  "what": "Each SM90 SM has **65,536 registers** (256KB). A typical GEMM warpgroup needs:",
+  "when": "Each SM90 SM has **65,536 registers** (256KB).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nHopper wgmma m64xn256xk16 BF16 register budget (per thread):\n\n  Accumulator:        128 FP32 registers (m64 x n256 / 128 threads)\n  A operand:           16 registers (via ldmatrix)\n  B descriptor:         2 registers\n  Loop variables:       8 registers\n  SMEM pointers:        4 registers\n  TMA state:            6 registers\n  Misc (indexing):     10 registers\n  ─────────────────────────────\n  Total per thread:   ~174 registers\n\n  Per warpgroup (128 threads): 174 * 128 = 22,272 registers\n  Per SM (65,536 regs): max 2 warpgroups = 2 CTAs at this tile size\n\n  Occupancy: 2 CTAs per SM (limited by registers)\n```\n\n```\nDouble-buffered accumulator: 256 registers per thread\nTotal per thread:            ~300 registers\nPer warpgroup:              38,400 registers\nPer SM:                     max 1 warpgroup -> 1 CTA per SM\n\nOccupancy: 1 CTA per SM (severe underutilization)\n```\n\n```\nRegister access:  ~4 cycles\nL1 local access:  ~30 cycles\nL2 spill access:  ~200 cycles\n\nA single spilled accumulator register accessed every MMA iteration\ncan cost 200 cycles * K_tiles additional latency.\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/register-to-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

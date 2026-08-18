@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gpu-execution-model",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-execution-model|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): GPU Execution Model and Thread Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "GPU Execution Model and Thread Optimization"
+  },
+  "title": "GPU Execution Model and Thread Optimization",
+  "summary": "GPUs use the SIMT (Single Instruction, Multiple Threads) model:",
+  "sections": [
+   {
+    "heading": "SIMT Execution Model",
+    "anchor": "simt-execution-model",
+    "gist": "GPUs use the SIMT (Single Instruction, Multiple Threads) model:"
+   },
+   {
+    "heading": "Warp Divergence",
+    "anchor": "warp-divergence",
+    "gist": "When threads within the same warp take different branch paths, the GPU must execute each path serially — all threads execute all paths, but only threads that satisfy the condition commit their results."
+   },
+   {
+    "heading": "Occupancy Optimization",
+    "anchor": "occupancy-optimization",
+    "gist": "Occupancy = Active warps / Maximum warps supported by an SM"
+   },
+   {
+    "heading": "Latency Hiding",
+    "anchor": "latency-hiding",
+    "gist": "GPUs hide various types of latency through massive parallel threads:"
+   },
+   {
+    "heading": "Concurrent Kernel Execution",
+    "anchor": "concurrent-kernel-execution",
+    "gist": "Multiple kernels can execute concurrently through different streams (command queues), suitable for scenarios where a single kernel cannot fully utilize the GPU."
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **Same-tier Complementary**: GPU Memory Hierarchy and Optimization — Together with this document, forms the Tier 0 foundational knowledge - **Advanced**: GPU Instruction-Level Optimization"
+   }
+  ],
+  "implementation": {
+   "snippet": "```c\n// 1D\nint tid = blockIdx.x * blockDim.x + threadIdx.x;\n\n// 2D\nint row = blockIdx.y * blockDim.y + threadIdx.y;\nint col = blockIdx.x * blockDim.x + threadIdx.x;\n\n// Linearized order: x changes fastest (consecutive threadIdx.x corresponds to consecutive threads)\n```\n\n```c\n// ❌ Thread-level divergence: Threads within same warp take different paths\nif (threadIdx.x % 2 == 0) {\n    do_something();\n} else {\n    do_other();\n}\n\n// ✅ Warp-level divergence: Entire warp takes same path\nif (threadIdx.x / 32 % 2 == 0) {  // Branch by warp\n    do_something();\n} else {\n    do_other();\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gpu-execution-model.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.training-optimization-practice",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|training-optimization-practice|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community Large Model Training Optimization Practices",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community Large Model Training Optimization Practices"
+  },
+  "title": "Community Large Model Training Optimization Practices",
+  "summary": "> This document synthesizes technical articles from the Zhihu community, distilling knowledge on GPU optimization practices in large model training scenarios. > It covers GPU resource optimization techniques, training performance analysis and diagnosis, mixed-precision training, Triton compiler optimization, > single-GPU training of very large models, and engineering practices for sparse model training. > > See the \"Information Sources\" section at the end of the article for a list of source articles.",
+  "sections": [
+   {
+    "heading": "GPU Resource Optimization: 12 Practical Tips",
+    "anchor": "gpu-resource-optimization-12-practical-tips",
+    "gist": "The following tips are based on community practice summaries, covering common optimization points from single GPU to clusters:"
+   },
+   {
+    "heading": "Training Performance Bottleneck Analysis and Diagnosis",
+    "anchor": "training-performance-bottleneck-analysis-and-diagnosis",
+    "gist": "Nsight Systems is NVIDIA's official system-level profiling tool, suitable for analyzing end-to-end training performance:"
+   },
+   {
+    "heading": "Mixed Precision Training Optimization",
+    "anchor": "mixed-precision-training-optimization",
+    "gist": "table columns: Feature, FP16, BF16"
+   },
+   {
+    "heading": "Triton/Gluon Compiler Optimization",
+    "anchor": "triton-gluon-compiler-optimization",
+    "gist": "The AMD Triton compiler adds AMD-specific optimizations on top of the standard pipeline (frontend → optimizer → backend):"
+   },
+   {
+    "heading": "Single-GPU Ultra-Large Model Training: MegaTrain",
+    "anchor": "single-gpu-ultra-large-model-training-megatrain",
+    "gist": "The MegaTrain approach enables training 100B+ parameter models on a single GPU, with CPU-centric design as its core concept:"
+   },
+   {
+    "heading": "Sparse Model Training: JD Advertising Practices",
+    "anchor": "sparse-model-training-jd-advertising-practices",
+    "gist": "Training architecture for ultra-large sparse models (TB-level embedding parameters) in JD's advertising scenario:"
+   },
+   {
+    "heading": "PTX and Low-Level Optimization",
+    "anchor": "ptx-and-low-level-optimization",
+    "gist": "PTX (Parallel Thread Execution) is NVIDIA's virtual instruction set, positioned between LLVM IR and SASS machine code:**Register Allocation**: - PTX uses infinite virtual registers, which are mapped to physical registers by the compiler - …"
+   },
+   {
+    "heading": "Information Sources",
+    "anchor": "information-sources",
+    "gist": "This article synthesizes content from the following Zhihu articles:"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **GPU Execution Model**: GPU Execution Model and Thread Optimization -- SIMT, warp, and occupancy fundamentals - **GPU Memory Hierarchy**: GPU Memory Hierarchy and Optimization -- Regi…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nscaler = torch.cuda.amp.GradScaler()\nwith torch.cuda.amp.autocast():\n    output = model(input)\n    loss = criterion(output, target)\nscaler.scale(loss).backward()\nscaler.step(optimizer)\nscaler.update()\n```\n\n```python\nDataLoader(\n    dataset,\n    num_workers=4,         # Number of CPU prefetch threads, typically set to half of CPU core count\n    pin_memory=True,       # Pinned memory, accelerates CPU→GPU transfer\n    prefetch_factor=2,     # Number of batches prefetched per worker\n    persistent_workers=True # Avoid recreating workers each epoch\n)\n```\n\n```bash\nnsys profile -t cuda,nvtx,osrt -o report python train.py\n```\n\n```python\nimport torch.cuda.nvtx as nvtx\nnvtx.range_push(\"forward\")\noutput = model(input)\nnvtx.range_pop()\n```\n\n```python\nwith torch.profiler.profile(\n    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],\n    schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),\n    on_trace_ready=torch.profiler.tensorboard_trace_handler('./logs'),\n) as prof:\n    for step, data in enumerate(dataloader):\n        # training step\n        prof.step()\n```\n\n```\nData sharding → Embedding Lookup (CPU/GPU collaboration) → Dense network (GPU) → Gradient update\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/training-optimization-practice.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

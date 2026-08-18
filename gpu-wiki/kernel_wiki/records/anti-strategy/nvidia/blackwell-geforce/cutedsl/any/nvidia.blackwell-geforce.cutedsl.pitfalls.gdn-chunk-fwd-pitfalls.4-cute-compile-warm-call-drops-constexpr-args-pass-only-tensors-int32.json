@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.4-cute-compile-warm-call-drops-constexpr-args-pass-only-tensors-int32",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#4-cute-compile-warm-call-drops-constexpr-args-pass-only-tensors-int32|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '4. cute.compile warm call drops Constexpr args — pass only tensors + Int32' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 4. cute.compile warm call drops Constexpr args — pass only tensors + Int32",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 4. cute.compile warm call drops Constexpr args — pass only tensors + Int32"
+  },
+  "attempted": "You pass `cutlass.Constexpr[int]` values (T, H, HV, etc.) to the compiled kernel's warm call, matching the cold compile signature.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Cold compile: pass everything (tensors + Int32 + Constexpr). Warm call: pass ONLY tensors + Int32, in the same order, omitting all Constexpr args.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`cute.compile` captures all `Constexpr[...]` values at compile time and eliminates them from the runtime signature. The warm call only accepts runtime arguments: `cute.Tensor` (via `from_dlpack`) and `cutlass.Int32`."
+  },
+  "observed": "Silent garbage output or crash. The warm call ignores Constexpr args entirely — they were baked into the compiled kernel during `cute.compile`. Extra positional args shift tensor bindings.",
+  "root_cause": "`cute.compile` captures all `Constexpr[...]` values at compile time and eliminates them from the runtime signature. The warm call only accepts runtime arguments: `cute.Tensor` (via `from_dlpack`) and `cutlass.Int32`.",
+  "implementation": {
+   "snippet": "```python\n# Cold compile\ncompiled = cute.compile(launch_fn, mK, mQ, mO, cutlass.Int32(B), T, H, NT)\n# Warm call — no T, H, NT\ncompiled(mK, mQ, mO, cutlass.Int32(B))\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

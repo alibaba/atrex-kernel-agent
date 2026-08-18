@@ -1,0 +1,158 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-dispatcher-kernel-selection",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ck-dispatcher-kernel-selection|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CK Tile Dispatcher and ML-Driven Kernel Selection",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CK Tile Dispatcher and ML-Driven Kernel Selection"
+  },
+  "title": "CK Tile Dispatcher and ML-Driven Kernel Selection",
+  "summary": "The Composable Kernel (CK) Tile Dispatcher subsystem provides a unified kernel selection and execution engine, supporting both C++ and Python frontends. Its core highlight is the LightGBM-based ML heuristic: through 72-dimensional feature engineering, it predicts the TFLOPS of each kernel configuration, completing the selection of the optimal kernel from over 4600 candidate kernels in microseconds, achieving 98.28% of oracle-best efficiency in benchmarks.",
+  "sections": [
+   {
+    "heading": "Architecture Overview",
+    "anchor": "architecture-overview",
+    "gist": "table columns: Component, File, Description"
+   },
+   {
+    "heading": "ML-Driven Kernel Selection",
+    "anchor": "ml-driven-kernel-selection",
+    "gist": "The `GemmUniversalFeatureEngine` in `feature_engine.py` extracts 72 features (the code actually defines 72, while the documentation marking 55 is from an earlier version), divided into five categories:"
+   },
+   {
+    "heading": "Training Pipeline",
+    "anchor": "training-pipeline",
+    "gist": "`generate_wide_coverage.py` can generate benchmark data for 706 diverse shapes, and `generate_edge_dims.py` covers edge cases such as N=1 Blocharacter1."
+   },
+   {
+    "heading": "Model Performance",
+    "anchor": "model-performance",
+    "gist": "table columns: Metric, 108 shapes, 168 shapes (wide coverage)"
+   },
+   {
+    "heading": "C++ Side Integration",
+    "anchor": "c-side-integration",
+    "gist": "`ml_heuristic.hpp` implements C++ side inference via the LightGBM C API:"
+   },
+   {
+    "heading": "Code Generation",
+    "anchor": "code-generation",
+    "gist": "`codegen/unified_gemm_codegen.py` generates kernel instance code based on `arch_specs.json`:"
+   },
+   {
+    "heading": "Pre-selected Kernel Instances",
+    "anchor": "pre-selected-kernel-instances",
+    "gist": "For common scenarios, CK Tile provides pre-selected kernel configurations, requiring no runtime ML inference:"
+   },
+   {
+    "heading": "Heuristic Fallback",
+    "anchor": "heuristic-fallback",
+    "gist": "When the ML model is unavailable, the Dispatcher falls back to rule-based strategies:"
+   },
+   {
+    "heading": "Supported GPU Architectures",
+    "anchor": "supported-gpu-architectures",
+    "gist": "table columns: Architecture, GPU, ROCm Version"
+   },
+   {
+    "heading": "Key Takeaways",
+    "anchor": "key-takeaways",
+    "gist": "The following are experimental conclusions from ``:"
+   },
+   {
+    "heading": "File Structure",
+    "anchor": "file-structure",
+    "gist": "---"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- CK Quantized GEMM and MX Format -- Dispatcher-managed quantized GEMM kernel - CK MoE / Norm / Conv Operators -- More operator types to be covered by Dispatcher in the future"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nKernelConfig → Registry → Dispatcher → GPU Execution\n                              |\n                         SelectionStrategy\n                        /                \\\n                  FirstFit            Heuristic\n                                    /         \\\n                              Rule-based    ML (LightGBM)\n```\n\n```cpp\nenum class SelectionStrategy {\n FirstFit, // current problem kernel\n Heuristic // use heuristic function sort\n};\n\n// definition heuristic\ndispatcher.set_heuristic([](const Problem& p) -> std::vector<std::string> {\n // returnsbyperformancesort kernel identifier column\n    return ranked_kernel_ids;\n});\n```\n\n```\n1. Profiling: GPU benchmark( shape x kernel)\n2. Feature Extraction: 72\n3. Model Training: LightGBM (log-space)\n4. Prediction: problem kernel TFLOPS\n5. Selection: TFLOPS high kernel\n```\n\n```bash\n# 1. benchmark data( shape kernel configuration)\npython3 generate_benchmark_data.py \\\n    --build_dir /path/to/build \\\n    --output_dir data/fp16_original \\\n    --dtype fp16 --layout rcr \\\n    --num_build_jobs 4 --warmup 10 --repeat 50\n\n# 2. conversion parquet\npython3 convert_json_to_parquet.py \\\n    --input data/fp16_original/benchmark_results_fp16_rcr.json \\\n    --output data/fp16_original/fp16_training_data.parquet \\\n    --arch gfx950\n```\n\n```bash\npython3 train.py \\\n    --data_dir data/ \\\n    --out_dir models/gemm_universal_fp8_gfx950 \\\n    --op gemm_universal --dtype fp8 --arch gfx950\n```\n\n```bash\npython3 train.py \\\n    --data_dir data/ \\\n    --out_dir models/v2 \\\n    --warm_start models/gemm_universal_fp8_gfx950 \\\n    --warm_start_n_estimators 200\n```\n\n```cpp\n// 72 ( Python )\nstatic constexpr int NUM_FEATURES = 72;\nstd::array<double, NUM_FEATURES> features =\n    extract_features(problem, kernel_key, hw_profile);\n\n// LightGBM\nLGBM_BoosterCreateFromModelfile(model_path, &num_iterations, &handle);\nLGBM_BoosterPredictForMat(handle, features.data(), C_API_DTYPE_FLOAT64,\n    1, NUM_FEATURES, /*is_row_major=*/1, ...);\n```\n\n```cpp\n// kernel\nRegistry registry;\nregistry.register_kernel(kernel_instance, Registry::Priority::High);\n\n// create dispatcher\nDispatcher dispatcher(&registry);\ndispatcher.set_strategy(Dispatcher::SelectionStrategy::Heuristic);\ndispatcher.set_heuristic(my_ml_heuristic);\n\n// execute\nProblem problem(M, N, K);\nfloat time_ms = dispatcher.run(a_dev, b_dev, c_dev, problem);\n```\n\n```bash\n# kernel\nmake generate_all_kernels\n\n# English note\nmake generate_kernels_gfx942\n\n# English note\nmake regenerate_all_kernels\n```\n\n```\ndispatcher/\n├── include/ck_tile/dispatcher/\n│ ├── dispatcher.hpp # main Dispatcher\n│   ├── registry.hpp          # Kernel Registry\n│ ├── kernel_key.hpp # Kernel configuration\n│ ├── kernel_instance.hpp # execute kernel\n│ ├── ml_heuristic.hpp # C++ ML (LightGBM)\n│   └── backends/             # Generated kernel backend\n├── codegen/\n│ ├── unified_gemm_codegen.py # GEMM kernel\n│ └── arch_specs.json # GPU\n├── heuristics/\n│ ├── feature_engine.py # 72\n│ ├── train.py # LightGBM\n│ ├── predict.py # sort\n│ ├── evaluate.py # evaluation\n│   ├── search.py             # Surrogate search\n│ ├── models/ # (.lgbm.gz)\n│ ├── LEARNINGS.md # experiment\n│ └── DATA_GENERATION.md # data\n└── examples/\n    └── gemm/\n ├── cpp/ # C++ example (01-06)\n └── python/ # Python example (01-11)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-dispatcher-kernel-selection.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

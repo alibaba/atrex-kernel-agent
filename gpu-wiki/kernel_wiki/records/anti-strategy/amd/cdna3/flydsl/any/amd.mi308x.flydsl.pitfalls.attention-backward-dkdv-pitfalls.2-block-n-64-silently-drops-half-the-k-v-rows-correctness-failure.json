@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.attention-backward-dkdv-pitfalls.2-block-n-64-silently-drops-half-the-k-v-rows-correctness-failure",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|pitfalls|attention-backward-dkdv-pitfalls#2-block-n-64-silently-drops-half-the-k-v-rows-correctness-failure|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '2. block_n=64 silently drops half the K/V rows (correctness failure)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 2. block_n=64 silently drops half the K/V rows (correctness failure)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Attention Backward dQ + dK+dV on MI308X (gfx942) -- 2. block_n=64 silently drops half the K/V rows (correctness failure)"
+  },
+  "attempted": "Increasing block_n from 32 to 64 doubles the K/V tile size per workgroup, reducing total workgroups and loop iterations. Benchmark shows 22% TFLOPS improvement, suggesting a clear win.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Always run correctness checks before trusting benchmark numbers. A kernel that silently computes half the output will appear faster while being wrong. The MFMA32x32x8 output layout fundamentally limits the N dimension to 32 rows per tile without inner tiling.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "MFMA32x32x8 C output maps `lane_mod_32` (lane_id % 32) to the row index. With 64-wide waves, only 32 unique row positions exist. The store logic uses `k_row = n_start + lane_mod_32`, which only covers the first 32 rows of the 64-row tile. Supporting block_n=64 would require an inner n_chunk loop that processes two 32-row sub-tiles sequentially."
+  },
+  "observed": "Rows 32-63 of dK and dV output are all zeros. 50% of KV rows are never computed.",
+  "root_cause": "MFMA32x32x8 C output maps `lane_mod_32` (lane_id % 32) to the row index. With 64-wide waves, only 32 unique row positions exist. The store logic uses `k_row = n_start + lane_mod_32`, which only covers the first 32 rows of the 64-row tile. Supporting block_n=64 would require an inner n_chunk loop that processes two 32-row sub-tiles sequentially."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/attention-backward-dkdv-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

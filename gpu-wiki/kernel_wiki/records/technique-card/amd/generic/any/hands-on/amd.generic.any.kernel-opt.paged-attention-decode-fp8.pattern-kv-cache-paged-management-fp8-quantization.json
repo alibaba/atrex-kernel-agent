@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.paged-attention-decode-fp8.pattern-kv-cache-paged-management-fp8-quantization",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|paged-attention|paged-attention-decode-fp8#pattern-kv-cache-paged-management-fp8-quantization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "paged-attention",
+   "operators": [
+    "paged-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "paged-attention",
+   "pattern-kv-cache-paged-management-fp8-quantization"
+  ],
+  "triggers": [
+   "the 'Pattern: KV Cache Paged Management + FP8 Quantization' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: KV Cache Paged Management + FP8 Quantization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Paged Attention Decode (FP8) -- Pattern: KV Cache Paged Management + FP8 Quantization"
+  },
+  "technique": "Pattern: KV Cache Paged Management + FP8 Quantization",
+  "what": "**Source**: `cdna/flydsl/FlyDSL/pa_decode_fp8.py`",
+  "when": "**Source**: `cdna/flydsl/FlyDSL/pa_decode_fp8.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@flyc.kernel\ndef paged_attention_decode_fp8(\n    q, k_cache, v_cache, page_table,\n    scale_k, scale_v,  # FP8 per-block scale\n    output, ...\n):\n    # 1. Query page table to get KV cache physical page addresses\n    page_indices = load_page_table(page_table, seq_id)\n\n    # 2. Iterate over all KV pages\n    m_i = -inf\n    l_i = 0.0\n    acc = zeros()\n\n    for page_idx in page_indices:\n        # Load FP8 KV + scale\n        k_fp8 = load_page(k_cache, page_idx)\n        v_fp8 = load_page(v_cache, page_idx)\n        k_scale = load_scale(scale_k, page_idx)\n        v_scale = load_scale(scale_v, page_idx)\n\n        # Dequant + attention (CDNA3 requires manual dequant)\n        k = dequant_fp8(k_fp8, k_scale)\n        s = dot(q, k.T)\n\n        # Online softmax\n        m_new = max(m_i, max(s))\n        p = exp2((s - m_new) * log2e)\n        alpha = exp2((m_i - m_new) * log2e)\n        acc = acc * alpha + dot(p, dequant_fp8(v_fp8, v_scale))\n        l_i = l_i * alpha + sum(p)\n        m_i = m_new\n\n    output = acc / l_i\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/paged-attention-decode-fp8.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

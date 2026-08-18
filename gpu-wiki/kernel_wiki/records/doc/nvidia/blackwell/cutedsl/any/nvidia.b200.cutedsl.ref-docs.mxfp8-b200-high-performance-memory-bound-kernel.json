@@ -1,0 +1,146 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.cutedsl.ref-docs.mxfp8-b200-high-performance-memory-bound-kernel",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|quantization|mxfp8-b200-high-performance-memory-bound-kernel|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "cutedsl",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "memory-bound"
+   ]
+  },
+  "technique_tags": [
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): High-Performance Memory-Bound Kernels on B200: An MXFP8 Quantization Case Study",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "High-Performance Memory-Bound Kernels on B200: An MXFP8 Quantization Case Study"
+  },
+  "title": "High-Performance Memory-Bound Kernels on B200: An MXFP8 Quantization Case Study",
+  "summary": "This document discusses optimization techniques for memory-bound kernels on NVIDIA B200, using an MXFP8 blockscaled quantization kernel as a practical example. Topics include persistent kernel design, 256-bit vectorized access, occupancy tuning, and asynchronous 1D TMA for scale factor storage.",
+  "sections": [
+   {
+    "heading": "1. Background",
+    "anchor": "1-background",
+    "gist": "This kernel was submitted to the SGLang community as part of a CUTLASS-based MXFP8 Blockscaled Grouped GEMM implementation."
+   },
+   {
+    "heading": "2. Kernel Design Overview",
+    "anchor": "2-kernel-design-overview",
+    "gist": "In the Grouped GEMM scenario, per-group input sizes are variable and unknown at compile time."
+   },
+   {
+    "heading": "3. Vectorized and Coalesced Access",
+    "anchor": "3-vectorized-and-coalesced-access",
+    "gist": "Each ThreadBlock loads one (128, 128) fp16/bf16 tile, stores one (128, 128) fp8 tile, plus 512 bytes of scale factors."
+   },
+   {
+    "heading": "4. Occupancy Optimization",
+    "anchor": "4-occupancy-optimization",
+    "gist": "For traditional SIMT-based memory-bound kernels, **high occupancy is nearly essential** to saturate bandwidth — sufficient schedulable warps are needed to keep the LSU fully utilized."
+   },
+   {
+    "heading": "5. TMA for Scale Factor Storage",
+    "anchor": "5-tma-for-scale-factor-storage",
+    "gist": "The 512-byte SF tile has internally shuffled rows (not Row-Major):"
+   },
+   {
+    "heading": "6. Performance Results",
+    "anchor": "6-performance-results",
+    "gist": "NCU profiling shows: - End-to-end HBM bandwidth utilization: 75%+ - Peak bandwidth utilization (PM sampling): 87%+ - Gap between end-to-end and peak is primarily due to load imbalance"
+   },
+   {
+    "heading": "7. Summary",
+    "anchor": "7-summary",
+    "gist": "Optimization techniques for B200 memory-bound kernels:"
+   },
+   {
+    "heading": "8. Design Trade-offs",
+    "anchor": "8-design-trade-offs",
+    "gist": "**Why not 2D TMA for loads?** 2D TMA requires SMEM space and typically uses multi-stage buffering that further reduces occupancy."
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nenum class QuantizationSFLayout {\n    // Block scale factors stored in swizzled layout for cutlass FP4 kernel.\n    // 512-byte blocks in global memory, each block 128x4 FP8 values.\n    // SF rows padded to multiple of 128, columns to multiple of 4.\n    // For SF row 'i': maps to data block row (i % 4) * 32 + (i / 4)\n    SWIZZLED,\n    LINEAR\n};\n```\n\n```cpp\nusing ThrLayout = Layout<Shape<_16, _8>, Stride<_8, _1>>;\nusing ValLayout = Layout<Shape<_1, _16>>;\nThrLayout thr_layout{};\nValLayout val_layout{};\n\nusing CopyOpG2R = UniversalCopy<cutlass::AlignedArray<T_IN, size(val_layout)>>;\nusing CopyAtomG2R = cute::Copy_Atom<CopyOpG2R, T_IN>;\nauto tiled_copy_g2r = cute::make_tiled_copy(CopyAtomG2R{}, thr_layout, val_layout);\n\nusing CopyOpR2G = UniversalCopy<cutlass::AlignedArray<cutlass::float_e4m3_t, size(val_layout)>>;\nusing CopyAtomR2G = cute::Copy_Atom<CopyOpR2G, cutlass::float_e4m3_t>;\nauto tiled_copy_r2g = cute::make_tiled_copy(CopyAtomR2G{}, thr_layout, val_layout);\n```\n\n```cpp\nint max_active_blocks_per_sm = -1;\nAT_CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(\n    &max_active_blocks_per_sm,\n    mxfp8_group_quant<T_IN, decltype(tiled_copy_g2r), decltype(tiled_copy_r2g), decltype(tiled_copy_r2s)>,\n    THREAD_BLOCK_SIZE, 0));\ndim3 grid(at::cuda::getCurrentDeviceProperties()->multiProcessorCount * max_active_blocks_per_sm, 1, 1);\n```\n\n```cpp\nconstexpr int tile_loop_count = size<1>(tiled_tensor_s);  // 8\n#pragma unroll 4\nfor (int t = 0; t < tile_loop_count; t++) {\n    // ...\n}\n```\n\n```\nRow 0  -> Row 0\nRow 1  -> Row 4\nRow 2  -> Row 8\nRow 3  -> Row 12\n...\nRow 32 -> Row 1\nRow 33 -> Row 5\n...\n```\n\n```cpp\nusing ScaleFactorTileLayout = Layout<Shape<Shape<_32, _4>, _4>, Stride<Stride<_16, _4>, _1>>;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/cutedsl/mxfp8-b200-high-performance-memory-bound-kernel.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

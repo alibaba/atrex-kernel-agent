@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.kernel-opt.nvfp4-gemv.per-k-specialization",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemv|nvfp4-gemv#per-k-specialization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": "gemv",
+   "operators": [
+    "gemv"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemv",
+   "per-k-specialization"
+  ],
+  "triggers": [
+   "the 'Per-K Specialization' technique is being considered on NVIDIA B200 (GB200 / SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA B200 (GB200 / SM100): Per-K Specialization",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "NVFP4 Batched GEMV -- Per-K Specialization"
+  },
+  "technique": "Per-K Specialization",
+  "what": "Compile separate kernels per K dimension, each with full loop unrolling and tuned configs:",
+  "when": "Compile separate kernels per K dimension, each with full loop unrolling and tuned configs:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Each K variant compiled separately with optimal configuration\ntemplate <int K_SIZE, int BLOCK_M, int MAX_REG>\n__global__ __launch_bounds__(THREADS, MIN_BLOCKS)\nvoid nvfp4_gemv_specialized(\n    const uint8_t* __restrict__ a,\n    const uint8_t* __restrict__ b,\n    const uint8_t* __restrict__ sfa,\n    const uint8_t* __restrict__ sfb,\n    half* __restrict__ c,\n    float sf_a_global, float sf_b_global,\n    int M\n) {\n    float acc = 0.0f;\n\n    // Full unroll: compiler knows K_SIZE at compile time\n    #pragma unroll\n    for (int k = 0; k < K_SIZE / ELEMENTS_PER_LOAD; k++) {\n        // Load FP4 packed data\n        uint64_t a_packed = load_fp4(a, row, k);\n        uint64_t b_packed = load_fp4(b, 0, k);\n\n        // Dequantize via PTX\n        half2 a_vals = cvt_e2m1x2(a_packed);\n        half2 b_vals = cvt_e2m1x2(b_packed);\n\n        // Apply block scales\n        float sa = sfa[row * (K_SIZE/16) + k/2];\n        float sb = sfb[k/2];\n\n        // Accumulate\n        acc += (float)a_vals.x * (float)b_vals.x * sa * sb;\n        acc += (float)a_vals.y * (float)b_vals.y * sa * sb;\n    }\n\n    // Apply global scales and store\n    c[row] = __float2half(acc * sf_a_global * sf_b_global);\n}\n\n// Dispatch: K=2048 uses BLOCK_M=8, maxreg=32\n//           K=7168 uses BLOCK_M=4, maxreg=40\n//           K=16384 uses BLOCK_M=2, maxreg=32\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/kernel-opt/kernels/nvfp4-gemv.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

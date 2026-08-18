@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.double-buffering.comparison-with-hopper",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|double-buffering#comparison-with-hopper|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "comparison-with-hopper"
+  ],
+  "triggers": [
+   "the 'Comparison with Hopper' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Comparison with Hopper",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Double/Multi-Buffering Patterns -- Comparison with Hopper"
+  },
+  "technique": "Comparison with Hopper",
+  "what": "On Hopper (SM90), there is no TMEM. The accumulator lives in registers, and double-buffering the accumulator requires explicit register management:",
+  "when": "On Hopper (SM90), there is no TMEM.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper: accumulator double-buffering uses register arrays\n// Each warpgroup maintains two register-based accumulators\n// This doubles register pressure and reduces occupancy\n\n// Hopper approach (register pressure is the primary constraint):\nfloat acc_buf0[REG_TILE_M][REG_TILE_N];  // First accumulator\nfloat acc_buf1[REG_TILE_M][REG_TILE_N];  // Second accumulator\n// Total: 2 * REG_TILE_M * REG_TILE_N * 4 bytes per thread\n// For a 64x256 tile with 128-thread warpgroup:\n//   each thread holds 2 * (64/4) * (256/128) * 4 = 2 * 16 * 2 * 4 = 256 bytes\n//   = 64 registers just for accumulators\n\n// Blackwell approach: TMEM holds both buffers with zero register cost\n// MMA warp uses ~0 registers for accumulators\n// All 256 KB of TMEM is dedicated accumulator space\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/double-buffering.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

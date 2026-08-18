@@ -1,0 +1,530 @@
+{
+ "schema": "hw-1.0",
+ "generated_by": "build_index.py",
+ "builder_version": "1",
+ "count": 30,
+ "records": [
+  {
+   "id": "amd.cdna3.spec-sheet.mi300x",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/amd/cdna3/mi300x.json",
+   "vendor": "amd",
+   "arch": "cdna3",
+   "product": "mi300x",
+   "compute_capability": null,
+   "sm_arch": null,
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "amd.cdna3.spec-sheet.mi308x",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/amd/cdna3/mi308x.json",
+   "vendor": "amd",
+   "arch": "cdna3",
+   "product": "mi308x",
+   "compute_capability": null,
+   "sm_arch": null,
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "amd.cdna4.spec-sheet.mi355x",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/amd/cdna4/mi355x.json",
+   "vendor": "amd",
+   "arch": "cdna4",
+   "product": "mi355x",
+   "compute_capability": null,
+   "sm_arch": null,
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "amd.generic.spec-sheet.generic",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/amd/generic/generic.json",
+   "vendor": "amd",
+   "arch": "generic",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": null,
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.ampere.spec-sheet.ampere",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/nvidia/ampere/ampere.json",
+   "vendor": "nvidia",
+   "arch": "ampere",
+   "product": null,
+   "compute_capability": "8.0",
+   "sm_arch": "sm_80",
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell-geforce.spec-sheet.sm120",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/nvidia/blackwell-geforce/sm120.json",
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "product": "sm120",
+   "compute_capability": "12.0",
+   "sm_arch": "sm_120",
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell-ultra.spec-sheet.b300",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/nvidia/blackwell-ultra/b300.json",
+   "vendor": "nvidia",
+   "arch": "blackwell-ultra",
+   "product": "b300",
+   "compute_capability": "10.3",
+   "sm_arch": "sm_103",
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.2sm-cooperative",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/2sm-cooperative.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "2sm-cooperative",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.clc",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/clc.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "clc",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.cuda-memory-hierarchy",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/cuda-memory-hierarchy.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "cuda-memory-hierarchy",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.gpu-architecture-resource-model",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/gpu-architecture-resource-model.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "gpu-architecture-resource-model",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.mbarrier",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/mbarrier.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "mbarrier",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.nvfp4",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/nvfp4.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "nvfp4",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.pdl-gdc",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/pdl-gdc.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "pdl-gdc",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.tcgen05-mma",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/tcgen05-mma.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "tcgen05-mma",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.tma",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/tma.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "tma",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.arch-feature.tmem",
+   "type": "arch-feature",
+   "status": "current",
+   "path": "records/arch-feature/nvidia/blackwell/tmem.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": "tmem",
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.clusterlaunchcontrol-try-cancel",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/clusterlaunchcontrol-try-cancel.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "clusterlaunchcontrol.try_cancel",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.cp-async",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/cp-async.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "cp.async",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.cvt-rn",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/cvt-rn.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "cvt.rn",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.ld-global",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/ld-global.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "ld.global",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-alloc",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-alloc.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.alloc",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-cp",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-cp.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.cp",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-dealloc",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-dealloc.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.dealloc",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-fence-after-thread-sync",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-fence-after-thread-sync.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.fence::after_thread_sync",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-ld",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-ld.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.ld",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-mma",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-mma.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.mma",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.instruction.tcgen05-st",
+   "type": "instruction",
+   "status": "current",
+   "path": "records/instruction/nvidia/blackwell/tcgen05-st.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": null,
+   "compute_capability": null,
+   "sm_arch": "sm_100",
+   "mnemonic": "tcgen05.st",
+   "feature": null,
+   "available_sm_arch": [
+    "sm_100"
+   ],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.blackwell.spec-sheet.b200",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/nvidia/blackwell/b200.json",
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "product": "b200",
+   "compute_capability": "10.0",
+   "sm_arch": "sm_100",
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "nvidia.hopper.spec-sheet.hopper",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/nvidia/hopper/hopper.json",
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "product": null,
+   "compute_capability": "9.0",
+   "sm_arch": "sm_90",
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [],
+   "evidence_class": "architecture-analysis"
+  }
+ ]
+}

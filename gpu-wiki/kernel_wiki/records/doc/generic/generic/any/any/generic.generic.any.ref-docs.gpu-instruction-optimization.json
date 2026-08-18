@@ -1,0 +1,123 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gpu-instruction-optimization",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-instruction-optimization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): GPU Instruction-Level Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "GPU Instruction-Level Optimization"
+  },
+  "title": "GPU Instruction-Level Optimization",
+  "summary": "Standard math functions (``sin``, ``exp``, ``log``, etc.) map to multiple hardware instructions. GPUs typically provide low-precision but high-throughput fast math intrinsics, which offer slightly lower precision but are much faster.",
+  "sections": [
+   {
+    "heading": "Arithmetic Instruction Optimization",
+    "anchor": "arithmetic-instruction-optimization",
+    "gist": "Standard math functions (``sin``, ``exp``, ``log``, etc.) map to multiple hardware instructions."
+   },
+   {
+    "heading": "Control Flow Optimization",
+    "anchor": "control-flow-optimization",
+    "gist": "Branch divergence is a GPU performance killer."
+   },
+   {
+    "heading": "Data Type Selection",
+    "anchor": "data-type-selection",
+    "gist": "Use vector types to load multiple elements at once, reducing the instruction count:"
+   },
+   {
+    "heading": "Performance Analysis Methods",
+    "anchor": "performance-analysis-methods",
+    "gist": "**Always profile first, then optimize**."
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Prerequisites**: GPU Execution Model — warp divergence fundamentals - **Prerequisites**: GPU Memory Hierarchy — memory access pattern fundamentals - **Content Overlap**: The warp div…"
+   }
+  ],
+  "implementation": {
+   "snippet": "````c\n// ❌ 3.14 is double, causing entire expression to be computed in double precision\nfloat result = x * 3.14;\n\n// ✅ Add f suffix to keep single precision\nfloat result = x * 3.14f;\n```\n\n````c\n// ❌ Expensive division and modulo\nint q = n / divisor;\nint r = n % divisor;\n\n// ✅ Use bitwise operations when divisor is power of 2\nint q = n >> log2_divisor;\nint r = n & (divisor - 1);\n```\n\n````c\n// ❌ Each thread may take different paths\nif (data[tid] > threshold) {\n    result = expensive_compute(data[tid]);\n} else {\n    result = 0.0f;\n}\n\n// ✅ Use multiplication to eliminate branches (when both paths are short)\nfloat flag = (data[tid] > threshold) ? 1.0f : 0.0f;\nresult = flag * expensive_compute(data[tid]);\n// Note: expensive_compute will still execute, only suitable when computation is minimal\n```\n\n````c\n// Compiler hint to unroll\n#pragma unroll\nfor (int i = 0; i < 4; i++) {\n    sum += a[i] * b[i];\n}\n\n// Fully unrolled to:\n// sum += a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];\n```\n\n````c\n// Scalar load: 4 load instructions\nfloat a = data[idx];\nfloat b = data[idx+1];\nfloat c = data[idx+2];\nfloat d = data[idx+3];\n\n// Vector load: 1 load instruction (128-bit)\nfloat4 vec = reinterpret_cast<float4*>(data)[idx/4];\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gpu-instruction-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

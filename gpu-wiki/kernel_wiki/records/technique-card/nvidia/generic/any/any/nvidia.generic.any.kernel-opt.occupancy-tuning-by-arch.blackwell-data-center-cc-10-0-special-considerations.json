@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.kernel-opt.occupancy-tuning-by-arch.blackwell-data-center-cc-10-0-special-considerations",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|occupancy-tuning-by-arch#blackwell-data-center-cc-10-0-special-considerations|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [
+   "blackwell-data-center-cc-10-0-special-considerations"
+  ],
+  "triggers": [
+   "the 'Blackwell Data Center (CC 10.0) Special Considerations' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Blackwell Data Center (CC 10.0) Special Considerations",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Occupancy Tuning Differences Across Architectures -- Blackwell Data Center (CC 10.0) Special Considerations"
+  },
+  "technique": "Blackwell Data Center (CC 10.0) Special Considerations",
+  "what": "- Maximum 32 blocks, 64 warps, and 2048 threads per SM - FP4/FP6 Tensor Core available → more flexible mixed-precision strategies",
+  "when": "- Maximum 32 blocks, 64 warps, and 2048 threads per SM - FP4/FP6 Tensor Core available → more flexible mixed-precision strategies",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/kernel-opt/occupancy-tuning-by-arch.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

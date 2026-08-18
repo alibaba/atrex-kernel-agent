@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.13-consumer-thread-count-must-divide-smem-element-count-for-copy-out",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#13-consumer-thread-count-must-divide-smem-element-count-for-copy-out|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '13. Consumer thread count must divide SMEM element count for copy-out' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 13. Consumer thread count must divide SMEM element count for copy-out",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 13. Consumer thread count must divide SMEM element count for copy-out"
+  },
+  "attempted": "With warp specialization (1 producer + 3 consumer warps), you have consumer warps (96 threads) copy data from SMEM to GMEM. The copy loop is:",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "After the `consumer_wait` + `__syncthreads()` barrier, ALL threads (including producer warp) should participate in SMEM reads. The TMA producer warp has finished its work at this point — it's waiting at the barrier anyway:",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "With 96 consumer threads and 4096 elements, each thread should copy 42.67 elements — not an integer. The for-loop skips the remainder, leaving elements uncopied."
+  },
+  "observed": "Incorrect output (max_err = 3.234375). Some SMEM elements are not copied, others are double-copied.",
+  "root_cause": "With 96 consumer threads and 4096 elements, each thread should copy 42.67 elements — not an integer. The for-loop skips the remainder, leaving elements uncopied.",
+  "implementation": {
+   "snippet": "```python\nper_thr = (M * N) // CONSUMER_THREADS   # 4096 / 96 = 42.67 ← NOT integer!\n```\n\n```python\nif is_consumer:\n    load_pipeline.consumer_wait(cons_state)\ncute.arch.barrier()      # <-- all warps sync here\n# ALL 128 threads participate in computation and SMEM reads\nper_thr = (M * N) // THREADS   # 4096 / 128 = 32 ← integer, correct\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

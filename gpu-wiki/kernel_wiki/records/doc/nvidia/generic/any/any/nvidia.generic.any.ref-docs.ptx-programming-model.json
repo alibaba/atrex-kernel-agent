@@ -1,0 +1,153 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ptx-programming-model",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ptx-programming-model|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): PTX Programming Model and Basics",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "PTX Programming Model and Basics"
+  },
+  "title": "PTX Programming Model and Basics",
+  "summary": "PTX (Parallel Thread Execution) is NVIDIA GPU's virtual ISA (Intermediate Representation), sitting between CUDA C++ and hardware SASS. PTX provides a stable programming interface, and the compiler (ptxas) translates PTX into SASS instructions for a specific GPU architecture.",
+  "sections": [
+   {
+    "heading": "PTX Overview",
+    "anchor": "ptx-overview",
+    "gist": "PTX (Parallel Thread Execution) is NVIDIA GPU's virtual ISA (Intermediate Representation), sitting between CUDA C++ and hardware SASS."
+   },
+   {
+    "heading": "State Spaces",
+    "anchor": "state-spaces",
+    "gist": "PTX divides memory into multiple logical state spaces, mapped to different hardware storage levels:"
+   },
+   {
+    "heading": "Basic Data Types",
+    "anchor": "basic-data-types",
+    "gist": "table columns: Type, Width, Signedness"
+   },
+   {
+    "heading": "Variable Declaration",
+    "anchor": "variable-declaration",
+    "gist": "// Registers .reg .f32 %f<32>; // 32 f32 registers .reg .pred %p; // Predicate registers"
+   },
+   {
+    "heading": "Special Registers",
+    "anchor": "special-registers",
+    "gist": "table columns: Register, Meaning, Usage"
+   },
+   {
+    "heading": "Predicated Execution",
+    "anchor": "predicated-execution",
+    "gist": "PTX makes extensive use of predicates identity for conditional execution, avoiding branches:"
+   },
+   {
+    "heading": "Control Flow",
+    "anchor": "control-flow",
+    "gist": "---"
+   },
+   {
+    "heading": "Performance Tuning Directives",
+    "anchor": "performance-tuning-directives",
+    "gist": "---"
+   },
+   {
+    "heading": "Memory Consistency Model (SM70+)",
+    "anchor": "memory-consistency-model-sm70",
+    "gist": "table columns: Scope, Description"
+   },
+   {
+    "heading": "Type Conversion",
+    "anchor": "type-conversion",
+    "gist": "- **opcode**: Operation code (add, mul, ld, st, ...) - **modifier**: Modifier (.rn, .sat, .ftz, .lo, .wide, ...) - **type**: Data type (.f32, .u64, .b16, ...) - **dest**: Destination operand - **src**: Source operand"
+   },
+   {
+    "heading": "PTX Kernel Declaration",
+    "anchor": "ptx-kernel-declaration",
+    "gist": ""
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nCUDA C++ / CuTeDSL Python → nvcc/MLIR → PTX → ptxas → SASS (GPU execution)\n```\n\n```\n.shared::cta // current CTA access(default)\n.shared::cluster // Cluster CTA access(DSMEM)\n```\n\n```\n.const[0] .const[10] // 11 independent bank\n// bank 0: compilation\n// bank 1-10: (driver )\n```\n\n```\n// pointer global, shared or local\nld.generic [ptr], %r1; // row\n\n// conversion\ncvta.to.global   %gptr, %ptr;    // generic → global\ncvta.to.shared   %sptr, %ptr;    // generic → shared\ncvta.shared.to.generic %ptr, %sptr;  // shared → generic\n```\n\n```\n.v2 // 2 vector: .v2.f32, .v2.u32\n.v4 // 4 vector: .v4.f32, .v4.b8\n.v8 // 8 ( .b16/.b32)\n```\n\n``````\n\n``````\n\n```\n// Set predicate\nsetp.gt.f32 %p, %f1, 0.0;       // p = (f1 > 0.0)\n\n// Conditional execution\n@%p  add.f32 %f2, %f2, %f1;     // if (p) f2 += f1\n@!%p mov.f32 %f2, 0.0;          // if (!p) f2 = 0.0\n\n// Conditional branch\n@%p  bra TARGET;                  // if (p) goto TARGET\n```\n\n```\n// Integer comparison\nsetp.eq/ne/lt/le/gt/ge.u32 %p, %a, %b;\n\n// Floating-point comparison (with NaN handling)\nsetp.lt.f32     %p, %a, %b;     // ordered: NaN → false\nsetp.ltu.f32    %p, %a, %b;     // unordered: NaN → true\nsetp.num.f32    %p, %a, %b;     // Are both non-NaN?\nsetp.nan.f32    %p, %a, %b;     // Is either NaN?\n```\n\n```\n// Branch\nbra         LABEL;               // Unconditional jump\nbra.uni     LABEL;               // Uniform jump (all threads same target)\n@%p bra     LABEL;               // Conditional jump\n\n// Function call\ncall (%ret), func, (%arg1, %arg2);\ncall.uni (%ret), func, (%arg1);  // Uniform call\n\n// Kernel return\nret;\nexit;                            // Terminate current thread\n```\n\n```\n// Maximum registers per thread\n.maxnreg 128                    // Limit compiler to use ≤128 registers\n\n// Maximum threads per CTA\n.maxntid 256, 1, 1              // Hint compiler for max block size 256 threads\n.reqntid 256, 1, 1              // Require block to be exactly 256 threads\n\n// Minimum CTA/SM\n.minnctapersm 2                 // At least 2 CTA/SM (increase occupancy)\n\n// Pragma\n.pragma \"nounroll\";             // Disable loop unrolling\n\n// Cluster size (SM90+)\n.reqnctapercluster 4            // Require 4 CTA/cluster\n.maxclusterrank 8               // Cluster max rank\n```\n\n```\nfence.sc.gpu; // GPU range fence\nfence.acq_rel.sys; // range acquire-release fence\nfence.proxy.alias; // proxy fence\nfence.proxy.async; // asynchronous proxy fence(cp.async complete)\nfence.proxy.async.global; // asynchronous global proxy fence\nfence.proxy.async.shared::cta; // asynchronous shared proxy fence\n```\n\n```\nmembar.cta; // CTA rangememorybarrier\nmembar.gl; // globalmemorybarrier\nmembar.sys; // memorybarrier\n```\n\n```\n// Basic conversions\ncvt.f32.f16   %f, %h;           // f16 → f32\ncvt.rn.f16.f32 %h, %f;          // f32 → f16 (round nearest)\ncvt.rz.f32.s32 %f, %i;          // s32 → f32 (round toward zero)\n\n// Rounding modes\n.rn    // round to nearest even (default)\n.rz    // round toward zero\n.rm    // round toward minus infinity\n.rp    // round toward plus infinity\n\n// Integer saturation\ncvt.sat.u8.s32 %b, %i;          // Clamp to [0, 255]\n\n// FP8 conversion (SM89+)\ncvt.rn.satfinite.e4m3.f32 %e, %f;  // f32 → fp8 e4m3\ncvt.f32.e5m2 %f, %e;               // fp8 e5m2 → f32\n```\n\n```\nopcode.modifier1.modifier2.type  dest, src1, src2;\n```\n\n```\n.version 8.6\n.target sm_90\n.address_size 64\n\n.visible .entry my_kernel (\n    .param .u64 param_ptr,\n    .param .u32 param_N\n)\n{\n    .reg .u32 %r<10>;\n    .reg .f32 %f<10>;\n    .reg .pred %p;\n\n    ld.param.u64 %rd0, [param_ptr];\n    ld.param.u32 %r0, [param_N];\n\n    // kernel body\n\n    ret;\n}\n```\n\n```\n- `.version` — PTX version\n- `.target` — Target architecture (sm_70, sm_80, sm_90, sm_100)\n- `.address_size` — Address width (32 or 64)\n- `.visible .entry` — Externally visible kernel entry\n- `.func` — Device function (non-entry)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ptx-programming-model.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

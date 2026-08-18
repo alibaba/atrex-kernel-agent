@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.epilogue-fusion.overlapping-mma-with-epilogue-via-double-buffering",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|epilogue-fusion#overlapping-mma-with-epilogue-via-double-buffering|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "overlapping-mma-with-epilogue-via-double-buffering"
+  ],
+  "triggers": [
+   "the 'Overlapping MMA with Epilogue via Double-Buffering' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Overlapping MMA with Epilogue via Double-Buffering",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Epilogue Fusion -- Overlapping MMA with Epilogue via Double-Buffering"
+  },
+  "technique": "Overlapping MMA with Epilogue via Double-Buffering",
+  "what": "The key to epilogue fusion on Blackwell is TMEM double-buffering. The 512-column TMEM space is split into two halves (columns 0-255 and 256-511). While the MMA warp accumulates into one half, the epilogue warps drain the other:",
+  "when": "The key to epilogue fusion on Blackwell is TMEM double-buffering.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// TMEM double-buffering for MMA-epilogue overlap\n//\n// TMEM layout: 128 rows x 512 columns (32-bit elements)\n// Buffer A: columns [0, 255]    -- 128 x 256 accumulator\n// Buffer B: columns [256, 511]  -- 128 x 256 accumulator\n//\n// Timeline:\n// Tile 0: MMA -> buffer A     | epilogue idle (no prior result)\n// Tile 1: MMA -> buffer B     | epilogue reads buffer A\n// Tile 2: MMA -> buffer A     | epilogue reads buffer B\n// Tile 3: MMA -> buffer B     | epilogue reads buffer A\n//    ... ping-pong continues ...\n\n__device__ void mma_epilogue_overlap(\n    const GemmParams& params,\n    int num_tiles)\n{\n    int warp_id = threadIdx.x / 32;\n\n    __shared__ uint64_t mbar_mma_done[2];    // One per TMEM buffer half\n    __shared__ uint64_t mbar_epi_done[2];    // Epilogue completion signals\n\n    if (threadIdx.x == 0) {\n        for (int i = 0; i < 2; i++) {\n            mbarrier_init(&mbar_mma_done[i], 1);\n            mbarrier_init(&mbar_epi_done[i], 1);\n        }\n    }\n    __syncthreads();\n\n    if (warp_id == 1) {\n        // === MMA WARP ===\n        for (int t = 0; t < num_tiles; t++) {\n            int buf = t % 2;  // Alternate between buffer halves\n\n            // Wait for epilogue to finish reading this buffer\n            if (t >= 2) {\n                mbarrier_wait(&mbar_epi_done[buf]);\n            }\n\n            // Issue MMA, accumulating into TMEM buffer half\n            int tmem_col_offset = buf * 256;\n            tcgen05_mma_with_offset(tmem_col_offset,\n                                    params.smem_A, params.smem_B);\n\n            // Signal epilogue that this buffer is ready\n            mbarrier_arrive(&mbar_mma_done[buf]);\n        }\n\n    } else if (warp_id >= 2) {\n        // === EPILOGUE WARPS ===\n        for (int t = 0; t < num_tiles; t++) {\n            int buf = t % 2;\n\n            // Wait for MMA to finish filling this buffer\n            mbarrier_wait(&mbar_mma_done[buf]);\n\n            // Read from TMEM buffer half and write to global memory\n            int tmem_col_offset = buf * 256;\n            epilogue_store(params, t, tmem_col_offset, warp_id);\n\n            // ALL epilogue warps must finish reading TMEM before MMA reuses\n            // the buffer. Each epilogue warp arrives on mbar_epi_done;\n            // mbar_epi_done is initialized with count = NUM_EPILOGUE_WARPS.\n            // MMA warp waits on this mbarrier before writing to this half.\n            if (lane_id == 0) {\n                mbarrier_arrive(&mbar_epi_done[buf]);\n            }\n            // mbar_epi_done[buf] fires only after ALL epilogue warps arrive\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/epilogue-fusion.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

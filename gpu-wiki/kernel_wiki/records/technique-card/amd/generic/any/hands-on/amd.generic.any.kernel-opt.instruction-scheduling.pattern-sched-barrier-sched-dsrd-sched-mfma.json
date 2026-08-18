@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.instruction-scheduling.pattern-sched-barrier-sched-dsrd-sched-mfma",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|instruction-scheduling#pattern-sched-barrier-sched-dsrd-sched-mfma|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-sched-barrier-sched-dsrd-sched-mfma"
+  ],
+  "triggers": [
+   "the 'Pattern: sched_barrier / sched_dsrd / sched_mfma' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: sched_barrier / sched_dsrd / sched_mfma",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Instruction Scheduling Control -- Pattern: sched_barrier / sched_dsrd / sched_mfma"
+  },
+  "technique": "Pattern: sched_barrier / sched_dsrd / sched_mfma",
+  "what": "**Source**: `cdna/flydsl/FlyDSL/`, `cdna4/gluon/triton/`",
+  "when": "**Source**: `cdna/flydsl/FlyDSL/`, `cdna4/gluon/triton/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# AMD GPU compilers respond well to ISA reordering (opposite of NVIDIA)\n# Manual instruction scheduling can be used to optimize pipeline overlap\n\n# In FlyDSL\nflyc.sched_barrier(0)    # Prevent instructions from being reordered across the barrier\nflyc.sched_mfma(8)       # Hint that 8 MFMA instructions follow\n\n# In Gluon\nfrom triton.experimental.gluon.language.amd import sched_barrier\n\nsched_barrier(0)  # Establish a scheduling barrier\n# Load instructions\na = tl.load(a_ptr)\nb = tl.load(b_ptr)\nsched_barrier(0)  # Ensure loads complete before MFMA\n# Compute instructions\nc = tl.dot(a, b)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/instruction-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

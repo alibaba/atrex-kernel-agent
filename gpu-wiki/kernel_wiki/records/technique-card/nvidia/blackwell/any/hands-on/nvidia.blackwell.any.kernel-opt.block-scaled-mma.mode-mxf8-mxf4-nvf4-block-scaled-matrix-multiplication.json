@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.block-scaled-mma.mode-mxf8-mxf4-nvf4-block-scaled-matrix-multiplication",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|block-scaled-mma#mode-mxf8-mxf4-nvf4-block-scaled-matrix-multiplication|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mode-mxf8-mxf4-nvf4-block-scaled-matrix-multiplication"
+  ],
+  "triggers": [
+   "the 'Mode: MXF8/MXF4/NVF4 Block-Scaled Matrix Multiplication' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Mode: MXF8/MXF4/NVF4 Block-Scaled Matrix Multiplication",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Block-Scaled MMA -- Mode: MXF8/MXF4/NVF4 Block-Scaled Matrix Multiplication"
+  },
+  "technique": "Mode: MXF8/MXF4/NVF4 Block-Scaled Matrix Multiplication",
+  "what": "**Source**: `cutedsl/cutlass/blockwise_gemm/`, `cutedsl/flashinfer/dense_blockscaled_gemm_sm100.py`",
+  "when": "**Source**: `cutedsl/cutlass/blockwise_gemm/`, `cutedsl/flashinfer/dense_blockscaled_gemm_sm100.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# Blackwell tcgen05 supports block-scaled MMA:\n# Matrices are quantized by blocks, each block shares a scale factor\n\n# MXF8: every 32 elements share an E8M0 scale\ntiled_mma = cute.make_tiled_mma(\n    cute.SM100_MMA_F32MXF8MXF8F32_SS_TN,\n    # Inputs are FP8 + E8M0 scale, output is FP32\n)\n\n# Scale factors are loaded via separate TMA\ncute.copy(tma_scale_a, scale_a_gmem, scale_a_smem)\ncute.copy(tma_scale_b, scale_b_gmem, scale_b_smem)\n\n# MMA automatically applies the scale\nacc = cute.gemm(tiled_mma, data_smem, scale_smem, acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/block-scaled-mma.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

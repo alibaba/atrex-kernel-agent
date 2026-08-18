@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-moe-data-prep-pitfalls.3-warp-specialization-in-barrier-bound-histogram-occupancy-collapse-v11-a-25-1",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep-pitfalls#3-warp-specialization-in-barrier-bound-histogram-occupancy-collapse-v11-a-25-1|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '3. Warp-specialization in barrier-bound histogram → occupancy collapse (V11-A, +25.1%)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 3. Warp-specialization in barrier-bound histogram → occupancy collapse (V11-A, +25.1%)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 INT32 MoE Data-Prep — Pitfalls -- 3. Warp-specialization in barrier-bound histogram → occupancy collapse (V11-A, +25.1%)"
+  },
+  "attempted": "V9 histogram top stall = `Stall Barrier 45.27%` across 3 `__syncthreads()` between Phase 1 (smem hist), Phase 2 (global merge), Phase 3 (last-CTA prefix sum). Most threads idle during Phase 2 (256 atomic merges = ~1 atomic per warp). Restructure: warp 0 owns Phase 2+3; warps 1-31 exit immediately after Phase 1's barrier. Replace inter-warp `__syncthreads` with intra-warp `__syncwarp`.",
+  "verdict": "performance-ceiling",
+  "lesson": "When NCU's top stall is `Stall Barrier`, **don't reflexively warp-specialize to remove the barrier**. First check whether the OTHER warps are doing useful latency-hiding work during that wait. **The barriers in V9 weren't pure waste** — they were serving as natural convergence points where 32 warps cooperate on the next parallel phase, and the inter-barrier work itself was hiding global-load latency.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "After Phase 1's barrier, warps 1-31 fall through to kernel exit while warp 0 continues. Hardware tracks **active warps per SM** based on warps that have not yet exited. Once 31 of 32 warps exit, achieved occupancy drops 4-fold (from 32 active warps per CTA to 1). Two compounding effects:"
+  },
+  "observed": "- Warp Cyc / Issued Inst dropped 44.11 → 25.12 (**−43.0%**, barriers really removed — the fix worked at the per-instruction level) - Issued Instructions dropped 17.8% (no per-warp redundant work after Phase 1) - BUT Achieved Occupancy COLLAPSED: 64.59% → **20.77%** (catastrophic, −43.8 pts) - Top stall shifted from `Stall Barrier 45.27%` to **`Stall LongScoreboard (L1TEX) 48.42%`** — same wall-time cost, different bucket - Histogram Duration: 25.31 → 35.39 µs (+39.8%) - Wall time T=6144 CG: 24.61 → 30.78 µs (**+25.1% regression**)",
+  "root_cause": "After Phase 1's barrier, warps 1-31 fall through to kernel exit while warp 0 continues. Hardware tracks **active warps per SM** based on warps that have not yet exited. Once 31 of 32 warps exit, achieved occupancy drops 4-fold (from 32 active warps per CTA to 1). Two compounding effects:"
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

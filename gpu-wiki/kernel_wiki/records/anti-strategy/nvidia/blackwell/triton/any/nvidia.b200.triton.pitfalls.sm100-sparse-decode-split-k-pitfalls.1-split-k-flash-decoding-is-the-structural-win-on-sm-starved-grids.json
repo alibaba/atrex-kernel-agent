@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.triton.pitfalls.sm100-sparse-decode-split-k-pitfalls.1-split-k-flash-decoding-is-the-structural-win-on-sm-starved-grids",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|triton|pitfalls|sm100-sparse-decode-split-k-pitfalls#1-split-k-flash-decoding-is-the-structural-win-on-sm-starved-grids|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "triton",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "triton",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA B200 (GB200 / SM100) risks the '1. Split-K (flash-decoding) is the structural win on SM-starved grids' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA B200 (GB200 / SM100): 1. Split-K (flash-decoding) is the structural win on SM-starved grids",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "sm_100 Triton sparse-decode / split-K pitfalls -- 1. Split-K (flash-decoding) is the structural win on SM-starved grids"
+  },
+  "attempted": "A decode/attention kernel with one CTA per token looks \"fine\" — it compiles, it's correct, and per-CTA occupancy is high. You start tuning tile sizes and cache hints.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Before any tile/cache tuning, compute `grid_CTAs / num_SMs`. If it's < 1 wave, the first move is **split-K / flash-decoding** to manufacture parallelism. `NUM_SPLITS` has a sweet spot (here 8 for `topk=2048`): too high and the combine pass + per-split prologue overhead dominates. Re-open the `NUM_SPLITS` axis after any structural rewrite — a \"near HBM-floor\" projection is computed at a *fixed* split count; doubling splits halves per-CTA bytes and moves the floor.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_100",
+    "toolchain": "triton"
+   },
+   "mechanism": "Wall-clock on an SM-starved grid is set by how few SMs you light up, not by per-CTA efficiency. Until the grid fills the machine, intra-CTA tuning is rearranging deck chairs."
+  },
+  "observed": "On a grid of ≤ 8 tokens, 1 CTA/token leaves **147/148 SMs idle**. Splitting the TopK/KV axis across `NUM_SPLITS` programs + a combine pass gave a **4× speedup** in one step, dwarfing every micro-tuning lever combined.",
+  "root_cause": "Wall-clock on an SM-starved grid is set by how few SMs you light up, not by per-CTA efficiency. Until the grid fills the machine, intra-CTA tuning is rearranging deck chairs."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/pitfalls/triton/sm100-sparse-decode-split-k-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

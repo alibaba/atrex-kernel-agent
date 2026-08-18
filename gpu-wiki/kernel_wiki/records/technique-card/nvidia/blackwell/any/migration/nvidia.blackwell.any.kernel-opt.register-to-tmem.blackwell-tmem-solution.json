@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-to-tmem.blackwell-tmem-solution",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|register-to-tmem#blackwell-tmem-solution|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "blackwell-tmem-solution"
+  ],
+  "triggers": [
+   "the 'Blackwell TMEM Solution' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Blackwell TMEM Solution",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Accumulators to TMEM -- Blackwell TMEM Solution"
+  },
+  "technique": "Blackwell TMEM Solution",
+  "what": "The key insight: **registers are no longer the bottleneck**. TMEM capacity becomes the binding constraint for occupancy, and the freed registers enable complex epilogues without spilling.",
+  "when": "The key insight: **registers are no longer the bottleneck**.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nBlackwell tcgen05 m128xn256xk16 BF16 register budget (per thread):\n\n  Accumulator:          0 registers (stored in TMEM!)\n  SMEM descriptors:     4 registers\n  Loop variables:       8 registers\n  TMA state:            6 registers\n  TMEM address:         1 register\n  Misc (indexing):     10 registers\n  ─────────────────────────────\n  Total per thread:   ~29 registers\n\n  Per CTA (256 threads): 29 * 256 = 7,424 registers\n  Per SM (65,536 regs): max 8 CTAs (register-wise)\n  Actual limit: TMEM capacity (512 columns)\n\n  TMEM usage per CTA: 256 columns for 128x256 tile\n  Max CTAs per SM: 512 / 256 = 2 CTAs (TMEM-limited, not register-limited)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/register-to-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,36 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.cuda-memory-hierarchy",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "cuda-memory-hierarchy",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "For kernel work, treat memory as a set of bottleneck candidates rather than a generic hierarchy. The likely next edit depends on which level is stressed.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices.",
+  "related_instructions": [
+   "tcgen05"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "CUDA Memory Hierarchy for Kernel Optimization",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/cuda-memory-hierarchy.md"
+   }
+  ]
+ }
+}

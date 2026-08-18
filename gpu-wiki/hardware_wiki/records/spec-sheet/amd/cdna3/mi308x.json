@@ -1,0 +1,105 @@
+{
+ "schema": "hw-1.0",
+ "id": "amd.cdna3.spec-sheet.mi308x",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "amd",
+  "arch": "cdna3",
+  "product": "mi308x",
+  "sm_arch": null,
+  "compute_capability": null
+ },
+ "facts": {
+  "summary": "AMD MI308X (gfx942 / CDNA3) Hardware Compute Specifications",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 21.5,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 80
+   },
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 43,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 43,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 172,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 206,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 308
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 412,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 206,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 5.3,
+    "use_case": "206 / 5.3 ≈ 38.9"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 412,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 5.3,
+    "use_case": "412 / 5.3 ≈ 77.7"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 128,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "sm_count": 80,
+   "cuda_cores": 5120,
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "AMD MI308X (gfx942 / CDNA3) Hardware Compute Specifications",
+    "kind": "third-party-analysis",
+    "ref": "amd/cdna3/mi308x/hardware-specs/hardware_specs_mi308x.md"
+   }
+  ]
+ }
+}

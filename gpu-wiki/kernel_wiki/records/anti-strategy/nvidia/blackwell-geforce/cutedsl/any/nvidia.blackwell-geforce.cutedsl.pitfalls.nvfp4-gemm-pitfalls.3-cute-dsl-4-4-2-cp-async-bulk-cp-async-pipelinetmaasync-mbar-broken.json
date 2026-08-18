@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.nvfp4-gemm-pitfalls.3-cute-dsl-4-4-2-cp-async-bulk-cp-async-pipelinetmaasync-mbar-broken",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|nvfp4-gemm-pitfalls#3-cute-dsl-4-4-2-cp-async-bulk-cp-async-pipelinetmaasync-mbar-broken|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '3. cute-DSL 4.4.2 `cp.async.bulk` / `cp.async` + `PipelineTmaAsync` mbar = broken' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 3. cute-DSL 4.4.2 `cp.async.bulk` / `cp.async` + `PipelineTmaAsync` mbar = broken",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "cute-DSL NVFP4 GEMM pitfalls (sm_120, RTX PRO 5000) -- 3. cute-DSL 4.4.2 `cp.async.bulk` / `cp.async` + `PipelineTmaAsync` mbar = broken"
+  },
+  "attempted": "CUTLASS C++ puts SF onto the SAME stage barrier as TMA(A,B). You try to do the same in cute-DSL via three reasonable paths: - (a) `cute.arch.cp_async_mbarrier_arrive_noinc(bar)` after issuing cp.async — register cp.async bytes onto an existing pipeline barrier. - (b) TMA-for-SF: view the compressed 512-byte SF chunk as `(32, 16)`-bytes (16-byte innermost satisfies TMA's minimum) and issue a TMA load via `make_tiled_tma_atom(CopyBulkTensorTileG2SOp(), ...)`. - (c) `cute.copy(make_copy_atom(CopyBulkG2SOp(), Uint8, num_bits_per_copy=4096), ..., mbar_ptr=bar)` — direct cp.async.bulk (1D, single-thread issue) signaling the same TMA bar.",
+  "verdict": "not-worth-it-here",
+  "lesson": "For sm_120 in cute-DSL 4.4.2, **keep SF on a separate cp.async pipeline** (the v43 pattern: per-warp cp.async for SF + own commit/wait/drain barrier). It costs some L2 bandwidth (consumer warps redundantly load SF) but it's correct and gets to 71% of CUTLASS. The \"right\" CUTLASS fix requires bypassing `PipelineTmaAsync` entirely and building mbar control (`mbarrier_init` / `arrive_and_expect_tx` / `try_wait`) from inline PTX — not a small detour.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "cute-DSL 4.4.2's `PipelineTmaAsync` uses an internal `tx_count` set at `pipeline.create()` time and exclusively expects TMA bytes (cp.async.bulk.tensor) to arrive on the bar. The mbarrier byte-counting machinery doesn't compose with non-tensor copies (regular cp.async or 1D cp.async.bulk) routed through the public API. The inline-PTX escape (`smem_ptr_to_uint` to convert the bar Pointer into the 32-bit shared address PTX needs) isn't exposed in cute.arch in this version."
+  },
+  "observed": "- (a) → CUDA `LaunchFailed` / `IllegalInstruction` at runtime, regardless of whether `arrive_noinc` is called before or after `producer_commit`. - (b) → compiles, runtime `IllegalInstruction` on the small `(32, 16)` TMA tile. - (c) → compiles, runs to completion, **`rel_err ≈ 1.0`** (garbage). Adding `cp_async_bulk_wait_group(0)` sync doesn't help. Restricting issue to `lane == 0` causes hang because the producer `producer_commit` then fires before `lane == 0`'s wait returns.",
+  "root_cause": "cute-DSL 4.4.2's `PipelineTmaAsync` uses an internal `tx_count` set at `pipeline.create()` time and exclusively expects TMA bytes (cp.async.bulk.tensor) to arrive on the bar. The mbarrier byte-counting machinery doesn't compose with non-tensor copies (regular cp.async or 1D cp.async.bulk) routed through the public API. The inline-PTX escape (`smem_ptr_to_uint` to convert the bar Pointer into the 32-bit shared address PTX needs) isn't exposed in cute.arch in this version."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/nvfp4-gemm-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

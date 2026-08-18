@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.software-pipelining.rdna4-tdm-async-copy",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|software-pipelining#rdna4-tdm-async-copy|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "rdna4-tdm-async-copy"
+  ],
+  "triggers": [
+   "the 'RDNA4: TDM Async Copy' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): RDNA4: TDM Async Copy",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Software Pipeline (Cross-Architecture Differences) -- RDNA4: TDM Async Copy"
+  },
+  "technique": "RDNA4: TDM Async Copy",
+  "what": "---",
+  "when": "---",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# RDNA4 (gfx1250) introduces TDM (Tensor Data Mover)\n# Similar to NVIDIA TMA, supports 2D descriptor\n\nfrom triton.experimental.gluon.language.amd.rdna4 import tdm\n\n# Create 2D descriptor\ndesc = tdm.make_2d_descriptor(base_ptr, width, height, stride)\n\n# Async load\ntdm.async_copy_2d(smem, desc, offset_x, offset_y)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/software-pipelining.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,155 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.blackwell-tensor-core-analysis-part1",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|blackwell-tensor-core-analysis-part1|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): NVIDIA Blackwell Tensor Core Analysis (Part 1)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "NVIDIA Blackwell Tensor Core Analysis (Part 1)"
+  },
+  "title": "NVIDIA Blackwell Tensor Core Analysis (Part 1)",
+  "summary": "A preliminary analysis of Blackwell (B200/SM100) Tensor Core features based on PTX ISA 8.7 documentation, covering compatibility, instruction set, memory layout, block scaling, and synchronization.",
+  "sections": [
+   {
+    "heading": "1. Key Takeaways",
+    "anchor": "1-key-takeaways",
+    "gist": "- B200 is **not backward-compatible** with H100 Tensor Core code; separate development is required - B200 Tensor Core code will likely **not be forward-compatible** with the next generation (Rubin) - B200 Tensor Core programming may be **m…"
+   },
+   {
+    "heading": "2. Compute Capability",
+    "anchor": "2-compute-capability",
+    "gist": "- B200: SM100 / SM101 - RTX 50-series (consumer): SM120"
+   },
+   {
+    "heading": "3. Compatibility",
+    "anchor": "3-compatibility",
+    "gist": "In PTX ISA, instructions with an \"a\" suffix on the compute capability version are exclusive to that version."
+   },
+   {
+    "heading": "4. 5th Generation Tensor Core Instructions",
+    "anchor": "4-5th-generation-tensor-core-instructions",
+    "gist": "Generations 1–3 are called WMMA, generation 4 is WGMMA, and generation 5 is simply referred to as \"5th gen.\""
+   },
+   {
+    "heading": "5. 5th Generation MMA Operations",
+    "anchor": "5-5th-generation-mma-operations",
+    "gist": "Supported data types: - `.kind::f16`: FP16 and BF16 - `.kind::tf32`: TF32 - `.kind::f8f6f4`: arbitrary FP8/FP6/FP4 combinations - `.kind::i8`: signed/unsigned INT8 - `.kind::mxf8f6f4` / `.kind::mxf4`: MX floating point - `.kind::mxf4nvf4`:…"
+   },
+   {
+    "heading": "6. Packing Formats in Tensor/Shared Memory",
+    "anchor": "6-packing-formats-in-tensor-shared-memory",
+    "gist": "Tensor Core output elements are always 32-bit."
+   },
+   {
+    "heading": "7. Matmul Tensor Memory Layout",
+    "anchor": "7-matmul-tensor-memory-layout",
+    "gist": "Since Tensor Core output element size is always 32-bit regardless of input type (TF32 or FP4), the D matrix has only 8 possible layouts in Tensor Memory."
+   },
+   {
+    "heading": "8. Block Scaling",
+    "anchor": "8-block-scaling",
+    "gist": "Microscaling format tensors have corresponding BlockScaling tensors."
+   },
+   {
+    "heading": "9. Sparse Matrices",
+    "anchor": "9-sparse-matrices",
+    "gist": "All Blackwell data types support structured sparsity on the A matrix."
+   },
+   {
+    "heading": "10. Tensor Core Collector Buffer",
+    "anchor": "10-tensor-core-collector-buffer",
+    "gist": "The Tensor Core contains an internal collector buffer that can cache A or B matrix data."
+   },
+   {
+    "heading": "11. Memory Consistency Model",
+    "anchor": "11-memory-consistency-model",
+    "gist": "Certain Tensor Core instructions are asynchronous and require explicit programmer-managed synchronization (see PTX ISA 9.7.16.5.4):"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ntcgen05.alloc.cta_group.sync.aligned{.shared::cta}.b32 [dst], nCols;\ntcgen05.dealloc.cta_group.sync.aligned.b32 taddr, nCols;\ntcgen05.relinquish_alloc_permit.cta_group.sync.aligned;\n.cta_group = { .cta_group::1, .cta_group::2 }\n```\n\n```\n// LD\ntcgen05.ld.sync.aligned.shape1.num{.pack}.b32     r, [taddr];\n// ST\ntcgen05.st.sync.aligned.shape1.num{.unpack}.b32   [taddr], r;\n// wait\ntcgen05.wait_operation.sync.aligned;\n.wait_operation = { .wait::ld, .wait::st }\n```\n\n```\ntcgen05.cp.cta_group.shape{.multicast}{.dst_fmt.src_fmt} [taddr], s-desc;\n.cta_group = { .cta_group::1, .cta_group::2 }\n.src_fmt = { .b6x16_p32 , .b4x16_p64 }\n.dst_fmt = { .b8x16 }\n.shape = { .128x256b, .4x256b, .128x128b, .64x128b**, .32x128b*** }\n.multicast = { .warpx2::02_13** , .warpx2::01_23**, .warpx4*** }\n```\n\n```\n// 1. Floating-point type without block scaling:\ntcgen05.mma.cta_group.kind  [d-tmem], a-desc, b-desc, idesc, { disable-output-lane }, enable-input-d {, scale-input-d};\ntcgen05.mma.cta_group.kind  [d-tmem], [a-tmem], b-desc, idesc, { disable-output-lane }, enable-input-d {, scale-input-d};\n.kind = { .kind::f16, .kind::tf32, .kind::f8f6f4 }\n.cta_group = { .cta_group::1, .cta_group::2 }\n\n// 2. Floating-point type with block scaling:\ntcgen05.mma.cta_group.kind.block_scale{.scale_vec_size}  [d-tmem], a-desc, b-desc, idesc, [scale-A-tmem], [scale-B-tmem], enable-input-d;\ntcgen05.mma.cta_group.kind.block_scale{.scale_vec_size}  [d-tmem], [a-tmem], b-desc, idesc, [scale-A-tmem], [scale-B-tmem], enable-input-d;\n.kind = { .kind::mxf8f6f4, .kind::mxf4, .kind::mxf4nvf4 }\n.cta_group = { .cta_group::1, .cta_group::2 }\n.scale_vec_size = { .scale_vec::1X, .scale_vec::2X, .scale_vec::4X }\n```\n\n```\nMMA.a.fill A[0], B[0]   <- load A[0]\nMMA.a.use A[0], B[1]\nMMA.a.use A[0], B[2]\nMMA.a.lastuse A[0], B[3]\nMMA.a.fill A[1], B[0]   <- load A[1]\nMMA.a.use A[1], B[1]\nMMA.a.use A[1], B[2]\nMMA.a.lastuse A[1], B[3]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/blackwell-tensor-core-analysis-part1.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

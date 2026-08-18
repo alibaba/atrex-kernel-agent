@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization-guide.step-5-output-optimization-results",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|optimization-guide#step-5-output-optimization-results|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "step-5-output-optimization-results"
+  ],
+  "triggers": [
+   "the 'Step 5: Output Optimization Results' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Step 5: Output Optimization Results",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Gluon Kernel Performance Optimization Guide -- Step 5: Output Optimization Results"
+  },
+  "technique": "Step 5: Output Optimization Results",
+  "what": "**⚠️ All output items below are mandatory. Missing any item = task incomplete.**",
+  "when": "**⚠️ All output items below are mandatory.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\n   | # | Optimization Item | Status | Notes |\n   |---|------------------|--------|-------|\n   | 3.0 | Merge memory access + order | ✅ | order=[1,0] matches row-major |\n   | 3.1 | load/store width | ✅ | Confirmed dwordx4 |\n   | 3.2 | swizzle bank conflict | ✅ | bank_conflicts=0 |\n   | 3.3 | ds_bpermute elimination | ➖ | No convert_layout |\n   | ... | ... | ... | ... |\n   ```\n\n```\n   | Size | Triton TFLOPS | Gluon TFLOPS (Before) | Gluon TFLOPS (After) | vs Triton |\n   |------|--------------|---------------------|---------------------|-----------|\n   | 1024 | 52.6 | 44.5 | 51.2 | 97.3% |\n   | ... | ... | ... | ... | ... |\n   ```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

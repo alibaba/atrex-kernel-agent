@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.12-v-perm-b32-inline-asm-with-ck-tile-style-sel-imm-gives-wrong-bytes",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#12-v-perm-b32-inline-asm-with-ck-tile-style-sel-imm-gives-wrong-bytes|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '12. `v_perm_b32` inline asm with CK_tile-style sel imm gives wrong bytes' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 12. `v_perm_b32` inline asm with CK_tile-style sel imm gives wrong bytes",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 12. `v_perm_b32` inline asm with CK_tile-style sel imm gives wrong bytes"
+  },
+  "attempted": "CK_tile's `transpose_vectors.hpp` uses `__builtin_amdgcn_perm(low, high, 0x05040100)` for 2×2 bf16 transpose and it works in HIP. So in FlyDSL an inline asm `\"v_perm_b32 $0, $1, $2, $3\"` with the same sel imm must work too.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "don't try to hand-write byte permutes via `v_perm_b32` inline asm unless you're ready to dump disassembly and verify sel encoding.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "HIP's `__builtin_amdgcn_perm` and the raw `v_perm_b32` inline asm differ in how the sel imm is interpreted on the current LLVM revision. The HIP builtin maps sel bytes directly to source-byte selectors; the inline asm encoding appears to route through a different SDWA-ish path where the byte-order convention is the opposite. The CK_tile-documented pattern (0x05040100 / 0x07060302) does NOT produce `{low16_a, low16_b}` / `{high16_a, high16_b}` packs as expected."
+  },
+  "observed": "kernel runs, cross-lane swap and predicate are verified correct (via scalar b16 debug variant), but the packed v_perm output is wrong. Max abs error 0.477 (vs 9.77e-04 with the same cross-lane + scalar pack). Perf is great (−22%) but numbers are meaningless.",
+  "root_cause": "HIP's `__builtin_amdgcn_perm` and the raw `v_perm_b32` inline asm differ in how the sel imm is interpreted on the current LLVM revision. The HIP builtin maps sel bytes directly to source-byte selectors; the inline asm encoding appears to route through a different SDWA-ish path where the byte-order convention is the opposite. The CK_tile-documented pattern (0x05040100 / 0x07060302) does NOT produce `{low16_a, low16_b}` / `{high16_a, high16_b}` packs as expected."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.flash-attention-1-to-4-gpu-evolution",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|flash-attention|flash-attention-1-to-4-gpu-evolution|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): FlashAttention 1–4: GPU Generational Evolution",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "FlashAttention 1–4: GPU Generational Evolution"
+  },
+  "title": "FlashAttention 1–4: GPU Generational Evolution",
+  "summary": "A comprehensive analysis of FlashAttention versions 1 through 4, tracing how each generation co-designs with NVIDIA GPU architectures from Ampere to Blackwell, covering IO-aware tiling, online softmax, warp specialization, TMEM utilization, and 2-CTA MMA techniques.",
+  "sections": [
+   {
+    "heading": "0. Background: Why Attention Needs \"Flash\"",
+    "anchor": "0-background-why-attention-needs-flash",
+    "gist": "Standard Self-Attention (where \\(S\\in\\mathbb{R}^{N\\times N}\\), \\(O\\in\\mathbb{R}^{N\\times d}\\)):"
+   },
+   {
+    "heading": "1. FlashAttention-1 (2022) — IO-Aware Tiling",
+    "anchor": "1-flashattention-1-2022-io-aware-tiling",
+    "gist": "**Target Hardware:** A100 (Ampere)"
+   },
+   {
+    "heading": "2. FlashAttention-2 (2023) — Maximizing Parallelism and Work Distribution",
+    "anchor": "2-flashattention-2-2023-maximizing-parallelism-and-work-distribution",
+    "gist": "**Target Hardware:** A100 (Ampere)"
+   },
+   {
+    "heading": "3. FlashAttention-3 (2024) — Deep Hopper Architecture Adaptation",
+    "anchor": "3-flashattention-3-2024-deep-hopper-architecture-adaptation",
+    "gist": "**Target Hardware:** H100 (Hopper)"
+   },
+   {
+    "heading": "4. FlashAttention-4 (2026) — Blackwell Co-Design",
+    "anchor": "4-flashattention-4-2026-blackwell-co-design",
+    "gist": "**Target Hardware:** B200 (Blackwell)"
+   },
+   {
+    "heading": "5. Cross-Generational Evolution Summary",
+    "anchor": "5-cross-generational-evolution-summary",
+    "gist": "table columns: Version, Year, Target GPU, Architecture Gen, Peak TFLOPS, GPU Utilization, vs Previous"
+   },
+   {
+    "heading": "References",
+    "anchor": "references",
+    "gist": "- Dao et al., \"FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness,\" NeurIPS 2022 — arXiv:2205.14135 - Dao, \"FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning,\" ICLR 2024 — arXiv:2307.…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# Installation\npip install flash-attn-4\n\n# Usage\nfrom flash_attn.cute import flash_attn_func\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/flash-attention-1-to-4-gpu-evolution.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

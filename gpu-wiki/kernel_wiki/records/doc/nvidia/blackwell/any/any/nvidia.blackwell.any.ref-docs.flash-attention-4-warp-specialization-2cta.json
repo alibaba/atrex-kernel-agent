@@ -1,0 +1,169 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.flash-attention-4-warp-specialization-2cta",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|flash-attention|flash-attention-4-warp-specialization-2cta|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention",
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): SVDQuant W4A4 on Blackwell: Warp Specialization, TMEM, and 2-CTA Persistent Kernel Using the FA4 Skeleton",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "SVDQuant W4A4 on Blackwell: Warp Specialization, TMEM, and 2-CTA Persistent Kernel Using the FA4 Skeleton"
+  },
+  "title": "SVDQuant W4A4 on Blackwell: Warp Specialization, TMEM, and 2-CTA Persistent Kernel Using the FA4 Skeleton",
+  "summary": "A practical walkthrough of building a Blackwell NVFP4 kernel that borrows FlashAttention-4's synchronization skeleton — explicit per-warp pipeline state, warp specialization, and persistent tile scheduling — to achieve +198% TFLOPS from a single SMEM budget fix.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "The key insight: how to keep a Blackwell kernel alive in a complex pipeline synchronization state space without deadlocking — by borrowing FlashAttention-4's synchronization skeleton (explicit per-warp pipeline state + warp specialization …"
+   },
+   {
+    "heading": "2. Why This Operator, Why This Article",
+    "anchor": "2-why-this-operator-why-this-article",
+    "gist": "**Math:**"
+   },
+   {
+    "heading": "3. Blackwell Primitives Used by This Kernel",
+    "anchor": "3-blackwell-primitives-used-by-this-kernel",
+    "gist": "NVFP4 is block-scaled FP4: two E2M1 nibbles packed into one byte as values, plus one FP8-E4M3 scale per 16 K-elements."
+   },
+   {
+    "heading": "4. v1 — The Pre-FA4 Baseline",
+    "anchor": "4-v1-the-pre-fa4-baseline",
+    "gist": "v1 is the baseline: main NVFP4 scaled-MMA + β-interleaved LoRA, 1-CTA only, monolithic `@cute.kernel`, stock `cutlass.pipeline.PipelineState`."
+   },
+   {
+    "heading": "5. Why FA4 — The Scaffolding We Adopted",
+    "anchor": "5-why-fa4-the-scaffolding-we-adopted",
+    "gist": "FA4 (FlashAttention-4 forward on Blackwell) already solved the 5-dimensional state space problem for a different operator: attention."
+   },
+   {
+    "heading": "6. v2_fa4 — The Rewrite",
+    "anchor": "6-v2-fa4-the-rewrite",
+    "gist": "The current production file is the FA4-derived rewrite's third real iteration: v0_fa4 (no LoRA, scaffolding only), v1_fa4 (v0_fa4 + single-stage LoRA), v2_fa4+C1 (v1_fa4 + 2-stage LoRA prologue + fused × wcscale + bias epilogue + LU SMEM f…"
+   },
+   {
+    "heading": "7. The Silent SMEM Budget Bug — LU ÷ cta_group_size",
+    "anchor": "7-the-silent-smem-budget-bug-lu-cta-group-size",
+    "gist": "Single-line patch, +198% TF on production shapes."
+   },
+   {
+    "heading": "8. Reading ncu with Blackwell Kernel Author Eyes",
+    "anchor": "8-reading-ncu-with-blackwell-kernel-author-eyes",
+    "gist": "Modal (fast iteration host) sets `NVreg_RestrictProfilingToAdminUsers=1` at the kernel module level."
+   },
+   {
+    "heading": "9. Calibration — Where This Kernel Actually Stands",
+    "anchor": "9-calibration-where-this-kernel-actually-stands",
+    "gist": "CUTLASS's `dense_blockscaled_gemm_persistent.py` (pure main NVFP4 MMA, no LoRA, no wcscale, no bias) on the K-heavy production shape (M=4352 K=15360 N=3840):"
+   },
+   {
+    "heading": "10. Remaining Levers",
+    "anchor": "10-remaining-levers",
+    "gist": "Ranked by current estimated ROI:"
+   },
+   {
+    "heading": "11. Code Locations",
+    "anchor": "11-code-locations",
+    "gist": "- `cute_kernels/gemm_w4a4/kernel.py` — v1, pre-FA4 reference."
+   },
+   {
+    "heading": "References",
+    "anchor": "references",
+    "gist": "- Dao et al., \"FlashAttention-4: Algorithm and Kernel Pipelining Co-Design for Asymmetric Hardware Scaling,\" 2026 - NVIDIA CUTLASS, `dense_blockscaled_gemm_persistent.py` - Modular, \"matmul-on-blackwell-part-3\" (2xSM MMA: Shared Memory Opt…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ny = scaled_mma(act₄, wgt₄) · wcscale + bias + lora_act_in @ lora_up\n```\n\n```python\ntiled_mma.set(tcgen05.Field.SFA, tCtSFA[sf_kblock_coord].iterator)\ntiled_mma.set(tcgen05.Field.SFB, tCtSFB[sf_kblock_coord].iterator)\ncute.gemm(tiled_mma, tCtAcc, tCrA[kblock_coord], tCrB[kblock_coord], tCtAcc)\n```\n\n```\ncluster_shape_mn = (2, 1), CtaGroup.TWO:\n  cluster_layout_vmnk.shape = ((2,), 1, 1, 1)\n  rank=0 → flat coord (0, 0, 0, 0) ← leader CTA\n  rank=1 → flat coord (1, 0, 0, 0) ← follower CTA\n```\n\n```python\nla_bytes = mma_inst_shape_mn[0] * R * lora_ab_dtype.width // 8 // cta_group_size\nlu_bytes = mma_inst_shape_mn[1] * R * lora_ab_dtype.width // 8  # ← bug\nlora_smem_bytes = (la_bytes + lu_bytes) * num_lora_stage\n```\n\n```python\nprint(\"la_one =\", cute.cosize(slice_(self.la_smem_layout_staged, (None, None, None, 0))))\nprint(\"lu_one =\", cute.cosize(slice_(self.lu_smem_layout_staged, (None, None, None, 0))))\n```\n\n```\n[PROBE96] num_lora_stage=2 cta_group_size=2\n[PROBE96] la_one cosize=16384 -> 32768 B (handwritten 32768 B, factor 1.000)\n[PROBE96] lu_one cosize=8192 -> 16384 B (handwritten 32768 B, factor 0.500)\n```\n\n```python\nlora_smem_bytes = 0\nif cutlass.const_expr(self.enable_lora):\n    la_bytes = (self.mma_inst_shape_mn[0] * self.R\n                * self.lora_ab_dtype.width // 8) // self.cta_group_size\n    lu_bytes = (self.mma_inst_shape_mn[1] * self.R\n                * self.lora_ab_dtype.width // 8) // self.cta_group_size\n    lora_smem_bytes = (la_bytes + lu_bytes) * self.num_lora_stage\n```\n\n```\nsm__pipe_tensor_subpipe_hmma_cycles_active.avg.pct_of_peak_sustained_active\n```\n\n```\nsm__ops_path_tensor_op_utcqmma_src_fp4_fp6_fp8_dst_fp32\nsm__ops_path_tensor_op_utcqmma_src_fp4_fp6_fp8_dst_fp16\nsm__ops_path_tensor_op_utcomma_src_fp4_dst_fp32\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/flash-attention-4-warp-specialization-2cta.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,150 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.blackwell-cutedsl-sm100",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|ref-docs|blackwell-cutedsl-sm100|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): SM100 Blackwell CuTeDSL Panorama",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "SM100 Blackwell CuTeDSL Panorama"
+  },
+  "title": "SM100 Blackwell CuTeDSL Panorama",
+  "summary": "The SM100 (Blackwell) architecture introduces the 5th generation Tensor Core (tcgen05), dedicated accumulator TMEM, 2SM cooperative MMA, and Cluster Launch Control (CLC) dynamic scheduling. This article dissects these new mechanisms from the CUTLASS/CuTeDSL code level, benchmarking against SM90 CuTeDSL Special Features, and compares the differences with SM120 (Blackwell GeForce).",
+  "sections": [
+   {
+    "heading": "1. UMMA — 5th Generation Tensor Core",
+    "anchor": "1-umma-5th-generation-tensor-core",
+    "gist": "SM100 replaces Hopper's WGMMA with `tcgen05.mma`, delivering **2x-4x** throughput over Hopper:"
+   },
+   {
+    "heading": "2. TMEM — Dedicated Tensor Accumulator Memory",
+    "anchor": "2-tmem-dedicated-tensor-accumulator-memory",
+    "gist": "SM100 introduces **Tensor Memory (TMEM)**, specifically designed bulls for storing MMA accumulator results."
+   },
+   {
+    "heading": "3. 2SM MMA Collaboration",
+    "anchor": "3-2sm-mma-collaboration",
+    "gist": "When ``AtomThrShapeMNK = Shape<_2,_1,_1>``, two adjacent CTAs in the cluster share TMEM and collaboratively execute the ``tcgen05.mma.cta_group::2`` instruction."
+   },
+   {
+    "heading": "4. CLC (Cluster Launch Control) Pipeline",
+    "anchor": "4-clc-cluster-launch-control-pipeline",
+    "gist": "table columns: Scheduling Method, SM90, SM100 CLC"
+   },
+   {
+    "heading": "5. 5-Warp Role Architecture",
+    "anchor": "5-5-warp-role-architecture",
+    "gist": "The SM100 kernel divides threads within a threadblock into **5 roles**, each role occupying **1 warp (32 threads)** (epilogue can use multiple warps):"
+   },
+   {
+    "heading": "6. Dynamic Cluster",
+    "anchor": "6-dynamic-cluster",
+    "gist": "Dynamic cluster is enabled when `ClusterShape` contains non-static dimensions:"
+   },
+   {
+    "heading": "7. SM100 Tile Shape and Dispatch Policy Quick Reference",
+    "anchor": "7-sm100-tile-shape-and-dispatch-policy-quick-reference",
+    "gist": "table columns: SM Mode, Tile Shape M, Tile Shape N, Dispatch Policy"
+   },
+   {
+    "heading": "8. SM120 (Blackwell GeForce) Differences",
+    "anchor": "8-sm120-blackwell-geforce-differences",
+    "gist": "SM120 targets consumer-grade Blackwell GPUs (RTX 50 series), supporting narrow-precision MMA but **without UMMA/TMEM/CLC**."
+   },
+   {
+    "heading": "9. Three-Generation Architecture Core Comparison",
+    "anchor": "9-three-generation-architecture-core-comparison",
+    "gist": "table columns: Feature, SM90 (Hopper), SM100 (Blackwell), SM120 (GeForce)"
+   },
+   {
+    "heading": "10. Related Documents",
+    "anchor": "10-related-documents",
+    "gist": "- SM90 CuTeDSL Special Features — Hopper WGMMA/TMA/Pipeline comparison - CuTeDSL Pipeline Patterns — Producer-Consu…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\n// sm100_mma_warpspecialized.hpp\nstatic_assert(cute::is_void_v<SmemCopyAtomA>,\n    \"SM100 UMMA cannot have a non-void copy atom for smem sourced instructions.\");\nstatic_assert(cute::is_void_v<SmemCopyAtomB>,\n    \"SM100 UMMA cannot have a non-void copy atom for smem sourced instructions.\");\n```\n\n```cpp\nstatic_assert(cute::is_base_of<cute::UMMA::DescriptorIterator, typename TiledMma::FrgTypeA>::value &&\n              cute::is_base_of<cute::UMMA::DescriptorIterator, typename TiledMma::FrgTypeB>::value,\n              \"MMA atom must source both A and B operand from smem_desc for this mainloop.\");\n```\n\n```cpp\n// TiledMma::ThrLayoutVMNK 0\nusing AtomThrShapeMNK = Shape<decltype(shape<0>(typename TiledMma::ThrLayoutVMNK{})), _1, _1>;\n// 1SM: AtomThrShapeMNK = Shape<_1,_1,_1>  → size = 1\n// 2SM: AtomThrShapeMNK = Shape<_2,_1,_1>  → size = 2\n```\n\n```cpp\nstatic constexpr bool IsRuntimeDataTypeA = detail::is_sm10x_runtime_f8f6f4<ElementA>();\nstatic constexpr bool IsRuntimeDataTypeB = detail::is_sm10x_runtime_f8f6f4<ElementB>();\n\n// must runtime or static\nstatic_assert((IsRuntimeDataTypeA && IsRuntimeDataTypeB) ||\n              (!IsRuntimeDataTypeA && !IsRuntimeDataTypeB),\n              \"ElementA and ElementB should be both runtime or both static.\");\n```\n\n```cpp\nusing RuntimeDataTypeA = cute::conditional_t<IsRuntimeDataTypeA, cute::UMMA::MXF8F6F4Format, void*>;\nusing RuntimeDataTypeB = cute::conditional_t<IsRuntimeDataTypeB, cute::UMMA::MXF8F6F4Format, void*>;\n```\n\n```cpp\n// sm100_gemm_tma_warpspecialized.hpp\nusing TmemAllocator = cute::conditional_t<\n    cute::size(cute::shape<0>(typename TiledMma::ThrLayoutVMNK{})) == 1,\n    cute::TMEM::Allocator1Sm,\n    cute::TMEM::Allocator2Sm>;\n```\n\n```cpp\n// MMA warp entire TMEM\ntmem_allocator.allocate(TmemAllocator::Sm100TmemCapacityColumns, &shared_storage.tmem_base_ptr);\n__syncwarp();\ntmem_allocation_result_barrier.arrive; // notify epilogue warp\n\nuint32_t tmem_base_ptr = shared_storage.tmem_base_ptr;\ncollective_mainloop.set_tmem_offsets(tmem_storage, tmem_base_ptr);\n```\n\n```cpp\ntmem_allocator.release_allocation_lock();\n// ... wait epilogue complete ...\ntmem_allocator.free(tmem_base_ptr, TmemAllocator::Sm100TmemCapacityColumns);\n```\n\n```cpp\ntemplate <class TmemStorage>\nCUTLASS_DEVICE static void\nset_tmem_offsets(TmemStorage& tmem_storage, uint32_t tmem_base_addr) {\n    tmem_storage.accumulators.data() = tmem_base_addr;\n}\n```\n\n```cpp\nstatic constexpr uint32_t AccumulatorPipelineStageCount =\n    DispatchPolicy::Schedule::AccumulatorPipelineStageCount;\n\n// tensor by stage\n// ((MMA_TILE_M,MMA_TILE_N),MMA_M,MMA_N,ACC_PIPE)\nTensor accumulators = cutlass::detail::make_sm100_accumulator<\n    AccumulatorPipelineStageCount, IsOverlappingAccum>(\n    tiled_mma, acc_shape, EpilogueTile{});\n```\n\n```cpp\naccumulator_pipeline.producer_commit(accumulator_pipe_producer_state);\n++accumulator_pipe_producer_state;\n```\n\n```cpp\nusing AccumulatorPipeline = cutlass::PipelineUmmaAsync<\n    AccumulatorPipelineStageCount, AtomThrShapeMNK>;\n```\n\n```cpp\n// PipelineUmmaAsync::producer_commit\nif constexpr (is_2sm_mma) {\n    cutlass::arch::umma_arrive_multicast_2x1SM(smem_ptr, tmem_sync_mask_);\n} else {\n    cutlass::arch::umma_arrive(smem_ptr);\n}\n```\n\n```cpp\n// 1SM usestandard TMA\nSM90_TMA_LOAD / SM90_TMA_LOAD_MULTICAST\n\n// 2SM use 2SM TMA\nSM100_TMA_2SM_LOAD / SM100_TMA_2SM_LOAD_MULTICAST\n```\n\n```cpp\ntemplate<class ClusterShape, class AtomThrShape_MNK>\nCUTLASS_DEVICE\nuint16_t calculate_umma_peer_mask(ClusterShape cluster_shape,\n                                   AtomThrShape_MNK atom_thr_shape,\n                                   dim3 block_id_in_cluster) {\n    uint16_t tmem_sync_mask = 0;\n    auto cluster_layout = make_layout(cluster_shape);\n    int block_id_x = (block_id_in_cluster.x / size<0>(AtomThrShape_MNK{}))\n                   * size<0>(AtomThrShape_MNK{});\n    int block_id_y = (block_id_in_cluster.y / size<1>(AtomThrShape_MNK{}))\n                   * size<1>(AtomThrShape_MNK{});\n    for (int x = 0; x < size<0>(AtomThrShape_MNK{}); x++) {\n        for (int y = 0; y < size<1>(AtomThrShape_MNK{}); y++) {\n            tmem_sync_mask |= (1 << cluster_layout(block_id_x + x, block_id_y + y, Int<0>{}));\n        }\n    }\n    return tmem_sync_mask;\n}\n```\n\n```cpp\n// Cluster layout AtomThrID\nauto cluster_layout_vmnk = tiled_divide(\n    make_layout(cluster_shape),\n    make_tile(typename TiledMma::AtomThrID{}));\nauto cta_coord_vmnk = cluster_layout_vmnk.get_flat_coord(block_rank_in_cluster);\n\n// TMA partition use layout\nauto [tAgA_mkl, tAsA] = tma_partition(*observed_tma_load_a_,\n    get<2>(cta_coord_vmnk), make_layout(size<2>(cta_layout_vmnk)),\n    group_modes<0,3>(sA), group_modes<0,3>(tCgA_mkl));\n```\n\n```cpp\ntemplate <int Stages_, class ClusterShape = Shape<int,int,_1>>\nclass PipelineCLCFetchAsync {\npublic:\n    static constexpr uint32_t Stages = Stages_;\n\n    struct Params {\n uint32_t transaction_bytes = 0; // 16 bytes (CLC response)\n        ThreadCategory role;\n uint32_t producer_blockid = 0; // 0 CTA producer\n uint32_t producer_arv_count = 1; // 1 elected thread\n uint32_t consumer_arv_count; //\n    };\n};\n```\n\n```cpp\n// configuration\nstatic constexpr uint32_t SchedulerPipelineStageCount =\n    DispatchPolicy::Schedule::SchedulerPipelineStageCount;  // = 3\n\nusing CLCPipeline = cutlass::PipelineCLCFetchAsync<\n    SchedulerPipelineStageCount, ClusterShape>;\n```\n\n```cpp\n// Scheduler warp loop\ndo {\n // 1. : wait mainloop load\n    clc_throttle_pipeline.consumer_wait(clc_pipe_throttle_consumer_state);\n    clc_throttle_pipeline.consumer_release(clc_pipe_throttle_consumer_state);\n\n // 2. CLC , next ClcID\n    clc_pipe_producer_state = scheduler.advance_to_next_work(\n        clc_pipeline, clc_pipe_producer_state);\n\n // 3. warp CLC result\n    auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(\n        work_tile_info, clc_pipeline, clc_pipe_consumer_state);\n} while (work_tile_info.is_valid());\n```\n\n```cpp\nenum class WarpCategory : int32_t {\n MMA = 0, // 1 warp - execute tcgen05.mma\n Sched = 1, // 1 warp - CLC scheduling( cluster 0 CTA)\n MainloopLoad = 2, // 1 warp - TMA load A/B\n EpilogueLoad = 3, // 1 warp - TMA load C/aux\n Epilogue = 4, // 1-4 warps - epilogue compute + TMA store\n};\n```\n\n```cpp\nstatic constexpr uint32_t NumSchedThreads        = 32;  // 1 warp\nstatic constexpr uint32_t NumMMAThreads          = 32;  // 1 warp\nstatic constexpr uint32_t NumMainloopLoadThreads = 32;  // 1 warp\nstatic constexpr uint32_t NumEpilogueLoadThreads = 32;  // 1 warp\nstatic constexpr uint32_t NumEpilogueThreads     = CollectiveEpilogue::ThreadCount;\n\nstatic constexpr uint32_t MaxThreadsPerBlock =\n    NumSchedThreads + NumMainloopLoadThreads + NumMMAThreads +\n    NumEpilogueLoadThreads + NumEpilogueThreads;\n```\n\n```cpp\nIsParticipant is_participant = {\n    (warp_category == WarpCategory::MMA),                                 // mma\n (warp_category == WarpCategory::Sched) && is_first_cta_in_cluster, // sched: CTA 0\n    (warp_category == WarpCategory::MainloopLoad),                        // main_load\n (warp_category == WarpCategory::EpilogueLoad) && is_epi_load_needed, // epi_load: by\n    (warp_category == WarpCategory::Epilogue)                             // epilogue\n};\n```\n\n```cpp\nstatic constexpr bool IsDynamicCluster = not cute::is_static_v<ClusterShape>;\n```\n\n```cpp\nstruct Params {\n TMA_A tma_load_a; // main cluster shape TMA\n    TMA_B tma_load_b;\n TMA_A tma_load_a_fallback; // fallback cluster shape TMA\n    TMA_B tma_load_b_fallback;\n    dim3 cluster_shape_fallback;\n    // ...\n};\n```\n\n```cpp\nif constexpr (IsDynamicCluster) {\n    const bool is_fallback_cluster =\n        (cute::size<0>(cluster_shape_) == params.cluster_shape_fallback.x &&\n         cute::size<1>(cluster_shape_) == params.cluster_shape_fallback.y);\n    observed_tma_load_a_ = is_fallback_cluster\n        ? &params.tma_load_a_fallback : &params.tma_load_a;\n    observed_tma_load_b_ = is_fallback_cluster\n        ? &params.tma_load_b_fallback : &params.tma_load_b;\n}\n```\n\n```cpp\n// sm120_mma_tma.hpp\nstatic_assert(not cute::is_void_v<SmemCopyAtomA>,\n    \"SM120 mainloop must specify a copy atom for A operand smem->rmem reads.\");\nstatic_assert(not cute::is_void_v<SmemCopyAtomB>,\n    \"SM120 mainloop must specify a copy atom for B operand smem->rmem reads.\");\n```\n\n```cpp\nusing TmaInternalElementA = cute::conditional_t<\n    cute::is_same_v<ElementA, cutlass::float_e2m1_t>,\n    cutlass::detail::float_e2m1_unpacksmem_t,    // 4-bit unpack\n    cute::conditional_t<cute::is_same_v<ElementA, cutlass::float_e2m3_t>,\n        cutlass::detail::float_e2m3_unpacksmem_t,  // 6-bit unpack\n        cute::conditional_t<cute::is_same_v<ElementA, cutlass::float_e3m2_t>,\n            cutlass::detail::float_e3m2_unpacksmem_t,\n            uint_bit_t<sizeof_bits_v<ElementA>>>>>;\n```\n\n```cpp\nstatic constexpr uint32_t LoadRegisterRequirement = 40;\nstatic constexpr uint32_t MmaRegisterRequirement = 232;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/blackwell-cutedsl-sm100.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

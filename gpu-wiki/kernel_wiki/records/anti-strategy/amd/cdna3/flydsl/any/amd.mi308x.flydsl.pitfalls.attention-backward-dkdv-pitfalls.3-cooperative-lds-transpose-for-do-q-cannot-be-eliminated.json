@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.attention-backward-dkdv-pitfalls.3-cooperative-lds-transpose-for-do-q-cannot-be-eliminated",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|pitfalls|attention-backward-dkdv-pitfalls#3-cooperative-lds-transpose-for-do-q-cannot-be-eliminated|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '3. Cooperative LDS transpose for dO/Q cannot be eliminated' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 3. Cooperative LDS transpose for dO/Q cannot be eliminated",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Attention Backward dQ + dK+dV on MI308X (gfx942) -- 3. Cooperative LDS transpose for dO/Q cannot be eliminated"
+  },
+  "attempted": "The dV MFMA uses dO^T as A operand (lane_mod_32 = d_col), requiring 4 consecutive q values per lane. Since dO is stored as (..., S, D), loading 4 different q values at the same d_col requires 4 strided global loads (stride = D = 64 elements apart). The obvious thought: \"skip LDS transpose, load directly from global like GEMM1 loads Q.\"",
+  "verdict": "not-worth-it-here",
+  "lesson": "Whether a GEMM operand can be loaded directly from global or needs LDS transpose depends on which dimension is contiguous in memory vs. which dimension MFMA maps to the lane_mod_32 (row) vs. the K-pack (4 consecutive). If the K-pack dimension is strided in memory, LDS transpose is mandatory.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "In GEMM1 (S=K@Q^T), Q is the B operand where lane_mod_32 selects the q_row, and each lane loads 4 consecutive D-dim values — which ARE contiguous in memory. But for dV MFMA, dO^T is the A operand where lane_mod_32 selects d_col, and each lane needs 4 consecutive q_row values at the same d_col — which are NOT contiguous (stride = D between q_rows). LDS transpose converts row-major dO(q,d) into column-major dO^T(d,q) to make the q dimension contiguous."
+  },
+  "observed": "Not possible.",
+  "root_cause": "In GEMM1 (S=K@Q^T), Q is the B operand where lane_mod_32 selects the q_row, and each lane loads 4 consecutive D-dim values — which ARE contiguous in memory. But for dV MFMA, dO^T is the A operand where lane_mod_32 selects d_col, and each lane needs 4 consecutive q_row values at the same d_col — which are NOT contiguous (stride = D between q_rows). LDS transpose converts row-major dO(q,d) into column-major dO^T(d,q) to make the q dimension contiguous."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/attention-backward-dkdv-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

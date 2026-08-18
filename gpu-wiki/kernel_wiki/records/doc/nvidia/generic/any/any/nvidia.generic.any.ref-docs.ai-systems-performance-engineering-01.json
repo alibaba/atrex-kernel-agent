@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ai-systems-performance-engineering-01",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ai-systems-performance-engineering-01|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): AI Systems Performance Engineering (Part 1)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "AI Systems Performance Engineering (Part 1)"
+  },
+  "title": "AI Systems Performance Engineering (Part 1)",
+  "summary": "Introduction and overview of AI systems performance engineering, covering the role definition, hardware landscape (GB200 NVL72), and the path toward 100-trillion-parameter models.",
+  "sections": [
+   {
+    "heading": "1. Chapter Overview",
+    "anchor": "1-chapter-overview",
+    "gist": "In late 2024, Chinese startup DeepSeek.AI trained a frontier LLM without access to the latest NVIDIA GPUs."
+   },
+   {
+    "heading": "2. The AI Systems Performance Engineer",
+    "anchor": "2-the-ai-systems-performance-engineer",
+    "gist": "A specialized role focused on optimizing AI model performance and underlying systems, ensuring AI training and inference pipelines are fast, efficient, reliable, and highly available."
+   },
+   {
+    "heading": "3. DeepSeek: Scaling to ~680B Parameters Under Hardware Constraints",
+    "anchor": "3-deepseek-scaling-to-680b-parameters-under-hardware-constraints",
+    "gist": "table columns: Feature, H100, H800"
+   },
+   {
+    "heading": "4. Toward 100-Trillion-Parameter Models",
+    "anchor": "4-toward-100-trillion-parameter-models",
+    "gist": "table columns: Estimate, Value"
+   },
+   {
+    "heading": "5. NVIDIA \"AI Supercomputer in a Rack\"",
+    "anchor": "5-nvidia-ai-supercomputer-in-a-rack",
+    "gist": "table columns: Metric, Value"
+   },
+   {
+    "heading": "6. Mechanical Sympathy",
+    "anchor": "6-mechanical-sympathy",
+    "gist": "Derived from F1 champion Jackie Stewart's deep understanding of racing car mechanics."
+   },
+   {
+    "heading": "7. Goodput: Effective Throughput",
+    "anchor": "7-goodput-effective-throughput",
+    "gist": "> The amount of **useful work** completed per unit time, excluding contributions that do not directly advance training/inference."
+   },
+   {
+    "heading": "8. Book Roadmap",
+    "anchor": "8-book-roadmap",
+    "gist": "table columns: Chapter, Topic"
+   },
+   {
+    "heading": "9. Key Takeaways",
+    "anchor": "9-key-takeaways",
+    "gist": "1."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ai-systems-performance-engineering-01.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

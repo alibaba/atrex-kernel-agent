@@ -1,0 +1,175 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.ref-docs.common_optimizations",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|ref-docs|common_optimizations|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): CDNA4 (gfx950) Generic ISA Optimization Checklist",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "CDNA4 (gfx950) Generic ISA Optimization Checklist"
+  },
+  "title": "CDNA4 (gfx950) Generic ISA Optimization Checklist",
+  "summary": "1. **Execute in order** — **3.0** → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → ..., each step's fix may eliminate issues in subsequent steps 2. **Verify at each step** — Verify accuracy and performance after each optimization step 3. **Accuracy first** — If an optimization step causes accuracy regression, roll back immediately 4. **Record changes** — Record the specific modifications and performance changes for each step",
+  "sections": [
+   {
+    "heading": "⚠️ Core Principles",
+    "anchor": "core-principles",
+    "gist": "1."
+   },
+   {
+    "heading": "3.0 Coalesced Memory Access Pre-check (Step Zero) ⚠️⚠️⚠️",
+    "anchor": "3-0-coalesced-memory-access-pre-check-step-zero",
+    "gist": "> **This is the prerequisite for all optimizations."
+   },
+   {
+    "heading": "3.1 Ensure Coalesced Access + Maximize Load/Store Instruction Width",
+    "anchor": "3-1-ensure-coalesced-access-maximize-load-store-instruction-width",
+    "gist": "On the premise of **ensuring coalesced access**, maximize the instruction width of global memory and shared memory: - Global load/store: `buffer_load_dwordx4` (128-bit) - Shared memory: `ds_read_b128` / `ds_write_b128` (128-bit)"
+   },
+   {
+    "heading": "3.2 Check LDS Write Width + Bank Conflicts",
+    "anchor": "3-2-check-lds-write-width-bank-conflicts",
+    "gist": "Eliminate **narrow writes** and bank conflicts in shared memory (LDS)."
+   },
+   {
+    "heading": "3.3 Eliminate ds_bpermute Instructions",
+    "anchor": "3-3-eliminate-ds-bpermute-instructions",
+    "gist": "Eliminate unnecessary ``ds_bpermute_b32`` instructions."
+   },
+   {
+    "heading": "3.4 Eliminate Scratch Operations (Register Spills)",
+    "anchor": "3-4-eliminate-scratch-operations-register-spills",
+    "gist": "Eliminate scratch-space `buffer_load`/`buffer_store` instructions (i.e., register spills to device memory)."
+   },
+   {
+    "heading": "3.5 Optimize Memory Access Stalls (Compute-Memory Overlap)",
+    "anchor": "3-5-optimize-memory-access-stalls-compute-memory-overlap",
+    "gist": "Ensure that memory load latency is effectively hidden by compute."
+   },
+   {
+    "heading": "3.6 warp_pipeline_stage Full-Stage Packing (Key GEMM Optimization) ⭐",
+    "anchor": "3-6-warp-pipeline-stage-full-stage-packing-key-gemm-optimization",
+    "gist": "Pack all stages of the GEMM loop (ds_read, MFMA, ds_write) with ``warp_pipeline_stage`` and hand them off to the compiler, allowing the WarpPipeliner to automatically perform ping-pong cross-iteration pipeline scheduling."
+   },
+   {
+    "heading": "3.7 Combined Layout + num_warps Tuning (Key for Large Tile GEMM) ⭐",
+    "anchor": "3-7-combined-layout-num-warps-tuning-key-for-large-tile-gemm",
+    "gist": "Jointly adjust `mma_layout.warps_per_cta` (determines num_warps), `b_load_layout.threads_per_warp`, and `b_shared_layout.order` to break through the VGPR bottleneck and unlock pipeline optimization opportunities."
+   },
+   {
+    "heading": "3.8 Attention-Specific Optimizations ⭐",
+    "anchor": "3-8-attention-specific-optimizations",
+    "gist": "See `` and the fused-attention topic for details."
+   },
+   {
+    "heading": "3.9 Small Matrix / Low CU Utilization Optimizations ⭐",
+    "anchor": "3-9-small-matrix-low-cu-utilization-optimizations",
+    "gist": "For small matrix scenarios (where grid size is much smaller than the number of CUs), maximize actual throughput by adjusting tiling strategy and loop parameters."
+   },
+   {
+    "heading": "XCD/PID Remapping (MI355X Load Balancing) ⭐",
+    "anchor": "xcd-pid-remapping-mi355x-load-balancing",
+    "gist": "The MI355X has 8 XCDs, each with 32 CUs."
+   },
+   {
+    "heading": "Quick Reference by Bottleneck Type",
+    "anchor": "quick-reference-by-bottleneck-type",
+    "gist": "table columns: Bottleneck Type, Priority Optimizations"
+   },
+   {
+    "heading": "Quick Reference by Operator Type",
+    "anchor": "quick-reference-by-operator-type",
+    "gist": "table columns: Operator Type, Applicable Optimizations"
+   },
+   {
+    "heading": "CDNA4 vs Hopper Differences",
+    "anchor": "cdna4-vs-hopper-differences",
+    "gist": "table columns: Feature, CDNA4 (gfx950), Hopper (sm_90)"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# 1. tensor stride\n# Q[total_q, num_heads, 576]: stride reshape layout\n# KV[total_kv, 288]: stride_kc=288, stride_ck=1 -> K (dim 1) contiguous -> order=[1, 0]\n\n# 2. spt contiguousdimension ≥ 8 (bf16/fp16) or ≥ 16 (fp4 packed) dwordx4 load\n```\n\n```bash\n# check load\n# buffer_load_ubyte / buffer_load_ushort -> coalesced！check order\n```\n\n```bash\n# critical: check ds_write\ngrep -o \"ds_write_[a-z0-9_]*\" $ASM | sort | uniq -c\n# if ds_write_b16 / ds_write_b16_d16_hi -> write！\n# ds_write_b128 (128-bit vectorwrite)\n```\n\n````python\n# ❌ tile smem -> 44×ds_write_b16 (performance)\nsmem_b.index(0).store(b_h.to(gl.bfloat16))\nh_dot = smem_b.index(0).load(dot_op1)\n\n# ✅ convert_layout -> write, ds_read_b64_tr_b16\nh_dot = gl.convert_layout(b_h.to(gl.bfloat16), dot_op1)\n```\n\n```\ngrid_blocks = cdiv(M, BLOCK_SIZE_M) × cdiv(N, BLOCK_SIZE_N)\nCU_utilization = grid_blocks / num_CUs   (MI355X: 256 CUs)\n```\n\n```python\nNUM_XCDS = 8\npid_raw = gl.program_id(0)\nwave = pid_raw // NUM_XCDS\npos_in_wave = pid_raw % NUM_XCDS\nis_odd_wave = wave % 2\nremapped_pos = tl.where(is_odd_wave, NUM_XCDS - 1 - pos_in_wave, pos_in_wave)\npid = wave * NUM_XCDS + remapped_pos\npid = tl.minimum(pid, total_blocks - 1)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/gluon/common_optimizations.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

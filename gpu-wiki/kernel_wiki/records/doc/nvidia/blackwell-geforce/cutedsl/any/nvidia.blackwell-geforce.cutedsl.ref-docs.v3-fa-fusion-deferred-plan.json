@@ -1,0 +1,157 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.v3-fa-fusion-deferred-plan",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|flash-attention|v3-fa-fusion-deferred-plan|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention",
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): V3 deferred plan: cute-DSL FlashAttention forward + sigmoid·gate + NVFP4 quant single-kernel fusion (sm_120)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "V3 deferred plan: cute-DSL FlashAttention forward + sigmoid·gate + NVFP4 quant single-kernel fusion (sm_120)"
+  },
+  "title": "V3 deferred plan: cute-DSL FlashAttention forward + sigmoid·gate + NVFP4 quant single-kernel fusion (sm_120)",
+  "summary": "Subclass `FlashAttentionForwardSm120` (which already subclasses `FlashAttentionForwardSm80`) and **override only `epilogue()`**. The current `epilogue()` (`flash_fwd.py:324-442` in the upstream / wiki copy) takes `acc_O: cute.Tensor` (FP32 accumulator fragment, already in registers per-thread, layout `(MMA_atom × MMA_M × MMA_N)` per the FA80 mma scheme), converts it to bf16 `rO`, then writes to gmem `mO`. **Replace the gmem write** with: (a) load gate per-thread for the same per-thread `(m, k)` slice, (b) run `bfloat2_sigmoid_mul(rO_pair, gate_pair)` element-wise, (c) per 16-element SF-block run V0's amax → e4m3 scale → e2m1 pack chain, (d) write `x_fp4` (`stg.E.64`) and `x_bs` (swizzled SF byte) to gmem. The `mO` argument becomes `mOutput` (uint8 fp4-packed) + `mScales` (uint8 swizzled SF). Mainloop (Q/K/V loading, softmax, P·V mma) is unmodified. **Eliminates the 50 MB attn_out DRAM round-trip** — the whole point.",
+  "sections": [
+   {
+    "heading": "§1 The structural change (one paragraph)",
+    "anchor": "1-the-structural-change-one-paragraph",
+    "gist": "Subclass `FlashAttentionForwardSm120` (which already subclasses `FlashAttentionForwardSm80`) and **override only `epilogue()`**."
+   },
+   {
+    "heading": "§2 Wiki references (line-precise, all confirmed present in this `gpu-wiki/` checkout)",
+    "anchor": "2-wiki-references-line-precise-all-confirmed-present-in-this-gpu-wiki-checkout",
+    "gist": "table columns: Topic, File, Lines"
+   },
+   {
+    "heading": "§3 SMEM budget (D=256, sm_120 99 KB)",
+    "anchor": "3-smem-budget-d-256-sm-120-99-kb",
+    "gist": "Per-stage SMEM cost @ tile_m / tile_n with D=256:"
+   },
+   {
+    "heading": "§4 Subclass design (concrete override map)",
+    "anchor": "4-subclass-design-concrete-override-map",
+    "gist": "---"
+   },
+   {
+    "heading": "§5 ISA-level targets",
+    "anchor": "5-isa-level-targets",
+    "gist": "table columns: Metric, Current (SDPA + V0 standalone), V3 fused target, Why"
+   },
+   {
+    "heading": "§6 Risk catalog (ranked by likelihood)",
+    "anchor": "6-risk-catalog-ranked-by-likelihood",
+    "gist": "table columns: #, Risk, Likelihood, Symptom, Fix"
+   },
+   {
+    "heading": "§7 Validation oracle",
+    "anchor": "7-validation-oracle",
+    "gist": "`vllm.vllm_flash_attn.flash_attn_varlen_func` — confirmed importable + functionally correct on sm_120 (probe Q3 PASS, 2026-04-27)."
+   },
+   {
+    "heading": "§8 Implementation sequence (when resumed)",
+    "anchor": "8-implementation-sequence-when-resumed",
+    "gist": "1."
+   },
+   {
+    "heading": "§9 What stays unchanged from V0/V1/V2 (DON'T touch)",
+    "anchor": "9-what-stays-unchanged-from-v0-v1-v2-don-t-touch",
+    "gist": "- All inline-PTX helpers in `cute_helpers.py` for the epilogue: `bfloat2_sigmoid_mul`, `bfloat2_max_abs_8`, `bfloat2_hmax_reduce_to_f32`, `bfloat2x8_to_e2m1x16_packed`, `cvt_f32_to_e4m3`, `nvfp4_compute_output_scale`, `compute_sf_index_swi…"
+   },
+   {
+    "heading": "related",
+    "anchor": "related",
+    "gist": "- `` — full Stage 3 narrative including why this plan was deferred - `` — the cutlass 4.4.2 vs 4.5+ vendor blocker - `wiki_drafts/sm120-flash-attn-vllm-no-fast-path.…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nsQ  = tile_m * D * 2  (bf16)             # never staged\nsK  = tile_n * D * 2 * num_stages\nsV  = tile_n * D * 2 * num_stages\nsO  = tile_m * D * 2  (recycles sQ via Q_in_regs=True)\nsGate = tile_m * D * 2 (epilogue only, allocated after sV dies)\n```\n\n```python\nclass FlashAttentionForwardSm120Fp4Quant(FlashAttentionForwardSm120):\n\n    @staticmethod\n    def can_implement(dtype, head_dim, head_dim_v, tile_m, tile_n,\n                      num_stages, num_threads, is_causal, Q_in_regs=False) -> bool:\n        ok = FlashAttentionForwardSm120.can_implement(\n            dtype, head_dim, head_dim_v, tile_m, tile_n,\n            num_stages, num_threads, is_causal, Q_in_regs)\n        if not ok:\n            return False\n        smem_gate = tile_m * head_dim_v * 2  # gate same shape as O per output tile\n        smem_capacity = utils_basic.get_smem_capacity_in_bytes(\"sm_120\")  # 99 KB\n        smem_used = (\n            tile_m * head_dim * 2  # sQ\n            + tile_n * head_dim * num_stages * 2  # sK\n            + (max(tile_m * head_dim * 2, tile_n * head_dim_v * num_stages * 2)\n               if Q_in_regs\n               else tile_m * head_dim * 2 + tile_n * head_dim_v * num_stages * 2)\n            + smem_gate\n        )\n        return smem_used <= smem_capacity\n\n    def _get_shared_storage_cls(self):\n        # Extend FA80 SharedStorage with sGate (allocated after sV dies in epilogue)\n        base = super()._get_shared_storage_cls()\n        sGate_struct = cute.struct.Align[\n            cute.struct.MemRange[self.dtype, self.tile_m * self.tile_hdimv], 1024\n        ]\n        @cute.struct\n        class SharedStorageFp4(base):\n            sGate: sGate_struct\n        return SharedStorageFp4\n\n    def epilogue(self, acc_O, lse, mGate, mOutput, mScales,\n                 mGlobalScale, sO, sGate, seqlen,\n                 gmem_tiled_copy_O, gmem_tiled_copy_Gate,\n                 tma_atom_O, tiled_mma, tidx, m_block, head_idx, batch_idx):\n        # 1. Convert acc_O FP32 fragment to bf16 fragment (UNCHANGED from FA80)\n        rO = cute.make_fragment_like(acc_O, self.dtype)\n        rO.store(acc_O.load().to(self.dtype))\n        cute.arch.barrier(barrier_id=int(NamedBarrierFwd.Epilogue),\n                          number_of_threads=self.num_epilogue_threads)\n\n        # 2. cp.async G2S load gate into sGate\n        gGate = cute.local_tile(\n            mGate[(None, None)],\n            (self.tile_m, self.tile_hdimv),\n            (m_block, head_idx),\n        )\n        thr_copy_gate = gmem_tiled_copy_Gate.get_slice(tidx)\n        cute.copy(gmem_tiled_copy_Gate,\n                  thr_copy_gate.partition_S(gGate),\n                  thr_copy_gate.partition_D(sGate))\n        cute.arch.cp_async_commit_group()\n        cute.arch.cp_async_wait_group(0)\n        cute.arch.barrier(barrier_id=int(NamedBarrierFwd.Epilogue),\n                          number_of_threads=self.num_epilogue_threads)\n\n        # 3. RECOMMENDED PATH: round-trip rO → sO, then re-read in V0 thread layout\n        #    Reason: mma_pv layout doesn't expose 16-element SF-block boundaries\n        #    cleanly; round-trip lets us reuse V0 epilogue mathematics 1:1.\n        #    Alternative: work out per-thread SF-block extraction from\n        #    thr_mma.partition_C(sO) — defer to V4 optimization.\n        cute.copy(smem_copy_atom_O, taccOrO, taccOsO)  # rO → sO (V0-compatible layout)\n        cute.arch.barrier()\n        # Now sO holds (sigmoid_mul not yet applied) attn_out in V0-friendly layout\n\n        # 4. Re-read sO in V0 thread layout (256 thr × 16 SF blocks per row × ...)\n        # then apply sigmoid_mul + V0 fp4-quant pipeline VERBATIM.\n        # See V0 kernel.py for the read + epilogue body.\n        # Inline gate read from sGate, paired with attn read from sO.\n        # x = sigmoid(gate) * attn_out — V0's bfloat2_sigmoid_mul UNCHANGED.\n        # Then V0's amax + cvt_f32_to_e4m3 + bfloat2x8_to_e2m1x16_packed + st_global_u64.\n```\n\n```python\nfrom vllm.vllm_flash_attn import flash_attn_varlen_func\nattn_out_oracle = flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,\n                                          max_seqlen_q, max_seqlen_k,\n                                          softmax_scale=1.0/math.sqrt(256),\n                                          causal=True)\n# attn_out_oracle is bf16 (N, H_q, D)\n# then run V0 fp4_quant on attn_out_oracle * sigmoid(gate)\n# for x_fp4_oracle / x_bs_oracle to compare against V3 fused output.\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/v3-fa-fusion-deferred-plan.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

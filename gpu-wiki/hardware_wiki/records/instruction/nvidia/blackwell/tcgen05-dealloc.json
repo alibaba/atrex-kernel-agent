@@ -1,0 +1,36 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.tcgen05-dealloc",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "tcgen05.dealloc",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "tcgen05.dealloc.cta_group::1.sync.aligned  tmem_addr, num_cols;"
+  ],
+  "semantics": "Deallocate TMEM (MUST before kernel exit)"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "tcgen05 Instructions",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

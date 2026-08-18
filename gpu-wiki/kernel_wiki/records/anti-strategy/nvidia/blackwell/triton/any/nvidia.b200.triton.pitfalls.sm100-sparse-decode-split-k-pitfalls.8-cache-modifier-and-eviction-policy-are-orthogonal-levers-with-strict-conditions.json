@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.triton.pitfalls.sm100-sparse-decode-split-k-pitfalls.8-cache-modifier-and-eviction-policy-are-orthogonal-levers-with-strict-conditions",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|triton|pitfalls|sm100-sparse-decode-split-k-pitfalls#8-cache-modifier-and-eviction-policy-are-orthogonal-levers-with-strict-conditions|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "triton",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "triton",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA B200 (GB200 / SM100) risks the '8. `cache_modifier` and `eviction_policy` are orthogonal levers with strict conditions' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA B200 (GB200 / SM100): 8. `cache_modifier` and `eviction_policy` are orthogonal levers with strict conditions",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "sm_100 Triton sparse-decode / split-K pitfalls -- 8. `cache_modifier` and `eviction_policy` are orthogonal levers with strict conditions"
+  },
+  "attempted": "Treat `.cg` / eviction hints as global \"make memory faster\" switches.",
+  "verdict": "performance-ceiling",
+  "lesson": "Apply cache/eviction hints **per-load, per-kernel**, never globally. `evict_first` needs *(a)* the line is read exactly once over the kernel lifetime",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_100",
+    "toolchain": "triton"
+   },
+   "mechanism": "`cache_modifier=\".cg\"` controls L1 bypass; `eviction_policy` is an L2 replacement hint — independent axes. Their value is entirely regime-dependent (grid fullness, re-touch pattern, freed-capacity size)."
+  },
+  "observed": "`.cg` on K loads **won** on an SM-starved split kernel (L1 can catch re-touched lines) but **regressed** the same loads on a fuller small-T grid (L1 is pure overhead when each CTA sees fresh K). `evict_first` on a re-read tensor cost **+3-4%** (hint evicted lines the loop re-reads → HBM refetch). And on **stores**, `.cg` + `evict_last` is a **ptxas error** (\"`.evict_last` cannot be combined with `.cg`\") — store-side L2 eviction is HW-LRU only on Blackwell.",
+  "root_cause": "`cache_modifier=\".cg\"` controls L1 bypass; `eviction_policy` is an L2 replacement hint — independent axes. Their value is entirely regime-dependent (grid fullness, re-touch pattern, freed-capacity size)."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/pitfalls/triton/sm100-sparse-decode-split-k-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

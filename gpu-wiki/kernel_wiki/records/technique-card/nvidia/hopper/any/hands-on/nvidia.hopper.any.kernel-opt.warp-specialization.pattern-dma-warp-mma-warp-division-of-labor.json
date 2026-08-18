@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.warp-specialization.pattern-dma-warp-mma-warp-division-of-labor",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|hands-on|warp-specialization#pattern-dma-warp-mma-warp-division-of-labor|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-dma-warp-mma-warp-division-of-labor"
+  ],
+  "triggers": [
+   "the 'Pattern: DMA Warp + MMA Warp Division of Labor' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Pattern: DMA Warp + MMA Warp Division of Labor",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Warp Specialization -- Pattern: DMA Warp + MMA Warp Division of Labor"
+  },
+  "technique": "Pattern: DMA Warp + MMA Warp Division of Labor",
+  "what": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`, `gluon/triton/07-persistence.py`",
+  "when": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`, `gluon/triton/07-persistence.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CuTeDSL: Explicit warp role assignment\nif warp_group_id == 0:\n    # DMA warp group: responsible for TMA loading\n    for k_tile in range(num_k_tiles):\n        pipeline.producer_acquire(stage)\n        cute.copy(tma_a, src[k_tile], smem[stage])\n        pipeline.producer_commit(stage)\nelif warp_group_id == 1:\n    # MMA warp group: responsible for matrix computation\n    for k_tile in range(num_k_tiles):\n        pipeline.consumer_wait(stage)\n        acc = cute.gemm(tiled_mma, smem_a[stage], smem_b[stage], acc)\n        pipeline.consumer_release(stage)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/warp-specialization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

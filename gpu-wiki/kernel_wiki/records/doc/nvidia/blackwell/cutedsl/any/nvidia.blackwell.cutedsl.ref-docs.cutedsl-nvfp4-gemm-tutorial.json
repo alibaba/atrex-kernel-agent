@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.cutedsl-nvfp4-gemm-tutorial",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|cutedsl-nvfp4-gemm-tutorial|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): CuTeDSL Tutorial: Learning nvfp4_gemm_0.py",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CuTeDSL Tutorial: Learning nvfp4_gemm_0.py"
+  },
+  "title": "CuTeDSL Tutorial: Learning nvfp4_gemm_0.py",
+  "summary": "A walkthrough of the CuTe DSL NVFP4 GEMM example, covering TMA tensor construction, MMA configuration, TMEM layout, and the producer-consumer mainloop pattern.",
+  "sections": [
+   {
+    "heading": "1. Regular vs TMA Tensor Syntax",
+    "anchor": "1-regular-vs-tma-tensor-syntax",
+    "gist": "`mA` is the full global tensor; `gA` is the tile this CTA operates on — straightforward."
+   },
+   {
+    "heading": "2. Key Configuration in nvfp4_gemm_0.py",
+    "anchor": "2-key-configuration-in-nvfp4-gemm-0-py",
+    "gist": "**Constraints:**"
+   },
+   {
+    "heading": "3. MMA Op and Tiled MMA Construction",
+    "anchor": "3-mma-op-and-tiled-mma-construction",
+    "gist": "---"
+   },
+   {
+    "heading": "4. SFA/SFB Layout Chain",
+    "anchor": "4-sfa-sfb-layout-chain",
+    "gist": "---"
+   },
+   {
+    "heading": "5. Four TMA Atoms",
+    "anchor": "5-four-tma-atoms",
+    "gist": "SFA/SFB use `internal_type=Int16` to avoid FP8-to-FP conversion overhead by treating them as raw 16-bit integers during transfer."
+   },
+   {
+    "heading": "6. TMEM Layout: Accumulator + SFA + SFB Compact Packing",
+    "anchor": "6-tmem-layout-accumulator-sfa-sfb-compact-packing",
+    "gist": "---"
+   },
+   {
+    "heading": "7. S2T Copy (SMEM to TMEM)",
+    "anchor": "7-s2t-copy-smem-to-tmem",
+    "gist": "---"
+   },
+   {
+    "heading": "8. Mainloop (Single-Warp Producer, warp_idx == 0)",
+    "anchor": "8-mainloop-single-warp-producer-warp-idx-0",
+    "gist": "---"
+   },
+   {
+    "heading": "9. Epilogue",
+    "anchor": "9-epilogue",
+    "gist": "---"
+   },
+   {
+    "heading": "10. Naming Convention Explained",
+    "anchor": "10-naming-convention-explained",
+    "gist": "The naming convention `tAsA` is standard across CuTe and CUTLASS."
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nTensor mA = make_tensor(make_gmem_ptr(A), select<0,2>(shape_MNK), dA); // (M,K)\nTensor mB = make_tensor(make_gmem_ptr(B), select<1,2>(shape_MNK), dB); // (N,K)\nTensor mC = make_tensor(make_gmem_ptr(C), select<0,1>(shape_MNK), dC); // (M,N)\nauto cta_coord = make_coord(blockIdx.x, blockIdx.y, _);\nTensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X,_1>{});\nTensor gB = local_tile(mB, cta_tiler, cta_coord, Step< X,_1,_1>{});\nTensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1,_1, X>{});\n```\n\n```cpp\nauto [M, N, K] = shape_MNK;\nTensor mA = tma_a.get_tma_tensor(make_shape(M,K)); // (M,K) TMA Tensor\nTensor mB = tma_b.get_tma_tensor(make_shape(N,K)); // (N,K) TMA Tensor\nTensor mC = make_tensor(make_gmem_ptr(C), make_shape(M,N), dC); // (M,N)\n// gA uses the same syntax as before\n```\n\n```python\nb_tensor = cute.make_tensor(\n    b_ptr,\n    cute.make_layout(\n        (n, cute.assume(k, 32), l),\n        stride=(cute.assume(k, 32), 1, cute.assume(n * k, 32)),\n    ),\n)\ntma_atom_b, tma_tensor_b = cute.nvgpu.make_tiled_tma_atom_B(\n    cpasync.CopyBulkTensorTileG2SOp(tcgen05.CtaGroup.ONE),\n    b_tensor, b_smem_layout, self.mma_tiler, tiled_mma,\n    self.cluster_layout_vmnk.shape,\n)\n```\n\n```python\nmma_tiler_mn  = (128, 256)\nmma_inst_shape_k = 64\nab_dtype = cutlass.Float4E2M1FN\nsf_dtype = cutlass.Float8E4M3FN\nc_dtype  = cutlass.Float16\nsf_vec_size = 16\n\nself.threads_per_cta   = 128\nself.num_tmem_alloc_cols = 512\nself.num_acc_stage = 1\nself.num_ab_stage  = 4\n```\n\n```python\nmma_inst_tile_k = 4\nself.mma_tiler = (mma_tiler_mn[0], mma_tiler_mn[1], mma_inst_shape_k * mma_inst_tile_k)  # (128,256,256)\n\nmma_op = tcgen05.MmaMXF4NVF4Op(\n    sf_dtype,\n    (*mma_tiler_mn, mma_inst_shape_k),\n    tcgen05.CtaGroup.ONE,\n    tcgen05.OperandSource.SMEM,\n)\ntiled_mma = cute.make_tiled_mma(mma_op)\n```\n\n```python\nsfa_layout = blockscaled_utils.tile_atom_to_shape_SF(a_tensor.shape, sf_vec_size)\n# ((Atom_M, Rest_M),(Atom_K, Rest_K),RestL)\nsfa_tensor = cute.make_tensor(sfa_ptr, sfa_layout)\n```\n\n```python\ntma_atom_a, tma_tensor_a   = cute.nvgpu.make_tiled_tma_atom_A(CopyBulkTensorTileG2SOp(CtaGroup.ONE), a_tensor, a_smem_layout, ...)\ntma_atom_b, tma_tensor_b   = cute.nvgpu.make_tiled_tma_atom_B(..., b_tensor, b_smem_layout, ...)\ntma_atom_sfa, tma_tensor_sfa = cute.nvgpu.make_tiled_tma_atom_A(..., sfa_tensor, sfa_smem_layout, ..., internal_type=cutlass.Int16)\ntma_atom_sfb, tma_tensor_sfb = cute.nvgpu.make_tiled_tma_atom_B(..., sfb_tensor, sfb_smem_layout, ..., internal_type=cutlass.Int16)\n```\n\n```python\nacc_tmem_ptr = tmem.retrieve_ptr(cutlass.Float32)\ntCtAcc = cute.make_tensor(acc_tmem_ptr, tCtAcc_fake.layout)\n\n# SFA immediately after accumulator\nsfa_tmem_ptr = cute.recast_ptr(\n    acc_tmem_ptr + tcgen05.find_tmem_tensor_col_offset(tCtAcc),\n    dtype=sf_dtype,\n)\ntCtSFA = cute.make_tensor(sfa_tmem_ptr, tCtSFA_layout)\n\n# SFB immediately after SFA\nsfb_tmem_ptr = cute.recast_ptr(\n    acc_tmem_ptr + tcgen05.find_tmem_tensor_col_offset(tCtAcc)\n                 + tcgen05.find_tmem_tensor_col_offset(tCtSFA),\n    dtype=sf_dtype,\n)\n```\n\n```python\ncopy_atom_s2t = cute.make_copy_atom(\n    tcgen05.Cp4x32x128bOp(tcgen05.CtaGroup.ONE),\n    sf_dtype,\n)\ntiled_copy_s2t_sfa = tcgen05.make_s2t_copy(copy_atom_s2t, tCtSFA_compact)\n```\n\n```python\nif warp_idx == 0:\n    acc_empty = acc_producer.acquire_and_advance()\n    tiled_mma.set(tcgen05.Field.ACCUMULATE, False)\n\n    for k_tile in cutlass.range(k_tile_cnt, prefetch_stages=self.num_ab_stage - 2):\n        ab_empty = ab_producer.acquire_and_advance()\n\n        # 4 TMA loads (A / B / SFA / SFB) sharing the same mbarrier ab_empty.barrier\n        cute.copy(tma_atom_a,   tAgA[(None, ab_empty.count)],   tAsA[(None, ab_empty.index)],   tma_bar_ptr=ab_empty.barrier)\n        cute.copy(tma_atom_b,   tBgB[(None, ab_empty.count)],   tBsB[(None, ab_empty.index)],   tma_bar_ptr=ab_empty.barrier)\n        cute.copy(tma_atom_sfa, tAgSFA[(None, ab_empty.count)], tAsSFA[(None, ab_empty.index)], tma_bar_ptr=ab_empty.barrier)\n        cute.copy(tma_atom_sfb, tBgSFB[(None, ab_empty.count)], tBsSFB[(None, ab_empty.index)], tma_bar_ptr=ab_empty.barrier)\n\n        ab_full = ab_consumer.wait_and_advance()\n\n        # S2T copy SFA/SFB -> TMEM\n        cute.copy(tiled_copy_s2t_sfa, tCsSFA_compact_s2t[(None, None, None, None, ab_full.index)], tCtSFA_compact_s2t)\n        cute.copy(tiled_copy_s2t_sfb, tCsSFB_compact_s2t[(None, None, None, None, ab_full.index)], tCtSFB_compact_s2t)\n\n        # Inner k-block loop\n        num_kblocks = cute.size(tCrA, mode=[2])\n        for kblock_idx in cutlass.range(num_kblocks, unroll_full=True):\n            tiled_mma.set(tcgen05.Field.SFA, tCtSFA[(None, None, kblock_idx)].iterator)\n            tiled_mma.set(tcgen05.Field.SFB, tCtSFB[(None, None, kblock_idx)].iterator)\n            cute.gemm(tiled_mma, tCtAcc, tCrA[(None, None, kblock_idx, ab_full.index)],\n                                          tCrB[(None, None, kblock_idx, ab_full.index)], tCtAcc)\n            tiled_mma.set(tcgen05.Field.ACCUMULATE, True)\n\n        ab_full.release()\n\n    acc_empty.commit()\n```\n\n```python\nop = tcgen05.Ld32x32bOp(tcgen05.Repetition.x128, tcgen05.Pack.NONE)\ncopy_atom_t2r = cute.make_copy_atom(op, cutlass.Float32)\ntiled_copy_t2r = tcgen05.make_tmem_copy(copy_atom_t2r, tCtAcc)\n# ... T2R transfer to registers -> cast to fp16 -> SIMT STG writes output C\nacc_full.release()\ntmem.free(acc_tmem_ptr)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/cutedsl-nvfp4-gemm-tutorial.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

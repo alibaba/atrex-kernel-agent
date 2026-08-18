@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.38-ck-like-prefetch-depth-and-barrier-masks-do-not-transfer-mechanically-to-flydsl-no-mask",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#38-ck-like-prefetch-depth-and-barrier-masks-do-not-transfer-mechanically-to-flydsl-no-mask|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '38. CK-like prefetch depth and barrier masks do not transfer mechanically to FlyDSL no-mask' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 38. CK-like prefetch depth and barrier masks do not transfer mechanically to FlyDSL no-mask",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 38. CK-like prefetch depth and barrier masks do not transfer mechanically to FlyDSL no-mask"
+  },
+  "attempted": "CK FMHA uses deeper prefetch and carefully placed scheduler barriers. Copying `_QK_PREFETCH_DEPTH=3` or CK-like softmax barrier masks into FlyDSL should move the kernel closer to CK.",
+  "verdict": "performance-ceiling",
+  "lesson": "Port scheduling constants only after ATT proves the surrounding pipeline shape matches. If the access pattern differs, treat CK constants as hypotheses, not defaults.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "CK's constants work with CK's access pattern and scheduler template. FlyDSL's register allocation, wait placement, and QK/V staging differ enough that the same knobs perturb the schedule without reproducing CK's latency hiding."
+  },
+  "observed": "On the no-mask D64 path these changes regressed:",
+  "root_cause": "CK's constants work with CK's access pattern and scheduler template. FlyDSL's register allocation, wait placement, and QK/V staging differ enough that the same knobs perturb the schedule without reproducing CK's latency hiding."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

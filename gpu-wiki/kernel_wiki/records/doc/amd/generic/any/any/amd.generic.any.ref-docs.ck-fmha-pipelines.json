@@ -1,0 +1,178 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-fmha-pipelines",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|flash-attention|ck-fmha-pipelines|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CK FMHA Pipelines: Composable Kernel Flash Attention Implementation Details",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CK FMHA Pipelines: Composable Kernel Flash Attention Implementation Details"
+  },
+  "title": "CK FMHA Pipelines: Composable Kernel Flash Attention Implementation Details",
+  "summary": "The Composable Kernel (CK) FMHA (Fused Multi-Head Attention) module implements the complete Flash Attention algorithm, covering forward (multiple pipeline variants) and backward computation. The code is located at `ck_tile/ops/fmha/`, organized in a three-layer structure: **block** (primitives), **pipeline** (core computation flow), **kernel** (launch entry points).",
+  "sections": [
+   {
+    "heading": "Table of Contents",
+    "anchor": "table-of-contents",
+    "gist": "- Overall Architecture - Forward Pipeline Variants - qr_ks_vs: Standard Forward - qr_ks_vs_async: Asynchronous Copy Variant"
+   },
+   {
+    "heading": "Overall Architecture",
+    "anchor": "overall-architecture",
+    "gist": "The three-layer structure of CK FMHA:"
+   },
+   {
+    "heading": "Forward Pipeline Variants",
+    "anchor": "forward-pipeline-variants",
+    "gist": "table columns: Pipeline, Name, Q Location, K/V Loading, PagedKV, SplitKV, Special Features, Target Scenario"
+   },
+   {
+    "heading": "Backward Pipeline",
+    "anchor": "backward-pipeline",
+    "gist": "CK FMHA backward consists of three kernels:"
+   },
+   {
+    "heading": "Two-Stage GEMM Structure",
+    "anchor": "two-stage-gemm-structure",
+    "gist": "The core of FMHA forward pass is a two-stage GEMM, with each stage executed by a BlockGemm instance provided by the Policy template:"
+   },
+   {
+    "heading": "Online Softmax Algorithm",
+    "anchor": "online-softmax-algorithm",
+    "gist": "CK implements the classic online softmax (i.e., the core algorithm of Flash Attention), avoiding materializing the full NxN attention matrix:"
+   },
+   {
+    "heading": "Masking System",
+    "anchor": "masking-system",
+    "gist": "CK provides three mask implementations, uniformly parameterized via the `(y, x, sink, y_total, x_total)` five-tuple:"
+   },
+   {
+    "heading": "Attention Variants: Logits Transform and Soft Cap",
+    "anchor": "attention-variants-logits-transform-and-soft-cap",
+    "gist": "`variants.hpp` defines a composable attention variant system:"
+   },
+   {
+    "heading": "RoPE Rotary Position Encoding",
+    "anchor": "rope-rotary-position-encoding",
+    "gist": "`BlockRotaryEmbedding` is applied in the AppendKV pipeline, supporting two modes:"
+   },
+   {
+    "heading": "Dropout Support",
+    "anchor": "dropout-support",
+    "gist": "`BlockDropout` uses Philox 4x32 PRNG to generate pseudo-random numbers:"
+   },
+   {
+    "heading": "PagedKV Cache Processing",
+    "anchor": "pagedkv-cache-processing",
+    "gist": "`PageBlockNavigator` provides address translation for paged KV cache:"
+   },
+   {
+    "heading": "SplitKV Long-Sequence Parallelism",
+    "anchor": "splitkv-long-sequence-parallelism",
+    "gist": "SplitKV splits seqlen_k into `num_splits` segments, with two kernels working together:"
+   },
+   {
+    "heading": "FP8 Quantization Support",
+    "anchor": "fp8-quantization-support",
+    "gist": "CK FMHA supports multiple quantization modes:"
+   },
+   {
+    "heading": "Performance Tuning",
+    "anchor": "performance-tuning",
+    "gist": "`kBlockPerCu` controls the number of workgroups per CU (compile-time constant or auto-derived):"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- CK GEMM Pipelines — CK general-purpose GEMM pipeline design - AMD MFMA Instructions — MFMA instruction selection and tuning - LDS Bank Conflict — LDS swizzle optimization patterns"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nkernel/ # Launch entry + Kargs definition\n  fmha_fwd_kernel.hpp           FmhaFwdKernel\n  fmha_fwd_splitkv_kernel.hpp   FmhaFwdSplitKVKernel\n  fmha_fwd_splitkv_combine_kernel.hpp\n  fmha_fwd_pagedkv_kernel.hpp   FmhaFwdPagedKVKernel\n  fmha_fwd_appendkv_kernel.hpp  FmhaFwdAppendKVKernel\n  fmha_fwd_v3_kernel.hpp        FmhaFwdV3Kernel\n  fmha_bwd_kernel.hpp           FmhaBwdKernel\n  fmha_batch_prefill_kernel.hpp FmhaBatchPrefillKernel\n\npipeline/ # corecompute pipeline\n block_fmha_pipeline_qr_ks_vs.hpp standardforward\n block_fmha_pipeline_qr_ks_vs_async.hpp asynchronouscopyforward\n block_fmha_pipeline_qs_ks_vs.hpp Q-in-SMEM forward\n block_fmha_fwd_splitkv_pipeline_*.hpp SplitKV forward\n block_fmha_fwd_pagedkv_pipeline_*.hpp PagedKV forward\n  block_fmha_fwd_appendkv_pipeline.hpp      AppendKV\n block_fmha_fwd_v3_pipeline.hpp V3 highoptimization\n block_fmha_fwd_splitkv_combine_pipeline.hpp Combine stage\n block_fmha_bwd_dq_dk_dv_pipeline_*.hpp backward dQ/dK/dV\n block_fmha_bwd_dot_do_o.hpp backward D = dot(dO, O)\n block_fmha_bwd_convert_dq.hpp backward dQ typeconversion\n\nblock/ # primitive\n  block_masking.hpp             Attention mask (causal/sliding window/custom)\n  block_dropout.hpp             Dropout (Philox RNG)\n  block_rotary_embedding.hpp    RoPE (interleaved / half-rotated)\n block_position_encoding.hpp ALiBi bit\n page_block_navigator.hpp PagedKV cache\n variants.hpp Attention (standard / logits_soft_cap / composed)\n block_attention_bias_enum.hpp Bias typeenum\n block_attention_quant_scale_enum.hpp quantizationscalingenum\n```\n\n```\nS[seqlen_q, seqlen_k]  = Q[seqlen_q, hdim_q] @ K[seqlen_k, hdim_q]^T\nS'[seqlen_q, seqlen_k] = S * scale\nS''                     = S' + Bias  (optional)\nP[seqlen_q, seqlen_k]  = Softmax(S'')\nO[seqlen_q, hdim_v]    = P @ V[seqlen_k, hdim_v]\n```\n\n```cpp\nenum class BlockFmhaPipelineEnum {\n    QRKSVS = 0,                    // Q-register, K-SMEM, V-SMEM\n QRKSVS_ASYNC, // same as above + async copy for K\n    QSKSVS,                        // Q-SMEM, K-SMEM, V-SMEM\n    QRKSVS_ASYNC_TRLOAD,           // async + transpose load (gfx950)\n    QRKSVS_ASYNC_TRLOAD_V3,        // V3 pipeline\n};\n```\n\n```cpp\n// LDS layout\nKDataType* k_lds_ptr = static_cast<KDataType*>(\n    static_cast<void*>(static_cast<char*>(smem_ptr) +\n    Policy::template GetSmemSizeQ<Problem>()));\n// V LDS(K )\nauto v_lds = make_tensor_view<address_space_enum::lds>(\n    reinterpret_cast<VDataType*>(smem_ptr), ...);\n```\n\n```\nloop i:    LDS_sync -> MFMA(k_i) -> LDS_sync -> store(k_{i+1}), load(k_{i+2})\nlast-1:    MFMA(k_{n-2}) -> store(k_{n-1}) + load(v_prefetch)\nlast:      MFMA(k_{n-1})\n```\n\n```cpp\n// Knew, optional RoPE\nif constexpr(RotaryEnum != RotaryEmbeddingEnum::NONE) {\n    BlockRotaryEmbedding<RotaryEnum>::apply(knew_tile, ...);\n}\nstore_tile(k_dram_block_window, knew_tile);\n\n// PagedKV page\nif constexpr(kIsPagedKV) {\n    if(k_page_block_navigator.is_cross_block(i_page_block_k, k_dram_block_window)) {\n        k_page_block_navigator.move_to_block(...);\n        store_tile(k_dram_block_window, knew_tile);\n    }\n}\n```\n\n```cpp\nstatic constexpr index_t kM0 = ...;  // Q seqlen tile\nstatic constexpr index_t kN0 = ...;  // K seqlen tile\nstatic constexpr index_t kK0 = ...;  // gemm0 (Q@K^T) unroll\nstatic constexpr index_t kK1 = ...;  // gemm1 (P^T@dO) unroll\nstatic constexpr index_t kK2 = ...;  // gemm2 (dO@V^T) unroll\nstatic constexpr index_t kK3 = ...;  // gemm3 (dS^T@Q) unroll\nstatic constexpr index_t kK4 = ...;  // gemm4 (dS@K) unroll\n```\n\n```\n┌──────────────────────────────────────────────────────┐\n│  Stage 1: GEMM_0 (Q x K^T)                          │\n│                                                      │\n│  Q_reg [M0, kK0] x K_lds [N0, kK0]^T -> S_acc [M0, N0] │\n│ k0_loops = kQKHeaddim / kK0 │\n│                                                      │\n│ : Q slice from register + K tile from LDS │\n│  K tile: DRAM -> register -> LDS -> MFMA              │\n└──────────────────────────────────────────────────────┘\n                        |\n                        v\n          ┌─────────────────────────┐\n          │  Online Softmax         │\n          │  S_acc -> scale/bias    │\n          │  -> mask -> exp -> P    │\n          └─────────────────────────┘\n                        |\n                        v\n┌──────────────────────────────────────────────────────┐\n│  Stage 2: GEMM_1 (P x V)                            │\n│                                                      │\n│  P_reg [M0, kK1] x V_lds [N1, kK1]^T -> O_acc [M0, N1] │\n│ k1_loops = kN0 / kK1 │\n│                                                      │\n│  V tile: DRAM -> register -> LDS -> MFMA              │\n│ (V GEMM_0 executeprefetch) │\n└──────────────────────────────────────────────────────┘\n```\n\n```cpp\nkM0 // Q column tile size ( 64/128)\nkN0 // K column tile size ( 64/128)\nkK0 // GEMM_0 dimension ( 32)\nkN1 // V head_dim tile size\nkK1 // GEMM_1 dimension\nkQKHeaddim // Q/K head dimension (32~256)\n```\n\n```\n: m = -inf, l = 0, O_acc = 0\n\nfor each K tile j:\n    S{j} = Q @ K{j}^T                    // GEMM_0\n m_local = rowmax(S{j}) // blockrowmaximum\n m_new = max(m_old, m_local) // globalrowmaximum\n\n // compute exp\n P{j}[i,k] = exp(S{j}[i,k] - m_new[i]) // or exp2 fast\n\n // l O_acc(rescale)\n rescale = exp(m_old - m_new) // or exp2\n    l = rescale * l + rowsum(P{j})\n O_acc = rescale * O_acc // rescale previous\n\n    O_acc += P{j} @ V{j}                 // GEMM_1\n\n// English comment\nO = O_acc / l\n```\n\n```cpp\n// exp2 mode P compute(none bias)\np_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);\n// where row_max = scale_s * validated_m\n```\n\n```cpp\n// exp2 mode\nlse(i_idx) = m_[i_idx] * scale_s / C_LOG2E + log(l_[i_idx]);\n// standardmode\nlse(i_idx) = m_[i_idx] + log(l_[i_idx]);\n```\n\n```cpp\nconst auto tmp = l[i_idx] == 0.f ? 0.f : 1 / l[i_idx];\n```\n\n```cpp\ntemplate <bool IsMasking_ = true, bool IsLocal_ = false>\nstruct GenericAttentionMask;\n```\n\n```\ntop-left: y = seq_q, x = 1 -> standard causal\nbottom-right: y = seq_q, x = seq_k - seq_q + 1\nlocal:        y < seq_q, x < seq_k     → sliding window\nno mask:      y = seq_q, x = seq_k\n```\n\n```cpp\nauto mask_coords = make_generic_attention_mask_coordinates_from_lr_window(\n    left_size, right_size, sink_size, seq_q, seq_k, is_top_left);\n```\n\n```cpp\nbool need_perpixel_check = mask.IsEdgeTile(\n    q_origin.at(number<0>{}), k_origin.at(number<0>{}),\n    number<kM0>{}, number<kN0>{});\nif(need_perpixel_check) {\n    set_tile_if(s_acc, -inf, [&](auto tile_idx) {\n        return !variant.LogitsMask(variant_params, batch_idx, row, col, ...);\n    });\n}\n```\n\n```cpp\n// GetSinkTileRangeAlongX returns (sink_seq_end, start, end)\n// sink , causal\n```\n\n```cpp\n// tanh mode\nlogits_out = logits_soft_cap * tanh(logits * logits_soft_cap_rcp);\n// softsign mode(AMD optimization)\nlogits_out = logits * rcp(1 + abs(logits * logits_soft_cap_rcp));\n```\n\n```cpp\nconstexpr uint32_t CUSTOM_MASK     = 1U;\nconstexpr uint32_t SLIDING_WINDOW  = 2U;\nconstexpr uint32_t LOGITS_SOFT_CAP = 4U;\nconstexpr uint32_t ALIBI           = 8U;\n```\n\n```cpp\nenum class RotaryEmbeddingEnum {\n    NONE         = 0,\n INTERLEAVED = 1, // : (d0, d1), (d2, d3), ...\n HALF_ROTATED = 2, // rotation: (d0, d_{dim/2}), (d1, d_{dim/2+1}), ...\n};\n```\n\n```cpp\n// rotation\nnew_left  = left * cos - right * sin;\nnew_right = right * cos + left * sin;\n```\n\n```cpp\n// English comment\n// requiresload \"other\" half data\nnew_curr = curr * cos + other * (is_left ? -sin : sin);\n```\n\n```cpp\n// forward: lowthresholdzero out rescale\np_compute(p_idx) = randval[r_idx] <= p_undrop_in_uint8_t\n    ? p_compute[p_idx] * rp_undrop\n    : PComputeDataType(0);\n\n// backward: use drop\np_compute(p_idx) = randval[r_idx] <= p_undrop_in_uint8_t\n    ? p_compute[p_idx]\n    : -p_compute[p_idx];\n```\n\n```\nlogical: [0, 1, 2, ..., seqlen_k-1] x [hdim]\nphysicalstore: page_table[block_idx] -> physical_blocks + block_stride\n```\n\n```\nKernel 1: FmhaFwdSplitKVKernel (num_splits workgroup)\n  ┌──────────┬──────────┬──────────┐\n │ Split 0 │ Split 1 │ Split 2 │ ... independentcompute\n  │ O_acc_0  │ O_acc_1  │ O_acc_2  │\n  │ LSE_0    │ LSE_1    │ LSE_2    │\n  └──────────┴──────────┴──────────┘\n                    |\n                    v\nKernel 2: FmhaFwdSplitKVCombineKernel\n split (O_acc, LSE) log-sum-exp coalesced\n output O LSE\n```\n\n```cpp\nenum class BlockAttentionQuantScaleEnum {\n NO_SCALE = 0, // nonequantization\n PERTENSOR = 1, // per-tensor tensor scale\n BLOCKSCALE = 2, // by block granularity scale (K/V shared)\n    KV_BLOCKSCALE = 3,   // Q per-tensor, K/V per-page block scale\n    MX            = 4,   // Microscaling (e8m0 scale per 32 elements)\n};\n```\n\n```cpp\n// OCP FP8: shift = 8.0, FNUZ FP8: shift = 7.0\nrow_max -= OCP_FP8_SHIFT;\np_compute(i_j_idx) = exp2(scale_s * s[i_j_idx] - row_max);\n```\n\n```cpp\n__builtin_amdgcn_sched_group_barrier(DS_READ, 2, 0); // 2 LDS\n__builtin_amdgcn_sched_group_barrier(MFMA, 2, 0); // 2 MFMA\n__builtin_amdgcn_sched_group_barrier(DS_READ, 1, 0);\n__builtin_amdgcn_sched_group_barrier(MFMA, 2, 0);\n__builtin_amdgcn_sched_group_barrier(DS_READ, 1, 0);\n__builtin_amdgcn_sched_group_barrier(MFMA, 4, 0);\n```\n\n```cpp\nif constexpr(FmhaMask::IsMasking || kPadSeqLenK) {\n    if(num_total_loop <= 0) {\n        // store -inf LSE, return zero O_acc\n        return o_acc;\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-fmha-pipelines.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,39 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.2sm-cooperative",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "2sm-cooperative",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "Blackwell enables two SMs within a TPC to cooperatively execute a single larger MMA, doubling the effective compute tile size to m256×n256×k16.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices.",
+  "related_instructions": [
+   "mbarrier",
+   "tcgen05",
+   "tcgen05.mma",
+   "tcgen05.mma.cta_group"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Two-SM Cooperative MMA",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/2sm-cooperative.md"
+   }
+  ]
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-to-tmem.impact-on-kernel-design",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|register-to-tmem#impact-on-kernel-design|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "impact-on-kernel-design"
+  ],
+  "triggers": [
+   "the 'Impact on Kernel Design' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Impact on Kernel Design",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Accumulators to TMEM -- Impact on Kernel Design"
+  },
+  "technique": "Impact on Kernel Design",
+  "what": "With accumulators in TMEM, the tile size is no longer constrained by register count:",
+  "when": "With accumulators in TMEM, the tile size is no longer constrained by register count:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper: large tiles cause spilling\n// m64xn256 uses 128 acc registers/thread -> barely fits\n// m128xn256 would need 256 acc registers/thread -> spills guaranteed\n\n// Blackwell: tile size limited by TMEM columns (512) and SMEM, not registers\n// m128xn256: 256 TMEM cols, 0 acc registers -> fits easily\n// m128xn512: 512 TMEM cols, 0 acc registers -> uses full TMEM budget\n// m256xn256 (2-SM): 256 TMEM cols/SM, 0 acc registers -> fits with cooperative\n```\n\n```cuda\n// Blackwell epilogue: full register file available\n__device__ void rich_epilogue(uint32_t tmem_acc, float* output,\n                               const float* bias, const float* scale,\n                               int M, int N) {\n    // Read TMEM in chunks\n    for (int c = 0; c < 256; c += 8) {\n        // Load 8 values from TMEM (8 registers -- trivial)\n        float v[8];\n        tmem_load_f32x4(tmem_acc + c, &v[0]);\n        tmem_load_f32x4(tmem_acc + c + 4, &v[4]);\n\n        // Apply bias (8 registers for bias values)\n        float b[8];\n        load_global_f32x4(&b[0], bias + c);\n        load_global_f32x4(&b[4], bias + c + 4);\n\n        #pragma unroll\n        for (int i = 0; i < 8; ++i) v[i] += b[i];\n\n        // Apply GELU activation (needs temp registers for polynomial)\n        #pragma unroll\n        for (int i = 0; i < 8; ++i) v[i] = gelu(v[i]);\n\n        // Apply per-channel scale\n        float s[8];\n        load_global_f32x4(&s[0], scale + c);\n        load_global_f32x4(&s[4], scale + c + 4);\n\n        #pragma unroll\n        for (int i = 0; i < 8; ++i) v[i] *= s[i];\n\n        // Quantize to FP8 for next layer\n        uint8_t q[8];\n        #pragma unroll\n        for (int i = 0; i < 8; ++i) q[i] = float_to_e4m3(v[i]);\n\n        // Store quantized output\n        store_global_u8x8(output + c, q);\n\n        // Total temp registers used: ~24 -- NO SPILLING\n        // On Hopper this epilogue would need 24 + 128 (acc) = 152 per thread\n    }\n}\n```\n\n```cuda\n__global__ void overlapped_gemm(/* ... */) {\n    // Two TMEM accumulator buffers\n    uint32_t tmem_a = tmem_alloc(256);\n    uint32_t tmem_b = tmem_alloc(256);\n    uint32_t* tmem_cur = &tmem_a;\n    uint32_t* tmem_nxt = &tmem_b;\n\n    // Compute first tile into tmem_a\n    compute_tile(*tmem_cur, tile_0);\n    fence_and_sync();\n\n    for (int t = 1; t < num_tiles; ++t) {\n        // START: next tile MMA into tmem_nxt (background, async)\n        zero_tmem(*tmem_nxt);\n        start_mma(*tmem_nxt, tile_t);\n\n        // SIMULTANEOUSLY: epilogue of current tile from tmem_cur\n        // MMA is running in the background while we read the old accumulator!\n        epilogue_from_tmem(*tmem_cur, output_tile[t-1]);\n\n        // Wait for MMA to complete\n        fence_and_sync();\n\n        // Swap buffers\n        uint32_t* tmp = tmem_cur;\n        tmem_cur = tmem_nxt;\n        tmem_nxt = tmp;\n    }\n\n    // Final epilogue\n    epilogue_from_tmem(*tmem_cur, output_tile[num_tiles-1]);\n\n    tmem_dealloc(tmem_a, 256);\n    tmem_dealloc(tmem_b, 256);\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/register-to-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

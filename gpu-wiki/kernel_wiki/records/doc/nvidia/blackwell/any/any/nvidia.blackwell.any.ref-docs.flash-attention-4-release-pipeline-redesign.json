@@ -1,0 +1,136 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.flash-attention-4-release-pipeline-redesign",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|flash-attention|flash-attention-4-release-pipeline-redesign|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): FlashAttention-4 Release: Algorithm Pipeline Redesign",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FlashAttention-4 Release: Algorithm Pipeline Redesign"
+  },
+  "title": "FlashAttention-4 Release: Algorithm Pipeline Redesign",
+  "summary": "Overview of FlashAttention-4's official release, covering the fundamental pipeline redesign that achieves near-matmul-speed attention on Blackwell GPUs through co-design with asymmetrically scaled hardware.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "FlashAttention-4 is officially released after a year of development."
+   },
+   {
+    "heading": "2. Hardware Trend: Asymmetric Scaling",
+    "anchor": "2-hardware-trend-asymmetric-scaling",
+    "gist": "FA3 targeted Hopper (H100); the industry has rapidly shifted to Blackwell (B200/GB200)."
+   },
+   {
+    "heading": "3. FA4 Co-Design",
+    "anchor": "3-fa4-co-design",
+    "gist": "Core objective: maximize overlap between matrix multiplication and other bottleneck resources, achieving 1605 TFLOPS/s (71% utilization), 1.3× faster than cuDNN 9.13, 2.7× faster than Triton."
+   },
+   {
+    "heading": "4. Blackwell Hardware Features",
+    "anchor": "4-blackwell-hardware-features",
+    "gist": "**Tensor Memory (TMEM):** B200's 148 SMs each have 256 KB TMEM, directly connected to Tensor Core, used for warp-synchronous intermediate result storage."
+   },
+   {
+    "heading": "5. Programming Language: CuTe-DSL",
+    "anchor": "5-programming-language-cute-dsl",
+    "gist": "FA4 is implemented entirely in CuTe-DSL (CUTLASS's Python kernel DSL): write kernels in Python → DSL lowers to PTX → CUDA toolchain compiles to GPU machine code."
+   },
+   {
+    "heading": "6. Performance Benchmarks",
+    "anchor": "6-performance-benchmarks",
+    "gist": "- **Forward:** 1.1–1.3× faster than cuDNN 9.13, 2.1–2.7× faster than Triton - **Backward:** Consistently outperforms other baselines on long sequences"
+   },
+   {
+    "heading": "7. Significance",
+    "anchor": "7-significance",
+    "gist": "FlashAttention-4 represents a milestone."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/flash-attention-4-release-pipeline-redesign.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -58,11 +58,18 @@ the supervisor creates it after terminal validation.
 
 When conversion is mandatory, treat the whole episode as a Triton-to-Gluon lowering direction:
 
-1. Read only the conversion sheet matching the authoritative runtime architecture:
-   - `sm_100`/`sm_103`: `gpu-wiki/docs/nvidia/blackwell/converter/blackwell.md`
-   - `sm_90`: `gpu-wiki/docs/nvidia/hopper/converter/hopper.md`
-   - `gfx94*`: `gpu-wiki/docs/amd/cdna3/converter/cdna3.md`
-   - `gfx95*`: `gpu-wiki/docs/amd/cdna4/converter/cdna4.md`
+1. Query only for the conversion record matching the authoritative runtime architecture. In the
+   natural-language request, name the true product `{{PLATFORM}}` and copy the authoritative runtime
+   architecture exactly from the injected Hardware ground-truth block; then
+   request both the full product specification and the matching Triton-to-Gluon conversion guidance:
+   ```bash
+   python3 gpu-wiki/tools/query_nl.py "The true target product is {{PLATFORM}} and the authoritative
+     runtime architecture is <exact value from Hardware ground truth>. Return the full product specification and only the matching
+     Triton-to-Gluon conversion guidance." --brief
+   ```
+   The expected conversion record is `nvidia.blackwell.any.converter.blackwell` for `sm_100`/`sm_103`,
+   `nvidia.hopper.any.converter.hopper` for `sm_90`, `amd.cdna3.any.converter.cdna3` for `gfx94*`, or
+   `amd.cdna4.any.converter.cdna4` for `gfx95*`. Do not use a sibling architecture's conversion record.
 2. Extract TTGIR before writing Gluon and derive layouts from the real kernel; never fabricate them.
 3. Preserve algorithm, tiling, signatures, and evaluator behavior. Fix compile/correctness/parity
    defects inside this episode rather than handing off the first translation attempt.

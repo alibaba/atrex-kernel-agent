@@ -138,4 +138,10 @@ def hardware_directive(platform: str, arch: str) -> str:
         "build/target flags your DSL/compiler exposes for THAT architecture and generation. Do NOT fall "
         "back to an older-arch portable path because of the device name, and do NOT assume a different "
         "vendor or generation than the detected one.\n"
+        "- In every natural-language GPU Wiki request, state the true target product exactly as "
+        f"**{platform}** and the authoritative runtime architecture exactly as {real}. Explicitly ask "
+        "`query_nl.py` for the full product hardware specification plus any architecture or ISA facts "
+        "needed by the optimization, so the response includes isolated `hardware_wiki` and "
+        "`kernel_wiki` records. Query-side normalization may ignore case and separators only; it must "
+        "never substitute one hardware identity for another.\n"
     )

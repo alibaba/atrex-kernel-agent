@@ -1,0 +1,174 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-conv-implicit-gemm",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|conv|cutlass-conv-implicit-gemm|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "conv",
+   "operators": [
+    "conv",
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "conv-vision"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "conv",
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS Convolution and Implicit GEMM Implementation Analysis",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS Convolution and Implicit GEMM Implementation Analysis"
+  },
+  "title": "CUTLASS Convolution and Implicit GEMM Implementation Analysis",
+  "summary": "CUTLASS maps convolution operations to GEMM (implicit GEMM algorithm), eliminating the need for explicit im2col matrix construction and instead dynamically computing indices when loading data from global memory to shared memory. This document, based on CUTLASS source code and official documentation, analyzes the core design of convolution implementations across generations from Turing to Blackwell.",
+  "sections": [
+   {
+    "heading": "Table of Contents",
+    "anchor": "table-of-contents",
+    "gist": "- Implicit GEMM Concept - Conv2d/3d to GEMM Mapping - Three Convolution Operators - Layout: NHWC and GEMM Row/Column Major"
+   },
+   {
+    "heading": "Implicit GEMM Concept",
+    "anchor": "implicit-gemm-concept",
+    "gist": "Traditional convolution implementations (im2col + GEMM) require explicit expansion of the input tensor, causing memory expansion equal to the filter size (R x S)."
+   },
+   {
+    "heading": "Conv2d/3d to GEMM Mapping",
+    "anchor": "conv2d-3d-to-gemm-mapping",
+    "gist": "Given `y[n,p,q,k] = sum_{c,r,s} x[n, p*stride_h + r*dilation_h - pad_h, q*stride_w + s*dilation_w - pad_w, c] * w[k,r,s,c]`"
+   },
+   {
+    "heading": "Three Convolution Operators: Fprop/Dgrad/Wgrad",
+    "anchor": "three-convolution-operators-fprop-dgrad-wgrad",
+    "gist": "CUTLASS implements three convolution operators by swapping the mapping of A/B/C to Activation/Filter/Output:"
+   },
+   {
+    "heading": "Layout: NHWC and GEMM Row/Column Major",
+    "anchor": "layout-nhwc-and-gemm-row-column-major",
+    "gist": "CUTLASS convolution recommends the **NHWC** layout (channel-last) because:"
+   },
+   {
+    "heading": "Stride / Dilation / Padding Handling",
+    "anchor": "stride-dilation-padding-handling",
+    "gist": "For Fprop, given an output position (p,q) and a filter position (r,s), the input position is:"
+   },
+   {
+    "heading": "Tile Iteration and Pointer Updates",
+    "anchor": "tile-iteration-and-pointer-updates",
+    "gist": "Implicit GEMM iterates along the K dimension (RSC / TRSC), processing one segment of channels at each filter position per iteration:"
+   },
+   {
+    "heading": "Depthwise Convolution",
+    "anchor": "depthwise-convolution",
+    "gist": "Depthwise convolution is a special case of grouped convolution, where each channel is convolved independently (`C == K == groups`):CUTLASS provides `default_depthwise_fprop.h` specifically for handling depthwise scenarios."
+   },
+   {
+    "heading": "Grouped Convolution",
+    "anchor": "grouped-convolution",
+    "gist": "Grouped convolution divides the C and K dimensions into G groups, with each group performing convolution independently:"
+   },
+   {
+    "heading": "Gather/Scatter Convolution (Example 59)",
+    "anchor": "gather-scatter-convolution-example-59",
+    "gist": "Example 59 demonstrates a CuTe-based Ampere 3D convolution kernel that supports both dense and gather/scatter modes."
+   },
+   {
+    "heading": "Wgrad Optimization: Split-K",
+    "anchor": "wgrad-optimization-split-k",
+    "gist": "The weight gradient computation is unique in that the reduction occurs along the spatial dimension (NPQ)."
+   },
+   {
+    "heading": "CUTLASS 3.x ConvProblemShape",
+    "anchor": "cutlass-3-x-convproblemshape",
+    "gist": "CUTLASS 3.x uses the rank-agnostic `ConvProblemShape` to unify 2D/3D convolutions:"
+   },
+   {
+    "heading": "Hopper/Blackwell Convolution Collective",
+    "anchor": "hopper-blackwell-convolution-collective",
+    "gist": "Uses Hopper's TMA + WGMMA SS instructions, supporting Conv2d/3d Fprop/Dgrad/Wgrad."
+   },
+   {
+    "heading": "Reference File Index",
+    "anchor": "reference-file-index",
+    "gist": "table columns: File, Content"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nEnglish description\n  Activation [N,H,W,C] --im2col--> ConvMatrix [NPQ, RSC] --GEMM--> Output [NPQ, K]\n ^^ memory R*S\n\nImplicit GEMM:\n Activation [N,H,W,C] ----> SMEM tile\n Filter [K,R,S,C] --directload--> SMEM tile ---> Tensor Core GEMM ---> Output [N,P,Q,K]\n requiresmatrix, on-the-fly compute\n```\n\n```\nA (activations): row-major [NPQ x RSC]    // GEMM M = N*P*Q, GEMM K = R*S*C\nB (filters):     col-major [RSC x K]      // GEMM N = K\nC (output):      row-major [NPQ x K]\n```\n\n```\nGEMM_M dimension:\n i = q + Q * (p + P * n) // dimension\n mapping: n = i/(PQ), p = (i%PQ)/Q, q = i%Q\n\nGEMM_K dimension:\n gemm_k = s + S * (r + R * c) // filter dimension\n mapping: c = gemm_k/(RS), r = (gemm_k%RS)/S, s = gemm_k%S\n```\n\n```\nActivation: [N,D,H,W,C]  -> GEMM A: [NZPQ x TRSC]\nFilter:     [K,T,R,S,C]  -> GEMM B: [TRSC x K]\nOutput:     [N,Z,P,Q,K]  -> GEMM C: [NZPQ x K]\n```\n\n```cpp\n// im2col activation layout:\n// ((N,(Z,P,Q)), (C,(T,R,S))) => idx    // logical (M, K)\nauto xformed_act_layout = make_layout(\n  make_shape (make_shape (     N,     Z,   P, Q), make_shape (  C,     T,   R, S)),\n  make_stride(make_stride(D*H*W*C, H*W*C, W*C, C), make_stride(_1{}, H*W*C, W*C, C)));\n```\n\n```cpp\nenum class Operator {\n kFprop, // forward: y = conv(x, w)\n kDgrad, // datagradient: dx = conv_transpose(dy, w)\n kWgrad, // weightgradient: dw = conv(x^T, dy)\n kDeconv //\n};\n```\n\n```cpp\n// CUTLASS 2.x definition\nusing LayoutInputA = cutlass::layout::TensorNHWC;\nusing LayoutInputB = cutlass::layout::TensorNHWC;\nusing LayoutC      = cutlass::layout::TensorNHWC;\n```\n\n```cpp\n// CUTLASS 3.x ConvProblemShape\nTensorExtent shape_A{};     // [n,d,h,w,c]\nTensorStride stride_A{}; // stride, default packed right-major\n```\n\n```\nh = p * stride_h + r * dilation_h - pad_h\nw = q * stride_w + s * dilation_w - pad_w\n```\n\n```cpp\n// valid checkactivationtensor\nbool valid = (h >= 0 && h < H && w >= 0 && w < W);\n```\n\n```cpp\nstruct ConvProblemShape {\n ShapePadding lower_padding{}; // [pad_d, pad_h, pad_w] padding\n ShapePadding upper_padding{}; // [pad_d, pad_h, pad_w] padding\n  TraversalStride traversal_stride{};  // [stride_d, stride_h, stride_w]\n  ShapeDilation dilation{};            // [dilation_d, dilation_h, dilation_w]\n  int groups = 1;\n};\n```\n\n```\nZPQ strides = DHW strides * traversal_stride // sampling\nTRS strides = DHW strides * dilation // filter\nZPQ shape   = floor((DHW + pad - ((TRS-1) * dilation + 1)) / traversal_stride) + 1\n```\n\n```\nfor each threadblock tile along K:\n advance_s // s -> s+1, filter width\n  if s == S:\n advance_r // r -> r+1, s = 0, filter height\n    if r == R:\n advance_c // c += tile_K * split_k, r = 0, channel\n```\n\n```cpp\n// Host compute (Conv2dFpropActivationIteratorOptimizedParams)\ninc_next[0] = stride[0] * dilation_w;                          // next S\ninc_next[1] = stride[1] * dilation_h - (S-1) * stride[0] * dilation_w;   // next R\ninc_next[2] = tile_K * split_k - (R-1)*stride[1]*dilation_h\n                                - (S-1)*stride[0]*dilation_w;   // next C batch\n\n// Device : + pointeraddition\nvoid advance() {\n  ++filter_s_;\n  if (filter_s_ == S) { filter_s_ = 0; ++filter_r_; next_idx = 1; }\n  if (filter_r_ == R) { filter_r_ = 0; next_idx = 2; }\n  add_byte_offset_(params_.inc_next[next_idx]);\n}\n```\n\n```\nGroup g :\n  Input channels:  [g * C/G, (g+1) * C/G)\n  Output channels: [g * K/G, (g+1) * K/G)\n```\n\n```cpp\n// Dense mode: standard im2col layout\nauto xformed_act_layout = make_layout(\n  make_shape (make_shape (N, Z, P, Q), make_shape (C, T, R, S)),\n  make_stride(make_stride(D*H*W*C, H*W*C, W*C, C), make_stride(_1{}, H*W*C, W*C, C)));\n\n// Gather mode: use composed layout + IndexedGather\n// layout: logical shape (M,K) mapping (idx_buffer_idx, dense_offset) codomain\nauto inner = make_layout(\n  make_shape (make_shape (N, Z, P, Q), make_shape (C, T, R, S)),\n  make_stride(make_stride(D*H*W*E<0>{}, H*W*E<0>{}, W*E<0>{}, E<0>{}),\n              make_stride(E<1>{},        H*W*E<0>{}, W*E<0>{}, E<0>{})));\n\n// layout: (idx_buffer_idx, dense_offset) -> actual\n// IndexedGather: addr = base + gather_idx[idx_buffer_idx] + dense_offset\nauto outer = make_layout(make_shape(_1{},_1{}),\n  make_stride(CustomStride{IndexedGather{idx_buf}, C}, _1{}));\n\nauto gathered_layout = composition(outer, make_arithmetic_tuple(_0{},_0{}), inner);\n```\n\n```cpp\nenum class SplitKMode {\n  kNone,\n kSerial, // CTA split\n kParallel // different CTA rowdifferent split, reduce\n};\n```\n\n```\nA = Output [NPQ x K] -> GEMM A (A )\nB = Activation [NPQ x C] -> GEMM B (B )\nC = Filter [K x RSC] -> GEMM C (output)\n\nSplit-K GEMM M (= NPQ) dimensionsplit\n```\n\n```cpp\ntemplate <conv::Operator ConvOp_, int NumSpatialDimensions_>\nstruct ConvProblemShape {\n static constexpr int RankS = NumSpatialDimensions_; // dimension (2 or 3)\n static constexpr int RankT = NumSpatialDimensions_ + 2; // tensordimension\n\n  conv::Mode mode{};               // kCrossCorrelation / kConvolution\n TensorExtent shape_A{}; // tensor A shape\n TensorStride stride_A{}; // tensor A stride ( packed)\n TensorExtent shape_B{}; // tensor B shape\n  TensorStride stride_B{};\n  TensorExtent shape_C{};\n  TensorStride stride_C{};\n\n ShapePadding lower_padding{}; // padding\n  ShapePadding upper_padding{};\n  TraversalStride traversal_stride{};\n  ShapeDilation dilation{};\n  int groups = 1;\n};\n```\n\n```\ninclude/cutlass/conv/collective/sm90_implicit_gemm_gmma_ss_warpspecialized.hpp\n```\n\n```\ninclude/cutlass/conv/collective/sm100_implicit_gemm_umma_warpspecialized.hpp\n```\n\n```cpp\ntemplate <conv::Operator ConvOp, int Stages, int NumSpatialDims, ...>\nstruct CollectiveConv<MainloopSm100TmaUmmaWarpSpecializedImplicitGemm<...>, ...> {\n // PipelineTmaUmmaAsync: TMA load UMMA computeasynchronous pipeline\n  using MainloopPipeline = cutlass::PipelineTmaUmmaAsync<Stages, ClusterShape, AtomThrShapeMNK>;\n\n // 1SM 2SM mode\n  using AtomThrShapeMNK = Shape<decltype(shape<0>(TiledMma::ThrLayoutVMNK{})), _1, _1>;\n\n // im2col passed stride tuple\n  using StrideA = decltype(detail::sm100_dispatch_policy_to_stride_A<DispatchPolicy>());\n  using StrideB = decltype(detail::sm100_dispatch_policy_to_stride_B<DispatchPolicy>());\n};\n```\n\n```\ninclude/cutlass/conv/kernel/sm100_implicit_gemm_tma_warpspecialized.hpp\ninclude/cutlass/conv/kernel/sm90_implicit_gemm_tma_warpspecialized.hpp\ninclude/cutlass/conv/kernel/conv_universal.hpp //\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-conv-implicit-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

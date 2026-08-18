@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.persistent-kernels.clc-loop-pattern",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|persistent-kernels#clc-loop-pattern|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [
+   "clc-loop-pattern"
+  ],
+  "triggers": [
+   "the 'CLC Loop Pattern' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): CLC Loop Pattern",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Persistent Kernels with CLC -- CLC Loop Pattern"
+  },
+  "technique": "CLC Loop Pattern",
+  "what": "The core persistent kernel loop on Blackwell uses CLC to dynamically assign tiles:",
+  "when": "The core persistent kernel loop on Blackwell uses CLC to dynamically assign tiles:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Persistent kernel with CLC tile scheduling (Blackwell SM100)\n__global__ void __launch_bounds__(512)\npersistent_gemm_clc(const __grid_constant__ GemmParams params)\n{\n    // CLC-managed persistent loop: each CTA processes multiple tiles\n    while (true) {\n        // Query CLC for next tile assignment\n        // Returns tile coordinates (tile_m, tile_n) or signals termination\n        TileCoord tile;\n        bool has_work = clc_try_get_tile(&tile);\n\n        if (!has_work) {\n            // No more tiles to process -- CTA exits\n            // clc_try_cancel atomically checks if all tiles are done\n            if (clc_try_cancel()) {\n                return;  // CTA terminates\n            }\n            continue;  // Race condition: another CTA may have generated work\n        }\n\n        // Standard GEMM tile computation\n        int tile_m = tile.m;\n        int tile_n = tile.n;\n\n        // TMA producer loads A[tile_m, :] and B[:, tile_n] tiles\n        // MMA consumer accumulates K-dimension\n        // Epilogue writes C[tile_m, tile_n]\n        compute_gemm_tile(params, tile_m, tile_n);\n    }\n}\n```\n\n```ptx\n// CLC tile acquisition in PTX\n// clusterctl.try_cancel cancels the CTA if no work remains\n.reg .pred  %has_work;\n.reg .b32   %tile_m, %tile_n;\n\nTILE_LOOP:\n    // Attempt to get next tile from CLC hardware scheduler\n    clusterctl.query.async.shared  [%smem_tile_desc];\n    clusterctl.wait;\n\n    // Check if valid tile was assigned\n    ld.shared.b32  %has_work, [%smem_tile_desc + 0];\n    @!%has_work bra TRY_CANCEL;\n\n    // Extract tile coordinates\n    ld.shared.b32  %tile_m, [%smem_tile_desc + 4];\n    ld.shared.b32  %tile_n, [%smem_tile_desc + 8];\n\n    // ... compute tile ...\n\n    bra TILE_LOOP;\n\nTRY_CANCEL:\n    // Atomically try to cancel this CTA\n    clusterctl.try_cancel  %cancelled;\n    @!%cancelled bra TILE_LOOP;   // Another CTA may have pushed work\n    ret;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/persistent-kernels.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

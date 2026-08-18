@@ -1,0 +1,131 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.ref-docs.optimization_results",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|flash-attention|optimization_results|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): Flash Attention Optimization Results Summary",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Flash Attention Optimization Results Summary"
+  },
+  "title": "Flash Attention Optimization Results Summary",
+  "summary": "pattern: fused_attention type: results pitfalls: [24-31, 38-40]",
+  "sections": [
+   {
+    "heading": "Causal Attention Optimization Results (fp16, MI308X, BLOCK_M=128, BLOCK_N=64, DIM=64)",
+    "anchor": "causal-attention-optimization-results-fp16-mi308x-block-m-128-block-n-64-dim-64",
+    "gist": "table columns: Configuration, Triton (TFLOPS), Gluon-v1 (TFLOPS), Gluon-v2 (TFLOPS), v2/Triton, v2/v1 Improvement"
+   },
+   {
+    "heading": "Non-Causal Attention Optimization Results (fp16, MI308X, BLOCK_M=128, BLOCK_N=64, DIM=64)",
+    "anchor": "non-causal-attention-optimization-results-fp16-mi308x-block-m-128-block-n-64-dim-64",
+    "gist": "table columns: Configuration, Triton (TFLOPS), Gluon-v1 (TFLOPS), Gluon-v2 (TFLOPS), v2/Triton, v2/v1 Improvement"
+   },
+   {
+    "heading": "v1 → v2 Key Change List",
+    "anchor": "v1-v2-key-change-list",
+    "gist": "table columns: Change, v1, v2, Performance Impact"
+   },
+   {
+    "heading": "Key Conclusions",
+    "anchor": "key-conclusions",
+    "gist": "1."
+   },
+   {
+    "heading": "Applicable Pitfall Experiences",
+    "anchor": "applicable-pitfall-experiences",
+    "gist": "table columns: Number, Title, Key Points, Source"
+   },
+   {
+    "heading": "Stopping Conditions",
+    "anchor": "stopping-conditions",
+    "gist": "Use the general stopping conditions from §1.8:"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/gluon/optimization_results.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

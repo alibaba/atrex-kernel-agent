@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.deepgemm-tile-wise-and-block-wise-scaling",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#deepgemm-tile-wise-and-block-wise-scaling|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "deepgemm-tile-wise-and-block-wise-scaling",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'DeepGEMM: Tile-wise and Block-wise Scaling' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): DeepGEMM: Tile-wise and Block-wise Scaling",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- DeepGEMM: Tile-wise and Block-wise Scaling"
+  },
+  "technique": "DeepGEMM: Tile-wise and Block-wise Scaling",
+  "what": "DeepGEMM implements fine-grained FP8 GEMM with two scaling patterns:",
+  "when": "DeepGEMM implements fine-grained FP8 GEMM with two scaling patterns:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// DeepGEMM FP8 GEMM with fine-grained scaling\n// A (activations): FP8 E4M3 with tile-wise 1x128 FP32 scales\n// B (weights):     FP8 E4M3 with block-wise 128x128 FP32 scales\n// C (output):      FP32 accumulator\n\n// Scale tensor shapes:\n//   scale_A: [M, K/128] -- one FP32 scale per 128 elements along K for each row\n//   scale_B: [K/128, N/128] -- one FP32 scale per 128x128 block\n\n__device__ void deepgemm_fp8_tile(\n    const fp8_e4m3* A,    // [TILE_M, TILE_K] in FP8\n    const fp8_e4m3* B,    // [TILE_K, TILE_N] in FP8\n    const float* scale_A, // [TILE_M, TILE_K/128]\n    const float* scale_B, // [TILE_K/128, TILE_N/128]\n    float* C,             // [TILE_M, TILE_N] accumulator\n    int M, int N, int K)\n{\n    // For each 128-element K-chunk:\n    for (int k_block = 0; k_block < K; k_block += 128) {\n        // 1. Load FP8 A tile [TILE_M, 128] and B tile [128, TILE_N]\n        // 2. Perform MMA: partial = A_fp8 * B_fp8 (in limited-precision FP32)\n        // 3. Apply combined scale: scale_A[m, k_block/128] * scale_B[k_block/128, n_block/128]\n        // 4. Accumulate: C[m, n] += partial * combined_scale\n\n        for (int m = 0; m < TILE_M; m++) {\n            float sa = scale_A[m * (K / 128) + k_block / 128];\n            for (int n_block = 0; n_block < TILE_N; n_block += 128) {\n                float sb = scale_B[(k_block / 128) * (N / 128) + n_block / 128];\n                float combined_scale = sa * sb;\n\n                // Apply scale to the partial MMA result\n                for (int n = n_block; n < n_block + 128; n++) {\n                    C[m * TILE_N + n] += partial[m][n] * combined_scale;\n                }\n            }\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

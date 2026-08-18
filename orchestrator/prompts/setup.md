@@ -38,9 +38,20 @@ through `tools/sandbox.py`.
 
 Do the following, in order, but only through baseline:
 
-1. **Step 0 — Hardware specs + Roofline.** Source
-   every hardware spec from `gpu-wiki/` (**no fabrication** — every spec value must cite a gpu-wiki path),
-   do the Roofline analysis from the public workload contract, compute absolute targets
+1. **Step 0 — Hardware specs + Roofline.** Query GPU Wiki with a natural-language request that names the
+   true public product exactly as `{{PLATFORM}}` and copy the authoritative runtime architecture exactly
+   from the injected Hardware ground-truth block. Explicitly request the complete product specification and any architecture/ISA facts relevant
+   to the operator, so `query_nl.py` returns isolated `hardware_wiki` and `kernel_wiki` records in one result:
+   ```bash
+   python3 gpu-wiki/tools/query_nl.py "The true target product is {{PLATFORM}} and the authoritative
+     runtime architecture is <exact value from Hardware ground truth>. I need the complete product specification and the hardware facts
+     required to compute the Roofline for this operator." --brief
+   ```
+   Query normalization may ignore case and separators, but must not translate hardware identities. If an
+   exact fact is needed, address `query_hardware.py --product {{PLATFORM}} --field <path>` directly; an
+   unknown or not-recorded value remains unknown and must never be replaced with a sibling product's value.
+   Source every hardware spec from these records (**no fabrication** — cite the stable record id), then
+   do the Roofline analysis from the public workload contract and compute absolute targets
    (`hardware peak * 90%`), and write `Hardware Spec`, the Roofline analysis, and `Stop Conditions`
    into the workspace `README.md`. If `agent_problem.json` exists, never seek private per-case
    roofline data or exact evaluator shapes.

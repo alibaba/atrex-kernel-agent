@@ -1,0 +1,115 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-ultra.any.ref-docs.blackwell-tensor-core-analysis-b300",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-ultra|any|ref-docs|blackwell-tensor-core-analysis-b300|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-ultra",
+   "architectures": [
+    "blackwell-ultra"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-ultra",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell Ultra (B300 / SM103) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell Ultra (B300 / SM103): NVIDIA Blackwell Tensor Core Analysis (Part 2): B300",
+  "problem": {
+   "target": "NVIDIA Blackwell Ultra (B300 / SM103)",
+   "statement": "NVIDIA Blackwell Tensor Core Analysis (Part 2): B300"
+  },
+  "title": "NVIDIA Blackwell Tensor Core Analysis (Part 2): B300",
+  "summary": "An analysis of new PTX ISA 8.8 features specific to the B300 (Blackwell Ultra / SM_103) GPU, focusing on the 1.5x FP4 throughput improvement and new attention-related instructions.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "NVIDIA recently released PTX ISA 8.8, which likely contains information about the B300 (Blackwell Ultra) variant."
+   },
+   {
+    "heading": "2. K=96 FP4 Mode (2CTA + SM_103 Only)",
+    "anchor": "2-k-96-fp4-mode-2cta-sm-103-only",
+    "gist": "When and only when 2CTA mode is enabled on SM_103 hardware, the Tensor Core FP4 mode supports K=96."
+   },
+   {
+    "heading": "3. Tensor Memory Load-Reduce (SM_101 and SM_103)",
+    "anchor": "3-tensor-memory-load-reduce-sm-101-and-sm-103",
+    "gist": "The tensor memory load-reduce instruction simultaneously loads data from Tensor Memory to the register file while performing a reduction operation along the N dimension."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n// Floating point type load along with reduction\ntcgen05.ld.red.sync.aligned.shape3.num.redOp{.abs}{.NaN}.f32 r, redval, [taddr];\ntcgen05.ld.red.sync.aligned.shape4.num.redOp{.abs}{.NaN}.f32 r, redval, [taddr], immHalfSplitoff;\n\n// Integer type load along with reduction\ntcgen05.ld.red.sync.aligned.shape3.num.redOp.type r, redval, [taddr];\ntcgen05.ld.red.sync.aligned.shape4.num.redOp.type r, redval, [taddr], immHalfSplitoff;\n\n.shape3 = { .32x32b }\n.shape4 = { .16x32bx2 }\n.redOp  = { .min, .max }\n.type   = { .u32, .s32 }\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-ultra/ref-docs/blackwell-tensor-core-analysis-b300.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

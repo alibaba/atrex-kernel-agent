@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.35-s-nop-hazard-padding-from-vcc-serialization-is-free-when-hidden-by-mfma-drain",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#35-s-nop-hazard-padding-from-vcc-serialization-is-free-when-hidden-by-mfma-drain|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '35. s_nop hazard padding from VCC serialization is free when hidden by MFMA drain' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 35. s_nop hazard padding from VCC serialization is free when hidden by MFMA drain",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 35. s_nop hazard padding from VCC serialization is free when hidden by MFMA drain"
+  },
+  "attempted": "ISA analysis shows 15% of instructions are `s_nop` from VCC write→read serialization in the mask bit extraction section (32 `v_cmp` + 32 `v_cndmask` pairs). Eliminating VCC via bit→fma mask transformation should reclaim ~37 cycles per inner loop.",
+  "verdict": "performance-ceiling",
+  "lesson": "`s_nop` instructions are only a bottleneck if they are on the critical path. When s_nops follow a long-latency MFMA chain, they execute during the drain window and cost zero additional cycles. Verify with the rocprofv3 `MfmaUtil` metric — if MFMA utilization is low (e.g. 29.6%), the kernel is stall-dominated and eliminating s_nops won't help because the stalls are elsewhere.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The mask section immediately follows the GEMM2 PV MFMA chain. The 4 MFMA chains have 16-31 cycle drain latency, which already absorbs the 37 s_nop cycles for free. The fma-form mask has 128 VALU ops (32 bfe + 32 cvt + 32 fmamk + 32 add) vs the original's 96 ops (32 cmp + 32 cndmask + 32 and), creating more VALU pressure that competes with MFMA drain rather than hiding behind it."
+  },
+  "observed": "The fma-form mask (bfe + cvt + fmamk + add, zero v_cmp/v_cndmask/ s_nop) was **-1.78% slower** despite removing all 37 s_nop cycles.",
+  "root_cause": "The mask section immediately follows the GEMM2 PV MFMA chain. The 4 MFMA chains have 16-31 cycle drain latency, which already absorbs the 37 s_nop cycles for free. The fma-form mask has 128 VALU ops (32 bfe + 32 cvt + 32 fmamk + 32 add) vs the original's 96 ops (32 cmp + 32 cndmask + 32 and), creating more VALU pressure that competes with MFMA drain rather than hiding behind it."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

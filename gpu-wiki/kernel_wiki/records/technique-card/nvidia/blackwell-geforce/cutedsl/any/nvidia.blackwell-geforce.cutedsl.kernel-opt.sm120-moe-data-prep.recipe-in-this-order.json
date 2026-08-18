@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-moe-data-prep.recipe-in-this-order",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep#recipe-in-this-order|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe",
+   "recipe-in-this-order"
+  ],
+  "triggers": [
+   "the 'Recipe (in this order)' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Recipe (in this order)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 MoE Data-Prep — Quick Reference -- Recipe (in this order)"
+  },
+  "technique": "Recipe (in this order)",
+  "what": "CuTeDSL `cute.compile()` callable cannot be captured in CUDA graphs (graph is empty), and CuTeDSL per-call overhead is ~16 µs which floors above vLLM's ~12 µs CG baseline. Use `torch.utils.cpp_extension.load_inline` for JIT CUDA C++.",
+  "when": "CuTeDSL `cute.compile()` callable cannot be captured in CUDA graphs (graph is empty), and CuTeDSL per-call overhead is ~16 µs which floors above vLLM's ~12 µs CG baseline.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\nif (topk_length <= 32768) {\n    fused_moe_data_single_cta<<<1, 1024, 0, stream>>>(...);\n} else {\n    // 8 CTAs × 1024 threads, two kernels\n    fused_moe_histogram_kernel<<<8, 1024, 0, stream>>>(...);\n    fused_moe_scatter_kernel  <<<8, 1024, 0, stream>>>(...);\n}\n```\n\n```cpp\n// In histogram's last-arriving CTA:\n//   global_buf[258 + bid*256 + e] = per-CTA cumulative base offset for expert e\n//\n// In scatter (each CTA):\n__shared__ int cta_base_smem[NUM_EXPERTS];\n__shared__ int local_cnts[NUM_EXPERTS];\n// Phase 0: load cta_base[bid][e] from global_buf into smem\n// Phase 1: for each token i in CTA's chunk:\nint local_rank = atomicAdd(&local_cnts[eid], 1);   // smem atomic only\nint global_rank = cta_base_smem[eid] + local_rank;\na_map[global_rank] = i / topk;\nc_map[i] = global_rank;\n```\n\n```cpp\nconstexpr int NUM_BANKS = 4;\n__shared__ int local_cnts_rep[NUM_BANKS][NUM_EXPERTS];   // 4 KB\n__shared__ int local_cnts[NUM_EXPERTS];                   // 1 KB\n// Phase 1: per-warp bank-private atomicAdd\nconst int bank = (threadIdx.x >> 5) & (NUM_BANKS - 1);\natomicAdd(&local_cnts_rep[bank][eid], 1);\n__syncthreads();\n// Merge: 256 threads × 4 banks → local_cnts[e]\nfor (int e = tid; e < NUM_EXPERTS; e += blockDim.x) {\n    int s = 0;\n    #pragma unroll\n    for (int b = 0; b < NUM_BANKS; b++) s += local_cnts_rep[b][e];\n    local_cnts[e] = s;\n}\n__syncthreads();\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-moe-data-prep.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

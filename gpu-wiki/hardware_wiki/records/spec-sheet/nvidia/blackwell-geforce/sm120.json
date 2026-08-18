@@ -1,0 +1,113 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell-geforce.spec-sheet.sm120",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell-geforce",
+  "product": "sm120",
+  "sm_arch": "sm_120",
+  "compute_capability": "12.0"
+ },
+ "facts": {
+  "summary": "NVIDIA Blackwell GeForce / RTX PRO Hardware Compute Specification Table",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 1.97,
+    "provenance": "architecture-analysis",
+    "use_case": "Program correctness / compatibility; not suitable for high-throughput FP64 (officially 1/64 of FP32)"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 126,
+    "provenance": "architecture-analysis",
+    "use_case": "General-purpose compute, element-wise, reduction"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 251.9,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 503.8,
+    "use_case": "Training / inference matrix multiply"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 503.8,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 1007.6,
+    "use_case": "Training / inference"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1007.6,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2015.2,
+    "use_case": "Inference / low-precision training"
+   },
+   {
+    "dtype": "fp4",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2015.2,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 4030.4,
+    "use_case": "NVFP4 / MXFP4 quantized inference"
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1007.6,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2015.2,
+    "use_case": "Quantized inference"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 96,
+   "l2_cache_mb": 128,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "gpcs": 12,
+   "sm_count": 188,
+   "cuda_cores": 24064,
+   "tensor_cores": 752,
+   "rt_cores": 188,
+   "texture_units": 752,
+   "cuda_cores_per_sm": 128,
+   "tensor_cores_per_sm": 4,
+   "rt_cores_per_sm": 1,
+   "register_file_kb_per_sm": 256,
+   "shared_memory_kb_per_sm": 128,
+   "register_file_kb_total": 48128,
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVIDIA Blackwell GeForce / RTX PRO Hardware Compute Specification Table",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md"
+   }
+  ]
+ }
+}

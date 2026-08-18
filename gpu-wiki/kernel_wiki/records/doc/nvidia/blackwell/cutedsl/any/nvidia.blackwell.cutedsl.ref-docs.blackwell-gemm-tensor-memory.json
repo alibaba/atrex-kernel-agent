@@ -1,0 +1,145 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.blackwell-gemm-tensor-memory",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|blackwell-gemm-tensor-memory|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): CUTLASS Tutorial: Blackwell GEMM with Tensor Memory",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CUTLASS Tutorial: Blackwell GEMM with Tensor Memory"
+  },
+  "title": "CUTLASS Tutorial: Blackwell GEMM with Tensor Memory",
+  "summary": "A detailed walkthrough of Blackwell's fifth-generation Tensor Core MMA instructions (`tcgen05.mma`) and the dedicated Tensor Memory (TMEM) they operate on, based on the Colfax Research CUTLASS tutorial series.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "NVIDIA Blackwell architecture introduces features that significantly change the implementation of GEMM kernels."
+   },
+   {
+    "heading": "2. Blackwell MMA Overview",
+    "anchor": "2-blackwell-mma-overview",
+    "gist": "Hopper's WGMMA instructions (`wgmma.mma_async` in PTX) are deprecated on Blackwell."
+   },
+   {
+    "heading": "3. Tensor Memory",
+    "anchor": "3-tensor-memory",
+    "gist": "**Tensor Memory (TMEM)** is on-chip memory dedicated to Tensor Core operations."
+   },
+   {
+    "heading": "4. tcgen05.mma Instruction",
+    "anchor": "4-tcgen05-mma-instruction",
+    "gist": "For dense FP16 GEMM with FP32 accumulation (`.kind::f16`), the single-CTA MMA shapes are:"
+   },
+   {
+    "heading": "5. tcgen05.ld Instruction",
+    "anchor": "5-tcgen05-ld-instruction",
+    "gist": "Three memory movement instructions exist under tcgen05: `ld`, `st`, and `cp`."
+   },
+   {
+    "heading": "6. CUTLASS UMMA Interface",
+    "anchor": "6-cutlass-umma-interface",
+    "gist": "The CuTe interface consists of `MMA_Atom` (PTX instruction wrapper) and `MMA_Traits` (CuTe layouts and metadata)."
+   },
+   {
+    "heading": "7. CUTLASS Example: Simple UMMA",
+    "anchor": "7-cutlass-example-simple-umma",
+    "gist": "The example is organized into five parts."
+   },
+   {
+    "heading": "8. TMEM Allocation and Deallocation",
+    "anchor": "8-tmem-allocation-and-deallocation",
+    "gist": "The CuTe helper class `cute::TMEM::Allocator1Sm` provides an interface for `tcgen05.alloc` and `tcgen05.dealloc`."
+   },
+   {
+    "heading": "9. Conclusion",
+    "anchor": "9-conclusion",
+    "gist": "The main concepts and overall structure of CUTLASS GEMM kernels have not changed with Blackwell."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/blackwell-gemm-tensor-memory.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

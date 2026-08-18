@@ -1,0 +1,104 @@
+{
+ "schema": "hw-1.0",
+ "id": "amd.cdna4.spec-sheet.mi355x",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "amd",
+  "arch": "cdna4",
+  "product": "mi355x",
+  "sm_arch": null,
+  "compute_capability": null
+ },
+ "facts": {
+  "summary": "AMD GPU Hardware Compute Specification Table (CDNA4)",
+  "peak_compute": [
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2500.0,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 5000
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 5000,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 10100.0
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 5000,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 10100.0
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 5000,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp6",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 10100.0,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp4",
+    "unit": "TOPS",
+    "unit_kind": "cuda-core",
+    "dense": 10100.0,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 157.3,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 157.3,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 78.6,
+    "provenance": "architecture-analysis"
+   }
+  ],
+  "memory": {
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "AMD GPU Hardware Compute Specification Table (CDNA4)",
+    "kind": "third-party-analysis",
+    "ref": "amd/cdna4/hardware-specs/hardware_specs_mi355x.md"
+   }
+  ]
+ }
+}

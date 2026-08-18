@@ -48,7 +48,11 @@ workspace template.
 
 ## Knowledge and Tools
 
-- Search `gpu-wiki/` first with the exact runtime architecture and framework.
+- Query `gpu-wiki/` first through `python3 gpu-wiki/tools/query_nl.py "<description>" --brief`.
+  The description must name the true product and authoritative runtime architecture, request the full
+  product specification and relevant architecture/ISA facts, and include the operator, framework,
+  measurements, failed attempts, and remaining hypotheses. Read each id-keyed record's `store`, isolated
+  payload, and notes; internal ids use the `internal_gpu_wiki::` namespace.
 - Search `reference-projects/` only when the local knowledge base is insufficient.
 - Use `tools/profile_nvidia.sh` and `tools/classify_ncu.py` for NVIDIA evidence.
 - Use `tools/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.

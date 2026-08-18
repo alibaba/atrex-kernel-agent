@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.ref-docs.ck_gemm_optimization_reference",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|gemm|ck_gemm_optimization_reference|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): AMD MI308X (gfx942) GEMM Optimization Techniques Reference",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "AMD MI308X (gfx942) GEMM Optimization Techniques Reference"
+  },
+  "title": "AMD MI308X (gfx942) GEMM Optimization Techniques Reference",
+  "summary": "> **Purpose**: This document is an optimization methodology reference for understanding and adapting high-performance GEMM patterns on the AMD MI308X (gfx942, CDNA3) platform. It covers core optimization concepts, design patterns, and decision frameworks applicable to this platform. > > **Target Hardware**: AMD Instinct MI308X — gfx942 Architecture (CDNA3) > > **Key Hardware Characteristics**: > - **Compute Units**: 80 CUs, each with 4 SIMDs, each SIMD executing 16 lanes (Wavefront = 64 threads) > - **Matrix Multiply Instructions**: MFMA (Matrix Fused Multiply-Add) and SMFMAC (Structured Sparse), **does not support scaled MFMA instructions** > - **Memory Hierarchy**: HBM3 (5.3 TB/s bandwidth) → L3 Cache (256 MB, shared across dies) → L2 Cache (4 MB/XCD) → LDS (64 KB per CU) → VGPR/SGPR > - **Multi-die Architecture**: 4 XCDs (Accelerated Compute Die), each XCD containing 20 CUs, interconnected via Infinity Fabric > - **LDS Capacity**: 64 KB per CU, maximum 64 KB usable per Workgroup > - **VGPR**: 512 KB per CU (128 KB per SIMD = 512 32-bit VGPRs) > - **Cache Hierarchy**: L2 Cache 4 MB/XCD (shared within XCD), L3 Cache 256 MB (globally shared)",
+  "sections": [
+   {
+    "heading": "1. Overall Design Philosophy",
+    "anchor": "1-overall-design-philosophy",
+    "gist": "High-performance GEMM implementations adopt a layered architecture, with each layer focusing on optimization at different granularities:"
+   },
+   {
+    "heading": "2. Pipeline Optimization (Core Technique)",
+    "anchor": "2-pipeline-optimization-core-technique",
+    "gist": "Pipelining is central to GEMM performance, controlling the overlap of HBM loading, LDS buffering, and MFMA computation."
+   },
+   {
+    "heading": "III. MFMA Instructions and Wave-Level Optimization",
+    "anchor": "iii-mfma-instructions-and-wave-level-optimization",
+    "gist": "MI308X (gfx942) supports a rich set of MFMA instructions, which form the foundation of GEMM performance."
+   },
+   {
+    "heading": "IV. Data Layout and Memory Optimization",
+    "anchor": "iv-data-layout-and-memory-optimization",
+    "gist": "**Core Idea**: Decompose the M×N×K dimensions of GEMM into multi-level tiles, with each level mapped to a different hardware layer of MI308X."
+   },
+   {
+    "heading": "V. FP8 Quantization and Low-Precision Optimization",
+    "anchor": "v-fp8-quantization-and-low-precision-optimization",
+    "gist": "MI308X (gfx942) supports the standard FP8/BF8 MFMA instruction set, enabling direct matrix multiplication with FP8/BF8 inputs and FP32 accumulation."
+   },
+   {
+    "heading": "VI. System-Level Optimization",
+    "anchor": "vi-system-level-optimization",
+    "gist": "**Core Idea**: Optimize the mapping relationship between workgroups and output matrix tiles to improve L2 cache hit rates and cross-XCD load balancing."
+   },
+   {
+    "heading": "VII. MI308X (gfx942) Data Type Support",
+    "anchor": "vii-mi308x-gfx942-data-type-support",
+    "gist": "table columns: Data Type, MFMA Native Support, Optimal Instruction (Latency), Accumulation Type, Typical Scenario, Optimization Tips"
+   },
+   {
+    "heading": "VIII. MI308X Performance Tuning Decision Framework",
+    "anchor": "viii-mi308x-performance-tuning-decision-framework",
+    "gist": "- [ ] **Pipeline Selection**: Use Intrawave + double buffering for compute-bound scenarios, deep prefetch + Interwave for HBM bandwidth-bound scenarios - [ ] **LDS Buffering Strategy**: Double buffering vs single buffering (trade off betwe…"
+   },
+   {
+    "heading": "9. MI308X Technical Combination Recommendation Matrix",
+    "anchor": "9-mi308x-technical-combination-recommendation-matrix",
+    "gist": "table columns: Scenario, Pipeline Strategy, MFMA Instruction, Special Technique, System Optimization"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nPing phase:// Use current buffer for computation\nPong phase:\n  2. Read data from LDS buffer0 to VGPR\n  3. Write HBM data to LDS buffer1\n  4. Prefetch next round of HBM data\n  5. Execute MFMA using buffer0 VGPR data\n```\n\n```\nMFMA output (VGPR, distributed across 64 lanes)\n  → Write to LDS (rearrange layout)\n  → Read from LDS (contiguous layout)\n  → Apply post-processing operations (such as activation function, Bias addition)\n  → Write back to HBM (coalesced access, 128-bit store)\n```\n\n```\nE = ElementwiseOp(GEMM(A, B), D0, D1, ...)\n```\n\n```\nMatrix dimension analysis (MI308X: 80 CU, 4 XCD, 5.3 TB/s HBM3, 64 KB LDS/CU, 4 MB L2/XCD, 256 MB L3):\n├── M, N large, K large → Compute-intensive\n│   ├── Choose 3-stage prefetch + Intrawave scheduling\n│   ├── Use LDS double buffering\n│   └── Use spatial locality Workgroup mapping (GroupNum=4, matches 4 XCDs)\n├── M, N large, K small → Potential cross-XCD load imbalance\n│   ├── Consider StreamK dynamic load balancing\n│   └── Use Persistent Kernel\n├── M, N small, K large → HBM bandwidth-limited\n│   ├── Use SplitK to parallelize K dimension (fully utilize 80 CUs)\n│   ├── Use deep prefetch pipeline (multi-stage)\n│   └── Use Interwave scheduling\n└── M, N small, K small → Kernel launch overhead is significant\n    ├── Use Persistent Kernel\n    ├── Consider Grouped GEMM batching\n └── decrease pipeline , low VGPR/LDS high occupancy\n```\n\n```python\n# BLOCK_K=64, MFMA 16, requires 4\na_slice = a_smem.slice(0, 16, dim=1)\naccumulator = gl.amd.cdna3.mfma(a_slice.load(...), b_slice.load(...), accumulator)\n\na_slice = a_smem.slice(16, 16, dim=1)\naccumulator = gl.amd.cdna3.mfma(a_slice.load(...), b_slice.load(...), accumulator)\n\na_slice = a_smem.slice(32, 16, dim=1)\naccumulator = gl.amd.cdna3.mfma(a_slice.load(...), b_slice.load(...), accumulator)\n\na_slice = a_smem.slice(48, 16, dim=1)\naccumulator = gl.amd.cdna3.mfma(a_slice.load(...), b_slice.load(...), accumulator)\n```\n\n```python\n# A matrixby K dimension (dim=1)\na_sub = a_tile.slice(offset, 16, dim=1)\na_load = a_sub.load(layout=dot_layout_a)\n\n# B matrixby K dimension (dim=0)\nb_sub = b_tile.slice(offset, 16, dim=0)\nb_load = b_sub.load(layout=dot_layout_b)\n```\n\n```python\ngl.assume(pid_m >= 0)\ngl.assume(pid_n >= 0)\ngl.assume(stride_am > 0)\ngl.assume(stride_ak > 0)\ngl.assume(stride_bn > 0)\ngl.assume(stride_bk > 0)\ngl.assume(stride_cm > 0)\ngl.assume(stride_cn > 0)\ngl.assume(num_k_iter > 3)\n```\n\n```python\n# (test_gluon_v3)\npid = gl.program_id(0)\nxcd = pid % NUM_XCDS\nlocal_pid = pid // NUM_XCDS\npid = xcd * PIDS_PER_XCD + local_pid\n\n# (requiresfunction)\npid = gl.program_id(axis=0)\npid = remap_xcd(pid, GRID_MN, NUM_XCDS=8)\n```\n\n```python\n# ( batch , pingpong)\na_smem = ttgl.allocate_shared_memory(gl.bfloat16, [1, BLOCK_M, BLOCK_K], shared_layout_a)\n\n# loopuse index access\na_tile = a_smem.index(0)\na_tile.store(val)\na_tile.load(...)\n```\n\n```python\n# ❌ Wrong: iterationmemory\na_smem = gl.allocate_shared_memory(..., value=a_val) # loop\n\n# ✅ Correct:\na_smem = ttgl.allocate_shared_memory(gl.bfloat16, [1, BLOCK_M, BLOCK_K], shared_layout_a)\na_tile = a_smem.index(buf_idx)\na_tile.store(val) #\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/gluon/ck_gemm_optimization_reference.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

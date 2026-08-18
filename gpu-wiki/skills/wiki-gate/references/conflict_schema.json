@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "wiki-gate conflict record",
+  "description": "Written to kernel_wiki/conflicts/ when an incoming record contradicts an existing one. Contains the COMPLETE incoming wiki (not a diff) so the conflict can be investigated later without re-running the pipeline.",
+  "type": "object",
+  "required": ["created", "existing_record_id", "incoming_record", "match_confidence", "conflict_reason", "context", "resolution"],
+  "additionalProperties": false,
+  "properties": {
+    "created": { "type": "string", "format": "date-time" },
+    "existing_record_id": { "type": "string" },
+    "incoming_record": { "type": "object", "description": "The complete incoming wiki JSON, unmodified." },
+    "match_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "conflict_reason": { "type": "string" },
+    "context": {
+      "type": "object",
+      "properties": {
+        "existing_shape_contract": {},
+        "incoming_shape_contract": {},
+        "existing_bottleneck": { "type": ["string", "null"] },
+        "incoming_bottleneck": { "type": ["string", "null"] },
+        "existing_observed_symptom": { "type": ["string", "null"] },
+        "incoming_observed_symptom": { "type": ["string", "null"] },
+        "match_explanation": { "type": ["string", "null"] },
+        "possible_explanations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "resolution": {
+      "type": ["string", "null"],
+      "enum": [null, "existing_correct", "incoming_correct", "both_valid_different_scope"],
+      "description": "Filled by human review after investigation."
+    }
+  }
+}
