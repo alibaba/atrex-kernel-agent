@@ -437,6 +437,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         "(default: claude).",
     )
     ap.add_argument(
+        "--long-reviewer-session",
+        choices=("codex", "qoder", "claude"),
+        default="",
+        metavar="REVIEWER",
+        help="Reuse one reviewer session across episodes (currently implemented for codex).",
+    )
+    ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
         default="leaderboard",
@@ -690,6 +697,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         verify_repeats=args.verify_repeats,
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,
+        long_reviewer_session=args.long_reviewer_session,
         convert_after=args.convert_after,
     )
     if latest_version(campaign.workspace) < 0:

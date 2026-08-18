@@ -85,6 +85,11 @@ from .workspace_state import (
 )
 
 
+_LONG_REVIEWER_SESSION_ENV = {
+    "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
+}
+
+
 @dataclass
 class Campaign:
     name: str
@@ -122,6 +127,7 @@ class Campaign:
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
+    long_reviewer_session: str = ""
     tokens_spent: int = field(default=0, init=False)
     _dependency_review_cache: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False, compare=False
@@ -132,6 +138,15 @@ class Campaign:
     _plan_reviewer_environment: dict[str, str] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+
+    def __post_init__(self) -> None:
+        if self.long_reviewer_session and self.long_reviewer_session not in (
+            _LONG_REVIEWER_SESSION_ENV
+        ):
+            raise NotImplementedError(
+                f"long reviewer sessions are not implemented for "
+                f"{self.long_reviewer_session}"
+            )
 
     @property
     def campaign_name(self) -> str:
@@ -261,6 +276,13 @@ class Campaign:
     def agent_environment(self) -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
+        if self.long_reviewer_session:
+            env_name = _LONG_REVIEWER_SESSION_ENV[self.long_reviewer_session]
+            state_file = (
+                self.workspace
+                / f".atrex_long_horizon/{self.long_reviewer_session}_reviewer_session.json"
+            )
+            environment[env_name] = str(state_file.resolve())
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         return environment

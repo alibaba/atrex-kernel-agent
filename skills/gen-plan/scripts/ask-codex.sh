@@ -11,6 +11,7 @@ input_file=""
 context_files=()
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 codex_timeout="${ATREX_ASK_CODEX_TIMEOUT:-600}"
+session_file="${ATREX_CODEX_REVIEW_SESSION_FILE:-}"
 # Independent plan review is always run at maximum reasoning depth. Do not inherit the episode,
 # project, environment, or caller effort because that would weaken the review when the main agent
 # is configured for a faster setting.
@@ -106,46 +107,53 @@ elif ! command -v "$codex_bin" >/dev/null 2>&1; then
     exit 127
 fi
 
-command=(
-    "$codex_bin"
-    exec
-    --ephemeral
-    --color never
-    --sandbox read-only
-    --skip-git-repo-check
-    --ignore-rules
-    -c "model_reasoning_effort=\"$reasoning_effort\""
-)
-if [[ -n "$codex_model" ]]; then
-    command+=(-m "$codex_model")
+if [[ -n "$session_file" && "$session_file" != /* ]]; then
+    echo "ask-codex: ATREX_CODEX_REVIEW_SESSION_FILE must be an absolute path" >&2
+    exit 2
 fi
-command+=(-)
 
-python_args=("$codex_timeout" "$input_file" "${#context_files[@]}")
+python_args=(
+    "$codex_timeout"
+    "$input_file"
+    "${#context_files[@]}"
+    "$codex_bin"
+    "$reasoning_effort"
+    "$codex_model"
+    "$session_file"
+)
 for ((index = 0; index < ${#context_files[@]}; index++)); do
     python_args+=("${context_files[$index]}")
 done
-python_args+=(-- "${command[@]}")
 
-echo "ask-codex: running isolated read-only consultation (timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
+if [[ -n "$session_file" ]]; then
+    echo "ask-codex: running campaign-persistent read-only consultation " \
+        "(timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
+else
+    echo "ask-codex: running isolated read-only consultation " \
+        "(timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
+fi
 if codex_response="$(python3 - "${python_args[@]}" <<'PY'
+import json
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+import uuid
+from datetime import datetime, timezone
 
 timeout = int(sys.argv[1])
 input_file = pathlib.Path(sys.argv[2])
 context_count = int(sys.argv[3])
-context_files = [pathlib.Path(item) for item in sys.argv[4 : 4 + context_count]]
-separator = 4 + context_count
-if sys.argv[separator] != "--":
-    print("ask-codex: internal command separator is missing", file=sys.stderr)
-    raise SystemExit(2)
-command = sys.argv[separator + 1 :]
+codex_bin = sys.argv[4]
+reasoning_effort = sys.argv[5]
+codex_model = sys.argv[6]
+session_file = pathlib.Path(sys.argv[7]) if sys.argv[7] else None
+context_files = [pathlib.Path(item) for item in sys.argv[8 : 8 + context_count]]
 environment = os.environ.copy()
 environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+environment.pop("CODEX_THREAD_ID", None)
+environment.pop("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)
 
 parts = [
     "Act as an independent reviewer for a GPU-kernel implementation plan.\n",
@@ -168,10 +176,137 @@ for context_file in context_files:
     )
 prompt = "".join(parts)
 
+
+def load_thread_id(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        thread_id = value["thread_id"]
+        uuid.UUID(thread_id)
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        print(
+            f"ask-codex: invalid persistent reviewer state: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if value.get("schema_version") != 1:
+        print("ask-codex: unsupported persistent reviewer state schema", file=sys.stderr)
+        raise SystemExit(2)
+    return thread_id
+
+
+def write_thread_id(path, thread_id):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    descriptor = os.open(temporary, flags, 0o600)
+    os.fchmod(descriptor, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "thread_id": thread_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                stream,
+                indent=2,
+            )
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def thread_id_from_events(output):
+    thread_ids = []
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "thread.started" and isinstance(
+            event.get("thread_id"), str
+        ):
+            thread_ids.append(event["thread_id"])
+    unique = list(dict.fromkeys(thread_ids))
+    if len(unique) != 1:
+        print(
+            "ask-codex: persistent consultation did not report exactly one thread id",
+            file=sys.stderr,
+        )
+        raise SystemExit(3)
+    try:
+        uuid.UUID(unique[0])
+    except ValueError:
+        print("ask-codex: persistent consultation reported an invalid thread id", file=sys.stderr)
+        raise SystemExit(3)
+    return unique[0]
+
+
+base_options = [
+    "--skip-git-repo-check",
+    "--ignore-rules",
+    "-c",
+    f'model_reasoning_effort="{reasoning_effort}"',
+]
+if codex_model:
+    base_options.extend(["-m", codex_model])
+
 try:
     # An empty, automatically removed working directory prevents project discovery. The reviewer
     # receives repository evidence only through the explicit prompt packet above.
     with tempfile.TemporaryDirectory(prefix="atrex-ask-codex-") as review_cwd:
+        response_file = pathlib.Path(review_cwd) / "last-message.txt"
+        thread_id = None
+        if session_file is None:
+            command = [
+                codex_bin,
+                "exec",
+                "--ephemeral",
+                "--color",
+                "never",
+                "--sandbox",
+                "read-only",
+                *base_options,
+                "-",
+            ]
+        elif session_file.exists():
+            thread_id = load_thread_id(session_file)
+            command = [
+                codex_bin,
+                "exec",
+                "resume",
+                "--json",
+                *base_options,
+                "-o",
+                str(response_file),
+                thread_id,
+                "-",
+            ]
+        else:
+            command = [
+                codex_bin,
+                "exec",
+                "--json",
+                "--color",
+                "never",
+                "--sandbox",
+                "read-only",
+                *base_options,
+                "-o",
+                str(response_file),
+                "-",
+            ]
         completed = subprocess.run(
             command,
             input=prompt,
@@ -182,6 +317,16 @@ try:
             env=environment,
             timeout=timeout,
         )
+        if session_file is not None and completed.returncode == 0:
+            observed_thread_id = thread_id_from_events(completed.stdout)
+            if thread_id is not None and observed_thread_id != thread_id:
+                print("ask-codex: resumed consultation changed thread id", file=sys.stderr)
+                raise SystemExit(3)
+            if thread_id is None:
+                write_thread_id(session_file, observed_thread_id)
+            response = response_file.read_text(encoding="utf-8")
+        else:
+            response = completed.stdout
 except subprocess.TimeoutExpired:
     print(f"ask-codex: timed out after {timeout}s", file=sys.stderr)
     raise SystemExit(124)
@@ -196,7 +341,7 @@ if return_code < 0:
     return_code = 128 + abs(return_code)
 if return_code != 0:
     raise SystemExit(return_code)
-sys.stdout.write(completed.stdout)
+sys.stdout.write(response)
 PY
 )"; then
     missing_markers=""
