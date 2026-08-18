@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.ref-docs.key_conclusions",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|ref-docs|key_conclusions|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): Key Conclusions",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Key Conclusions"
+  },
+  "title": "Key Conclusions",
+  "summary": "pattern: small_gemm type: conclusion",
+  "sections": [
+   {
+    "heading": "1. Correct Priority for Small Matrix Optimization",
+    "anchor": "1-correct-priority-for-small-matrix-optimization",
+    "gist": "The benefit of reducing tile size (2.5×) far exceeds the sum of all other optimizations."
+   },
+   {
+    "heading": "2. CU Utilization Improvement Is the Root Cause of Performance Doubling",
+    "anchor": "2-cu-utilization-improvement-is-the-root-cause-of-performance-doubling",
+    "gist": "Going from 1 block to 32 blocks is a 32× increase in parallelism."
+   },
+   {
+    "heading": "3. Small Matrices Do Not Have the Problem of Tiles Being Too Small",
+    "anchor": "3-small-matrices-do-not-have-the-problem-of-tiles-being-too-small",
+    "gist": "Within the small matrix range of 128×64×256 ~ 256×128×512, performance is **strictly monotonically increasing** with tile size reduction:"
+   },
+   {
+    "heading": "4. Gluon Can Significantly Outperform Triton on Small Matrices",
+    "anchor": "4-gluon-can-significantly-outperform-triton-on-small-matrices",
+    "gist": "Final results (32×32×32 tile, 2 warps): - vs Triton: **2.6-2.85× faster** - vs Converter baseline: **3.3× faster**"
+   },
+   {
+    "heading": "Full Process Final Results",
+    "anchor": "full-process-final-results",
+    "gist": "**Test matrices**: M=256, K=128, N=512 (largest test case)"
+   },
+   {
+    "heading": "Stopping Criteria",
+    "anchor": "stopping-criteria",
+    "gist": "Stop optimization when the following conditions are met:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n tile size ≫ BLOCK_K > ISA optimization\n```\n\n```\n128×256 (14.5µs) → 64×128 (8.5µs) → 64×64 (7.6µs) → 32×64 (6.9µs) → 32×32 (6.7µs)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/gluon/key_conclusions.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,162 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-gemm-optimization",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|gemm|cutlass-gemm-optimization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS GEMM Optimization Strategy",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS GEMM Optimization Strategy"
+  },
+  "title": "CUTLASS GEMM Optimization Strategy",
+  "summary": "CUTLASS maps GEMM to the GPU hardware hierarchy through three-layer tiling:",
+  "sections": [
+   {
+    "heading": "Three-Layer Tiling Structure",
+    "anchor": "three-layer-tiling-structure",
+    "gist": "CUTLASS maps GEMM to the GPU hardware hierarchy through three-layer tiling:"
+   },
+   {
+    "heading": "Building the GEMM Mainloop (CuTe Style)",
+    "anchor": "building-the-gemm-mainloop-cute-style",
+    "gist": "CuTe convention: A = `(M,K)`, B = `(N,K)`, C = `(M,N)`."
+   },
+   {
+    "heading": "Copy Partitioning vs Math Partitioning",
+    "anchor": "copy-partitioning-vs-math-partitioning",
+    "gist": "Use the thread layout `tA` to partition the gmem/smem tensor:"
+   },
+   {
+    "heading": "Advanced Partitioning: TiledCopy and TiledMMA",
+    "anchor": "advanced-partitioning-tiledcopy-and-tiledmma",
+    "gist": "---"
+   },
+   {
+    "heading": "Mainloop Implementation",
+    "anchor": "mainloop-implementation",
+    "gist": "---"
+   },
+   {
+    "heading": "SMEM Layout Optimization",
+    "anchor": "smem-layout-optimization",
+    "gist": "Simply modify the layout definition; the kernel code remains unchanged."
+   },
+   {
+    "heading": "Software Pipelining",
+    "anchor": "software-pipelining",
+    "gist": "Since the accumulator occupies a large number of registers Site resulting in low occupancy, the GPU cannot hide latency through context switching."
+   },
+   {
+    "heading": "Parallel Reduction",
+    "anchor": "parallel-reduction",
+    "gist": "Distributes the K dimension across multiple threadblocks, requiring two kernels:"
+   },
+   {
+    "heading": "Threadblock Rasterization",
+    "anchor": "threadblock-rasterization",
+    "gist": "Adjusts the mapping order of threadblocks to GEMM coordinates to maximize **L2 cache reuse**."
+   },
+   {
+    "heading": "Epilogue",
+    "anchor": "epilogue",
+    "gist": "Handles the layout conversion from register layout to global memory layout:"
+   },
+   {
+    "heading": "Hopper Warp Specialization",
+    "anchor": "hopper-warp-specialization",
+    "gist": "Thread blocks are divided into **producer** and **consumer** warp groups:"
+   },
+   {
+    "heading": "GETT: Tensor Contractions as Multimodal GEMM",
+    "anchor": "gett-tensor-contractions-as-multimodal-gemm",
+    "gist": "CuTe's nested layout supports executing tensor contractions with an **unchanged GEMM kernel**:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nauto prob_shape = make_shape(M, N, K);\nTensor mA = make_tensor(make_gmem_ptr(A), select<0,2>(prob_shape), dA);  // (M,K)\nTensor mB = make_tensor(make_gmem_ptr(B), select<1,2>(prob_shape), dB);  // (N,K)\nTensor mC = make_tensor(make_gmem_ptr(C), select<0,1>(prob_shape), dC);  // (M,N)\n```\n\n```cpp\nauto cta_tiler = make_shape(Int<128>{}, Int<128>{}, Int<8>{});  // (BLK_M, BLK_N, BLK_K)\n\nauto cta_coord = make_coord(blockIdx.x, blockIdx.y, _); // _ keep K dimension\nTensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X, _1>{});  // (BLK_M, BLK_K, k)\nTensor gB = local_tile(mB, cta_tiler, cta_coord, Step< X, _1, _1>{});  // (BLK_N, BLK_K, k)\nTensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1,  X>{});  // (BLK_M, BLK_N)\n```\n\n```cpp\n// Column-major (NT)\nauto sA_layout = make_layout(make_shape(bM, bK));           // m-major\nauto sB_layout = make_layout(make_shape(bN, bK));           // n-major\n\n// English comment\n__shared__ TA smemA[cosize_v<ASmemLayout>];\nTensor sA = make_tensor(make_smem_ptr(smemA), sA_layout);  // (BLK_M, BLK_K)\n```\n\n```cpp\n// 32x8 = 256 128x8 tile -> 4x1 tensor\nauto tA = make_layout(make_shape(Int<32>{}, Int<8>{}));\n\nTensor tAgA = local_partition(gA, tA, threadIdx.x);  // (THR_M, THR_K, k)\nTensor tAsA = local_partition(sA, tA, threadIdx.x);  // (THR_M, THR_K)\n\ncopy(tAgA(_,_,k_tile), tAsA);  // gmem → smem\n```\n\n```cpp\nauto tC = make_layout(make_shape(Int<16>{}, Int<16>{})); // 16x16 = 256\n\n// Step : tC M mode sA, N mode sB\nTensor tCsA = local_partition(sA, tC, threadIdx.x, Step<_1, X>{});  // (THR_M, BLK_K)\nTensor tCsB = local_partition(sB, tC, threadIdx.x, Step< X, _1>{});  // (THR_N, BLK_K)\nTensor tCgC = local_partition(gC, tC, threadIdx.x, Step<_1, _1>{});  // (THR_M, THR_N)\nTensor tCrC = make_tensor_like(tCgC); // register\n\ngemm(tCsA, tCsB, tCrC);\n```\n\n```cpp\nTiledCopy copyA = make_tiled_copy(\n Copy_Atom<UniversalCopy<uint128_t>, TA>{}, // 128-bit\n Layout<Shape<_32, _8>>{}, // layout\n Layout<Shape<_4, _1>>{} //\n);\n\nThrCopy thr_copy = copyA.get_slice(threadIdx.x);\nTensor tAgA = thr_copy.partition_S(gA);   // (CPY, CPY_M, CPY_K, k)\nTensor tAsA = thr_copy.partition_D(sA);   // (CPY, CPY_M, CPY_K)\ncute::copy(copyA, tAgA, tAsA);\n```\n\n```cpp\nTiledMMA mmaC = make_tiled_mma(UniversalFMA<TC,TA,TB>{},\n                               Layout<Shape<_16,_16,_1>>{});\n\nThrMMA thr_mma = mmaC.get_slice(threadIdx.x);\nTensor tCsA = thr_mma.partition_A(sA);\nTensor tCsB = thr_mma.partition_B(sB);\nTensor tCrC = thr_mma.make_fragment_C(tCgC);\ncute::gemm(mmaC, tCsA, tCsB, tCrC);\n```\n\n```cpp\nfor (int k_tile = 0; k_tile < K_TILE_MAX; ++k_tile) {\n    // 1. Copy: gmem → smem\n    copy(tAgA(_,_,k_tile), tAsA);\n    copy(tBgB(_,_,k_tile), tBsB);\n\n    cp_async_fence();\n    cp_async_wait<0>();\n    __syncthreads();\n\n    // 2. Compute: smem → register → accumulate\n    gemm(tCsA, tCsB, tCrC);\n\n    __syncthreads();\n}\n```\n\n```cpp\n// m-major: stride = bM\nauto sA = make_layout(make_shape(bM, bK));\n\n// Padding: stride = bM + 1, bank access\nauto sA = make_layout(make_shape(bM, bK),\n                      make_stride(Int<1>{}, bM + Int<1>{}));\n```\n\n```\nSwizzle(MBase, BBits, SShift)\nresult = lowbit XOR highbitbit\n```\n\n```\nIteration i:     [Load tile i+1 → SMEM_B] + [Compute tile i from SMEM_A]\nIteration i+1:   [Load tile i+2 → SMEM_A] + [Compute tile i+1 from SMEM_B]\n```\n\n```\nm=128, n=128, k=4096, 16 partitions\n-> 16 batches, k=256\n-> reduction 16 128x128\n```\n\n```\nConsumer A: [Compute tile 0] [Epilogue tile 0] [Compute tile 2] [Epilogue tile 2]\nConsumer B:                  [Compute tile 1]  [Epilogue tile 1] [Compute tile 3]\n```\n\n```cpp\n// standard GEMM: M scalar\nauto M = m;\nauto bM = Int<128>{};\n\n// GETT: M\nauto M = make_shape(m0, m1);\nauto bM = Shape<_64, _2>{}; // m0 64, m1 2\n\n// kernel ！\ngemm_device<<<dimGrid, dimBlock>>>(prob_shape, cta_tiler, ...);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-gemm-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

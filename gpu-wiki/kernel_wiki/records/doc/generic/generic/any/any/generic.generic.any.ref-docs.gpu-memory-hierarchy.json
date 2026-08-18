@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gpu-memory-hierarchy",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-memory-hierarchy|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): GPU Memory Hierarchy and Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "GPU Memory Hierarchy and Optimization"
+  },
+  "title": "GPU Memory Hierarchy and Optimization",
+  "summary": "The core of GPU performance optimization is understanding the memory hierarchy and properly leveraging the bandwidth and latency characteristics of each storage level.",
+  "sections": [
+   {
+    "heading": "Memory Types Overview",
+    "anchor": "memory-types-overview",
+    "gist": "table columns: Memory Type, Location, Scope, Lifetime, Latency, Bandwidth, Typical Size"
+   },
+   {
+    "heading": "Register Optimization",
+    "anchor": "register-optimization",
+    "gist": "Registers are the fastest storage, but their quantity is limited (typically 64K 32-bit registers per SM)."
+   },
+   {
+    "heading": "Global Memory Optimization",
+    "anchor": "global-memory-optimization",
+    "gist": "Global memory is the largest but slowest storage."
+   },
+   {
+    "heading": "Shared Memory Optimization",
+    "anchor": "shared-memory-optimization",
+    "gist": "Shared memory is on-chip programmable cache with bandwidth far exceeding that of global memory."
+   },
+   {
+    "heading": "Local Memory",
+    "anchor": "local-memory",
+    "gist": "The name is misleading—local memory actually resides in **off-chip device memory**, with latency and bandwidth identical to global memory."
+   },
+   {
+    "heading": "Constant Memory",
+    "anchor": "constant-memory",
+    "gist": "- Total 64 KB, globally read-only - Ideal for scenarios where all threads read the same value (broadcast within a warp, a single read suffices) - When threads within a warp read different addresses, accesses are serialized; in such cases, …"
+   },
+   {
+    "heading": "Host-Device Data Transfer Optimization",
+    "anchor": "host-device-data-transfer-optimization",
+    "gist": "PCIe bandwidth (~16 GB/s) is far lower than device memory bandwidth (hundreds of GB/s to several TB/s)."
+   },
+   {
+    "heading": "Effective Bandwidth as a Performance Metric",
+    "anchor": "effective-bandwidth-as-a-performance-metric",
+    "gist": "Key metric for measuring memory optimization effectiveness:"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Same-layer complementary**: GPU Execution Model and Thread Optimization — Together with this document, forms Tier 0 foundational knowledge - **Content overlap**: [GPU Application-Level Optimization Strategies]…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```c\n// ✅ Coalesced access: Adjacent threads read adjacent elements\nint idx = blockIdx.x * blockDim.x + threadIdx.x;\nfloat val = data[idx];\n\n// ❌ Non-coalesced access: Strided access\nint idx = (blockIdx.x * blockDim.x + threadIdx.x) * stride;\nfloat val = data[idx];  // stride > 1 wastes bandwidth\n```\n\n```c\n// ❌ 32-way bank conflict: Column access of 32×32 array\n__shared__ float s[32][32];\nfloat val = s[threadIdx.x][0];  // All threads access bank 0\n\n// ✅ Eliminate bank conflict: Padding\n__shared__ float s[32][33];  // Extra 1 column padding, stagger bank mapping\nfloat val = s[threadIdx.x][0];  // Each thread accesses different bank\n```\n\n```\nPseudo-code:\nfor each stream i:\n    async_copy(host_data[i] → device_data[i], stream[i])\n    launch_kernel(device_data[i], stream[i])\n    async_copy(device_result[i] → host_result[i], stream[i])\n```\n\n```\nEffective bandwidth (GB/s) = (bytes read + bytes written) / time / 10^9\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gpu-memory-hierarchy.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

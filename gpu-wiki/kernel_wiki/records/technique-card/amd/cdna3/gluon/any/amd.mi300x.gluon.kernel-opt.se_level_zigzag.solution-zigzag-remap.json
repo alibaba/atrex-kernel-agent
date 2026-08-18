@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi300x.gluon.kernel-opt.se_level_zigzag.solution-zigzag-remap",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|se_level_zigzag#solution-zigzag-remap|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi300x"
+   ],
+   "product": "mi300x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "solution-zigzag-remap"
+  ],
+  "triggers": [
+   "the 'Solution: Zigzag Remap' technique is being considered on AMD MI300X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI300X (CDNA3 / gfx942): Solution: Zigzag Remap",
+  "problem": {
+   "target": "AMD MI300X (CDNA3 / gfx942)",
+   "statement": "SE-level Causal Attention Load Balancing -- Solution: Zigzag Remap"
+  },
+  "technique": "Solution: Zigzag Remap",
+  "what": "Zigzag remap redistributes the order of `start_m` to achieve more balanced SE load.",
+  "when": "Zigzag remap redistributes the order of `start_m` to achieve more balanced SE load.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.jit\ndef remap_start_m_zigzag(start_m, NUM_SE: tl.constexpr = 8):\n    \"\"\"Zigzag remap start_m to balance SE load\"\"\"\n    # Simple zigzag: 0, 7, 1, 6, 2, 5, 3, 4, 8, 15, 9, 14, ...\n    se_id = start_m % NUM_SE\n    zigzag_se_id = se_id if se_id % 2 == 0 else NUM_SE - 1 - se_id\n    remapped_start_m = (start_m // NUM_SE) * NUM_SE + zigzag_se_id\n    return remapped_start_m\n```\n\n```python\n@triton.jit\ndef remap_pid_zigzag(pid, NUM_PID_M, NUM_PID_BH, GROUP_SIZE_M: tl.constexpr = 8, NUM_SE: tl.constexpr = 8):\n    \"\"\"Zigzag remap (start_m, batch, head) to balance SE load\"\"\"\n    # Map 1D pid to (start_m, batch, head)\n    pid_m = pid % NUM_PID_M\n    pid_bh = pid // NUM_PID_M\n\n    # Apply zigzag to start_m\n    se_id_m = pid_m % NUM_SE\n    zigzag_se_id_m = se_id_m if se_id_m % 2 == 0 else NUM_SE - 1 - se_id_m\n    remapped_pid_m = (pid_m // NUM_SE) * NUM_SE + zigzag_se_id_m\n\n    # Apply zigzag to batch-head\n    se_id_bh = pid_bh % NUM_SE\n    zigzag_se_id_bh = se_id_bh if se_id_bh % 2 == 0 else NUM_SE - 1 - se_id_bh\n    remapped_pid_bh = (pid_bh // NUM_SE) * NUM_SE + zigzag_se_id_bh\n\n    # Recombine\n    remapped_pid = remapped_pid_m + remapped_pid_bh * NUM_PID_M\n    return remapped_pid\n```\n\n```python\n@triton.heuristics({\n    \"NUM_PID_M\": lambda args: triton.cdiv(args[\"M\"], args[\"BLOCK_M\"]),\n    \"NUM_PID_BH\": lambda args: args[\"B\"] * args[\"H\"],\n})\n@gluon.jit\ndef flash_attn_kernel(..., NUM_PID_M: tl.constexpr, NUM_PID_BH: tl.constexpr):\n    pid = gl.program_id(axis=0)\n    pid = remap_pid_zigzag(pid, NUM_PID_M, NUM_PID_BH, GROUP_SIZE_M=8, NUM_SE=8)\n    pid_m = pid % NUM_PID_M\n    pid_bh = pid // NUM_PID_M\n    start_m = pid_m * BLOCK_M\n    batch = pid_bh // H\n    head = pid_bh % H\n    # ...\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi300x/kernel-opt/gluon/se_level_zigzag.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

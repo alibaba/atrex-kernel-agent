@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.nvfp4-gemm-pitfalls.4-splitting-block-k-into-a-5d-smem-layout-k-block-as-middle-dim-breaks-ldmatrix",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|nvfp4-gemm-pitfalls#4-splitting-block-k-into-a-5d-smem-layout-k-block-as-middle-dim-breaks-ldmatrix|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '4. Splitting BLOCK_K into a 5D smem layout (K_BLOCK as middle dim) breaks ldmatrix' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 4. Splitting BLOCK_K into a 5D smem layout (K_BLOCK as middle dim) breaks ldmatrix",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "cute-DSL NVFP4 GEMM pitfalls (sm_120, RTX PRO 5000) -- 4. Splitting BLOCK_K into a 5D smem layout (K_BLOCK as middle dim) breaks ldmatrix"
+  },
+  "attempted": "Natural extension of v43: instead of two separate sub-buffers `sA0, sA1` for the two k_blocks, make a single 5D smem `(STAGES, ATOMS_M, ATOM_M, K_BLOCK_MAX, ATOM_K//2)` and slice as `sA[s, atom, _, k_block, _]`.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "For BLOCK_K split into multiple k_blocks, use **separate smem allocations per k_block** (e.g., sA0, sA1) so that within each, the ldmatrix sees the v38 / v43 single-K-block layout it was designed for. TMA does 2 calls per outer K-tile (one per k_block), which is fine.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`ldmatrix.x4` of an 8×8 16-bit matrix interprets the per-thread address pattern based on the *physical* smem layout, not the abstract slice. With our 64-byte row stride (for the multi-K-block layout), the second k_block's data isn't at the address ldmatrix expects within its 16-byte-per-thread access window.**Lesson**: For BLOCK_K split into multiple k_blocks, use **separate smem allocations per k_block** (e.g., sA0, sA1) so that within each, the ldmatrix sees the v38 / v43 single-K-block layout it was designed for. TMA does 2 calls per outer K-tile (one per k_block), which is fine."
+  },
+  "observed": "Compiles and runs, single-tile (K_TILES=1) correct, multi-tile produces `rel_err ≈ 5e-3`. The slice `[_, _, k_block, _]` has the SAME shape (16, 32) and SAME strides (64, 1) as the proto for any `k_block`, but ldmatrix on the strided view (gaps between rows because the OTHER k_block sits between rows of the same atom) silently reads the wrong bytes for `k_block=1`.",
+  "root_cause": "`ldmatrix.x4` of an 8×8 16-bit matrix interprets the per-thread address pattern based on the *physical* smem layout, not the abstract slice. With our 64-byte row stride (for the multi-K-block layout), the second k_block's data isn't at the address ldmatrix expects within its 16-byte-per-thread access window.**Lesson**: For BLOCK_K split into multiple k_blocks, use **separate smem allocations per k_block** (e.g., sA0, sA1) so that within each, the ldmatrix sees the v38 / v43 single-K-block layout it was designed for. TMA does 2 calls per outer K-tile (one per k_block), which is fine."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/nvfp4-gemm-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

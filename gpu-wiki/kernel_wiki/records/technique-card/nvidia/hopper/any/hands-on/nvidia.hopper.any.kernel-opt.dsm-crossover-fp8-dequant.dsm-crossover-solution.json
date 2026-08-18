@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.dsm-crossover-fp8-dequant.dsm-crossover-solution",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|quantization|dsm-crossover-fp8-dequant#dsm-crossover-solution|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "dsm-crossover-solution",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'DSM Crossover Solution' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): DSM Crossover Solution",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "DSM Crossover FP8 Dequantization -- DSM Crossover Solution"
+  },
+  "technique": "DSM Crossover Solution",
+  "what": "Using **Cluster Size = 2**, two CTAs each handle dequantization for half of the tokens, writing results into each other's shared memory via DSM:",
+  "when": "Using **Cluster Size = 2**, two CTAs each handle dequantization for half of the tokens, writing results into each other's shared memory via DSM:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nCTA 0 (SM_A):                       CTA 1 (SM_B):\n┌─────────────────┐                 ┌─────────────────┐\n│ 1. load FP8 tokens 0-31 │ │ 1. load FP8 tokens 32-63 │\n│ 2. Dequant → BF16      │         │ 2. Dequant → BF16        │\n│ 3. st.async → SM_B SMEM│─────────│ 3. st.async → SM_A SMEM  │\n│ 4. WGMMA( 64 tokens)│ │ 4. WGMMA( 64 tokens) │\n└─────────────────┘                 └─────────────────┘\n```\n\n```cpp\n// asynchronouswrite peer CTA shared memory\n// st.async current, writebackgroundcomplete\nasm volatile(\n    \"st.async.weak.shared::cluster.mbarrier::complete_tx::bytes\"\n    \".v4.b32 [%0], {%1, %2, %3, %4}, [%5];\"\n :: \"r\"(dst_smem_addr), // : peer CTA SMEM\n \"r\"(data0), \"r\"(data1), // quantization BF16 data\n       \"r\"(data2), \"r\"(data3),\n \"r\"(mbar_addr) // peer CTA mbarrier\n);\n\n// peer CTA SMEM\n// XOR 1 CTA 0 mapping CTA 1,\nuint32_t peer_addr = __cluster_map_shared_rank(local_smem_ptr, rank ^ 1);\n```\n\n```cpp\n// FP8 E4M3 -> BF16, tile-level scale factor\nbf16x8 cvt_fp8x8_bf16x8(const fp8x8 &inputs, const __nv_bfloat162 &scale) {\n // 1. FP8 -> FP32\n    float4 fp32x4 = (float4)(inputs.low);\n // 2. FP32 -> BF16 + scale\n    output.low = __float22bfloat162_rn({fp32x4.x, fp32x4.y}) * scale;\n    output.high = __float22bfloat162_rn({fp32x4.z, fp32x4.w}) * scale;\n    return output;\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/dsm-crossover-fp8-dequant.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

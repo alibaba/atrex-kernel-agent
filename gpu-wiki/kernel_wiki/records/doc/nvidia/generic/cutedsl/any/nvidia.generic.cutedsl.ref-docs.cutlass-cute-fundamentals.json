@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-cute-fundamentals",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutlass-cute-fundamentals|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS/CuTe Core Concepts and Layout Algebra",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS/CuTe Core Concepts and Layout Algebra"
+  },
+  "title": "CUTLASS/CuTe Core Concepts and Layout Algebra",
+  "summary": "CuTeDSL shares all core concepts with CuTe C++ (Layout, Tensor, Atom, TiledMMA/TiledCopy), with consistent API naming. CuTeDSL is not a replacement for CUTLASS C++, but rather a high-productivity kernel authoring framework.",
+  "sections": [
+   {
+    "heading": "Relationship Between CUTLASS, CuTe, and CuTeDSL",
+    "anchor": "relationship-between-cutlass-cute-and-cutedsl",
+    "gist": "table columns: Component, Role, Language"
+   },
+   {
+    "heading": "Layout Basics",
+    "anchor": "layout-basics",
+    "gist": "A Layout is a **function mapping from coordinate space to index space**, consisting of a pair of IntTuples: `(Shape, Stride)`."
+   },
+   {
+    "heading": "Coordinate System",
+    "anchor": "coordinate-system",
+    "gist": "Each Layout accepts three compatible coordinate types:"
+   },
+   {
+    "heading": "Five Layout Algebra Operations",
+    "anchor": "five-layout-algebra-operations",
+    "gist": "Merge adjacent modes without changing the function mapping, reducing Layout complexity."
+   },
+   {
+    "heading": "Tensor",
+    "anchor": "tensor",
+    "gist": "Engine (iterator) provides data access, Layout provides coordinate → index mapping."
+   },
+   {
+    "heading": "MMA Atom Abstraction",
+    "anchor": "mma-atom-abstraction",
+    "gist": "CuTe encapsulates GPU matrix multiply-accumulate hardware instructions into four layers of abstraction:"
+   },
+   {
+    "heading": "CuTe Algorithms",
+    "anchor": "cute-algorithms",
+    "gist": "**Three levels of optimization:** 1."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nLayout = (Shape, Stride)\nindex = inner_product(coordinate, stride)\n```\n\n```\n6 - scalar\n(2) - 1 tuple\n(4, 3) - 2 tuple\n(3, (6, 2), 8) - tuple\n```\n\n```\nLayout: (4, 2):(1, 4)    — 4x2 column-major\n  0  4\n  1  5\n  2  6\n  3  7\n\nLayout: (4, 2):(2, 1)    — 4x2 row-major\n  0  1\n  2  3\n  4  5\n  6  7\n```\n\n```\nLayout (3,(2,3)):(3,(12,1))\ncoordinate (i,(j,k)) → index = i*3 + j*12 + k*1\n```\n\n```\nA = (6,2):(8,2), B = (4,3):(3,1)\n\nA ∘ 4:3 = (2,2):(24,2)    — divide by 3, mod by 4\nA ∘ 3:1 = (3,1):(8,2)     — divide by 1, mod by 3\nresult: ((2,2),3):((24,2),8)\n```\n\n```\ncomplement(4:1, 24) = 6:4 - 4 layout 6\ncomplement(6:4, 24) = 4:1 -\ncomplement(4:2, 24) = (2,3):(1,8) -\n```\n\n```\nA ⊘ B := A ∘ (B, B*)\nwhere B* = complement(B, size(A))\n```\n\n```\nlogical_divide : ((TileM,RestM), (TileN,RestN), L, ...)\nzipped_divide : ((TileM,TileN), (RestM,RestN,L,...)) ←\ntiled_divide   : ((TileM,TileN), RestM, RestN, L, ...)\nflat_divide    : (TileM, TileN, RestM, RestN, L, ...)\n```\n\n```\nA ⊗ B := (A, A* ∘ B)\nwhere A* = complement(A, size(A)*cosize(B))\n```\n\n```\nTensor T = E ∘ L\n```\n\n```cpp\n// C++\nTensor mA = make_tensor(make_gmem_ptr(A), make_layout(shape, stride));\n\n# Python (CuTeDSL)\nmA = cute.make_tensor(cute.make_ptr(Float16, ptr, AddressSpace.gmem), layout)\n```\n\n```cpp\n// C++\nTensor tCrC = make_tensor_like(tCgC);\n\n# Python\ntCrC = cute.make_rmem_tensor_like(src, dtype)\n```\n\n```\nOperation → Traits → Atom → TiledMMA\n```\n\n```\nSM70_8x8x4_F32F16F16F32_NT\n│    │       │            └── A=col-major, B=row-major\n│    │       └── D=F32, A=F16, B=F16, C=F32\n│    └── MxNxK = 8x8x4\n└── Volta\n```\n\n```cpp\n// 4 quadpair atom 2x2 -> 16x16x4 Volta HMMA\nTiledMMA mma = make_tiled_mma(SM70_8x8x4_F32F16F16F32_NT{},\n                              Layout<Shape<_2,_2>, Stride<_2,_1>>{});\n```\n\n```cpp\nThrMMA thr_mma = mma.get_slice(threadIdx.x);\nTensor tCsA = thr_mma.partition_A(sA);       // (MMA, MMA_M, MMA_K)\nTensor tCsB = thr_mma.partition_B(sB);       // (MMA, MMA_N, MMA_K)\nTensor tCgC = thr_mma.partition_C(gC);       // (MMA, MMA_M, MMA_N)\nTensor tCrC = thr_mma.make_fragment_C(tCgC); // register\n\ncute::gemm(mma, tCsA, tCsB, tCrC);\n```\n\n```cpp\nTiledCopy copyA = make_tiled_copy(\n Copy_Atom<UniversalCopy<uint128_t>, TA>{}, // 128-bit copy\n Layout<Shape<_32,_8>>{}, // 32x8 layout\n Layout<Shape<_4,_1>>{} // 4x1\n);\n```\n\n```cpp\nThrCopy thr_copy = copy_a.get_slice(threadIdx.x);\nTensor tAgA = thr_copy.partition_S(gA);  // (CPY, CPY_M, CPY_K, k) — source\nTensor tAsA = thr_copy.partition_D(sA);  // (CPY, CPY_M, CPY_K)    — destination\n\ncute::copy(copy_a, tAgA, tAsA);\n```\n\n```cpp\n// default dispatch( tensor typeautomatic)\ncopy(src, dst);\n\n// Copy_Atom\ncopy(copy_atom, src, dst);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-cute-fundamentals.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

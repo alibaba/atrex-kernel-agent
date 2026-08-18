@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutedsl-programming-model",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutedsl-programming-model|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CuTeDSL Programming Model",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CuTeDSL Programming Model"
+  },
+  "title": "CuTeDSL Programming Model",
+  "summary": "CuTeDSL is a Python DSL in NVIDIA CUTLASS 4.x, providing a low-level GPU kernel programming model consistent with CuTe C++. Compilation path:",
+  "sections": [
+   {
+    "heading": "Positioning",
+    "anchor": "positioning",
+    "gist": "CuTeDSL is a Python DSL in NVIDIA CUTLASS 4.x, providing a low-level GPU kernel programming model consistent with CuTe C++."
+   },
+   {
+    "heading": "@jit and @kernel Decorators",
+    "anchor": "jit-and-kernel-decorators",
+    "gist": "table columns: Caller, Callee, Allowed, Behavior"
+   },
+   {
+    "heading": "Three-Stage Compilation Pipeline",
+    "anchor": "three-stage-compilation-pipeline",
+    "gist": "The AST preprocessor rewrites decorated functions, inserting callbacks around control flow structures to explicitly capture program structure."
+   },
+   {
+    "heading": "Type System: Constexpr vs Dynamic",
+    "anchor": "type-system-constexpr-vs-dynamic",
+    "gist": "Code is **executed twice**: at **meta-programming time** (host CPU, building the kernel) and at **runtime** (GPU execution)."
+   },
+   {
+    "heading": "Control Flow",
+    "anchor": "control-flow",
+    "gist": "table columns: Construct, Runtime (emit IR), Compile-time (Python execution)"
+   },
+   {
+    "heading": "JIT Cache",
+    "anchor": "jit-cache",
+    "gist": "Cache key = hash(MLIR bytecode + DSL source files + shared libraries + environment variables)"
+   },
+   {
+    "heading": "Framework Integration",
+    "anchor": "framework-integration",
+    "gist": "Each `from_dlpack` incurs approximately 2-3μs overhead."
+   },
+   {
+    "heading": "CuTeDSL Core API",
+    "anchor": "cutedsl-core-api",
+    "gist": "---"
+   },
+   {
+    "heading": "Autotuning GEMM",
+    "anchor": "autotuning-gemm",
+    "gist": "- `mma_tiler_mn`: MMA tile dimensions - `cluster_shape_mn`: Number of CTAs in a cluster - `use_2cta_instrs`: Whether to use 2-CTA instructions (Blackwell) - `use_tma_store`: Whether to use TMA store"
+   },
+   {
+    "heading": "Limitations",
+    "anchor": "limitations",
+    "gist": "table columns: Limitation, Description"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nPython kernel -> AST Rewrite -> Tracing -> MLIR IR -> ptxas -> SASS\n```\n\n```python\n@cute.jit\ndef host_function(a, b):\n # Python or DSL function\n # preprocessor=True (default): automaticconversion Python IR\n    pass\n```\n\n```python\n@cute.kernel\ndef gpu_kernel(ptr, layout):\n # compilation GPU\n # launchparameter: grid, block, cluster, smem\n    pass\n```\n\n```python\n@cute.jit\ndef add_dynamic(b: cutlass.Float32):\n    a = cutlass.Float32(2.0)\n    result = a + b\n    print(\"[meta]\", result)             # <Float32 proxy>\n    cute.printf(\"[gpu] %f\\n\", result)   # 7.000000\n\n@cute.jit\ndef add_const(b: cutlass.Constexpr):\n    a = 2.0\n    result = a + b\n print(\"[meta]\", result) # 7.0 (compilation)\n    cute.printf(\"[gpu] %f\\n\", result)   # 7.000000\n```\n\n```python\n@cute.kernel\ndef gemm(..., do_relu: cutlass.Constexpr):\n    ...\n    if cutlass.const_expr(do_relu):\n ... # ReLU do_relu=True compilation IR\n\ngemm(..., False) # none ReLU kernel\ngemm(..., True) # ReLU kernel\n```\n\n```python\nfor i in cutlass.range(bound, prefetch_stages=3):\n    cute.copy(atom, gmem[i], buffer[i % total_stages], ...)\n    use(buffer[i % total_stages])\n```\n\n```python\ncompiled = cute.compile(kernel_fn, *args)\n# cache compiled executor, direct\ncompiled(a, b, c, stream)\n```\n\n```python\n@cute.jit\ndef foo(src):\n    print(src)  # ptr<f32, generic> o (?,?,?):(?,?,1)\n\na = torch.randn(30, 20, 32, device=\"cpu\")\nfoo(a) # automaticconversion, layout ( leading dim stride=1)\n```\n\n```python\nfrom cutlass.cute.runtime import from_dlpack\n\nt = from_dlpack(x) # layout, copy\nt = from_dlpack(x).mark_layout_dynamic #\nt = from_dlpack(x).mark_compact_shape_dynamic(0) # dimension\n```\n\n```python\nfrom cutlass.cute.runtime import make_ptr\n\na_ptr = make_ptr(cutlass.Float16, a.data_ptr(), cute.AddressSpace.gmem, assumed_align=32)\nlayout = cute.make_ordered_layout((m, k, l), order=(0, 1, 2))\nmA = cute.make_tensor(a_ptr, layout=layout)\n```\n\n```python\nlayout = cute.make_layout((4, 4))                         # compact column-major\nlayout = cute.make_layout((4, 4), stride=(1, 4)) # definition stride\nlayout = cute.make_ordered_layout((4, 4), order=(1, 0))   # row-major\nlayout = cute.make_identity_layout((4, 4)) # mapping\n```\n\n```python\nptr = cute.make_ptr(Float32, base_ptr, AddressSpace.gmem)\ntensor = cute.make_tensor(ptr, cute.make_layout((64, 128), stride=(128, 1)))\n\n# register tensor\nrmem = cute.make_rmem_tensor((128, 32), cutlass.Float16)\nrmem = cute.make_rmem_tensor_like(src, cutlass.Float32)\n\n# tensor\nident = cute.make_identity_tensor((3, 2))  # [(0,0),(1,0),(2,0),(0,1),...]\n```\n\n```python\na = rmem.load()           # TensorSSA\nb = cute.full_like(a, 1.0)\nc = a + b #\nd = c.to(cutlass.Float16) # typeconversion\ne = c.reduce(op, init_val, reduction_profile) # bymodereduction\n```\n\n```python\ncute.composition(L1, L2)           # R(c) = L1(L2(c))\ncute.complement(layout, cotarget) # layout\ncute.zipped_divide(layout, tiler)  # tiling: (Tile, Rest)\ncute.logical_product(block, tiler) # layout\ncute.coalesce(layout) # coalesced\ncute.right_inverse(layout) # right\ncute.left_inverse(layout) # left\n```\n\n```python\ncute.local_partition(target, tiler, index, proj) # by tiler index\ncute.local_tile(input, tiler, coord, proj)        # zipped_divide + slice\n```\n\n```python\nswizzle = cute.make_swizzle(b=3, m=0, s=3)  # (BBits, MBase, SShift)\n# result = lowbit XOR (highbit << SShift)\n```\n\n```python\n@cute.struct\nclass Storage:\n    mbarA: cute.struct.MemRange[cutlass.Int64, num_stages]\n    dataA: cute.struct.Align[cute.struct.MemRange[cutlass.Float32, size_a], 1024]\n\n# use\nstorage.mbarA.data_ptr # pointer\nstorage.mbarA.get_tensor(layout, swizzle) # create tensor\n```\n\n```python\n# compilationcache\nkernel_cache_key = f\"{ab_dtype}x{c_dtype}x{mma_tiler}x{cluster_shape}\"\nconfig_kernel_dict[kernel_cache_key] = compiled_kernel\n\n# inputcache\ninput_kernel_dict[(m, n, k)] = best_compiled_kernel\n# power_of_2 decrease key count\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutedsl-programming-model.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

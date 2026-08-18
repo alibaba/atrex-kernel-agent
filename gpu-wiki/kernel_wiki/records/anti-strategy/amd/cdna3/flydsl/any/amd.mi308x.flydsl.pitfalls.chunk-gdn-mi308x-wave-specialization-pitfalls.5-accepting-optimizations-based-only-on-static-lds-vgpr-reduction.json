@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.chunk-gdn-mi308x-wave-specialization-pitfalls.5-accepting-optimizations-based-only-on-static-lds-vgpr-reduction",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|gdn|chunk-gdn-mi308x-wave-specialization-pitfalls#5-accepting-optimizations-based-only-on-static-lds-vgpr-reduction|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '5. Accepting Optimizations Based Only on Static LDS/VGPR Reduction' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 5. Accepting Optimizations Based Only on Static LDS/VGPR Reduction",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Chunk-GDN Wave-Specialized Megakernel on MI308X -- 5. Accepting Optimizations Based Only on Static LDS/VGPR Reduction"
+  },
+  "attempted": "Seeing that changes like stride adjustments, beta direct load, or producer-side precomputation reduce LDS or VGPR, and assuming they must be faster.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "An accepted version must simultaneously satisfy correctness, rocprofv3 sweep, ISA resource usage, and counter consistency. When static resources decrease but rocprofv3 becomes slower, rocprofv3 and counters take precedence.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "On MI308X, this kernel is primarily constrained by LDS traffic, bank conflicts, barriers, recurrent dependencies, and the one-CTA-per-CU constraint. Static resources are only a necessary condition, not an acceptance criterion."
+  },
+  "observed": "Multiple post-V47 cleanup attempts had better static resource usage, but `SQ_LDS_BANK_CONFLICT`, VMEM/TCP, or wait deteriorated, making large-T rocprofv3 slower.",
+  "root_cause": "On MI308X, this kernel is primarily constrained by LDS traffic, bank conflicts, barriers, recurrent dependencies, and the one-CTA-per-CU constraint. Static resources are only a necessary condition, not an acceptance criterion."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

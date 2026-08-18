@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.18-shared-fp32-state-mma-can-remove-ffma-but-still-lose",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#18-shared-fp32-state-mma-can-remove-ffma-but-still-lose|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '18. Shared fp32 state-MMA can remove FFMA but still lose' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 18. Shared fp32 state-MMA can remove FFMA but still lose",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 18. Shared fp32 state-MMA can remove FFMA but still lose"
+  },
+  "attempted": "Move the recurrent state into fp32 shared memory and use HMMA-like state updates to remove scalar FFMA work.",
+  "verdict": "performance-ceiling",
+  "lesson": "Keep the recurrent state register-resident. Use shared memory only as a bf16 MMA operand bridge, and make those bridges R2S/LDSM-friendly.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "Persisting fp32 state in shared memory adds large shared stores/loads and extra barriers. The old scalar compute wall disappears, but it is replaced by a shared-memory dependency wall."
+  },
+  "observed": "The probe was correct, and SASS did remove the old FFMA/SHF/PRMT wall, but performance regressed to about `1.26 ms` or worse. Registers and shared-memory traffic collapsed occupancy and scheduler eligibility.",
+  "root_cause": "Persisting fp32 state in shared memory adds large shared stores/loads and extra barriers. The old scalar compute wall disappears, but it is replaced by a shared-memory dependency wall."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

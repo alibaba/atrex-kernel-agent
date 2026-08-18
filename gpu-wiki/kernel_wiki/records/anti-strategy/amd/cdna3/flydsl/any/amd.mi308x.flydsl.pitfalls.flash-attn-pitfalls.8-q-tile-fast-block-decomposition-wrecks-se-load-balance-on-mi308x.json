@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.8-q-tile-fast-block-decomposition-wrecks-se-load-balance-on-mi308x",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#8-q-tile-fast-block-decomposition-wrecks-se-load-balance-on-mi308x|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '8. q_tile-fast block decomposition wrecks SE load balance on MI308X' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 8. q_tile-fast block decomposition wrecks SE load balance on MI308X",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 8. q_tile-fast block decomposition wrecks SE load balance on MI308X"
+  },
+  "attempted": "a \"natural\" decomposition of `block_id` is q_tile-fast / head-slow:",
+  "verdict": "performance-ceiling",
+  "lesson": "on AMD CDNA3, block scheduling is SE-major then CU-preemptive within each SE. Always put the **uniform-compute** dimension in the fast position of `block_id`, the **non-uniform-compute** dimension (causal q_tile, varying batch lengths) in the slow position.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "MI308X has 16 SEs × 5 CUs and dispatches block_id `i` to SE `i mod 16`. With q_tile-fast, SE 0 gets blocks `{0, 16, 32, ...}` = all the same q_tile of different heads — but for Qwen H_q=16 with 8 q_tiles, SE 0 ends up with all `q_tile=0` (light) blocks, while SE 7 ends up with all `q_tile=7` (heavy) blocks. The pipeline waits for the slowest SE."
+  },
+  "observed": "30–76% slower on every Qwen GQA shape than head-fast.",
+  "root_cause": "MI308X has 16 SEs × 5 CUs and dispatches block_id `i` to SE `i mod 16`. With q_tile-fast, SE 0 gets blocks `{0, 16, 32, ...}` = all the same q_tile of different heads — but for Qwen H_q=16 with 8 q_tiles, SE 0 ends up with all `q_tile=0` (light) blocks, while SE 7 ends up with all `q_tile=7` (heavy) blocks. The pipeline waits for the slowest SE.",
+  "implementation": {
+   "snippet": "```python\nq_tile_idx = block_id % num_q_tiles\nhead_idx   = block_id // num_q_tiles % NUM_HEADS\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

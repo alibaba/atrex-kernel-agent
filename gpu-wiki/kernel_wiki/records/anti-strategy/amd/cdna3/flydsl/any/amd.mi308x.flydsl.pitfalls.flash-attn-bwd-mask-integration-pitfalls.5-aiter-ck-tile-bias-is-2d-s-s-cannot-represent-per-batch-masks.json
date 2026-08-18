@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.5-aiter-ck-tile-bias-is-2d-s-s-cannot-represent-per-batch-masks",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#5-aiter-ck-tile-bias-is-2d-s-s-cannot-represent-per-batch-masks|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '5. aiter CK-tile bias is 2D (S,S) — cannot represent per-batch masks' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 5. aiter CK-tile bias is 2D (S,S) — cannot represent per-batch masks",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 5. aiter CK-tile bias is 2D (S,S) — cannot represent per-batch masks"
+  },
+  "attempted": "When benchmarking against aiter's `mha_bwd` with bias, you might expect to pass the full (B, 1, S, S) mask as bias.",
+  "verdict": "not-worth-it-here",
+  "lesson": "aiter CK-tile backward with bias only handles the case where all sequences share the same mask pattern. For per-batch arbitrary masks (common in training with variable-length packed sequences), aiter cannot be used. This is a fundamental capability gap — not just a performance difference. FlyDSL's approach (bit-packed per-batch mask with precomputed loop bounds) supports the general case.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "aiter's CK-tile backward kernel hardcodes `batch_stride_bias = 0` and `nhead_stride_bias = 0` — the same 2D (S, S) bias is broadcast identically across all batches and heads. This is a kernel-level design limitation of CK's fused backward implementation."
+  },
+  "observed": "RuntimeError from CK kernel: `bias.sizes() == {seqlen_q, seqlen_k}` assertion fails. Bias must be exactly 2D.",
+  "root_cause": "aiter's CK-tile backward kernel hardcodes `batch_stride_bias = 0` and `nhead_stride_bias = 0` — the same 2D (S, S) bias is broadcast identically across all batches and heads. This is a kernel-level design limitation of CK's fused backward implementation."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

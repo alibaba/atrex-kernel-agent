@@ -1,0 +1,164 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.triton-cutile-ptx-isa-future-comparison",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|triton-cutile-ptx-isa-future-comparison|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Triton vs cuTile vs PTX-ISA: The Future of AI Hardware Programming",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Triton vs cuTile vs PTX-ISA: The Future of AI Hardware Programming"
+  },
+  "title": "Triton vs cuTile vs PTX-ISA: The Future of AI Hardware Programming",
+  "summary": "A comprehensive comparison of tile-level programming systems competing to define the next-generation AI accelerator programming middleware.",
+  "sections": [
+   {
+    "heading": "1. They All Answer the Same Question",
+    "anchor": "1-they-all-answer-the-same-question",
+    "gist": "These projects are fundamentally competing for **the middleware layer of next-generation AI accelerator programming**: preventing developers from writing thread-level CUDA or complex manual scheduling, while avoiding regression to fixed-li…"
+   },
+   {
+    "heading": "2. Why Did They Emerge?",
+    "anchor": "2-why-did-they-emerge",
+    "gist": "AI kernel development over the past decade has progressed through three stages:"
+   },
+   {
+    "heading": "3. Project Positioning Comparison",
+    "anchor": "3-project-positioning-comparison",
+    "gist": "table columns: Project, Core Position, Abstraction Layer, Greatest Advantage, Greatest Risk/Weakness"
+   },
+   {
+    "heading": "4. cuTile / CUDA Tile: NVIDIA's Official Tile Programming Entry",
+    "anchor": "4-cutile-cuda-tile-nvidia-s-official-tile-programming-entry",
+    "gist": "cuTile is NVIDIA's new Python DSL introduced in the **CUDA 13.x** era, backed by **CUDA Tile IR**."
+   },
+   {
+    "heading": "5. Triton: The Most Practical Custom GPU Kernel DSL Today",
+    "anchor": "5-triton-the-most-practical-custom-gpu-kernel-dsl-today",
+    "gist": "Triton is the **most mature and widely adopted** tool in this category."
+   },
+   {
+    "heading": "6. TileLang: More Explicit, Targeting Complex Fused Operators",
+    "anchor": "6-tilelang-more-explicit-targeting-complex-fused-operators",
+    "gist": "Positioned as \"writing high-performance GPU/CPU kernels with Pythonic syntax while retaining low-level optimization capabilities.\" Built on **TVM compilation infrastructure**."
+   },
+   {
+    "heading": "7. CuTe DSL: Not to be Confused with cuTile",
+    "anchor": "7-cute-dsl-not-to-be-confused-with-cutile",
+    "gist": "NVIDIA's ecosystem also contains **CuTe DSL**, part of the CUTLASS family — a Python DSL evolved from C++ CuTe/CUTLASS."
+   },
+   {
+    "heading": "8. PTO-ISA: Ascend Ecosystem's Tile Virtual ISA",
+    "anchor": "8-pto-isa-ascend-ecosystem-s-tile-virtual-isa",
+    "gist": "**Ascend CANN-defined Parallel Tile Operation virtual ISA**."
+   },
+   {
+    "heading": "9. PyPTO: High-Level Tile/Graph Programming on Ascend",
+    "anchor": "9-pypto-high-level-tile-graph-programming-on-ascend",
+    "gist": "A high-performance AI accelerator programming framework based on the PTO paradigm."
+   },
+   {
+    "heading": "10. TileLang-Ascend: Where TileLang Meets PTO/Ascend",
+    "anchor": "10-tilelang-ascend-where-tilelang-meets-pto-ascend",
+    "gist": "A noteworthy branch: a high-level tile DSL connecting multiple backends."
+   },
+   {
+    "heading": "11. What Are Their Essential Advantages?",
+    "anchor": "11-what-are-their-essential-advantages",
+    "gist": "1."
+   },
+   {
+    "heading": "12. Limitations Are Also Clear",
+    "anchor": "12-limitations-are-also-clear",
+    "gist": "- **Standard operators may not be worth writing yourself.** Standard GEMM, Conv, LayerNorm, and common attention patterns are already highly optimized in mature libraries."
+   },
+   {
+    "heading": "13. Future Development Assessment",
+    "anchor": "13-future-development-assessment",
+    "gist": "**2026**: Triton continues as mainstream; cuTile/TileLang/PTO rapidly catching up."
+   },
+   {
+    "heading": "14. Practical Selection Guidelines",
+    "anchor": "14-practical-selection-guidelines",
+    "gist": "- **NVIDIA + PyTorch custom kernels** → Triton first: fused elementwise, reduction, attention variants, quantization, inference kernels."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/triton-cutile-ptx-isa-future-comparison.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.swizzling.cute-swizzle-layout",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|swizzling#cute-swizzle-layout|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "cute-swizzle-layout"
+  ],
+  "triggers": [
+   "the 'CuTe Swizzle Layout' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): CuTe Swizzle Layout",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Nsight Compute command to check shared memory bank conflicts -- CuTe Swizzle Layout"
+  },
+  "technique": "CuTe Swizzle Layout",
+  "what": "In CuTe/CUTLASS, swizzle is expressed as a layout composition:",
+  "when": "In CuTe/CUTLASS, swizzle is expressed as a layout composition:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// CuTe swizzle layout for 128-byte swizzle pattern\n// Swizzle<B, M, S> where:\n//   B = number of bits in the base (non-swizzled) portion\n//   M = number of bits in the mask\n//   S = shift amount\n//\n// Swizzle<3, 4, 3> encodes the 128B swizzle:\n//   3 base bits (8-byte alignment)\n//   4 mask bits (16 rows)\n//   3 shift bits (8-column groups)\n\nusing SmemLayoutAtom = decltype(\n    composition(\n        Swizzle<3, 4, 3>{},\n        Layout<Shape<_8, _64>,\n               Stride<_64, _1>>{}\n    )\n);\n\n// Tile the atom across the full SMEM tile\nusing SmemLayoutA = decltype(\n    tile_to_shape(SmemLayoutAtom{}, Shape<Int<TILE_M>, Int<TILE_K>>{})\n);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/swizzling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

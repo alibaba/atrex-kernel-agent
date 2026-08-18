@@ -1,0 +1,142 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-tile-scheduling",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutlass-tile-scheduling|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "blackwell-geforce",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS Tile Scheduling",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS Tile Scheduling"
+  },
+  "title": "CUTLASS Tile Scheduling",
+  "summary": "CUTLASS 3.x provides multiple tile scheduling strategies that control how persistent kernels assign output tiles to thread blocks. This document covers Persistent Scheduler, Stream-K work stealing, Grouped GEMM scheduling, Dependent Kernel Launch (PDL), tile heuristics, and SM90/SM100/SM120 scheduler differences.",
+  "sections": [
+   {
+    "heading": "Tile Scheduler Overview",
+    "anchor": "tile-scheduler-overview",
+    "gist": "All CUTLASS 3.x GEMM kernels are persistent kernels -- thread blocks run continuously throughout the kernel's lifetimeuru, fetching the next tile to compute from the tile scheduler."
+   },
+   {
+    "heading": "Persistent Tile Scheduler",
+    "anchor": "persistent-tile-scheduler",
+    "gist": "The Persistent scheduler is CUTLASS's default tile scheduling strategy."
+   },
+   {
+    "heading": "Stream-K Work Stealing",
+    "anchor": "stream-k-work-stealing",
+    "gist": "Stream-K is a fine-grained work decomposition strategy that splits GEMM along the K dimension, so that a single \"work unit\" can span partial K intervals across multiple output tiles."
+   },
+   {
+    "heading": "Grouped GEMM Scheduler",
+    "anchor": "grouped-gemm-scheduler",
+    "gist": "Grouped kernels execute multiple independent GEMM problems in a single CUDA launch, processing them sequentially through a persistent loop."
+   },
+   {
+    "heading": "Dependent Kernel Launch (PDL)",
+    "anchor": "dependent-kernel-launch-pdl",
+    "gist": "PDL allows two adjacent kernels in the same CUDA stream to overlap in execution."
+   },
+   {
+    "heading": "Tile Heuristics",
+    "anchor": "tile-heuristics",
+    "gist": "CUTLASS provides analytical heuristic tools `nvidia-matmul-heuristics` to assist in selecting kernel configurations."
+   },
+   {
+    "heading": "Quick Reference for Scheduler Configuration",
+    "anchor": "quick-reference-for-scheduler-configuration",
+    "gist": ""
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- CUTLASS 3.x Architecture -- Four-level hierarchy and dispatch policy system - CuTe Fundamentals -- Layout algebra - CUTLASS GEMM Optimization Strategies"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nnamespace cutlass::gemm {\n struct PersistentScheduler { }; // default: persistent scheduling\n struct StreamKScheduler { }; // Stream-K\n  struct GroupScheduler { };            // Grouped/Ptr-Array GEMM\n struct DynamicPersistentScheduler { }; // persistent(SM100 CLC)\n struct StaticPersistentScheduler { }; // persistent(SM100 fallback)\n}\n```\n\n```cpp\nstruct WorkTileInfo {\n int32_t M_idx = 0; // output tile M\n int32_t N_idx = 0; // output tile N\n int32_t L_idx = 0; // batch dimension\n  bool is_valid_tile = false;\n\n  bool is_valid() const { return is_valid_tile; }\n bool is_final_split(uint32_t k_tiles) const { return true; } // split-K true\n};\n```\n\n```cpp\n// tile_scheduler_params.h swizzle compute\nauto log_swizzle_size = get_log_swizzle_size(\n    problem_blocks_m, problem_blocks_n, max_swizzle_size);\n```\n\n```cpp\nenum class RasterOrder {\n AlongM, // M dimension\n AlongN // N dimension(default)\n};\n\nenum class RasterOrderOptions {\n Heuristic, // automatic( M/N )\n  AlongM,\n  AlongN\n};\n```\n\n```cpp\n// SM90 swizzle compute\noffset = cluster_id & ((1 << log_swizzle_size) - 1);\nextra = cluster_id >> log_swizzle_size;\ndivmod_cluster_blk_major(cluster_idx_minor_div_swizzle, cluster_idx_major, extra);\ncluster_idx_minor = cluster_idx_minor_div_swizzle * (1 << log_swizzle_size) + offset;\n```\n\n```cpp\nclass PersistentTileSchedulerSm90 :\n    public StaticPersistentTileScheduler<PersistentTileSchedulerSm90> {\n  static constexpr bool IsDynamicPersistent = false;\n // none Pipeline, none CLCResponse -- scheduling\n  using Pipeline = PipelineEmpty;\n};\n```\n\n```cpp\ntemplate<class ClusterShape_, uint32_t Stages_>\nclass PersistentTileSchedulerSm100 {\n  static constexpr bool IsDynamicPersistent = true;\n  static constexpr uint32_t Stages = Stages_;\n\n // CLC response 16 bytes\n  struct CLCResponse { uint32_t data[4] = {0}; };\n\n // CLC asynchronous fetch pipeline\n  using Pipeline = PipelineCLCFetchAsync<Stages, ClusterShape>;\n // pipeline\n  using ThrottlePipeline = PipelineAsync<Stages>;\n\n  class SharedStorage {\n    PipelineStorage pipeline_;\n    ThrottlePipelineStorage throttle_pipeline_;\n CLCResponse data_[Stages]; // stage CLC response buffer\n  };\n};\n```\n\n```cpp\nenum class DecompositionMode {\n Heuristic, // automatic data-parallel / split-K / stream-K\n DataParallel, // data-parallel( block completecomplete output tile)\n SplitK, // split-K( splits parameteruse)\n StreamK // stream-K\n};\n```\n\n```cpp\nenum class ReductionMode {\n Deterministic, // : by K turnstile (requires)\n Nondeterministic // : atomic\n};\n```\n\n```cpp\nstruct WorkTileInfo {\n  int32_t M_idx = 0;\n  int32_t N_idx = 0;\n int32_t K_idx = 0; // current work unit K dimensionbit\n  int32_t L_idx = 0;\n uint32_t k_tile_count = 0; // work unit compute K tile\n uint32_t k_tile_remaining = 0; // entire work unit K tile\n bool is_separate_reduction = false; // reduction work unit\n\n  bool is_valid() const {\n    return k_tile_count > 0 || is_separate_reduction;\n  }\n  bool is_final_split(uint32_t k_tiles_per_output_tile) const {\n    return (K_idx + k_tile_count) == k_tiles_per_output_tile;\n  }\n};\n```\n\n```cpp\nstruct Arguments {\n int splits = 1; // split-K\n int max_swizzle_size = 1; // swizzle upper bound\n  RasterOrderOptions raster_order = RasterOrderOptions::Heuristic;\n  ReductionMode reduction_mode = ReductionMode::Deterministic;\n  DecompositionMode decomposition_mode = DecompositionMode::Heuristic;\n};\n```\n\n```cpp\nProblemVisitor problem_visitor;\n\nwhile (problem_visitor.next_tile()) {\n // tile index\n // execute MMA + epilogue\n    problem_visitor.advance(gridDim.x);\n}\n```\n\n```cpp\nenum class GroupScheduleMode {\n kDeviceOnly, // default: device scheduling\n kHostPrecompute // maincomputescheduling\n};\n```\n\n```cpp\n// usesort\ngrouped_gemm.sort_problems();\n```\n\n```bash\ncmake . -DCUTLASS_ENABLE_GDC_FOR_SM90=1   # Hopper\ncmake . -DCUTLASS_ENABLE_GDC_FOR_SM100=1  # Blackwell\n```\n\n```cpp\ngemm.run(stream, /*cuda_adapter=*/nullptr, /*launch_with_pdl=*/true);\n```\n\n```bash\ncmake .. -DCUTLASS_NVCC_ARCHS=90a \\\n    -DCUTLASS_LIBRARY_HEURISTICS_PROBLEMS_FILE=problems.json \\\n    -DCUTLASS_LIBRARY_HEURISTICS_CONFIGS_PER_PROBLEM=5\n```\n\n```cpp\nusing Gemm = cutlass::gemm::device::GemmUniversalAdapter<\n    cutlass::gemm::kernel::GemmUniversal<\n        ProblemShape, CollectiveMainloop, CollectiveEpilogue,\n cutlass::gemm::PersistentScheduler // or void\n    >>;\n\n// Arguments\ntypename Gemm::GemmKernel::TileScheduler::Arguments scheduler_args;\nscheduler_args.max_swizzle_size = 1; // swizzle upper bound(2 )\nscheduler_args.raster_order = RasterOrderOptions::Heuristic;\n```\n\n```cpp\nusing Gemm = cutlass::gemm::device::GemmUniversalAdapter<\n    cutlass::gemm::kernel::GemmUniversal<\n        ProblemShape, CollectiveMainloop, CollectiveEpilogue,\n        cutlass::gemm::StreamKScheduler\n    >>;\n\n// Arguments\ntypename Gemm::GemmKernel::TileScheduler::Arguments scheduler_args;\nscheduler_args.splits = 1; // >1 split-K\nscheduler_args.max_swizzle_size = 1;\nscheduler_args.raster_order = RasterOrderOptions::Heuristic;\nscheduler_args.reduction_mode = ReductionMode::Deterministic;\nscheduler_args.decomposition_mode = DecompositionMode::Heuristic;\n```\n\n```cpp\nusing Gemm = cutlass::gemm::device::GemmUniversalAdapter<\n    cutlass::gemm::kernel::GemmUniversal<\n        GroupProblemShape, CollectiveMainloop, CollectiveEpilogue,\n        cutlass::gemm::GroupScheduler\n    >>;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-tile-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

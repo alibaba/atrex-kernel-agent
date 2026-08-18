@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.cuda-performance-fundamentals",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|cuda-performance-fundamentals|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community CUDA Performance Optimization Basics",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community CUDA Performance Optimization Basics"
+  },
+  "title": "Community CUDA Performance Optimization Basics",
+  "summary": "A compilation of practical knowledge on CUDA programming fundamentals and performance optimization from the Zhihu community. Supplements real-world experience and common pitfalls not covered in GPU Memory Hierarchy and Optimization and GPU Execution Model and Thread Optimization.",
+  "sections": [
+   {
+    "heading": "1. Memory Access Optimization",
+    "anchor": "1-memory-access-optimization",
+    "gist": "Coalesced access is the most critical aspect of CUDA performance tuning."
+   },
+   {
+    "heading": "2. Shared Memory Usage Tips",
+    "anchor": "2-shared-memory-usage-tips",
+    "gist": "Shared Memory is divided into **32 banks**, each 4 bytes wide."
+   },
+   {
+    "heading": "3. Occupancy and Resource Balance",
+    "anchor": "3-occupancy-and-resource-balance",
+    "gist": "Occupancy = Number of active warps per SM / Maximum supported warps per SM."
+   },
+   {
+    "heading": "4. Warp Execution and Branch Optimization",
+    "anchor": "4-warp-execution-and-branch-optimization",
+    "gist": "When 32 threads within the same Warp execute different branch paths, the GPU must serialize execution of each branch (execution cost = sum of all branch costs)."
+   },
+   {
+    "heading": "5. Kernel Launch Overhead and Optimization",
+    "anchor": "5-kernel-launch-overhead-and-optimization",
+    "gist": "For each kernel launch, the CPU must compute execution parameters, maintain pointer addresses, validate Grid/Block dimensions, and push instructions into the GPU hardware queue."
+   },
+   {
+    "heading": "6. Common Performance Pitfalls and Debugging Methods",
+    "anchor": "6-common-performance-pitfalls-and-debugging-methods",
+    "gist": "**Case**: The `10e-3` in `while (tmp > 10e-3)` is a `double` literal."
+   },
+   {
+    "heading": "7. Key Numbers Every CUDA Developer Must Know",
+    "anchor": "7-key-numbers-every-cuda-developer-must-know",
+    "gist": "table columns: Storage Type, Latency (GPU cycles), Physical Location, Notes"
+   },
+   {
+    "heading": "8. Performance Optimization Methodology",
+    "anchor": "8-performance-optimization-methodology",
+    "gist": "1."
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- GPU Memory Hierarchy and Optimization – Systematic theory of memory hierarchy - GPU Execution Model and Thread Optimization – Thread model and scheduling mechanisms - [GPU Instruction-…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```c\n// Coalesced access (high performance): threadIdx.x indexes innermost dimension\nint idx = blockIdx.x * blockDim.x + threadIdx.x;\nfloat val = data[idx];\n\n// Non-coalesced access (low performance): threadIdx.x indexes outer dimension\nint idx = blockIdx.x * threadIdx.x + blockDim.x;\nfloat val = data[idx];\n```\n\n```c\n__global__ void vectorized_copy(float* in, float* out, int n) {\n    int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;\n    if (idx < n) {\n        // One LDG.E.128 instruction loads 4 floats\n        float4 data = reinterpret_cast<float4*>(&in[idx])[0];\n        data.x *= 2.0f; data.y *= 2.0f;\n        data.z *= 2.0f; data.w *= 2.0f;\n        reinterpret_cast<float4*>(&out[idx])[0] = data;\n    }\n}\n```\n\n```c\n// AoS (bad): Non-contiguous access within warp\nstruct Point3D { float x, y, z; };\nPoint3D points[N];\nfloat xCoord = points[i].x;  // Stride of 12B, cannot coalesce\n\n// SoA (good): Contiguous access within warp\nstruct Points {\n    float xCoords[N], yCoords[N], zCoords[N];\n};\nfloat xCoord = pts.xCoords[i];  // Continuous access, perfect coalescing\n```\n\n```c\nfor (int tile = 0; tile < numTiles; tile++) {\n    // Load tile to shared memory\n    M_tile[ir][ic] = M[...];\n    N_tile[ir][ic] = N[...];\n    __syncthreads();   // Ensure all threads have loaded before computing\n\n    for (int k = 0; k < TILE_SIZE; k++)\n        res += M_tile[ir][k] * N_tile[k][ic];\n    __syncthreads();   // Ensure all threads have finished computing before loading next tile\n    // If missing second sync, fast threads may overwrite tile data prematurely\n}\n```\n\n```c\nif (tid < N)  // When N is much larger than 32, warps in front all take the same branch, no divergence\n    c[tid] = a[tid] + b[tid];\n```\n\n```bash\nnvcc --ptx demo.cu  # Check if branch instructions are generated\n```\n\n```c\n// Has divergence\nif (idx % 2 == 0) output[idx] += 3;\nelse output[idx] = idx;\n\n// No divergence (compiler uses predicate instructions)\nint val = idx % 2 == 0 ? output[idx] + 3 : idx;\noutput[idx] = val;\n```\n\n```c\n// Capture phase\ncudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);\nkernel1<<<grid, block, 0, stream>>>(...);\nkernel2<<<grid, block, 0, stream>>>(...);\ncudaStreamEndCapture(stream, &graph);\ncudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);\n\n// Execution phase (repeated calls, very low overhead)\ncudaGraphLaunch(graphExec, stream);\n```\n\n```c\n// Slow (implicit double promotion)\nwhile (tmp > 10e-3) { ... }    // 10e-3 is double\n\n// Fast (explicit float)\nfloat theta = 10e-3f;          // Note the f suffix\nwhile (tmp > theta) { ... }\n```\n\n```\nptxas info: 176 bytes stack frame, 176 bytes spill stores, 176 bytes spill loads\nptxas info: Used 255 registers\n```\n\n```bash\nnsys profile \\\n  --trace cuda,osrt,nvtx,cudnn,cublas \\\n  --gpu-metrics-device=all \\\n  --duration=60 --delay=120 \\\n  --cuda-memory-usage true \\\n  --output profile_log \\\n  torchrun train.py\n```\n\n```python\nimport nvtx\n@nvtx.annotate(\"data_loading\", color=\"blue\")\ndef load_data(): ...\n\nwith nvtx.annotate(\"backward_pass\", color=\"red\"):\n    loss.backward()\n```\n\n```\nRidge Point = Peak GFLOPS / Memory bandwidth (GB/s)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/cuda-performance-fundamentals.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

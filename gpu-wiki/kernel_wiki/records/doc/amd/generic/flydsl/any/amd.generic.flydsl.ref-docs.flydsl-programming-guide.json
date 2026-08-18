@@ -1,0 +1,168 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-programming-guide",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-programming-guide|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): FlyDSL Programming Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "FlyDSL Programming Guide"
+  },
+  "title": "FlyDSL Programming Guide",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "1. Project Overview",
+    "anchor": "1-project-overview",
+    "gist": "table columns: Dimension, Description"
+   },
+   {
+    "heading": "2. Compilation Pipeline",
+    "anchor": "2-compilation-pipeline",
+    "gist": "1."
+   },
+   {
+    "heading": "3. Core API",
+    "anchor": "3-core-api",
+    "gist": "- Can only be called inside the `@flyc.jit` function - The call returns `KernelLauncher`, which must be dispatched using `.launch()` - Generates `gpu.func` + `gpu.kernel` attributes"
+   },
+   {
+    "heading": "4. Parameter Types",
+    "anchor": "4-parameter-types",
+    "gist": "table columns: Type, Description, Host-side Mapping"
+   },
+   {
+    "heading": "5. Expression API (`flydsl.expr`)",
+    "anchor": "5-expression-api-flydsl-expr",
+    "gist": "AMD buffer load/store intrinsics for efficient global memory access:"
+   },
+   {
+    "heading": "6. Control Flow",
+    "anchor": "6-control-flow",
+    "gist": "`ASTRewriter` automatically converts Python loops into MLIR ops:"
+   },
+   {
+    "heading": "7. Shared Memory (LDS)",
+    "anchor": "7-shared-memory-lds",
+    "gist": "Emit `memref.global` inside the GPU module body:"
+   },
+   {
+    "heading": "8. Autotuning",
+    "anchor": "8-autotuning",
+    "gist": "- `Config(num_warps=, waves_per_eu=, maxnreg=, **kwargs)` — Single tuning configuration - `@autotune(configs=[...], key=[...])` — Auto-benchmark all configurations - Results cached to `~/.flydsl/autotune/` - `do_bench(fn, warmup=5, rep=25)…"
+   },
+   {
+    "heading": "9. Compilation Cache",
+    "anchor": "9-compilation-cache",
+    "gist": "- **Memory Cache**: Indexed by parameter type signature - **Disk Cache**: Stored in `~/.flydsl/cache/` (configurable) - **Cache Key**: Source hash + dependency source + closure values + FlyDSL/LLVM version"
+   },
+   {
+    "heading": "10. Debugging",
+    "anchor": "10-debugging",
+    "gist": "Generates numbered `.mlir` files:"
+   },
+   {
+    "heading": "11. Environment Variables",
+    "anchor": "11-environment-variables",
+    "gist": "table columns: Variable, Default, Description"
+   },
+   {
+    "heading": "12. Build and Installation",
+    "anchor": "12-build-and-installation",
+    "gist": "- ROCm 6.x / 7.x - cmake ≥ 3.20, C++17 compiler - Python 3.10+"
+   },
+   {
+    "heading": "13. Complete Example: VecAdd",
+    "anchor": "13-complete-example-vecadd",
+    "gist": "table columns: Category, Location, Requires GPU, Description"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- FlyDSL Layout Algebra — Detailed reference for layout algebra - FlyDSL Pre-built Kernel Library — Production-grade kernel reference - [AMD GPU Kernel Optimization Framework Overvi…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nFlyDSL/\n├── python/flydsl/ # Python DSL core\n│ ├── compiler/ # JIT compilation(@flyc.jit, @flyc.kernel)\n│ ├── expr/ # API(layout , arith, vector, gpu, rocdl)\n│ ├── runtime/ # row(GPU )\n│ └── utils/ # tool(SmemAllocator, , variable)\n├── include/flydsl/ # C++ Fly file\n├── lib/ # C++\n├── kernels/ # kernel\n├── examples/ # rowexample(vectorAdd, tiledCopy, tiledMma, GEMM)\n└── tests/ #\n```\n\n```\nPython function (@flyc.kernel / @flyc.jit)\n        │\n ▼ AST (for/if -> scf.for/scf.if)\n conversion Python function\n        │\n ▼ Tracing( MLIR Context execute)\n MLIR Module (gpu, arith, scf, memref )\n        │\n ▼ MlirCompiler.compile - 14 stage pass pipeline\n   ┌──────────────────────────────────────────┐\n   │  1. gpu-kernel-outlining                 │ → gpu.func\n │ 2. fly-canonicalize │ -> FlyDSL\n │ 3. fly-layout-lowering │ -> layout\n │ 4. convert-fly-to-rocdl │ -> Fly ops -> ROCDL\n │ 5. canonicalize │ -> standard MLIR\n   │  6. convert-scf-to-cf + convert-gpu-to-rocdl │\n   │  7. rocdl-attach-target{chip=gfxNNN}     │\n   │  8-13. SCF/CF/GPU/Arith/Func → LLVM     │\n │ 14. gpu-module-to-binary{format=fatbin} │ -> HSACO\n   └──────────────────────────────────────────┘\n        │\n        ▼\n JITCFunction(ExecutionEngine )\n```\n\n```python\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\nfrom flydsl.expr import arith, gpu\n\n@flyc.kernel\ndef vec_add_kernel(\n    A: fx.Tensor,\n    B: fx.Tensor,\n    C: fx.Tensor,\n    N: fx.Constexpr[int],\n):\n    tid = gpu.thread_idx.x\n    bid = gpu.block_idx.x\n    idx = bid * 256 + tid\n    # ... kernel body ...\n```\n\n```python\n@flyc.jit\ndef vec_add(\n    A: fx.Tensor,\n    B: fx.Tensor,\n    C: fx.Tensor,\n    N: fx.Constexpr[int],\n    stream: fx.Stream = fx.Stream(None),\n):\n    vec_add_kernel(A, B, C, N).launch(\n        grid=(N // 256,),\n        block=(256,),\n        stream=stream,\n    )\n```\n\n```python\nkernel_fn(args...).launch(\n grid=(num_blocks_x, num_blocks_y, num_blocks_z), # 1-3\n block=(threads_x, threads_y, threads_z), # 1-3\n smem=shared_mem_bytes, # sharedmemory\n    stream=stream,                                      # CUDA/HIP stream\n)\n```\n\n```python\nfrom flydsl.compiler import JitArgumentRegistry\n\n@JitArgumentRegistry.register(MyType, dsl_type=MyDslType)\nclass MyAdaptor:\n def __fly_types__(self): return [...] # MLIR type\n def __fly_ptrs__(self): return [...] # ctypes pointer\n```\n\n```python\nclass DslType(Protocol):\n    @classmethod\n    def __fly_construct__(cls, values: List[ir.Value]) -> \"DslType\": ...\n    def __fly_values__(self) -> List[ir.Value]: ...\n\nclass JitArgument(Protocol):\n    def __fly_types__(self) -> List[ir.Type]: ...\n    def __fly_ptrs__(self) -> List[ctypes.c_void_p]: ...\n```\n\n```python\nfrom flydsl.expr import gpu\n\n# (returns Int32)\ntid_x = gpu.thread_idx.x  # .y, .z\nbid_x = gpu.block_idx.x   # .y, .z\nbdim_x = gpu.block_dim.x\ngdim_x = gpu.grid_dim.x\n\n# synchronousbarrier\ngpu.barrier # workgroup s_barrier\n```\n\n```python\nfrom flydsl.expr import arith\n\n# constant(recommended DSL type)\nc42 = fx.Index(42) # index type\nc3_14 = fx.Float32(3.14)    # f32\nmask = fx.Int32(0xFF)       # i32\n\n# English note\nresult = a + b\nresult = a * 2\nresult = a // 4\nresult = a % 16\n\n# English note\nresult = arith.select(cond, true_val, false_val)\n\n# bit\nresult = arith.andi(a, b)\nresult = arith.xori(a, b)\nresult = arith.shli(a, b)\n```\n\n```python\nfrom flydsl.expr import vector\n\nvec = vector.from_elements(vec_type, [a, b, c, d])\nvector.store(vec, memref, [idx])\nelem = vector.extractelement(vec, idx)\n```\n\n```python\nfrom flydsl.expr import buffer_ops\n\nrsrc = buffer_ops.create_buffer_resource(memref_value)\ndata = buffer_ops.buffer_load(rsrc, byte_offset, vec_width=4)\nbuffer_ops.buffer_store(data, rsrc, byte_offset)\n```\n\n```python\nfrom flydsl.expr import rocdl\n\n# Buffer tensor\nA_buf = rocdl.make_buffer_tensor(A)\n\n# MFMA\nresult = rocdl.mfma_f32_16x16x16f16(result_type, [a, b, acc])\nresult = rocdl.mfma_f32_16x16x32_fp8_fp8(result_type, [a, b, acc])\nresult = rocdl.mfma_i32_16x16x32_i8(result_type, [a, b, acc])\n\n# GFX950 scaled MFMA (MXFP4/FP6/FP8)\nresult = rocdl.mfma_scale_f32_16x16x128_f8f6f4(\n    result_type, [a, b, acc, cbsz, blgp, opselA, scaleA, opselB, scaleB]\n)\n\n# schedulingbarrier\nrocdl.sched_mfma(cnt) # wait MFMA complete\nrocdl.sched_vmem(cnt) # wait VMEM complete\nrocdl.sched_dsrd(cnt) # wait LDS complete\nrocdl.sched_dswr(cnt) # wait LDS complete\n\n# ( VALU)\nresult = rocdl.exp2(T.f32, x)   # v_exp_f32\nresult = rocdl.rcp(T.f32, x)    # v_rcp_f32\n\n# Warp shuffle\nval = rocdl.ds_bpermute(idx, src)\n```\n\n```python\n@flyc.kernel\ndef my_kernel(data: fx.Tensor, N: fx.Constexpr[int]):\n # compilationloop\n    for i in range_constexpr(N):\n        ...\n\n # rowloop(-> scf.for)\n    for i in range(runtime_value):\n        ...\n```\n\n```python\nfrom flydsl.expr import const_expr\n\ntile_size = const_expr(N // 4)\nfor i in range_constexpr(tile_size):\n    ...\n```\n\n```python\nfrom flydsl.utils.smem_allocator import SmemAllocator\nfrom flydsl.expr.typing import T\n\n# create\nallocator = SmemAllocator(None, arch=\"gfx942\", global_sym_name=\"smem0\")\n\n# type\nlds_a = allocator.allocate_array(T.f16, 8192)\nlds_b = allocator.allocate_array(T.f16, 8192)\n\n# Kernel : pointertype\nlds_base = allocator.get_base()\nlds_a_ptr = lds_a(lds_base)   # SmemPtr\nlds_b_ptr = lds_b(lds_base)   # SmemPtr\n\n# Load/Store\nval = lds_a_ptr.load([idx])\nlds_b_ptr.store(val, [idx])\n```\n\n```python\ncomp_ctx = CompilationContext.get_current()\nwith ir.InsertionPoint(comp_ctx.gpu_module_body):\n    allocator.finalize()\n```\n\n```python\nfrom flydsl import Config, autotune\n\nconfigs = [\n    Config(num_warps=4, waves_per_eu=2, BLOCK_M=128, BLOCK_N=128),\n    Config(num_warps=8, waves_per_eu=1, BLOCK_M=256, BLOCK_N=64),\n]\n\n@autotune(configs=configs, key=[\"M\", \"N\", \"K\"])\n@flyc.jit\ndef launch(A: fx.Tensor, B: fx.Tensor, ...):\n    ...\n```\n\n```bash\nFLYDSL_RUNTIME_ENABLE_CACHE=0 python my_script.py\n```\n\n```bash\nFLYDSL_DUMP_IR=1 FLYDSL_DUMP_DIR=./dumps python my_script.py\n```\n\n```\ndumps/my_func_name/\n├── 00_original.mlir\n├── 01_gpu-kernel-outlining.mlir\n├── ...\n├── 14_gpu-module-to-binary.mlir\n└── final_isa.s # AMD ISA\n```\n\n```bash\nFLYDSL_DEBUG_AST_DIFF=1 python my_script.py\n```\n\n```python\nfx.printf(\"tid={} bid={} val={}\", tid, bid, value)\n```\n\n```bash\n# 1. LLVM/MLIR( 30 )\nbash scripts/build_llvm.sh -j64\n\n# 2. FlyDSL\nbash scripts/build.sh -j64\n\n# 3. (mode)\npip install -e .\n\n# 4. verification\nbash scripts/run_tests.sh\n```\n\n```python\nimport torch\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\n\n@flyc.kernel\ndef vectorAddKernel(\n    A: fx.Tensor, B: fx.Tensor, C: fx.Tensor,\n    block_dim: fx.Constexpr[int],\n):\n    bid = fx.block_idx.x\n    tid = fx.thread_idx.x\n\n # by block\n    tA = fx.logical_divide(A, fx.make_layout(block_dim, 1))\n    tA = fx.slice(tA, (None, bid))\n    tA = fx.logical_divide(tA, fx.make_layout(1, 1))\n\n    tB = fx.logical_divide(B, fx.make_layout(block_dim, 1))\n    tB = fx.slice(tB, (None, bid))\n    tB = fx.logical_divide(tB, fx.make_layout(1, 1))\n\n    tC = fx.logical_divide(C, fx.make_layout(block_dim, 1))\n    tC = fx.slice(tC, (None, bid))\n    tC = fx.logical_divide(tC, fx.make_layout(1, 1))\n\n # register + copy atom\n    RABTy = fx.MemRefType.get(fx.T.f32(), fx.LayoutType.get(1, 1),\n                              fx.AddressSpace.Register)\n    copyAtom = fx.make_copy_atom(fx.UniversalCopy32b(), fx.Float32)\n    rA = fx.memref_alloca(RABTy, fx.make_layout(1, 1))\n    rB = fx.memref_alloca(RABTy, fx.make_layout(1, 1))\n    rC = fx.memref_alloca(RABTy, fx.make_layout(1, 1))\n\n    fx.copy_atom_call(copyAtom, fx.slice(tA, (None, tid)), rA)\n    fx.copy_atom_call(copyAtom, fx.slice(tB, (None, tid)), rB)\n\n    vC = fx.arith.addf(fx.memref_load_vec(rA), fx.memref_load_vec(rB))\n    fx.memref_store_vec(vC, rC)\n    fx.copy_atom_call(copyAtom, rC, fx.slice(tC, (None, tid)))\n\n@flyc.jit\ndef vectorAdd(\n    A: fx.Tensor, B: fx.Tensor, C,\n    n: fx.Int32,\n    const_n: fx.Constexpr[int],\n    stream: fx.Stream = fx.Stream(None),\n):\n    block_dim = 64\n    grid_x = (n + block_dim - 1) // block_dim\n    vectorAddKernel(A, B, C, block_dim).launch(\n        grid=(grid_x, 1, 1), block=[block_dim, 1, 1], stream=stream,\n    )\n\n# use\nn = 128\nA = torch.randint(0, 10, (n,), dtype=torch.float32).cuda()\nB = torch.randint(0, 10, (n,), dtype=torch.float32).cuda()\nC = torch.zeros(n, dtype=torch.float32).cuda()\nvectorAdd(A, B, C, n, n + 1, stream=torch.cuda.Stream())\n```\n\n```bash\nbash scripts/run_tests.sh # GEMM Correct\nbash scripts/run_benchmark.sh # performance\n\n# row\npython tests/kernels/test_preshuffle_gemm.py --in_dtype fp8 -M 16 -N 5120 -K 8192\n```\n\n```python\nfrom tests.test_common import perftest, checkAllclose\n\n@perftest(num_iters=20, num_warmup=3)\ndef my_test(Input, Output):\n    ...\n\n# verification\nerr = checkAllclose(output, reference, rtol=1e-2, atol=1e-2)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-programming-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

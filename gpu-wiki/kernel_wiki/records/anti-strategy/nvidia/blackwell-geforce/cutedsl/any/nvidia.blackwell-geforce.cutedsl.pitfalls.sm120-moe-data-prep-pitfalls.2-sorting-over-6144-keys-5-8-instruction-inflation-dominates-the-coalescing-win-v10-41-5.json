@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-moe-data-prep-pitfalls.2-sorting-over-6144-keys-5-8-instruction-inflation-dominates-the-coalescing-win-v10-41-5",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep-pitfalls#2-sorting-over-6144-keys-5-8-instruction-inflation-dominates-the-coalescing-win-v10-41-5|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '2. Sorting over 6144+ keys — 5.8× instruction inflation dominates the coalescing win (V10, +41.5%)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 2. Sorting over 6144+ keys — 5.8× instruction inflation dominates the coalescing win (V10, +41.5%)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 INT32 MoE Data-Prep — Pitfalls -- 2. Sorting over 6144+ keys — 5.8× instruction inflation dominates the coalescing win (V10, +41.5%)"
+  },
+  "attempted": "V7 scatter has 68% uncoalesced wavefronts on a_map writes (NCU est. 3.2× utilization penalty, the largest single lever in the workload). Sort tokens by expert id with `cub::DeviceRadixSort::SortPairs`, then per-expert coalesced bursts to shared memory.",
+  "verdict": "not-worth-it-here",
+  "lesson": "For sort-then-flush patterns under inline CUDA via `torch.utils.cpp_extension.load_inline`: - **Estimate sort instruction count vs target kernel duration BEFORE integrating**. Rule of thumb: CUB radix sort costs roughly 50–80 inst per key per CTA. For ≤ 1024 keys/CTA the cost is acceptable; for **6000+ keys it dominates any small target kernel**. Library primitives optimized for general workloads pay overhead the smaller-N case can't amortize. - When optimizing one of two related outputs (a_map AND c_map), **make sure the fix doesn't break the OTHER one's existing coalescing**. V7's c_map was already optimal — the sort was net-negative there. The invariant a_map[i] and c_map[i] must use the SAME global rank per token, which means restructuring how a_map is computed forces a matching restructure of how c_map is computed (the V10 first attempt failed validation precisely because Phase 1.5 race-order c_map and Phase 6 sort-order a_map disagreed). - No `cub::DeviceRadixSort` precedent existed in `torch.utils.cpp_extension.load_inline` before this session. Build flags needed: `-std=c++17 --expt-relaxed-constexpr --expt-extended-lambda -I/usr/local/cuda/include` (defensive — nvcc auto-includes CUB but header propagation is finicky).",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "8-bit radix sort over 6144 keys × 1024 threads × 6 items/thread = ~8 radix passes of (per-pass scan + scatter), plus its TempStorage smem traffic. NCU instruction breakdown matched a textbook 8-pass radix sort. IPC improvements can't out-run the instruction count when the kernel is small (V7 scatter is 11.4 µs of compute): - V9 scatter: 101,888 inst @ 0.76 IPC = ~134K cycles ≈ 11.5 µs wall - V10 scatter: 590,288 inst @ 0.56 IPC = ~1054K cycles ≈ 24 µs wall (matches measured 26.4 µs)"
+  },
+  "root_cause": "8-bit radix sort over 6144 keys × 1024 threads × 6 items/thread = ~8 radix passes of (per-pass scan + scatter), plus its TempStorage smem traffic. NCU instruction breakdown matched a textbook 8-pass radix sort. IPC improvements can't out-run the instruction count when the kernel is small (V7 scatter is 11.4 µs of compute): - V9 scatter: 101,888 inst @ 0.76 IPC = ~134K cycles ≈ 11.5 µs wall - V10 scatter: 590,288 inst @ 0.56 IPC = ~1054K cycles ≈ 24 µs wall (matches measured 26.4 µs)"
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

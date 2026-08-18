@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.gated-delta-net.flashinfer-mlsys-2026-contest",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gdn|gated-delta-net#flashinfer-mlsys-2026-contest|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flashinfer-mlsys-2026-contest",
+   "gdn"
+  ],
+  "triggers": [
+   "the 'FlashInfer MLSys 2026 Contest' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): FlashInfer MLSys 2026 Contest",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Gated Delta Net -- Linear Attention -- FlashInfer MLSys 2026 Contest"
+  },
+  "technique": "FlashInfer MLSys 2026 Contest",
+  "what": "GatedDeltaNet is Track C of the FlashInfer MLSys 2026 contest: - Parameters: qk_dim=4, v_dim=8, d=128 - Benchmarks: decode `qk4_v8_d128_k_last`, prefill `qk4_v8_d128_k_last` - Status: decode done for both Hopper and Blackwell; prefill done on Hopper, in progress for Blackwell",
+  "when": "GatedDeltaNet is Track C of the FlashInfer MLSys 2026 contest: - Parameters: qk_dim=4, v_dim=8, d=128 - Benchmarks: decode `qk4_v8_d128_k_last`, prefill `qk4_v8_d128_k_last` - Status: decode done for both Hopper and Blackwell; prefill done…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/gated-delta-net.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

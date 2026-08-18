@@ -1,0 +1,137 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.h100-to-b200-gpgpu-scaling-analysis",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|h100-to-b200-gpgpu-scaling-analysis|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "b200",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): From H100 to B200: GPGPU and LLM Scaling Deep Analysis",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "From H100 to B200: GPGPU and LLM Scaling Deep Analysis"
+  },
+  "title": "From H100 to B200: GPGPU and LLM Scaling Deep Analysis",
+  "summary": "A comprehensive analysis of GPU microarchitecture, cluster networking, collective communication, and distributed training scaling strategies based on the Google DeepMind report \"How to Scale Your Model.\"",
+  "sections": [
+   {
+    "heading": "1. Introduction: GPGPU Evolution and AI Infrastructure",
+    "anchor": "1-introduction-gpgpu-evolution-and-ai-infrastructure",
+    "gist": "In the deep learning era, GPUs have evolved into GPGPUs (General-Purpose GPUs) focused on parallel computation."
+   },
+   {
+    "heading": "2. Chip Architecture: The GPU Microworld",
+    "anchor": "2-chip-architecture-the-gpu-microworld",
+    "gist": "Unlike TPUs (systolic arrays with SIMD), GPUs emphasize flexibility and multi-threaded parallelism."
+   },
+   {
+    "heading": "3. Networking: Foundation for Cluster Scaling",
+    "anchor": "3-networking-foundation-for-cluster-scaling",
+    "gist": "Within a node (typically 8 GPUs), NVLink provides high-speed interconnect via NVSwitch for all-to-all connectivity."
+   },
+   {
+    "heading": "4. Collective Communication Primitives",
+    "anchor": "4-collective-communication-primitives",
+    "gist": "- **AllReduce**: Reduce + broadcast."
+   },
+   {
+    "heading": "5. Scaling Strategies",
+    "anchor": "5-scaling-strategies",
+    "gist": "The golden rule: **compute time must exceed communication time** (Roofline principle)."
+   },
+   {
+    "heading": "6. GB200 NVL72: Scale-Up Renaissance",
+    "anchor": "6-gb200-nvl72-scale-up-renaissance",
+    "gist": "72 GPUs across 9 trays, each containing 8 GB200 Superchips + 4 NVSwitch 5.0."
+   },
+   {
+    "heading": "7. Communication Wall Challenge",
+    "anchor": "7-communication-wall-challenge",
+    "gist": "GPU compute growth far outpaces bandwidth growth: - Compute: A100 312 → B200 2,250 TFLOPS (7.2x) - Intra-node BW: A100 300 → B200 900 GB/s (3x only) - Inter-node BW: stagnant at 400 GB/s"
+   },
+   {
+    "heading": "8. Summary",
+    "anchor": "8-summary",
+    "gist": "Key insights:"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/h100-to-b200-gpgpu-scaling-analysis.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

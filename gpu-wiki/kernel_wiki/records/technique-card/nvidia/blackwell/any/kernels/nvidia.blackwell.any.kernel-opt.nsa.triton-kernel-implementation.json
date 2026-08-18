@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.nsa.triton-kernel-implementation",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|kernels|nsa#triton-kernel-implementation|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "kernels",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "triton-kernel-implementation"
+  ],
+  "triggers": [
+   "the 'Triton Kernel Implementation' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Triton Kernel Implementation",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Native Sparse Attention (NSA) -- Triton Kernel Implementation"
+  },
+  "technique": "Triton Kernel Implementation",
+  "what": "The core NSA kernel is implemented in Triton with group-centric data loading and grid-based scheduling.",
+  "when": "The core NSA kernel is implemented in Triton with group-centric data loading and grid-based scheduling.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef nsa_sparse_attention_fwd(\n    Q_ptr, K_ptr, V_ptr, O_ptr,\n    block_indices_ptr,  # Selected block indices per query\n    num_selected: tl.constexpr,\n    BLOCK_SIZE: tl.constexpr,\n    HEAD_DIM: tl.constexpr,\n    NUM_HEADS: tl.constexpr,\n    GROUP_SIZE: tl.constexpr,  # GQA group size\n):\n    \"\"\"\n    Sparse attention forward: only compute attention over selected KV blocks.\n    Group-centric loading: shares sparse KV blocks across all query heads\n    in a GQA group, minimizing redundant KV transfers.\n    \"\"\"\n    pid = tl.program_id(0)\n    head_id = tl.program_id(1)\n    batch_id = tl.program_id(2)\n\n    # GQA: determine which KV head group this query head belongs to\n    kv_head_id = head_id // GROUP_SIZE\n\n    # Load query tile\n    q_offset = batch_id * NUM_HEADS * HEAD_DIM + head_id * HEAD_DIM\n    q = tl.load(Q_ptr + q_offset + tl.arange(0, HEAD_DIM))\n\n    # Accumulator for online softmax\n    acc = tl.zeros([HEAD_DIM], dtype=tl.float32)\n    lse = float(\"-inf\")\n\n    # Iterate over selected blocks (sparse)\n    for block_idx in range(num_selected):\n        # Load block index for this query\n        sel_offset = (batch_id * NUM_HEADS + kv_head_id) * num_selected + block_idx\n        kv_block_start = tl.load(block_indices_ptr + sel_offset) * BLOCK_SIZE\n\n        # Group-centric: load KV block once, shared across GROUP_SIZE query heads\n        k_offsets = kv_block_start + tl.arange(0, BLOCK_SIZE)\n        k_block = tl.load(K_ptr + (batch_id * kv_head_id * SEQ_LEN + k_offsets[:, None]) * HEAD_DIM\n                          + tl.arange(0, HEAD_DIM)[None, :])\n        v_block = tl.load(V_ptr + (batch_id * kv_head_id * SEQ_LEN + k_offsets[:, None]) * HEAD_DIM\n                          + tl.arange(0, HEAD_DIM)[None, :])\n\n        # Compute attention scores for this block\n        scores = tl.sum(q[None, :] * k_block, axis=1)  # [BLOCK_SIZE]\n\n        # Online softmax update\n        block_max = tl.max(scores)\n        new_lse = tl.where(lse > block_max,\n                           lse + tl.log(1.0 + tl.exp(block_max - lse)),\n                           block_max + tl.log(1.0 + tl.exp(lse - block_max)))\n\n        # Rescale accumulator and add new contribution\n        old_scale = tl.exp(lse - new_lse)\n        new_scale = tl.exp(scores - new_lse)\n        acc = acc * old_scale + tl.sum(new_scale[:, None] * v_block, axis=0)\n        lse = new_lse\n\n    # Store output\n    o_offset = batch_id * NUM_HEADS * HEAD_DIM + head_id * HEAD_DIM\n    tl.store(O_ptr + o_offset + tl.arange(0, HEAD_DIM), acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/nsa.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

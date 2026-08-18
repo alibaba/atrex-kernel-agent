@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.50-share-kv-lds-needs-waves-per-eu-4-to-realize-occupancy-gain-resolves-trap-18",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#50-share-kv-lds-needs-waves-per-eu-4-to-realize-occupancy-gain-resolves-trap-18|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '50. SHARE_KV_LDS needs waves_per_eu=4 to realize occupancy gain (resolves trap 18)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 50. SHARE_KV_LDS needs waves_per_eu=4 to realize occupancy gain (resolves trap 18)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 50. SHARE_KV_LDS needs waves_per_eu=4 to realize occupancy gain (resolves trap 18)"
+  },
+  "attempted": "After enabling SHARE_KV_LDS, LDS drops from 17,152 to 8,704 bytes. Theory says this allows 4 WGs per CU (8,704 × 4 = 34,816 < 64 KB). But actual occupancy stays at 3.",
+  "verdict": "api-limitation",
+  "lesson": "LDS reduction is necessary but not sufficient for occupancy gains. Always pair LDS optimization with `waves_per_eu=N` to prevent the compiler from absorbing the savings into VGPRs. Verify the compiled binary's VGPR count matches the target.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Without an explicit occupancy hint, the compiler optimizes for instruction-level parallelism by using more registers. The `waves_per_eu` attribute is the only way to tell the compiler \"I want occupancy N, so limit VGPRs to 512/N = 128\". Setting `waves_per_eu=4` forces ≤128 VGPRs, and combined with the reduced LDS, achieves occupancy=4."
+  },
+  "observed": "VGPRs increased from 123 → 130. At 130 VGPRs/wave, occupancy is still limited to 3 waves/SIMD (130 × 4 = 520 > 512 VGPRs/SIMD). The compiler used the freed LDS budget to expand register allocation.",
+  "root_cause": "Without an explicit occupancy hint, the compiler optimizes for instruction-level parallelism by using more registers. The `waves_per_eu` attribute is the only way to tell the compiler \"I want occupancy N, so limit VGPRs to 512/N = 128\". Setting `waves_per_eu=4` forces ≤128 VGPRs, and combined with the reduced LDS, achieves occupancy=4."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

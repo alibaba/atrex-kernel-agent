@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization-guide.validation-and-inspection-guidance",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|optimization-guide#validation-and-inspection-guidance|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "validation-and-inspection-guidance"
+  ],
+  "triggers": [
+   "the 'Validation And Inspection Guidance' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Validation And Inspection Guidance",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Gluon Kernel Performance Optimization Guide -- Validation And Inspection Guidance"
+  },
+  "technique": "Validation And Inspection Guidance",
+  "what": "| Tool | Purpose | When to Invoke | |------|---------|----------------| | `tools/compute_utilization.py` | Roofline bottleneck analysis + compute/bandwidth utilization calculation | Step 1, Step 4 | | `tools/measure_bandwidth_ceiling.py` | Measure bandwidth upper bound at specified data volume (Gluon memcpy) | Step 1 (Memory Bound) | | `tools/profile_kernel.sh` | rocprofv3 instruction-level profiling | Step 2 | | `tools/extract_asm.py` | Extract and analyze assembly code | Step 3 (each sub-step) | | `tools/measure_kernel_time.py` | Measure kernel elapsed time | After each optimization step | | local accuracy validation | Accuracy verification | After each optimization step | | local benchmark | Compare performance with Triton | Final verification | | TTGIR/layout inspection | Extract TTGIR to analyze layout | When layout modification is needed |",
+  "when": "| Tool | Purpose | When to Invoke | |------|---------|----------------| | `tools/compute_utilization.py` | Roofline bottleneck analysis + compute/bandwidth utilization calculation | Step 1, Step 4 | | `tools/measure_bandwidth_ceiling.py` |…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,142 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.quack-reduction-kernels",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|quack-reduction-kernels|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "misc"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "memory-bound"
+   ]
+  },
+  "technique_tags": [
+   "reduction"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): QuACK: CuTeDSL Memory-Bound Reduction Kernels",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "QuACK: CuTeDSL Memory-Bound Reduction Kernels"
+  },
+  "title": "QuACK: CuTeDSL Memory-Bound Reduction Kernels",
+  "summary": "QuACK (Quirky Assortment of CuTe Kernels) is a high-performance memory-bound kernel library built on CuTeDSL, covering common LLM operators such as RMSNorm, Softmax, Cross Entropy, and TopK. Its core design philosophy leverages the GPU's 4-level memory hierarchy to implement hierarchical reduction, achieving approximately 90% HBM bandwidth utilization on the H100.",
+  "sections": [
+   {
+    "heading": "1. ReductionBase Framework",
+    "anchor": "1-reductionbase-framework",
+    "gist": "All reduction kernels inherit from the `ReductionBase` base class, which uniformly manages the infrastructure for 4-level reduction."
+   },
+   {
+    "heading": "2. RMSNorm",
+    "anchor": "2-rmsnorm",
+    "gist": "File: `quack/rmsnorm.py`"
+   },
+   {
+    "heading": "3. Softmax",
+    "anchor": "3-softmax",
+    "gist": "File: `quack/softmax.py`"
+   },
+   {
+    "heading": "4. Cross Entropy",
+    "anchor": "4-cross-entropy",
+    "gist": "File: `quack/cross_entropy.py`"
+   },
+   {
+    "heading": "5. TopK",
+    "anchor": "5-topk",
+    "gist": "Files: `quack/topk.py`, `quack/sort/bitonic_sort.py`, `quack/sort/sorting_networks.py`"
+   },
+   {
+    "heading": "6. Performance Characteristics",
+    "anchor": "6-performance-characteristics",
+    "gist": "Based on benchmarks on H100 HBM3 (3.35 TB/s peak):"
+   },
+   {
+    "heading": "7. Architecture Design Summary",
+    "anchor": "7-architecture-design-summary",
+    "gist": ""
+   },
+   {
+    "heading": "Reference",
+    "anchor": "reference",
+    "gist": "- QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light (github.com/Dao-AILab/quack) - CuTe-DSL Documentation (docs.nvidia.com/cutlass -- pythonDSL/cute_dsl_general) - Hierarchical Reduction General Principles"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nclass ReductionBase:\n    def __init__(self, dtype, N, stage, reduction_dtype=Float32):\n self.dtype = dtype # inputdatatype\n self.N = N # reduction dimensionsize\n self.stage = stage # reduction buffer stage (stagereduction)\n self.reduction_dtype = reduction_dtype # reductionresulttype\n```\n\n```python\ndef _get_tiled_copy(self, vecsize: int = 1):\n    threads_per_row = self._threads_per_row()\n num_threads = self._num_threads # 128 (N<=16K) or 256\n    num_blocks_N = ceil_div(N // vecsize, threads_per_row * cluster_n)\n    tiler_mn = (num_threads // threads_per_row,\n                vecsize * num_blocks_N * threads_per_row)\n    tiled_copy = copy_utils.tiled_copy_2d(dtype, threads_per_row, num_threads, vecsize)\n    return tiled_copy, tiler_mn, threads_per_row\n```\n\n```python\ndef _allocate_reduction_buffer_and_mbar(self, smem, tv_layout, is_persistent=False):\n    # reduction_buffer shape: (num_warps // warps_per_row, (warps_per_row, cluster_n), stage)\n    reduction_buffer = smem.allocate_tensor(\n        self.reduction_dtype,\n        self._get_reduction_buffer_layout(tv_layout, self.cluster_n), ...)\n    if self.cluster_n > 1:\n        mbar_ptr = smem.allocate_array(Int64, num_elems=self.stage * (2 if is_persistent else 1))\n    else:\n        mbar_ptr = None\n    return reduction_buffer, mbar_ptr\n```\n\n```python\ndef _initialize_cluster(self, tidx, mbar_ptr, num_warps, is_persistent=False):\n    if self.cluster_n > 1:\n        if tidx < self.stage:\n            cute.arch.mbarrier_init(mbar_ptr + tidx, 1)  # full barrier\n            if is_persistent:\n                cute.arch.mbarrier_init(mbar_ptr + self.stage + tidx, num_warps * cluster_n)\n        cute.arch.mbarrier_init_fence()\n        cute.arch.cluster_arrive_relaxed()\n```\n\n```python\ndef row_reduce(x, op, threads_per_row, reduction_buffer, mbar_ptr, init_val=0.0, ...):\n # Level 1: Thread reduction(registerreduction)\n    val = x.reduce(op, init_val=init_val, reduction_profile=0)\n\n # Level 2: Warp reduction(shuffle reduction)\n    val = cute.arch.warp_reduction(val, warp_op, threads_in_group=min(threads_per_row, 32))\n\n # Level 3+4: Block/Cluster reduction(SMEM/DSMEM reduction)\n    if warps_per_row > 1 or cluster_n > 1:\n        val = block_or_cluster_reduce(val, warp_op, reduction_buffer, mbar_ptr, ...)\n    return val\n```\n\n```python\nclass RMSNormBackward(ReductionBase):\n    def __init__(self, dtype, N):\n        super().__init__(dtype, N, stage=2, reduction_dtype=Float32)\n        self.reload_wdy = None if N <= 16K else \"smem\"\n```\n\n```\nx_hat = x * rstd\nwdy = dout * weight\nmean_xhat_wdy = row_reduce(x_hat * wdy, ADD) / N\ndx = (wdy - x_hat * mean_xhat_wdy) * rstd\n```\n\n```python\ndef online_softmax_reduce(x, threads_per_row, reduction_buffer, mbar_ptr, ...):\n # Thread-level: compute max sum_exp\n    max_x = warp_reduction(x.reduce(MAX, ...), fmax, ...)\n    exp_x = exp2(x * log2e - max_x * log2e)\n    sum_exp_x = warp_reduction(exp_x.reduce(ADD, ...), add, ...)\n\n # Block/Cluster level: Int64 row\n # warp (max_x, sum_exp_x) Int64 write reduction buffer\n    reduction_buffer[row, col] = f32x2_to_i64(max_x, sum_exp_x)\n    # ...barrier...\n # , online coalesced:\n    # max_final = max(max_1, max_2, ...)\n    # sum_final = sum_1 * exp(max_1 - max_final) + sum_2 * exp(max_2 - max_final) + ...\n```\n\n```\ndot = row_reduce(dy * y, ADD) # reduction\ndx = y * (dy - dot)              # elementwise\n```\n\n```\n   probs = exp_x / denom\n   dx[j] = probs[j]              # for j != target\n   dx[target] = probs[target] - 1  # for j == target\n   ```\n\n```python\n# ifrequires dx, use two-pass(requires exp_x); otherwise online\ncross_entropy_op = CrossEntropy(dtype, N, online_softmax=not has_dx)\n```\n\n```python\n# block 16K column\nprobs = exp2(x * log2e - lse * log2e)\ngrad = where(col == target, probs - 1.0, probs) * dloss\n```\n\n```python\ndef bitonic_topk(arr, k, ascending=False, warp_width=32):\n # 1. arr by k , sort\n    topk_vals = arr[:k]\n    bitonic_sort(topk_vals)\n\n # 2. coalesced: bitonic_topk_merge keep top-k\n    for i in range(1, n // k):\n        other_vals = arr[i*k : (i+1)*k]\n        bitonic_sort(other_vals)\n        bitonic_topk_merge(topk_vals, other_vals)\n\n # 3. warp coalesced: passed shuffle_sync_bfly data\n    for i in range(log2(warp_width)):\n        other_vals = shuffle_sync_bfly(topk_vals, offset=1<<i)\n        bitonic_topk_merge(topk_vals, other_vals)\n```\n\n```python\nif self.softmax:\n max_val = shuffle_sync(topk_vals[0], offset=0, ...) # sort, max\n    exp_x = exp2(topk_vals * log2e - max_val * log2e)\n    denom = warp_reduction_sum(exp_x.reduce(ADD, ...))\n    topk_vals = exp_x * rcp_approx(denom)\n```\n\n```\nReductionBase\n |-- _get_tiled_copy # 128-bit vector TV-Layout\n |-- _set_cluster_n # : by N cluster size\n |-- _threads_per_row # : by N\n |-- _allocate_reduction_buffer_and_mbar # SMEM/DSMEM\n |-- _initialize_cluster # mbarrier\n  |\n  |-- RMSNorm               (stage=1, online, fused residual)\n  |-- RMSNormBackward        (stage=2, persistent kernel, dW accumulation)\n  |-- Softmax               (stage=1 online / stage=2 two-pass)\n  |-- SoftmaxBackward        (stage=1, dot product reduction)\n  |-- CrossEntropy           (stage=1 online / stage=2 two-pass, fused dx)\n  |-- TopKBackward           (stage=1, scatter-based)\n\nTopK (independent, ReductionBase)\n |-- bitonic_topk # register bitonic sort + warp shuffle\n |-- optimal_sort # sorting network\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/quack-reduction-kernels.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.triton-blackwell.downstream-triton-on-blackwell-adoption-post-3-6-evidence",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|languages|triton-blackwell#downstream-triton-on-blackwell-adoption-post-3-6-evidence|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "languages",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "downstream-triton-on-blackwell-adoption-post-3-6-evidence"
+  ],
+  "triggers": [
+   "the 'Downstream Triton-on-Blackwell adoption (post-3.6 evidence)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Downstream Triton-on-Blackwell adoption (post-3.6 evidence)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Triton on Blackwell -- Downstream Triton-on-Blackwell adoption (post-3.6 evidence)"
+  },
+  "technique": "Downstream Triton-on-Blackwell adoption (post-3.6 evidence)",
+  "what": "The `evidence_basis` is anchored on:",
+  "when": "The `evidence_basis` is anchored on:",
+  "caveats": [
+   "The anchors do not prove that EVERY plain `tl.dot` kernel on SM100 emits `tcgen05.mma` PTX. They prove that real Triton kernels with `tl.dot` matmul are landing on Blackwell-only paths in tracked downstream repos (per `pr-vllm-34597`'s `triton_decode_attention.py` kernel) and that the 3.6 release added the infrastructure those kernels lower through. Whether the lowering automatically targets `tcgen05.mma` for every shape and dtype on every Blackwell SKU is a separate question.",
+   "The anchors do not include explicit inspectable `tcgen05.mma` PTX dumps from a tracked-downstream merged PR. Such proof would be an even stronger anchor than what we have today; until one is found, the verified claim should be read as \"Triton 3.6+ Blackwell is real and downstream-adopted\", not \"every Triton matmul on Blackwell is now optimal\".",
+   "`pr-sglang-22079` -- Gemma4 NVFP4 SGLang `extend_attention` Triton kernel doing actual `tl.dot(q,k)` / `tl.dot(p,v)` matmul on `[sm100, sm90]`, merged 2026-04-03. Strongest in-corpus example of a real `tl.dot` Triton matmul landing for SM100 post-3.6, but pre-refresh per `previous_pages_manifest`.",
+   "`pr-sglang-21019` -- Qwen3.5 GDN projection fused split/reshape/cat kernel merged 2026-03-20. `tl.load`/`tl.store` only (memory rearrangement, no `tl.dot`); demonstrates \"Triton on SM100 post-3.6\" but not the matmul lowering path."
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/languages/triton-blackwell.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

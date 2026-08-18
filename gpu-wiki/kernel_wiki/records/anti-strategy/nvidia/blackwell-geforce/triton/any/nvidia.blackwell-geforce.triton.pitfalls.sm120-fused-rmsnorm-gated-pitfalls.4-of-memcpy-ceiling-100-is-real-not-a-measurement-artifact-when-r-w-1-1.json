@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.triton.pitfalls.sm120-fused-rmsnorm-gated-pitfalls.4-of-memcpy-ceiling-100-is-real-not-a-measurement-artifact-when-r-w-1-1",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|triton|norm|sm120-fused-rmsnorm-gated-pitfalls#4-of-memcpy-ceiling-100-is-real-not-a-measurement-artifact-when-r-w-1-1|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": "norm",
+   "operators": [
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "triton",
+   "workload_family": "norm"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "norm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '4. \"% of memcpy ceiling > 100 %\" is **real**, not a measurement artifact, when R:W ≠ 1:1' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 4. \"% of memcpy ceiling > 100 %\" is **real**, not a measurement artifact, when R:W ≠ 1:1",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 Triton fused-RMSNormGated pitfalls -- 4. \"% of memcpy ceiling > 100 %\" is **real**, not a measurement artifact, when R:W ≠ 1:1"
+  },
+  "attempted": "Standard practice is to declare a memory-bound kernel \"done\" at ~90 % of D2D memcpy ceiling. When measurements show **122.6 %**, instinct says \"my measurement is wrong\" or \"the ceiling number is stale\".",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "When checking \"% of ceiling\", **compute the ceiling for your kernel's actual R:W ratio**, not just D2D-copy ceiling. Either: 1. Run a synthetic kernel with the same R:W ratio as ceiling, OR 2. Treat any value within 80-130 % of D2D ceiling as \"at the wall\" — both under (different access pattern) and over (better R:W) are explained by the asymmetry.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "triton"
+   },
+   "mechanism": "The standard memcpy ceiling assumes balanced 1:1 read:write (D2D: read N bytes, write N bytes). Our kernel is **2:1 (read 100 MB, write 48 MB)**. HBM controllers achieve higher effective bandwidth for asymmetric R:W traffic than for the worst-case D2D copy. The 122 % is a real measurement of higher hardware efficiency — the ceiling number is just inappropriate as a yardstick for this kernel's traffic profile."
+  },
+  "observed": "(V3 final on sm_120 RTX PRO 5000): - Measured kernel time: 108 us - Working set: 100 MB read + 48 MB write = **148 MB** total - Achieved bandwidth: 148 / (108 × 1e-6) ≈ **1370 GB/s** - D2D memcpy ceiling at 148 MB: **1110.71 GB/s** (measured separately) - Apparent utilisation: **123 %**",
+  "root_cause": "The standard memcpy ceiling assumes balanced 1:1 read:write (D2D: read N bytes, write N bytes). Our kernel is **2:1 (read 100 MB, write 48 MB)**. HBM controllers achieve higher effective bandwidth for asymmetric R:W traffic than for the worst-case D2D copy. The 122 % is a real measurement of higher hardware efficiency — the ceiling number is just inappropriate as a yardstick for this kernel's traffic profile."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/triton/sm120-fused-rmsnorm-gated-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

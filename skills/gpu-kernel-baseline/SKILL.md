@@ -36,11 +36,19 @@ referenced below as `<gpu-wiki>/`.
 
 ## Phase 2: Learn Framework APIs from gpu-wiki
 
-1. **Mandatory prerequisite**: read `<gpu-wiki>/README.md` and follow its indexed learning path.
-2. Prioritize API docs, reference kernels, hardware constraints, and pitfalls directly related to the target platform, framework, and compute pattern.
-3. Prefer implementations with the same framework and compute pattern.
-4. Enter relevant documents through each directory-level `README.md`; do not blindly grep the full wiki first.
-5. Record learned wiki paths, API constraints, hardware constraints, and pitfalls in `plans/v0_plan.md` for implementation and reporting.
+1. Read `<gpu-wiki>/README.md`, then use the natural-language front door:
+   ```bash
+   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
+   ```
+2. State the true target product and authoritative runtime architecture exactly as supplied. Explicitly
+   request the complete product specification and relevant architecture/ISA facts, plus the framework,
+   operator, shapes, dtypes, intended implementation, and uncertainties. Do not substitute another
+   hardware identity or reduce the description to keywords.
+3. Results contain only `records` and `notes`. Read each id-keyed record's `store`, independent `payload`,
+   `source`, `type`, and `match.arch`; internal ids use the `internal_gpu_wiki::` namespace. Use
+   `--max-bytes` when a hard context limit is needed.
+4. Prefer records with the same framework and compute pattern. Record the stable ids and the constraints
+   they established in `plans/v0_plan.md`.
 
 ## Phase 3: Implement Baseline Kernel and Correctness Tests
 
@@ -78,7 +86,8 @@ for case in test_cases:
     finally:
         signal.alarm(0)
 ```
-6. If API, compilation, accuracy, performance, or hardware issues appear, return to `<gpu-wiki>/` through README indexes, read the relevant docs/reference kernels/pitfalls, and then fix the implementation.
+6. If API, compilation, accuracy, performance, or hardware issues appear, query `<gpu-wiki>/` again with
+   the exact failure and measured evidence, and then fix the implementation.
 7. Record the baseline configuration, including tile size, thread organization, grid/block design, and major data-movement patterns.
 
 ## Phase 4: Performance, Correctness, and Quality Gate
@@ -91,7 +100,7 @@ timeout 60 python test_kernel.py   # default 60s per run; adjust via --timeout f
 
    - Each individual test case must complete within **30 seconds** (configurable via `TEST_TIMEOUT_SEC` env var).
    - If a case exceeds the timeout, mark it as `TIMEOUT_FAIL`, kill the process, and record the failure in `baseline_report.md`.
-   - Common timeout causes: infinite loops in index calculation, deadlocks in synchronization, or excessive compilation time. Return to gpu-wiki to diagnose.
+   - Common timeout causes: infinite loops in index calculation, deadlocks in synchronization, or excessive compilation time. Query gpu-wiki with the failure mode to diagnose.
 
 2. Verify all correctness cases pass and record max `rel_err` plus PASS/FAIL.
 3. Measure baseline performance and record:
@@ -111,7 +120,7 @@ python tools/compute_utilization.py   --gpu <gpu> --dtype <dtype>   --flops-expr
    - Baseline kernel path
    - Correctness test path
    - PyTorch reference logic description
-   - Learned and searched gpu-wiki paths
+   - Stable gpu-wiki record ids consulted
    - Baseline configuration summary
    - Correctness results: case list, max `rel_err`, PASS/FAIL (include any TIMEOUT_FAIL cases)
    - Baseline performance: latency(us), TFLOPS, bandwidth(GB/s), and peak utilization percentages
@@ -137,7 +146,7 @@ python tools/compute_utilization.py   --gpu <gpu> --dtype <dtype>   --flops-expr
 
    For array fields (`pitfalls_and_fixes`, `references`), update the JSON file directly or use `read` + manual edit + write-back. Fill in:
    - `pitfalls_and_fixes`: any errors encountered during implementation
-   - `references`: gpu-wiki paths and docs referenced during learning
+   - `references`: stable gpu-wiki record ids and other docs referenced during learning
 
 8. After the quality gate passes, commit:
 

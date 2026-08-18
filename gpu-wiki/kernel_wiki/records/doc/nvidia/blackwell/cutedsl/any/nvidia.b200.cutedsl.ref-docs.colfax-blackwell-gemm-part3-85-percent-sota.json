@@ -1,0 +1,120 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.cutedsl.ref-docs.colfax-blackwell-gemm-part3-85-percent-sota",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|colfax-blackwell-gemm-part3-85-percent-sota|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): Blackwell Matrix Multiplication Part 3: Achieving 85% SOTA",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "Blackwell Matrix Multiplication Part 3: Achieving 85% SOTA"
+  },
+  "title": "Blackwell Matrix Multiplication Part 3: Achieving 85% SOTA",
+  "summary": "Multicast TMA, 2×SM MMA, warp-specialized pipelines, and output double-buffering techniques that push Blackwell GEMM performance to 85% of cuBLAS state-of-the-art.",
+  "sections": [
+   {
+    "heading": "1. Kernel 5: Multicast and 2×SM MMA",
+    "anchor": "1-kernel-5-multicast-and-2-sm-mma",
+    "gist": "Since Hopper, CTAs within the same SM group can access each other's shared memory (DSMEM)."
+   },
+   {
+    "heading": "2. Kernel 6: 2-SM Pipeline (Warp Specialization)",
+    "anchor": "2-kernel-6-2-sm-pipeline-warp-specialization",
+    "gist": "Refactored into `load_AB()` / `consume_AB()` / `store_C()`."
+   },
+   {
+    "heading": "3. Kernel 7: Output Double-Buffering",
+    "anchor": "3-kernel-7-output-double-buffering",
+    "gist": "The C store pipeline (TMEM → registers → shared memory → GMEM) applies the same pipelining principle."
+   },
+   {
+    "heading": "4. Next Steps",
+    "anchor": "4-next-steps",
+    "gist": "The remaining 15% comes from: GMEM write-out overhead and CTA scheduling launch overhead."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/cutedsl/colfax-blackwell-gemm-part3-85-percent-sota.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

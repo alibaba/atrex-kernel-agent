@@ -1,0 +1,10 @@
+{
+  "architecture": "sm_100",
+  "vendor": null,
+  "dsl": "triton",
+  "operator_terms": ["rmsnorm"],
+  "measured_symptoms": ["75% of DRAM peak", "memory-bound"],
+  "free_text_terms": ["fusion", "single-pass fusion"],
+  "intents": ["technique"],
+  "hardware_requests": []
+}

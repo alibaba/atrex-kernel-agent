@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.triton.pitfalls.sm120-fused-rmsnorm-gated-pitfalls.5-triton-num-stages-is-a-near-no-op-for-memory-bound-elementwise-on-sm-120",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|triton|norm|sm120-fused-rmsnorm-gated-pitfalls#5-triton-num-stages-is-a-near-no-op-for-memory-bound-elementwise-on-sm-120|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": "norm",
+   "operators": [
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "triton",
+   "workload_family": "norm"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "norm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '5. Triton `num_stages` is a near-no-op for memory-bound elementwise on sm_120' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 5. Triton `num_stages` is a near-no-op for memory-bound elementwise on sm_120",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 Triton fused-RMSNormGated pitfalls -- 5. Triton `num_stages` is a near-no-op for memory-bound elementwise on sm_120"
+  },
+  "attempted": "`num_stages` is the standard knob for hiding DRAM latency via software pipelining. Default Triton autotune treats it as a primary tuning parameter (`num_stages ∈ {1, 2, 3, 4, 5}` is common).",
+  "verdict": "api-limitation",
+  "lesson": "For sm_120 memory-bound elementwise/normalisation kernels with small per-program work, **don't waste autotune budget on `num_stages > 2`**. Keep `num_stages = 2` as default and spend the budget on `BLOCK_M` (huge spread, see #3) and `num_warps` (small but real spread, e.g. `num_warps=1` gave 7× regression in our sweep).",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "triton"
+   },
+   "mechanism": "At `BLOCK_M=2`, each program is so small (~17 LDG.E.128 total) that the compiler can already overlap loads with the small amount of compute even at single-stage. The cp.async pipeline depth doesn't help because there's nothing to pipeline against — the kernel finishes before deeper stages would matter."
+  },
+  "observed": "at `BLOCK_M=2, num_warps=4` on sm_120:",
+  "root_cause": "At `BLOCK_M=2`, each program is so small (~17 LDG.E.128 total) that the compiler can already overlap loads with the small amount of compute even at single-stage. The cp.async pipeline depth doesn't help because there's nothing to pipeline against — the kernel finishes before deeper stages would matter."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/triton/sm120-fused-rmsnorm-gated-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

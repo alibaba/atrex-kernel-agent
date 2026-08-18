@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.low-precision-accumulation-strategies",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|low-precision-accumulation-strategies|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Low-Precision Accumulation Strategies",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Low-Precision Accumulation Strategies"
+  },
+  "title": "Low-Precision Accumulation Strategies",
+  "summary": "Precision issues and solutions for accumulation in low-precision (FP8/FP4) matrix multiplication: periodic accumulator promotion, chunked quantization, error analysis, and hardware support.",
+  "sections": [
+   {
+    "heading": "1. Precision Issues in Low-Precision Arithmetic",
+    "anchor": "1-precision-issues-in-low-precision-arithmetic",
+    "gist": "The FP8 format has two main variants:"
+   },
+   {
+    "heading": "2. Periodic Accumulator Promotion",
+    "anchor": "2-periodic-accumulator-promotion",
+    "gist": "This is the most critical precision recovery technique in low-precision GEMM."
+   },
+   {
+    "heading": "3. When FP16 Accumulation Is Safe",
+    "anchor": "3-when-fp16-accumulation-is-safe",
+    "gist": "Not all scenarios require FP32 accumulation or promotion techniques."
+   },
+   {
+    "heading": "4. Block-Scaled Quantization",
+    "anchor": "4-block-scaled-quantization",
+    "gist": "The core problem of quantization: how to represent original floating-point values with lower-bit (FP8/FP4/INT4) formats."
+   },
+   {
+    "heading": "5. Numerical Error Analysis",
+    "anchor": "5-numerical-error-analysis",
+    "gist": "For the accumulation of N FP8 (p mantissa bits) products, using an FP32 accumulator:"
+   },
+   {
+    "heading": "6. Hardware Architecture Support",
+    "anchor": "6-hardware-architecture-support",
+    "gist": "The Hopper WGMMA instruction has a `scale_D` parameter:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n 1 : accum = a0*b0 # = eps1\n 2 : accum = (a0*b0 + eps1) + a1*b1 + eps2 # = eps1 + eps2\n N : accum = true_sum + sum(eps_i) # = O(N * ulp)\n```\n\n```\nTC_accum: tensorcore( FP16, )\nmain_accum: register FP32 main(accuracyhigh)\n\n N MMA :\n 1. main_accum += TC_accum ( FP32)\n 2. TC_accum = 0 (zero out, )\n```\n\n```\nK dimension (e.g., K=4096, each MMA processes k=16)\n|<-- 256 MMA operations ------------------------------------------------->|\n\nWithout promotion (pure FP32 accumulator, precise but possibly slow):\n[--- FP32 accum accumulates 256 MMA operations -------------------->]\n\nWithout promotion (pure FP16 accumulator, fast but inaccurate):\n[--- FP16 accum accumulates 256 MMA operations -- overflow/precision disaster --X          ]\n\nUsing promotion (interval=4):\n[FP16x4][FP16x4][FP16x4][FP16x4]...[FP16x4][residual]\n   |       |       |       |            |      |\n   +--FP32-+--FP32-+--FP32-+---...-----+--FP32+-> Final result\n\nEach [FP16x4] segment: 4 MMAs accumulated to FP16\nArrow: FP16 result promoted (added) to FP32 main accumulator, then FP16 cleared\n```\n\n```python\n# Pseudocode\nmain_accum[i] += TC_accum[i]    # FADD instruction\nTC_accum[i] = 0\n```\n\n```python\n# Scalar scaling\nmain_accum[i] += TC_accum[i] * scale       # FFMA instruction\nTC_accum[i] = 0\n\n# Per-element scaling (per-group quantization)\nmain_accum[i] += TC_accum[i] * scaleA[i] * scaleB[i]\nTC_accum[i] = 0\n```\n\n```python\n# Main loop ends\nif mma_count > 0:    # Remaining un-promoted data\n    main_accum += TC_accum   # Final promotion\n```\n\n```\nif K * max(|A|) * max(|B|) > 32000:    # Approaching half of FP16 max value 65504\n    Use FP32 accumulation or promotion\nelse:\n    FP16 accumulation may be safe (but verification recommended)\n```\n\n```\nquantization: q = round(x / scale)\nquantization: x_approx = q * scale\n```\n\n```\nPer-Tensor          Per-Channel          Per-Group           Per-Element\n                    (along K axis)       (32-128 elements shared)\n    1 scale         M or N scales       M*N / group_size     M*N scales\n                                         scales\n\n Precision:  Lowest          Lower                 Higher                 Highest\n Overhead:   Minimum         O(M+N)               O(M*N/G)              O(M*N)\n Speed:      Fastest         Fast                  Slower                 Slowest\n```\n\n```\nload Q_A, Q_B, scale_A, scale_B\nA = Q_A * scale_A    # Dequantize in shared memory or registers\nB = Q_B * scale_B\nC += A * B            # MMA uses high-precision inputs\n```\n\n```\nload Q_A, Q_B\nTC_accum += Q_A * Q_B   # MMA directly uses quantized values\n# Every N MMAs:\nmain_accum += TC_accum * scale_A * scale_B  # Dequantization fused into promotion\nTC_accum = 0\n```\n\n```\n# Entire K loop uses quantized values\nC_raw = sum(Q_A * Q_B)\n# Final single scaling\nC = C_raw * scale_overall\n```\n\n```\nMX Block (e.g., 32 elements):\n+--------+-------+-------+-----+-------+\n| Shared | elem0 | elem1 | ... | elem31|\n| Exponent| Mantissa| Mantissa|     | Mantissa|\n| (8-bit)| (p-bit)| (p-bit)|     | (p-bit)|\n+--------+-------+-------+-----+-------+\n\nShared exponent = max(exponent(elem_i)) for entire block\nEach element stores only: sign + mantissa (exponent derived from shared exponent)\n```\n\n```\ntcgen05.mma  ... .scale_a .scale_b   // Hardware automatically reads and applies scale factor\n\nInput: A_quantized (FP4/FP8), B_quantized (FP4/FP8)\n      scale_A (per-block), scale_B (per-block)\nOutput: C (FP32 accumulator) = sum(dequant(A) * dequant(B))\n```\n\n```\n|| <= N * 2^(-23) * |true_sum| # FP32 ULP\n```\n\n```\n|| <= N * 2^(-10) * |true_sum| # FP16 ULP , 1000x\n```\n\n```\n|| <= I * 2^(-10) * |partial_sum| # FP16\n + (N/I) * 2^(-23) * |true_sum| # FP32\n```\n\n```\nWithout promotion (FP16 accumulator):\n  Error upper bound ≈ 4096 * 2^(-10) * 4096 ≈ 16384\n  Relative error ≈ 4.0 = 400%  ← Completely unusable\n\nUsing promotion (interval=4, FP16 TC accumulator):\n  FP16 part: 4 * 2^(-10) * 4 ≈ 0.016\n  FP32 part: 1024 * 2^(-23) * 4096 ≈ 0.0005\n  Total relative error ≈ 0.4%  ← Acceptable\n\nWithout promotion (FP32 accumulator):\n  Error upper bound ≈ 4096 * 2^(-23) * 4096 ≈ 0.002\n  Relative error ≈ 0.00005%  ← Most accurate\n```\n\n```\noutput ≈ cond(A) * cond(B) *\n```\n\n```python\ndef kahan_sum(values):\n    s = 0.0\n    c = 0.0        # Compensation term\n    for v in values:\n        y = v - c\n        t = s + y\n        c = (t - s) - y    # Recover discarded low-order bits\n        s = t\n    return s\n```\n\n```\n FP8 TC FP4 TC TC Block-Scale Promotion\n optionalaccuracy requires\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSM89 (Ada/L40S) FP32 only (1)\nSM90 (Hopper/H100) FP16/FP32 (2)\nSM100 (Blackwell) FP32  (3)\nAMD CDNA3 (MI300X) FP32 only (1)\nAMD CDNA4 (MI355X) FP32 (1)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n(1) FP32 , requires promotion\n(2) FP16 requires promotion accuracy\n(3) block-scale, MMA quantization\n```\n\n```\nD = A * B + scale_D * C\n\nscale_D = 1 (ScaleOut::One):   D = A*B + C   # Accumulation mode\nscale_D = 0 (ScaleOut::Zero):  D = A*B       # Clear and restart\n```\n\n```\ntcgen05.mma.kind.block_scale_type  D, A, B, idesc, scaleA, scaleB\n\nblock_scale_type:\n  .block_scale.scale_vec_1x    # 1 scale per 1 column/row\n  .block_scale.scale_vec_2x    # 2 scale vectors\n```\n\n```python\ndef should_use_promotion(K, dtype_bits, accum_bits, arch):\n    \"\"\"Rough estimate of whether promotion is needed\"\"\"\n    if accum_bits == 32:\n        return False  # FP32 accumulator is sufficiently precise\n\n    # Worst-case scenario for FP16 accumulator\n    max_product = (2 ** dtype_bits) ** 2  # Upper bound of FP8 product\n    max_accum = K * max_product\n\n    if max_accum > 30000:  # FP16 max ≈ 65504, leave safety margin\n        return True\n\n    return False\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/low-precision-accumulation-strategies.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-tma-warp-spec-pitfalls.5-cute-compile-launcher-returns-a-callable-whose-runtime-signature-drops-constexpr-args",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|pitfalls|sm120-tma-warp-spec-pitfalls#5-cute-compile-launcher-returns-a-callable-whose-runtime-signature-drops-constexpr-args|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '5. `cute.compile(launcher)` returns a callable whose runtime signature drops Constexpr args' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 5. `cute.compile(launcher)` returns a callable whose runtime signature drops Constexpr args",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 cute 4.4.2 TMA + warp-spec implementation pitfalls -- 5. `cute.compile(launcher)` returns a callable whose runtime signature drops Constexpr args"
+  },
+  "attempted": "when calling `compiled(...)` with the same argument list as `cute.compile(...)`.",
+  "verdict": "not-worth-it-here",
+  "lesson": "5. `cute.compile(launcher)` returns a callable whose runtime signature drops Constexpr args",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "5. `cute.compile(launcher)` returns a callable whose runtime signature drops Constexpr args"
+  },
+  "implementation": {
+   "snippet": "```\nDSLRuntimeError: input args/kwargs length does not match runtime function signature!\n  input args length: 11\n  function signature args length: 8\n```\n\n```python\ncompiled = cute.compile(\n    launcher,\n    mAttn, mGate, mOut, mScl, Int32(M), Int32(padded_M), Int32(num_blocks), mGS,\n    num_sf_blocks_per_row, padded_sf_cols, num_col_chunks,   # Constexpr\n)\ncompiled(\n    mAttn, mGate, mOut, mScl, Int32(M), Int32(padded_M), Int32(num_blocks), mGS,\n    # NO Constexpr args here\n)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-tma-warp-spec-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.cute-dsl.warp-specialized-kernel-skeleton",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|languages|cute-dsl#warp-specialized-kernel-skeleton|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "languages",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "warp-specialized-kernel-skeleton"
+  ],
+  "triggers": [
+   "the 'Warp-Specialized Kernel Skeleton' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Warp-Specialized Kernel Skeleton",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CuTe-DSL: SM100 MMA atom for BF16 -- Warp-Specialized Kernel Skeleton"
+  },
+  "technique": "Warp-Specialized Kernel Skeleton",
+  "what": "Warp 0: TMA producer",
+  "when": "Warp 0: TMA producer",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@cute_kernel\ndef blackwell_gemm(A, B, C):\n    # Warp 0: TMA producer\n    if warp_id == 0:\n        for stage in pipeline:\n            tma_copy(A_tile, smem_A[stage])\n            tma_copy(B_tile, smem_B[stage])\n            arrive(mbarrier[stage])\n\n    # Warp 1: MMA consumer\n    elif warp_id == 1:\n        tmem = alloc_tmem(256)  # columns\n        for stage in pipeline:\n            wait(mbarrier[stage])\n            fence_after_thread_sync()\n            mma(smem_A[stage], smem_B[stage], tmem)\n        signal_epilogue()\n\n    # Warps 2+: Epilogue\n    else:\n        wait_epilogue()\n        regs = load_tmem(tmem)\n        store_global(C, regs)\n        dealloc_tmem(tmem)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/languages/cute-dsl.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

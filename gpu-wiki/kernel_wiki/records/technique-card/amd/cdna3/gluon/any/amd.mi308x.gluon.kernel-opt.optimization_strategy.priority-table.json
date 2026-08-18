@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization_strategy.priority-table",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|sort|optimization_strategy#priority-table|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": "sort",
+   "operators": [
+    "sort"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "mask-index"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "priority-table",
+   "sort"
+  ],
+  "triggers": [
+   "the 'Priority Table' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Priority Table",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Optimization Strategies (Sorted by Priority) -- Priority Table"
+  },
+  "technique": "Priority Table",
+  "what": "| Priority | Optimization | Gain | Description | |--------|--------|------|------| | ⭐⭐⭐ | **Reduce tile size** | **2.5×** | Improves CU utilization, highest priority | | ⭐⭐ | **Double BLOCK_K** | **+17%** | Reduces loop overhead, extremely cost-effective | | ⭐ | Remove `other=0.0` | +0.4-3.5% | Eliminates redundant `v_cndmask_b32` instructions | | ⭐ | `tl.assume` compiler hints | +1-2% | Zero-cost optimization, always do | | ❌ | `warp_pipeline_stage` | **-14%** | Loop count too small, overhead > benefit | | ❌ | `num_warps=8` | **-14%** | Grid too small, no occupancy benefit | | ❌ | `value=` pattern | **-13%** | Per-iteration allocation adds overhead |",
+  "when": "| Priority | Optimization | Gain | Description | |--------|--------|------|------| | ⭐⭐⭐ | **Reduce tile size** | **2.5×** | Improves CU utilization, highest priority | | ⭐⭐ | **Double BLOCK_K** | **+17%** | Reduces loop overhead, extremel…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization_strategy.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

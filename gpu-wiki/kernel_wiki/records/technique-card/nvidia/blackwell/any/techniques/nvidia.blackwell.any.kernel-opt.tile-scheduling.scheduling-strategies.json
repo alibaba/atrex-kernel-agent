@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.tile-scheduling.scheduling-strategies",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|tile-scheduling#scheduling-strategies|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "scheduling-strategies"
+  ],
+  "triggers": [
+   "the 'Scheduling Strategies' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Scheduling Strategies",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "L2 cache reuse analysis for different schedulers -- Scheduling Strategies"
+  },
+  "technique": "Scheduling Strategies",
+  "what": "Tiles are assigned in row-major order. Simple but poor L2 locality: consecutive tiles share no B-matrix data until the entire M-dimension is traversed.",
+  "when": "Tiles are assigned in row-major order.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Linear raster: tile_idx maps directly to (tile_m, tile_n)\n__device__ void linear_raster(int tile_idx, int tiles_n,\n                               int& tile_m, int& tile_n) {\n    tile_m = tile_idx / tiles_n;\n    tile_n = tile_idx % tiles_n;\n}\n\n// Access pattern for a 4x4 tile grid:\n//  0  1  2  3\n//  4  5  6  7\n//  8  9 10 11\n// 12 13 14 15\n//\n// Problem: tiles 0,1,2,3 all load different B columns.\n// By tile 4, B column 0 has been evicted from L2.\n```\n\n```cuda\n// Swizzled raster: group tiles into blocks that share A and B data\n// swizzle_size controls the block width (typically 4-8)\n__device__ void swizzled_raster(int tile_idx, int tiles_m, int tiles_n,\n                                 int swizzle_size, int& tile_m, int& tile_n)\n{\n    // Number of tile columns per swizzle group\n    int group_cols = min(swizzle_size, tiles_n);\n    int tiles_per_group = tiles_m * group_cols;\n\n    // Which swizzle group\n    int group_idx = tile_idx / tiles_per_group;\n    int within_group = tile_idx % tiles_per_group;\n\n    // Within the group, iterate in column-major order\n    tile_m = within_group / group_cols;\n    tile_n = group_idx * group_cols + within_group % group_cols;\n}\n\n// Access pattern with swizzle_size=2 on a 4x4 grid:\n//  0  1 |  8  9\n//  2  3 | 10 11\n//  4  5 | 12 13\n//  6  7 | 14 15\n//\n// Tiles 0,1,2,3 share the same B columns (0,1).\n// Tiles 0,2,4,6 share the same A rows.\n// Much better L2 reuse.\n```\n\n```cuda\n// Static stride: CTA i processes tiles i, i+gridDim.x, i+2*gridDim.x, ...\n__device__ void static_stride(int cta_id, int total_ctas,\n                               int iteration, int tiles_n,\n                               int& tile_m, int& tile_n) {\n    int tile_idx = cta_id + iteration * total_ctas;\n    tile_m = tile_idx / tiles_n;\n    tile_n = tile_idx % tiles_n;\n}\n```\n\n```cuda\n// CLC-based scheduling on Blackwell\n// The scheduling policy is set once during CLC initialization\nenum class ClcSchedulePolicy {\n    LinearRaster,       // Simple row-major order\n    SwizzledRaster,     // Blocked pattern for L2 locality\n    ColumnFirst,        // Column-major for specific workloads\n    Hilbert             // Space-filling curve (experimental)\n};\n\n__device__ void clc_init_scheduler(\n    void* clc_buffer,\n    int tiles_m, int tiles_n,\n    ClcSchedulePolicy policy)\n{\n    if (threadIdx.x == 0) {\n        // Program the CLC with tile grid dimensions and policy\n        // CLC handles the swizzle mapping internally\n        uint32_t config = encode_clc_config(tiles_m, tiles_n, policy);\n        asm volatile(\n            \"clusterctl.init.shared [%0], %1, %2, %3;\"\n            : : \"r\"((uint32_t)clc_buffer),\n                \"r\"(tiles_m), \"r\"(tiles_n), \"r\"(config)\n        );\n    }\n    __syncwarp();\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/tile-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

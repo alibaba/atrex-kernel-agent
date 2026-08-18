@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.software-pipelining.cdna4-hardware-async-dma-pipeline",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|software-pipelining#cdna4-hardware-async-dma-pipeline|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "cdna4-hardware-async-dma-pipeline"
+  ],
+  "triggers": [
+   "the 'CDNA4: Hardware Async DMA Pipeline' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): CDNA4: Hardware Async DMA Pipeline",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Software Pipeline (Cross-Architecture Differences) -- CDNA4: Hardware Async DMA Pipeline"
+  },
+  "technique": "CDNA4: Hardware Async DMA Pipeline",
+  "what": "**CDNA4 Insights**: - Async copy bypasses registers, significantly reducing VGPR pressure - Supports deeper pipelines (3-4 stages) since it does not consume registers - Similar to NVIDIA Hopper's cp.async, but with a different implementation mechanism",
+  "when": "**CDNA4 Insights**: - Async copy bypasses registers, significantly reducing VGPR pressure - Supports deeper pipelines (3-4 stages) since it does not consume registers - Similar to NVIDIA Hopper's cp.async, but with a different implementati…",
+  "caveats": [
+   "Supports deeper pipelines (3-4 stages) since it does not consume registers",
+   "Similar to NVIDIA Hopper's cp.async, but with a different implementation mechanism"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CDNA4 supports hardware async copy: global → LDS, bypassing registers\nfrom triton.experimental.gluon.language.amd.cdna4 import async_copy\n\nfor k in range(K_tiles):\n    # Async copy: global → LDS, no register usage\n    async_copy.buffer_load_to_shared(smem_a, a_ptr + k * stride)\n    async_copy.buffer_load_to_shared(smem_b, b_ptr + k * stride)\n    async_copy.commit()\n\n    # Wait for previous copy to complete\n    async_copy.wait(0)\n\n    # Compute\n    acc = tl.dot(smem_a, smem_b, acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/software-pipelining.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

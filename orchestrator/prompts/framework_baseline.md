@@ -86,26 +86,27 @@ infer hidden evaluator cases for a generalized problem.
 ## Step B — Research the implementation approach
 
 1. **Mandatory reads**: workspace `README.md`, `gpu-wiki/README.md`, `memory/v0.json`.
-2. **Architecture-scoped L1 retrieval**: Read the target architecture from workspace `README.md`, then query
-   main's architecture-first wiki before broad grep. Open the returned pages and follow their local links:
+2. **L1 retrieval — describe the problem, do not compose flags.** Use the natural-language front door;
+   `query_bridge_agent` extracts only typed intent, while deterministic code performs normalization,
+   retrieval, widening, projection, and context limiting:
    ```bash
-   python3 gpu-wiki/scripts/query.py --arch <arch> --vendor <nvidia|amd> \
-     --area docs --dsl <dsl> --operator <operator> \
-     --section ref-docs --section pitfalls
-   python3 gpu-wiki/scripts/query.py <operator-or-mechanism> --arch <arch> \
-     --vendor <nvidia|amd> --dsl <dsl> --area reference-kernels --kind kernel
+   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
+   python3 gpu-wiki/tools/query_nl.py --file plans/research_request.txt
    ```
-   Omit `--area` only when combined docs/reference results are useful. Narrow
-   reference results with `--source`, `--status`, or `--kind`; test/build/package
-   files require `--include-auxiliary`. Retry uncertain spellings with `--fuzzy`
-   while keeping the same architecture/vendor/DSL filters. Copied filenames and
-   paths work directly without fuzzy mode. Unknown filters must fail closed. Do
-   not remove `--arch` to make an empty result look successful.
+   State the true product exactly as `{{PLATFORM}}` and the authoritative runtime architecture exactly
+   as `{{ARCH}}`. Explicitly request the full `{{PLATFORM}}` specification and relevant architecture/ISA
+   facts so the same response contains isolated `hardware_wiki` and `kernel_wiki` records. Also include
+   the operator, `{{FRAMEWORK}}`, shapes, dtypes, current measurements, intended implementation, and
+   uncertainties. Do not translate the product into another identity or compress the request into keywords.
+
+   The response has only `records` and `notes`. Records are keyed by stable id; inspect each record's
+   `store`, independent `payload`, `source`, `type`, and `match.arch`. Internal ids use the
+   `internal_gpu_wiki::` namespace. Use `--max-bytes` for a hard context limit. The
+   structured `query_wiki.py` and `query_hardware.py` interfaces remain available for an exact address
+   already known; never drop architecture scope to manufacture a match.
 3. **Three-layer progressive search (strict order)** for a reference implementation of this operator class in
    `{{FRAMEWORK}}` on this architecture:
-   - **L1 (gpu-wiki)**: architecture-scoped `gpu-wiki/docs/` first, then `gpu-wiki/reference-kernels/`. Only
-     after those P0-P4 sources are insufficient, use the runtime's available `KernelWiki` skill or
-     `gpu-wiki/3rdparty/` as P5 sources for NVIDIA SM90/SM100.
+   - **L1 (gpu-wiki)**: use the front door above and exhaust relevant returned records first.
    - **L2 (reference-projects)**: Only if L1 yields no new actionable path. Search relevant modules in
      `reference-projects/` for implementation patterns.
    - **L3 (public web)**: Only if L1+L2 yield nothing new. Use web search for papers, docs, or community posts.

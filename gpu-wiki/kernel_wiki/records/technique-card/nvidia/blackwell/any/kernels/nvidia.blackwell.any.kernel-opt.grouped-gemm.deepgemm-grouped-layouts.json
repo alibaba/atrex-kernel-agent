@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.grouped-gemm.deepgemm-grouped-layouts",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|grouped-gemm#deepgemm-grouped-layouts|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "grouped-gemm",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "deepgemm-grouped-layouts",
+   "gemm",
+   "grouped-gemm",
+   "moe"
+  ],
+  "triggers": [
+   "the 'DeepGEMM Grouped Layouts' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): DeepGEMM Grouped Layouts",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Grouped GEMM for MoE -- DeepGEMM Grouped Layouts"
+  },
+  "technique": "DeepGEMM Grouped Layouts",
+  "what": "DeepGEMM provides three layouts optimized for different MoE phases:",
+  "when": "DeepGEMM provides three layouts optimized for different MoE phases:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Layout 1: Contiguous (prefill)\n// All expert inputs packed sequentially with cumulative offset array\n// Memory: [Expert0 (M0 rows)] [Expert1 (M1 rows)] [Expert2 (M2 rows)]...\n// Index:  offsets[0]=0         offsets[1]=M0         offsets[2]=M0+M1\nstruct ContiguousLayout {\n    const fp8_t* A;         // Packed input [sum(M_i), K]\n    const fp8_t* B;         // Expert weights [num_experts, N, K]\n    float* C;               // Packed output [sum(M_i), N]\n    const int* offsets;     // Cumulative M offsets [num_experts + 1]\n};\n\n// Layout 2: Masked (decode with CUDA graphs)\n// Fixed allocation per expert, binary mask for valid tokens\n// Compatible with CUDA graph capture (static shapes)\nstruct MaskedLayout {\n    const fp8_t* A;         // [num_experts, M_max, K]\n    const fp8_t* B;         // [num_experts, N, K]\n    float* C;               // [num_experts, M_max, N]\n    const bool* mask;       // [num_experts, M_max] validity flags\n};\n\n// Layout 3: K-grouped (weight gradients in training backward)\n// Groups along K-axis instead of M-axis\nstruct KGroupedLayout {\n    const fp8_t* A;         // [M, sum(K_i)]\n    const fp8_t* B;         // Per-group B matrices with different K\n    float* C;               // [M, N]\n    const int* k_offsets;   // Cumulative K offsets\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/grouped-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

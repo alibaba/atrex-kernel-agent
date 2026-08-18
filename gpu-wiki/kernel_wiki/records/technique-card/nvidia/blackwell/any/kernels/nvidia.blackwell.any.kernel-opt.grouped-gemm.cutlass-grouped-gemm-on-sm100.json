@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.grouped-gemm.cutlass-grouped-gemm-on-sm100",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|grouped-gemm#cutlass-grouped-gemm-on-sm100|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "grouped-gemm",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "cutlass-grouped-gemm-on-sm100",
+   "gemm",
+   "grouped-gemm",
+   "moe"
+  ],
+  "triggers": [
+   "the 'CUTLASS Grouped GEMM on SM100' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): CUTLASS Grouped GEMM on SM100",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Grouped GEMM for MoE -- CUTLASS Grouped GEMM on SM100"
+  },
+  "technique": "CUTLASS Grouped GEMM on SM100",
+  "what": "CUTLASS schedule for grouped GEMM on Blackwell",
+  "when": "CUTLASS schedule for grouped GEMM on Blackwell",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// CUTLASS schedule for grouped GEMM on Blackwell\nusing Schedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecialized1SmNvf4Sm100;\n\n// PtrArray mode: array of pointers to per-group A, B, C matrices\n// TMA handles variable-offset loads via per-group descriptors\n// CLC distributes tiles across groups dynamically\n\nusing GemmKernel = cutlass::gemm::kernel::GemmGrouped<\n    cutlass::gemm::GemmShape<128, 256, 128>,  // Tile shape\n    cutlass::arch::Sm100,\n    cutlass::float_e2m1_t,    // NVFP4 operand type\n    cutlass::float_e2m1_t,\n    float,\n    cutlass::layout::RowMajor,\n    cutlass::layout::ColumnMajor\n>;\n\n// Launch: single kernel handles all groups\nGemmKernel::Arguments args{\n    num_groups,\n    problem_sizes,   // [num_groups] array of {M_i, N, K}\n    ptr_A, ptr_B, ptr_C,\n    scale_factors_A, scale_factors_B\n};\nGemmKernel kernel;\nkernel.run(args, stream);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/grouped-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.nvidia-ptx-mma-instructions",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|nvidia-ptx-mma-instructions|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): PTX MMA Instruction Evolution (NVIDIA General)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "PTX MMA Instruction Evolution (NVIDIA General)"
+  },
+  "title": "PTX MMA Instruction Evolution (NVIDIA General)",
+  "summary": "High-level API; the compiler manages fragment layout (opaque layout).",
+  "sections": [
+   {
+    "heading": "MMA Instruction Lineage",
+    "anchor": "mma-instruction-lineage",
+    "gist": "---"
+   },
+   {
+    "heading": "wmma — Warp Matrix Multiply-Accumulate (SM70+)",
+    "anchor": "wmma-warp-matrix-multiply-accumulate-sm70",
+    "gist": "High-level API; the compiler manages fragment layout (opaque layout)."
+   },
+   {
+    "heading": "mma.sync — Low-level MMA (SM75+)",
+    "anchor": "mma-sync-low-level-mma-sm75",
+    "gist": "Directly maps to hardware instructions; fragment layout is fixed and documented."
+   },
+   {
+    "heading": "wgmma.mma_async — Warpgroup MMA (SM90+)",
+    "anchor": "wgmma-mma-async-warpgroup-mma-sm90",
+    "gist": "128 threads (4 warps = 1 warpgroup) collaborate to execute asynchronous MMA."
+   },
+   {
+    "heading": "tcgen05.mma — Fifth-Generation Tensor Core (SM100+)",
+    "anchor": "tcgen05-mma-fifth-generation-tensor-core-sm100",
+    "gist": "The Blackwell architecture introduces TMEM (Tensor Memory) as accumulator storage, further decoupling computation and data movement."
+   },
+   {
+    "heading": "MMA Sparse Variants",
+    "anchor": "mma-sparse-variants",
+    "gist": "2:4 structured sparsity: only 2 out of every 4 elements are non-zero, doubling throughput."
+   },
+   {
+    "heading": "MMA Instruction Selection Guide",
+    "anchor": "mma-instruction-selection-guide",
+    "gist": "table columns: Scenario, Recommended Instruction, Rationale"
+   },
+   {
+    "heading": "ldmatrix Evolution",
+    "anchor": "ldmatrix-evolution",
+    "gist": ""
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Prerequisites**: PTX Programming Model → PTX Instruction Set → PTX Synchronization & Asynchrony - **AMD Counterpart**: [AMD MFMA Matrix Core Programm…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nwmma (SM70+) → mma.sync (SM75+) → wgmma.mma_async (SM90+) → tcgen05.mma (SM100+)\n  32 threads    32 threads            128 threads(warpgroup)       128 threads(warpgroup)\n  High-level API Low-level precise control  Async+SMEM input   TMEM accumulator\n```\n\n```\n// Declare fragments (opaque layout, compiler-managed)\nwmma.load.a.sync.aligned.row.m16n16k16.f16     {%r0,...,%r7}, [%sptr], %ldm;\nwmma.load.b.sync.aligned.col.m16n16k16.f16     {%r0,...,%r7}, [%sptr], %ldm;\nwmma.load.c.sync.aligned.row.m16n16k16.f32     {%r0,...,%r7}, [%sptr], %ldm;\n\n// MMA computation\nwmma.mma.sync.aligned.row.col.m16n16k16.f32.f32\n    {%d0,...,%d7}, {%a0,...,%a7}, {%b0,...,%b7}, {%c0,...,%c7};\n\n// Store result\nwmma.store.d.sync.aligned.row.m16n16k16.f32    [%ptr], {%d0,...,%d7}, %ldm;\n```\n\n```\n// 4-bit integer MMA\nwmma.load.a.sync.aligned.row.m8n8k32.s4   {%r0}, [%ptr], %ldm;\nwmma.mma.sync.aligned.row.col.m8n8k32.s32.s4\n    {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};\n\n// 1-bit MMA (SM75+)\nwmma.mma.xor.popc.sync.aligned.row.col.m8n8k128.s32.b1\n    {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};\n```\n\n```\n// INT8 m8n8k16\nmma.sync.aligned.m8n8k16.row.col.s32.s8.s8.s32\n    {%d0, %d1}, {%a0}, {%b0}, {%c0, %c1};\n\n// FP16 m16n8k8\nmma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1}, {%b0}, {%c0,%c1,%c2,%c3};\n```\n\n```\n// FP16 m16n8k16\nmma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n\n// BF16 m16n8k16\nmma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n\n// TF32 m16n8k8\nmma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n\n// FP64 m8n8k4\nmma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64\n    {%d0,%d1}, {%a0}, {%b0}, {%c0,%c1};\n\n// INT8 m16n8k32\nmma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n```\n\n```\n// FP8 m16n8k32\nmma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n\nmma.sync.aligned.m16n8k32.row.col.f32.e5m2.e4m3.f32\n    {%d0,%d1,%d2,%d3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};\n// A B usedifferent FP8\n```\n\n```\nA matrix (16x16, row-major):\n  4 registers/thread, each register 2 f16\n  Thread T holds part of row [T%16, T%16+8]\n\nB matrix (8x16, col-major):\n  2 registers/thread\n\nD/C matrix (16x8):\n  4 registers/thread, each register 2 f32\n```\n\n```\n// fence + MMA + commit + wait four-step workflow\n\n// 1. Fence: separate different MMA groups\nwgmma.fence.sync.aligned;\n\n// 2. MMA instruction (async launch)\nwgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16\n    {%d0,...,%d63},                    // D: 64 f32 registers\n    %desc_a,                           // A: SMEM descriptor\n    %desc_b,                           // B: SMEM descriptor\n    1,                                 // scale_d: 1=accumulate, 0=overwrite\n    -1, 1, 0, 1;                       // scale_a, scale_b, trans_a, trans_b\n\n// 3. Commit: submit to async group\nwgmma.commit_group.sync.aligned;\n\n// 4. Wait: wait for group completion\nwgmma.wait_group.sync.aligned  0;     // Wait for all groups to complete\n```\n\n```\n// A from SMEM (descriptor) — saves registers\nwgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16\n    {%d0,...}, %desc_a, %desc_b, ...;\n\n// A from registers — for epilogue fusion or special data flow\nwgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16\n    {%d0,...}, {%a0,...,%a7}, %desc_b, ...;\n```\n\n```\n// 64-bit descriptor encoding:\n// [13:0]   start_address     — 14-bit SMEM address (128B aligned)\n// [29:16]  leading_byte_offset — continuous dimension stride\n// [45:32]  stride_byte_offset  — non-continuous dimension stride\n// [48:46]  base_offset        — base address offset\n// [51:49]  swizzle mode       — 0-4 (none/32B/64B/128B)\n```\n\n```\nwgmma.fence.sync.aligned;\n// - Ensures registers written by previous MMA group are visible to subsequent instructions\n// - Must be called after modifying A/B SMEM operands and before next MMA\n// - Similar to acquire-release semantics but specific to WGMMA\n\nwgmma.commit_group.sync.aligned;\n// - Groups all pending wgmma instructions into a group\n// - Similar to cp.async.commit_group\n\nwgmma.wait_group.sync.aligned  N;\n// - Wait until ≤N groups pending\n// - N=0 means all completed\n```\n\n```\n// TMEM\ntcgen05.alloc %tmem_addr, %num_columns;\n\n// Fence\ntcgen05.fence::before_thread_sync;\nbar.sync 0;\n\n// MMA\ntcgen05.mma.cta_group::1.kind::f16\n    [%tmem_addr], %desc_a, %desc_b, %idesc, %enable, %scale_d;\n\n// Commit + Wait\ntcgen05.commit.cta_group::1;\ntcgen05.wait.cta_group::1  0;\n\n// TMEM\ntcgen05.ld [%tmem_addr], {%r0,...};\n\n// TMEM\ntcgen05.dealloc %tmem_addr, %num_columns;\n```\n\n```\n// 1 CTA\ntcgen05.mma.cta_group::1.kind::f16   [%tmem], %desc_a, %desc_b, ...;\n\n// 2 CTA ( CTA compute tile)\ntcgen05.mma.cta_group::2.kind::f16   [%tmem], %desc_a, %desc_b, ...;\n```\n\n```\n// English comment\ntcgen05.alloc              %addr, %num_cols;\n\n// English comment\ntcgen05.dealloc            %addr, %num_cols;\n\n// TMEM loadregister\ntcgen05.ld                 [%tmem_addr+offset], {%r0,...};\ntcgen05.ld.16x256b [%tmem_addr+offset], {%r0,...}; // 16 column x 256 bytes\n\n// store TMEM\ntcgen05.st                 [%tmem_addr+offset], {%r0,...};\ntcgen05.st.16x32b [%tmem_addr+offset], {%r0,...}; // 16 column x 32 bytes\n\n// TMEM -> SMEM directstore\ntcgen05.st.shared::cluster [%smem_ptr], [%tmem_addr], %num_cols;\n```\n\n```\n// mma.sync\nmma.sync.aligned.m16n8k32.row.col.f32.f16.f16.f32\n    {%d0,...,%d3}, {%a0,...,%a3}, {%b0,...,%b3}, {%c0,...,%c3};\n// A matrix 2:4 , metadata register\n\n// wgmma(SM90+)\nwgmma.mma_async.sp.sync.aligned.m64n128k32.f32.f16.f16\n    {%d0,...}, %desc_a, %desc_b, %meta, %selector, ...;\n// %meta: modedata\n// %selector: data\n```\n\n```\n// SM90+: stmatrix (reverse operation)\nstmatrix.sync.aligned.m8n8.x4.shared.b16  [%sptr], {%r0,...,%r3};\nstmatrix.sync.aligned.m8n8.x4.trans.shared.b16  [%sptr], {%r0,...,%r3};\n\n// SM100+: m16n8 variants\nldmatrix.sync.aligned.m16n8.x1.shared.b8  {%r0}, [%sptr];\nldmatrix.sync.aligned.m16n8.x2.shared.b8  {%r0,%r1}, [%sptr];\nldmatrix.sync.aligned.m16n8.x4.shared.b8  {%r0,...,%r3}, [%sptr];\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/nvidia-ptx-mma-instructions.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

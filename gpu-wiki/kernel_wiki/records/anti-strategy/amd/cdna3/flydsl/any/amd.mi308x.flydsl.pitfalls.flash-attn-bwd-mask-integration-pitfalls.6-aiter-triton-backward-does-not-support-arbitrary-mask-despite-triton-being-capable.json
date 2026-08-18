@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.6-aiter-triton-backward-does-not-support-arbitrary-mask-despite-triton-being-capable",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#6-aiter-triton-backward-does-not-support-arbitrary-mask-despite-triton-being-capable|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '6. aiter Triton backward does NOT support arbitrary mask despite Triton being capable' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 6. aiter Triton backward does NOT support arbitrary mask despite Triton being capable",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 6. aiter Triton backward does NOT support arbitrary mask despite Triton being capable"
+  },
+  "attempted": "\"aiter has Triton flash attention kernels; Triton can load arbitrary mask tensors; therefore aiter's Triton backward should support free masks.\"",
+  "verdict": "api-limitation",
+  "lesson": "\"Framework X can do Y\" ≠ \"Library Z built on framework X does Y.\" Always check actual implementation, not theoretical capability. For performance comparisons, verify which code paths are actually exercised.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "While Triton can technically load any mask tensor via `tl.load`, aiter's Triton backward kernels only implement causal masking (`offs_m >= offs_n` diagonal). Adding arbitrary mask support would require loading the mask tile per block, applying it to scores, and propagating it through the backward softmax computation — all of which adds register pressure and memory traffic. The CK-tile path handles this via C++ template specialization; the Triton path simply hasn't been implemented."
+  },
+  "observed": "All three aiter Triton backward implementations (`mha_fused_bwd`, `mha_onekernel_bwd`, and the `mha.py` wrapper) raise `ValueError(\"Bias is not supported yet in the Triton Backend\")` when bias is not None.",
+  "root_cause": "While Triton can technically load any mask tensor via `tl.load`, aiter's Triton backward kernels only implement causal masking (`offs_m >= offs_n` diagonal). Adding arbitrary mask support would require loading the mask tile per block, applying it to scores, and propagating it through the backward softmax computation — all of which adds register pressure and memory traffic. The CK-tile path handles this via C++ template specialization; the Triton path simply hasn't been implemented."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

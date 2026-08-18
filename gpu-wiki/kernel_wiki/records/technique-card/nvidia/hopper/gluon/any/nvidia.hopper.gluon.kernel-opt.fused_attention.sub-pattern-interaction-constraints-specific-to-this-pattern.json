@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.gluon.kernel-opt.fused_attention.sub-pattern-interaction-constraints-specific-to-this-pattern",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|gluon|paged-attention|fused_attention#sub-pattern-interaction-constraints-specific-to-this-pattern|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": "paged-attention",
+   "operators": [
+    "paged-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "paged-attention",
+   "sub-pattern-interaction-constraints-specific-to-this-pattern"
+  ],
+  "triggers": [
+   "the 'Sub-pattern Interaction Constraints (Specific to This Pattern)' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Sub-pattern Interaction Constraints (Specific to This Pattern)",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Fused Attention (Prefill / Paged Attention) Optimization Guide -- Sub-pattern Interaction Constraints (Specific to This Pattern)"
+  },
+  "technique": "Sub-pattern Interaction Constraints (Specific to This Pattern)",
+  "what": "> The following constraints are **not covered** in and , as they only appear when multiple sub-patterns are combined.",
+  "when": "> The following constraints are **not covered** in and , as they only appear when multiple sub-patterns are combined.",
+  "caveats": [
+   "Q tiles may be reused across both matmuls (to avoid redundant loading)",
+   "Shared memory allocation strategy requires global planning; individual matmuls cannot be optimized independently"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/gluon/fused_attention.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

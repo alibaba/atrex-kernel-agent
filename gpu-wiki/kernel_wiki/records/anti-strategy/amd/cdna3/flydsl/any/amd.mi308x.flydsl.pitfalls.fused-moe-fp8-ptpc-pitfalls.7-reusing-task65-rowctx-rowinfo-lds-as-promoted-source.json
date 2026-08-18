@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.fused-moe-fp8-ptpc-pitfalls.7-reusing-task65-rowctx-rowinfo-lds-as-promoted-source",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|fused-moe-fp8-ptpc-pitfalls#7-reusing-task65-rowctx-rowinfo-lds-as-promoted-source|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '7. Reusing Task65 Rowctx / Rowinfo-LDS As Promoted Source' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 7. Reusing Task65 Rowctx / Rowinfo-LDS As Promoted Source",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL FP8 PTPC Fused MoE on MI308X -- 7. Reusing Task65 Rowctx / Rowinfo-LDS As Promoted Source"
+  },
+  "attempted": "Reapply task65 row-context or rowinfo-LDS changes because some rows show tiny local improvement.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Task65 is documentation-only negative evidence. Do not retain its source changes without a new correctness and gate-passing proof.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The current rowctx/rowinfo-LDS reimplementation does not reproduce the older positive path. The best token512 row remains far above target, and token128 regresses."
+  },
+  "observed": "No task65 probe reaches the 5 percent gate; some changes regress important rows.",
+  "root_cause": "The current rowctx/rowinfo-LDS reimplementation does not reproduce the older positive path. The best token512 row remains far above target, and token128 regresses."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

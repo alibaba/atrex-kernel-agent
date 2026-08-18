@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-attention-backward-dkdv-bf16-causal-mask-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|ref-docs|cdna3-attention-backward-dkdv-bf16-causal-mask-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Attention Backward dQ + dK+dV (bf16, Causal Mask) on MI308X (gfx942)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Attention Backward dQ + dK+dV (bf16, Causal Mask) on MI308X (gfx942)"
+  },
+  "title": "FlyDSL Attention Backward dQ + dK+dV (bf16, Causal Mask) on MI308X (gfx942)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "- Chip: AMD MI308X (CDNA3, gfx942) - Peak bf16 MFMA: 206 TFLOPS - HBM BW: 5.3 TB/s - CUs: 80, LDS: 64 KB/CU, VGPR: 512/SIMD (4 SIMD/CU)"
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "Attention backward pass computing dQ, dK and dV gradients with arbitrary additive mask."
+   },
+   {
+    "heading": "Kernel resource footprint (final)",
+    "anchor": "kernel-resource-footprint-final",
+    "gist": "table columns: Resource, Value, Notes"
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "Starting point: single-pass dK+dV kernel with block_n=32, BLOCK_SIZE=64."
+   },
+   {
+    "heading": "Final perf vs baseline",
+    "anchor": "final-perf-vs-baseline",
+    "gist": "Test shape: B=1024, H=8, S=316, D=64, S_PAD=320, causal mask."
+   },
+   {
+    "heading": "Kernel resource footprint (updated)",
+    "anchor": "kernel-resource-footprint-updated",
+    "gist": "table columns: Resource, Value, Notes"
+   },
+   {
+    "heading": "Remaining bottlenecks",
+    "anchor": "remaining-bottlenecks",
+    "gist": "1."
+   },
+   {
+    "heading": "What would close the remaining gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "1."
+   },
+   {
+    "heading": "Sustained recipe",
+    "anchor": "sustained-recipe",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Forward kernel optimization: - Forward kernel pitfalls: - Backward …"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-attention-backward-dkdv-bf16-causal-mask-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.tile-level-dsl-emergence",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|tile-level-dsl-emergence|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Why Tile-Level DSLs Emerged: Triton, TileLang, cuTile and Mojo",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Why Tile-Level DSLs Emerged: Triton, TileLang, cuTile and Mojo"
+  },
+  "title": "Why Tile-Level DSLs Emerged: Triton, TileLang, cuTile and Mojo",
+  "summary": "An analysis of why tile-level DSLs emerged, what they automate, and where their abstractions leak — connecting hardware constraints to software design decisions.",
+  "sections": [
+   {
+    "heading": "1. Glossary",
+    "anchor": "1-glossary",
+    "gist": "table columns: Term, Abbreviation, One-Line Description"
+   },
+   {
+    "heading": "2. Manual Orchestration is Too Expensive, So It Gets Automated",
+    "anchor": "2-manual-orchestration-is-too-expensive-so-it-gets-automated",
+    "gist": "Writing a high-performance kernel requires manually handling a long chain of hardware details: choosing block sizes based on occupancy, tiling data into shared memory, avoiding bank conflicts, using double-buffering for load-compute overla…"
+   },
+   {
+    "heading": "3. Cross-Vendor Perspective: DSLs Want to Flatten Hardware, But Leak Points Vary",
+    "anchor": "3-cross-vendor-perspective-dsls-want-to-flatten-hardware-but-leak-points-vary",
+    "gist": "table columns: Dimension, NVIDIA, AMD, Does Abstraction Leak?"
+   },
+   {
+    "heading": "4. Hardware Constraint to Software Design Rule Mapping",
+    "anchor": "4-hardware-constraint-to-software-design-rule-mapping",
+    "gist": "table columns: Hardware Fact, Cost/Limitation, DSL Automation, Still Leaks to You"
+   },
+   {
+    "heading": "5. Summary",
+    "anchor": "5-summary",
+    "gist": "The extreme cost of manually orchestrating tiling, SMEM, bank conflicts, pipelining, and Tensor Core layouts drove tile-level DSLs into existence: **you write only what a tile computes; the compiler takes over thread allocation, SMEM, pipe…"
+   },
+   {
+    "heading": "References",
+    "anchor": "references",
+    "gist": "- Tillet et al., *Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations* - OpenAI Triton official documentation and tutorials - TileLang project documentation; NVIDIA cuTile / CUDA Tile programming materials -…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nimport torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):\n    pid  = tl.program_id(axis=0)              # Which tile (corresponds to one block)\n    offs = pid * BLOCK + tl.arange(0, BLOCK)  # Element indices this tile covers\n    mask = offs < n                           # Boundary mask, auto-handles tail block\n    x = tl.load(x_ptr + offs, mask=mask)      # Block load; coalescing guaranteed by compiler\n    y = tl.load(y_ptr + offs, mask=mask)\n    tl.store(out_ptr + offs, x + y, mask=mask)\n\ndef add(x, y):\n    out = torch.empty_like(x)\n    n = x.numel()\n    BLOCK = 1024\n    grid = (triton.cdiv(n, BLOCK),)            # num tiles = ceil(n / BLOCK)\n    add_kernel[grid](x, y, out, n, BLOCK=BLOCK)\n    return out\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/tile-level-dsl-emergence.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

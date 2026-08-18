@@ -1,0 +1,95 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.hopper.spec-sheet.hopper",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "hopper",
+  "product": null,
+  "sm_arch": "sm_90",
+  "compute_capability": "9.0"
+ },
+ "facts": {
+  "summary": "NVIDIA Hopper GPU Hardware Compute Specifications Table",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 33.5,
+    "provenance": "architecture-analysis",
+    "use_case": "Scientific computing"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 494.7,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 989.4,
+    "use_case": "TF32 matrix multiply"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 67,
+    "provenance": "architecture-analysis",
+    "use_case": "General-purpose computing"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 989.4,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 1978.9,
+    "use_case": "Training / Inference"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1978.9,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 3957.8,
+    "use_case": "Inference"
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1978.9,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 3957.8,
+    "use_case": "Quantized inference"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 80,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "sm_count": 132,
+   "cuda_cores": 16896,
+   "tensor_cores": 528,
+   "shared_memory_kb_per_sm": 228,
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVIDIA Hopper GPU Hardware Compute Specifications Table",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/hopper/hardware-specs/hardware_specs_hopper.md"
+   }
+  ]
+ }
+}

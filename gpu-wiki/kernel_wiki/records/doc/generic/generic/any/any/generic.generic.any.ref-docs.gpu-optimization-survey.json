@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gpu-optimization-survey",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-optimization-survey|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community GPU Optimization Overview and Learning Roadmap",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community GPU Optimization Overview and Learning Roadmap"
+  },
+  "title": "Community GPU Optimization Overview and Learning Roadmap",
+  "summary": "A systematic compilation of community knowledge on GPU architecture, performance optimization methodologies, and learning resources. Provides a complete learning path and technology map for GPU kernel developers, from beginner to advanced.",
+  "sections": [
+   {
+    "heading": "1. GPU Architecture Fundamentals",
+    "anchor": "1-gpu-architecture-fundamentals",
+    "gist": "The GPU hardware structure, from top to bottom, can be summarized as:"
+   },
+   {
+    "heading": "2. Optimization Methodology",
+    "anchor": "2-optimization-methodology",
+    "gist": "GPU optimization can be organized from two perspectives: **hierarchy** and **dimension**."
+   },
+   {
+    "heading": "3. Performance Analysis Methodology",
+    "anchor": "3-performance-analysis-methodology",
+    "gist": "The Roofline model is the core tool for identifying kernel performance bottlenecks:"
+   },
+   {
+    "heading": "4. Learning Path and Resources",
+    "anchor": "4-learning-path-and-resources",
+    "gist": "**Phase 1: Basic Concepts (1-2 weeks)** - Understand GPU thread model: Grid → Block → Warp → Thread - Understand memory hierarchy: Registers → Shared Memory → L2 → Global Memory - Recommended resource: CUDA C Programming Guide, first 5 cha…"
+   },
+   {
+    "heading": "5. Emerging Trends",
+    "anchor": "5-emerging-trends",
+    "gist": "The warp specialization concept introduced by the 2012 cudaDMA paper—dividing warps into producers (data movement) and consumers (computation)—has been revitalized on Hopper/Blackwell architectures."
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- GPU Memory Hierarchy & Optimization — A systematic guide to memory optimization - GPU Execution Model & Thread Optimization — In-depth explanation of thread organization and scheduling…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```c\n__shared__ TYPE mem[size_y][size_x];\nmem[y][x ^ (((y >> a) & b) << c)]\n// a: log2(minimum unit in y direction), b: complexity mask, c: log2(minimum unit in x direction)\n```\n\n```\nHigh DRAM throughput + low SM throughput → Memory-bound → Tiling + Memory access optimization\nHigh SM throughput + low DRAM throughput → Compute-bound → Fusion + Architecture specialization\nBoth low → Latency-bound → Persistent kernel + Split-K\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gpu-optimization-survey.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

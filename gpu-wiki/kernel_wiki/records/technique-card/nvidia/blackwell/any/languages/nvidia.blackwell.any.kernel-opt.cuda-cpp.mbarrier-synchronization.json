@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.cuda-cpp.mbarrier-synchronization",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|languages|cuda-cpp#mbarrier-synchronization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "languages",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mbarrier-synchronization"
+  ],
+  "triggers": [
+   "the 'mbarrier Synchronization' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): mbarrier Synchronization",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CUDA C++ for Blackwell Kernels -- mbarrier Synchronization"
+  },
+  "technique": "mbarrier Synchronization",
+  "what": "TMA-MMA synchronization via mbarrier",
+  "when": "TMA-MMA synchronization via mbarrier",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// TMA-MMA synchronization via mbarrier\n// expected_bytes: total bytes the TMA will deliver to this stage\n__device__ void mbarrier_arrive(uint64_t* mbar, uint32_t expected_bytes) {\n    asm volatile(\n        \"mbarrier.arrive.expect_tx.shared.b64 _, [%0], %1;\"\n        :: \"r\"((uint32_t)__cvta_generic_to_shared(mbar)),\n           \"r\"(expected_bytes)\n    );\n}\n\n__device__ void mbarrier_wait(uint64_t* mbar, int phase) {\n    asm volatile(\n        \"{\\n\"\n        \".reg .pred p;\\n\"\n        \"WAIT_LOOP:\\n\"\n        \"  mbarrier.try_wait.parity.shared.b64 p, [%0], %1;\\n\"\n        \"  @!p bra WAIT_LOOP;\\n\"\n        \"}\\n\"\n        :: \"r\"((uint32_t)__cvta_generic_to_shared(mbar)),\n           \"r\"(phase)\n    );\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/languages/cuda-cpp.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

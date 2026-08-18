@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.blackwell-tcgen05-gemm-from-scratch",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|blackwell-tcgen05-gemm-from-scratch|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Building a tcgen05 GEMM from Scratch: Reaching 98% of cuBLAS on Blackwell",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Building a tcgen05 GEMM from Scratch: Reaching 98% of cuBLAS on Blackwell"
+  },
+  "title": "Building a tcgen05 GEMM from Scratch: Reaching 98% of cuBLAS on Blackwell",
+  "summary": "A step-by-step implementation of a Blackwell matrix multiplication kernel using raw PTX tcgen05 instructions, progressing from a basic kernel to 98% of cuBLAS performance through swizzling, pipelining, warp specialization, 2-SM MMA, and persistent kernel techniques.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "`tcgen05` is a set of PTX instructions for programming Tensor Cores on NVIDIA Blackwell GPUs (SM100, not to be confused with consumer Blackwell SM120)."
+   },
+   {
+    "heading": "2. High-Performance Matrix Multiplication Review",
+    "anchor": "2-high-performance-matrix-multiplication-review",
+    "gist": "Matrix multiplication of A (shape MxK) and B (shape KxN) produces output C of shape MxN."
+   },
+   {
+    "heading": "3. Basic tcgen05 Kernel",
+    "anchor": "3-basic-tcgen05-kernel",
+    "gist": "The Tensor Memory Accelerator (TMA), available since Hopper, issues memory loads with minimal register usage and address computation."
+   },
+   {
+    "heading": "4. 128-Byte Global Loads and Swizzling",
+    "anchor": "4-128-byte-global-loads-and-swizzling",
+    "gist": "Swizzling avoids shared memory bank conflicts by distributing data across all 32 banks."
+   },
+   {
+    "heading": "5. Pipelining",
+    "anchor": "5-pipelining",
+    "gist": "Standard N-stage pipelining: maintain N in-flight global→shared load stages, each with its own shared memory buffer."
+   },
+   {
+    "heading": "6. Warp Specialization",
+    "anchor": "6-warp-specialization",
+    "gist": "Since only 1 thread issues TMA and 1 thread issues MMA, dedicate separate warps to each task."
+   },
+   {
+    "heading": "7. 2-SM MMA",
+    "anchor": "7-2-sm-mma",
+    "gist": "Blackwell allows two CTAs to cooperatively compute a single MMA tile."
+   },
+   {
+    "heading": "8. Persistent Kernel with Static Scheduling",
+    "anchor": "8-persistent-kernel-with-static-scheduling",
+    "gist": "In-kernel profiling reveals that epilogue and per-tile setup consume significant time, leaving Tensor Cores idle."
+   },
+   {
+    "heading": "9. Performance Summary",
+    "anchor": "9-performance-summary",
+    "gist": "table columns: Kernel, TFLOPS, % of cuBLAS"
+   },
+   {
+    "heading": "10. Observations",
+    "anchor": "10-observations",
+    "gist": "Tensor Core programming on Blackwell feels easier than previous generations due to dedicated hardware and instructions."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\ndef matmul(A: Tensor, B: Tensor, C: Tensor, M: int, N: int, K: int):\n    for m in range(M):\n        for n in range(N):\n            acc = 0\n            for k in range(K):\n                acc += A[m, k] * B[k, n]\n            C[m, n] = acc\n```\n\n```python\ndef tiled_matmul(A: Tensor, B: Tensor, C: Tensor, M: int, N: int, K: int):\n    BLOCK_M = 128\n    BLOCK_N = 128\n    BLOCK_K = 64\n    for m in range(0, M, BLOCK_M):\n        for n in range(0, N, BLOCK_N):\n            acc = torch.zeros(BLOCK_M, BLOCK_N)\n            for k in range(0, K, BLOCK_K):\n                A_tile = A[m:m+BLOCK_M, k:k+BLOCK_K]\n                B_tile = B[k:k+BLOCK_K, n:n+BLOCK_N]\n                acc += mini_matmul(A_tile, B_tile)\n            C[m : m + BLOCK_M, n : n + BLOCK_N] = acc\n```\n\n```cpp\n#include <cudaTypedefs.h>\n#include <cuda_bf16.h>\n\nconstexpr int BLOCK_M = 64;\nconstexpr int BLOCK_N = 64;\nconstexpr int BLOCK_K = 64;\nconstexpr int TB_SIZE = 128;\n\nvoid init_2D_tmap(\n    CUtensorMap *tmap, const nv_bfloat16 *ptr,\n    uint64_t global_height, uint64_t global_width,\n    uint32_t shared_height, uint32_t shared_width\n) {\n    constexpr uint32_t rank = 2;\n    uint64_t globalDim[rank] = {global_width, global_height};\n    uint64_t globalStrides[rank-1] = {global_width * sizeof(nv_bfloat16)};\n    uint32_t boxDim[rank] = {shared_width, shared_height};\n    uint32_t elementStrides[rank] = {1, 1};\n    auto err = cuTensorMapEncodeTiled(\n        tmap, CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,\n        rank, (void *)ptr, globalDim, globalStrides, boxDim, elementStrides,\n        CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,\n        CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_NONE,\n        CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_NONE,\n        CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE\n    );\n}\n```\n\n```cpp\n// mbarrier initialization\nif (tid == 0) {\n    asm volatile(\"mbarrier.init.shared::cta.b64 [%0], %1;\" :: \"r\"(mbar_addr), \"r\"(1));\n    asm volatile(\"fence.mbarrier_init.release.cluster;\");\n}\n__syncthreads();\n\n// main loop\nint phase = 0;\nfor (int iter_k = 0; iter_k < K / BLOCK_K; iter_k++) {\n    if (tid == 0) {\n        const int off_k = iter_k * BLOCK_K;\n        tma_2d_gmem2smem(A_smem, &A_tmap, off_k, off_m, mbar_addr);\n        tma_2d_gmem2smem(B_smem, &B_tmap, off_k, off_n, mbar_addr);\n        constexpr int cp_size = (BLOCK_M + BLOCK_N) * BLOCK_K * sizeof(nv_bfloat16);\n        asm volatile(\"mbarrier.arrive.expect_tx.release.cta.shared::cta.b64 _, [%0], %1;\"\n            :: \"r\"(mbar_addr), \"r\"(cp_size) : \"memory\");\n    }\n    mbarrier_wait(mbar_addr, phase);\n    phase ^= 1;\n    // issue tcgen05.mma ...\n}\n```\n\n```cpp\n__device__ inline void mbarrier_wait(int mbar_addr, int phase) {\n    uint32_t ticks = 0x989680;\n    asm volatile(\n        \"{\\n\\t\"\n        \".reg .pred P1;\\n\\t\"\n        \"LAB_WAIT:\\n\\t\"\n        \"mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 P1, [%0], %1, %2;\\n\\t\"\n        \"@P1 bra.uni DONE;\\n\\t\"\n        \"bra.uni LAB_WAIT;\\n\\t\"\n        \"DONE:\\n\\t\"\n        \"}\" :: \"r\"(mbar_addr), \"r\"(phase), \"r\"(ticks)\n    );\n}\n```\n\n```cpp\n__shared__ int tmem_addr[1];\nif (warp_id == 1) {\n    const int addr = static_cast<int>(__cvta_generic_to_shared(tmem_addr));\n    asm volatile(\"tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;\"\n        :: \"r\"(addr), \"r\"(BLOCK_N));\n}\n__syncthreads();\nconst int taddr = tmem_addr[0];\n```\n\n```cpp\nauto make_desc = [](int addr, int height) -> uint64_t {\n    const int LBO = height * 16;\n    const int SBO = 8 * 16;\n    return desc_encode(addr) | (desc_encode(LBO) << 16ULL)\n         | (desc_encode(SBO) << 32ULL) | (1ULL << 46ULL);\n};\n```\n\n```cpp\nasm volatile(\"tcgen05.fence::after_thread_sync;\");\nfor (int n = 0; n < BLOCK_N / 8; n++) {\n    float tmp[8];\n    const int row = warp_id * 32;\n    const int col = n * 8;\n    const int addr = taddr + (row << 16) + col;\n    asm volatile(\"tcgen05.ld.sync.aligned.32x32b.x8.b32 {%0,%1,%2,%3,%4,%5,%6,%7}, [%8];\"\n        : \"=f\"(tmp[0]),\"=f\"(tmp[1]),\"=f\"(tmp[2]),\"=f\"(tmp[3]),\n          \"=f\"(tmp[4]),\"=f\"(tmp[5]),\"=f\"(tmp[6]),\"=f\"(tmp[7])\n        : \"r\"(addr));\n    asm volatile(\"tcgen05.wait::ld.sync.aligned;\");\n    // convert to BF16 and store to global memory\n}\n```\n\n```cpp\nauto make_desc = [](int addr) -> uint64_t {\n    const int SBO = 8 * 128;\n    return desc_encode(addr) | (desc_encode(SBO) << 32ULL)\n         | (1ULL << 46ULL) | (2ULL << 61ULL);\n};\n```\n\n```cpp\nfor (int k1 = 0; k1 < BLOCK_K / 64; k1++)\n    for (int k2 = 0; k2 < 64 / MMA_K; k2++) {\n        uint64_t a_desc = make_desc(A_smem + k1 * BLOCK_M * 128 + k2 * 32);\n        uint64_t b_desc = make_desc(B_smem + k1 * BLOCK_N * 128 + k2 * 32);\n        tcgen05_mma_f16(taddr, a_desc, b_desc, i_desc, enable_acc);\n    }\n```\n\n```cpp\nauto load = [&](int iter_k) { /* issue TMA */ };\nauto compute = [&](int iter_k) { /* issue tcgen05.mma */ };\n\nfor (int stage = 0; stage < NUM_STAGES; stage++)\n    load(stage);\n\nfor (int iter_k = 0; iter_k < K / BLOCK_K; iter_k++) {\n    load(iter_k + NUM_STAGES - 1);\n    // wait for current load stage\n    compute(iter_k);\n    // wait for current compute stage\n}\n```\n\n```cpp\nif (warp_id == 0 && elect_sync()) {\n    // TMA warp\n    for (int iter_k = 0; iter_k < num_iters; iter_k++) ...\n} else if (warp_id == 1 && elect_sync()) {\n    // MMA warp\n    for (int iter_k = 0; iter_k < num_iters; iter_k++) ...\n}\n```\n\n```cpp\n__global__ __cluster_dims__(2, 1, 1) __launch_bounds__(TB_SIZE)\nvoid kernel(...) {\n    int cta_rank;\n    asm volatile(\"mov.b32 %0, %%cluster_ctarank;\" : \"=r\"(cta_rank));\n    ...\n}\n```\n\n```cpp\nif (warp_id == 0 && elect_sync()) {\n    // TMA warp: iterate over output tiles, inner loop over K\n} else if (cta_rank == 0 && warp_id == 1 && elect_sync()) {\n    // MMA warp: iterate over output tiles, inner loop over K\n} else if (warp_id >= 2) {\n    // Epilogue warps (4 warps): iterate over output tiles\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/blackwell-tcgen05-gemm-from-scratch.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

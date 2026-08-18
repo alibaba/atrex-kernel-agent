@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.nvidia-ptx-sync-and-async",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|nvidia-ptx-sync-and-async|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): nvidia-ptx-sync-and-async",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "nvidia-ptx-sync-and-async"
+  },
+  "title": "nvidia-ptx-sync-and-async",
+  "summary": "mbarrier (Memory Barrier) supports **asynchronous** completion tracking and is the foundation for TMA and software pipelining.",
+  "sections": [
+   {
+    "heading": "Synchronous Barriers",
+    "anchor": "synchronous-barriers",
+    "gist": "**Limit**: bar.sync barrier ID range 0–15 (up to 16 named barriers on SM70+)."
+   },
+   {
+    "heading": "mbarrier — Asynchronous Barrier (SM80+)",
+    "anchor": "mbarrier-asynchronous-barrier-sm80",
+    "gist": "mbarrier (Memory Barrier) supports **asynchronous** completion tracking and is the foundation for TMA and software pipelining."
+   },
+   {
+    "heading": "Fence Instructions",
+    "anchor": "fence-instructions",
+    "gist": "Proxy fence ensures visibility between memory operations through different **proxies** (paths):"
+   },
+   {
+    "heading": "cp.async — Asynchronous Copy",
+    "anchor": "cp-async-asynchronous-copy",
+    "gist": "TMA (Tensor Memory Accelerator) describes multi-dimensional tensors via **descriptors**, completing the entire tile transfer in a single instruction:"
+   },
+   {
+    "heading": "ldmatrix / stmatrix (SM75+)",
+    "anchor": "ldmatrix-stmatrix-sm75",
+    "gist": "Used Expediently for loading/storing Tensor Core operands, with each thread holding a portion of the matrix:"
+   },
+   {
+    "heading": "Summary of Asynchronous Operation Completion Mechanisms",
+    "anchor": "summary-of-asynchronous-operation-completion-mechanisms",
+    "gist": "table columns: Operation, Completion Method, Wait Method"
+   },
+   {
+    "heading": "Synchronization Operation Selection Guide",
+    "anchor": "synchronization-operation-selection-guide",
+    "gist": "table columns: Scenario, Recommendation"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n// Basic barrier (all threads)\nbar.sync    0;                      // Barrier 0, wait for all threads in CTA\nbar.sync    0, 128;                 // Barrier 0, wait for 128 threads\n\n// Barrier arrival (no wait)\nbar.arrive  1, 256;                 // Barrier 1, arrive, 256 threads participating\n\n// Barrier with reduction\nbar.red.and.pred  %p, 2, %q;       // Barrier 2 + AND reduction\nbar.red.or.pred   %p, 3, %q;       // Barrier 3 + OR reduction\nbar.red.popc.u32  %r, 4, %q;       // Barrier 4 + vote count\n```\n\n```\nbarrier.sync        0;                  // Wait for all\nbarrier.sync        0, 128;             // Wait for 128 threads\nbarrier.sync.aligned 0;                 // Aligned version\n\nbarrier.arrive      1, 64;             // Arrive only\nbarrier.arrive.aligned 1, 64;\n\n// Producer-consumer pattern\n// Thread group A:\nbarrier.arrive  5, 64;       // Group A arrives (64 threads)\n// Thread group B:\nbarrier.sync    5, 128;      // Group B waits (A+B total 128 threads)\n```\n\n```\nbarrier.cluster.arrive;               // Current CTA arrives at cluster barrier\nbarrier.cluster.arrive.aligned;       // Aligned version\nbarrier.cluster.wait;                 // Wait for all CTAs in cluster to arrive\n\n// Typical pattern\nbarrier.cluster.arrive;\n// ... execute other work ...\nbarrier.cluster.wait;\n```\n\n```\nPhase 0: mbarrier waits for N arrives or tx_count bytes\n         → flips phase\nPhase 1: mbarrier waits for N arrives or tx_count bytes\n         → flips phase\n... alternates\n```\n\n```\n// Initialize mbarrier in shared memory\nmbarrier.init.shared::cta.b64   [%mbar_ptr], %count;\n// count = expected arrival count\n\n// Initialize fence (ensure init visible to all threads)\nfence.mbarrier_init.release.cluster;   // Cluster scope\nfence.mbarrier_init.release.cta;       // CTA scope\n```\n\n```\n// Basic arrival\nmbarrier.arrive.shared::cta.b64           %state, [%mbar_ptr];\n\n// Arrive and set transfer byte expectation\nmbarrier.arrive.expect_tx.shared::cta.b64 %state, [%mbar_ptr], %tx_count;\n// TMA automatically reduces tx_count when transfer completes\n\n// Set transfer expectation (no arrive)\nmbarrier.expect_tx.shared::cta.b64   [%mbar_ptr], %tx_count;\n\n// Cross-CTA arrival (remote arrival within cluster)\nmbarrier.arrive.shared::cluster.b64       %state, [%mbar_ptr];\n// Pointer points to peer CTA's SMEM address\n```\n\n```\n// Blocking wait\nmbarrier.try_wait.shared::cta.b64         %pred, [%mbar_ptr], %phase;\n// pred = true means barrier has flipped to current phase\n\n// Wait with timeout\nmbarrier.try_wait.parity.shared::cta.b64  %pred, [%mbar_ptr], %phaseParity, %timeout;\n\n// Non-blocking check\nmbarrier.test_wait.shared::cta.b64        %pred, [%mbar_ptr], %phase;\n```\n\n```\n// === Producer threads ===\n// 1. Set transfer expectation\nmbarrier.expect_tx.shared::cta.b64   [%mbar_ptr], 4096;  // Expect 4KB\n\n// 2. Initiate TMA copy (TMA hardware automatically arrives)\ncp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes\n    [%smem_ptr], [%desc_ptr, {%x, %y}], [%mbar_ptr];\n\n// === Consumer threads ===\n// 3. Wait for data ready\nmbarrier.try_wait.shared::cta.b64  %pred, [%mbar_ptr], %phase;\n@!%pred bra WAIT_LOOP;\n\n// 4. Use data\nld.shared.f32  %f, [%smem_ptr];\n```\n\n```\n// Acquire-Release Fence\nfence.acq_rel.cta; // CTA range\nfence.acq_rel.cluster; // Cluster range(SM90+)\nfence.acq_rel.gpu; // GPU range\nfence.acq_rel.sys; // range\n\n// Fence\nfence.sc.gpu; // GPU range\nfence.sc.sys; // range\n```\n\n```\n// proxy(memorydifferent)\nfence.proxy.alias;\n\n// asynchronous proxy(cp.async complete)\nfence.proxy.async; //\nfence.proxy.async.global; // global memory\nfence.proxy.async.shared::cta; // shared memory(CTA)\nfence.proxy.async.shared::cluster;   // shared memory（cluster）\n\n// Tensormap proxy\nfence.proxy.tensormap::generic.acquire.cta [%desc_ptr], 128;\nfence.proxy.tensormap::generic.release.cta [%desc_ptr], 128;\n```\n\n```\nmembar.cta;        // ≈ fence.acq_rel.cta\nmembar.gl;         // ≈ fence.acq_rel.gpu\nmembar.sys;        // ≈ fence.acq_rel.sys\n```\n\n```\n// asynchronouscopy 4/8/16 bytes\ncp.async.ca.shared.global    [%smem_ptr], [%gmem_ptr], 16;\ncp.async.cg.shared.global    [%smem_ptr], [%gmem_ptr], 16;\n// .ca = cache at all levels, .cg = cache at L2 only\n\n// sizecopy( tile )\ncp.async.ca.shared.global    [%smem_ptr], [%gmem_ptr], 16, %src_size;\n// if src_size < 16,\n\n// wait\ncp.async.commit_group; // current\ncp.async.wait_group 0; // waitcomplete\ncp.async.wait_group 1; // wait ≤1 pending\ncp.async.wait_all; // waitcomplete\n```\n\n```\n// Global -> Shared\ncp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes\n    [%smem_dst], [%gmem_src], %size, [%mbar_ptr];\n// copy ≤ CTA sharedmemorysize\n\n// Shared → Global\ncp.async.bulk.global.shared::cta\n    [%gmem_dst], [%smem_src], %size;\n\n// completewait\ncp.async.bulk.commit_group;\ncp.async.bulk.wait_group  0;\ncp.async.bulk.wait_group.read 1; // .read meansdataread\n```\n\n```\n// 2D TMA Load: Global → Shared\ncp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes\n    [%smem_dst], [%tensor_desc, {%coord_x, %coord_y}], [%mbar_ptr];\n\n// 3D TMA Load\ncp.async.bulk.tensor.3d.shared::cluster.global.mbarrier::complete_tx::bytes\n    [%smem_dst], [%tensor_desc, {%x, %y, %z}], [%mbar_ptr];\n\n// TMA Store: Shared → Global\ncp.async.bulk.tensor.2d.global.shared::cta\n    [%tensor_desc, {%x, %y}], [%smem_src];\n\n// TMA Multicast Load (broadcast to multiple CTAs within cluster)\ncp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes.multicast::cluster\n    [%smem_dst], [%tensor_desc, {%x, %y}], [%mbar_ptr], %ctamask;\n\n// TMA Reduce Store\ncp.async.bulk.tensor.2d.global.shared::cta.add\n    [%tensor_desc, {%x, %y}], [%smem_src];\n// .add/.min/.max/.inc/.dec/.and/.or/.xor\n```\n\n```\n// Descriptor created on host side, contains:\n// - base pointer\n// - tensor shape (size per dimension)\n// - tensor stride (stride per dimension)\n// - element type\n// - swizzle mode\n// - OOB fill value\n\n// Runtime descriptor update (SM90+)\ntensormap.replace.tile.global_address.shared::cta.b1024   [%desc_ptr], %new_ptr;\ntensormap.replace.tile.rank.shared::cta.b1024             [%desc_ptr], %new_rank;\ntensormap.replace.tile.box_dim.shared::cta.b1024          [%desc_ptr], %dim_idx, %new_size;\ntensormap.replace.tile.global_dim.shared::cta.b1024       [%desc_ptr], %dim_idx, %new_size;\ntensormap.replace.tile.global_stride.shared::cta.b1024    [%desc_ptr], %dim_idx, %new_stride;\ntensormap.replace.tile.element_stride.shared::cta.b1024   [%desc_ptr], %dim_idx, %new_stride;\n\n// Descriptor prefetch\nprefetch.tensormap   [%desc_ptr];\n```\n\n```\n// Asynchronous store to remote CTA's SMEM\nst.async.shared::cluster.mbarrier::complete_tx::bytes.f32\n    [%remote_smem_ptr], %val, [%mbar_ptr];\n\n// Bulk asynchronous copy SMEM → remote SMEM\ncp.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes\n    [%dst_remote_smem], [%src_local_smem], %size, [%mbar_ptr];\n\n// Address mapping: use mapa instruction to get remote SMEM address\nmapa.shared::cluster.u32  %remote_ptr, %local_ptr, %target_cta_rank;\n```\n\n```\n// ldmatrix: load from SMEM to registers (warp collaboration)\nldmatrix.sync.aligned.m8n8.x1.shared.b16   {%r0}, [%sptr];         // 1 8x8 matrix\nldmatrix.sync.aligned.m8n8.x2.shared.b16   {%r0, %r1}, [%sptr];   // 2 8x8 matrices\nldmatrix.sync.aligned.m8n8.x4.shared.b16   {%r0,%r1,%r2,%r3}, [%sptr]; // 4 8x8 matrices\n\n// With transpose\nldmatrix.sync.aligned.m8n8.x4.trans.shared.b16  {%r0,%r1,%r2,%r3}, [%sptr];\n\n// stmatrix (SM90+): store from registers to SMEM\nstmatrix.sync.aligned.m8n8.x4.shared.b16  [%sptr], {%r0,%r1,%r2,%r3};\nstmatrix.sync.aligned.m8n8.x4.trans.shared.b16  [%sptr], {%r0,%r1,%r2,%r3};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/nvidia-ptx-sync-and-async.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

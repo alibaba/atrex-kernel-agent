@@ -1,0 +1,37 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.tcgen05-mma",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "tcgen05.mma",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "tcgen05.mma.cta_group::1.kind::f16  tmem_addr, desc_a, desc_b, idesc_c, idesc_d;",
+   "tcgen05.mma.cta_group::2.kind::f16  tmem_addr, desc_a, desc_b, idesc_c, idesc_d;"
+  ],
+  "semantics": "MMA: inputs from SMEM, accumulator in TMEM; 2-SM cooperative MMA"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "tcgen05 Instructions",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

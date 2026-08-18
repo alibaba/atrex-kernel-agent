@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-ncu-l1-hit-rate-shared-pollution",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|pitfalls|sm120-ncu-l1-hit-rate-shared-pollution|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the 'sm_120 ncu trap: l1tex__t_sector_hit_rate.pct includes ld.shared hits' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): sm_120 ncu trap: l1tex__t_sector_hit_rate.pct includes ld.shared hits",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 ncu trap: l1tex__t_sector_hit_rate.pct includes ld.shared hits"
+  },
+  "attempted": "On sm_120 cute 4.4.2 + ncu 2025.2.1, `l1tex__t_sector_hit_rate.pct` (displayed as \"L1/TEX Hit Rate\" in Speed-of-Light + Memory Workload sections) **includes shared-memory ld.shared hits**, not just global memory hits. This is because L1 and texture units share the same physical SRAM unit on sm_120 (same as Ampere/Ada).",
+  "verdict": "not-worth-it-here",
+  "lesson": "On sm_120, to confirm TMA actually bypasses L1, ALWAYS check:",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "Verified on sm_120 cute 4.4.2 V2-TMA kernel (M=6144, K=4096, kernel_opt_attn_fp4_fusion):"
+  },
+  "observed": "TMA-based kernel reads only ld.global ~ O(grid_dim) for scalar / control, but ncu reports L1/TEX Hit Rate 30-50% even when global loads are 100% TMA-bulk (bypassing L1 by design). Looks like TMA \"isn't bypassing L1\", which contradicts both flashinfer NVFP4QuantizeTMAKernel sm_120 validation and persistent_gemm sm_120 evidence.",
+  "root_cause": "Verified on sm_120 cute 4.4.2 V2-TMA kernel (M=6144, K=4096, kernel_opt_attn_fp4_fusion):"
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-ncu-l1-hit-rate-shared-pollution.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

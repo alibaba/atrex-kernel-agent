@@ -1,0 +1,136 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-ultra.any.ref-docs.blackwell-ultra-b300-chip-evolution",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-ultra|any|ref-docs|blackwell-ultra-b300-chip-evolution|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-ultra",
+   "architectures": [
+    "blackwell-ultra"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-ultra",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell Ultra (B300 / SM103) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell Ultra (B300 / SM103): Blackwell Ultra (B300): NVIDIA AI Chip Evolution and Roadmap",
+  "problem": {
+   "target": "NVIDIA Blackwell Ultra (B300 / SM103)",
+   "statement": "Blackwell Ultra (B300): NVIDIA AI Chip Evolution and Roadmap"
+  },
+  "title": "Blackwell Ultra (B300): NVIDIA AI Chip Evolution and Roadmap",
+  "summary": "A first-principles analysis of the B300 (Blackwell Ultra) GPU, with projections for the Rubin and Rubin Next platforms through 2030.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "NVIDIA first announced the Rubin platform at Computex 2024 on June 2, 2024, with a planned 2026 launch."
+   },
+   {
+    "heading": "2. Process Technology Roadmap",
+    "anchor": "2-process-technology-roadmap",
+    "gist": "By 2030, semiconductor technology will enter the 1nm era, with single-die transistor counts reaching an estimated 200 billion."
+   },
+   {
+    "heading": "3. Advanced Packaging",
+    "anchor": "3-advanced-packaging",
+    "gist": "TSMC CoWoS roadmap: - 2023: 3.3-reticle, 8 HBM (Blackwell) - 2026: 5.5-reticle, 12 HBM (Rubin / Rubin Ultra) - 2027: >8-reticle, 12 HBM (Rubin Next, possibly 3.5D) - 2026+: Silicon-based SoW (System-on-Wafer), >40-reticle, 60+ HBM"
+   },
+   {
+    "heading": "4. HBM Roadmap",
+    "anchor": "4-hbm-roadmap",
+    "gist": "- HBM4: mass production 2025 → Rubin - HBM4E: 2027 → Rubin Next - Samsung developing custom HBM4 for CSPs, targeting 2025 mass production - SK Hynix: 48 GB 16-layer HBM3E (announced at November 2025 SK AI Summit) - Jensen Huang requested S…"
+   },
+   {
+    "heading": "5. Blackwell Ultra (GB300 & B300) Analysis",
+    "anchor": "5-blackwell-ultra-gb300-b300-analysis",
+    "gist": "B300 is a full redesign on 4NP process, delivering **+50% overall FLOPS over B200**."
+   },
+   {
+    "heading": "6. GB300 Supply Chain Changes",
+    "anchor": "6-gb300-supply-chain-changes",
+    "gist": "- GB200: complete Bianca board (GPU + Grace CPU + 512 GB LPDDR5X + VRM) + switch tray + copper backplane - GB300: only SXM Puck module with B300 GPU + BGA Grace CPU + Axiado HMC; remaining components sourced by OEM - Second-tier memory: LP…"
+   },
+   {
+    "heading": "7. Rubin / Rubin Ultra Architecture Projections",
+    "anchor": "7-rubin-rubin-ultra-architecture-projections",
+    "gist": "Evolution path: Hopper (single die) → Blackwell (dual die) → **Rubin (quad die)**."
+   },
+   {
+    "heading": "8. Rubin NVL288 Projections",
+    "anchor": "8-rubin-nvl288-projections",
+    "gist": "Integrating 4 NVL72 units into a single rack yields 4x compute density."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-ultra/ref-docs/blackwell-ultra-b300-chip-evolution.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

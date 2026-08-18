@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.nsa.sliding-window-component",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|kernels|nsa#sliding-window-component|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "kernels",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "sliding-window-component"
+  ],
+  "triggers": [
+   "the 'Sliding Window Component' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Sliding Window Component",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Native Sparse Attention (NSA) -- Sliding Window Component"
+  },
+  "technique": "Sliding Window Component",
+  "what": "Window bounds",
+  "when": "Window bounds",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.jit\ndef nsa_sliding_window_fwd(\n    Q_ptr, K_ptr, V_ptr, O_ptr,\n    seq_pos,\n    WINDOW_SIZE: tl.constexpr,  # 512\n    HEAD_DIM: tl.constexpr,\n):\n    \"\"\"Local sliding window attention for recent context.\"\"\"\n    pid = tl.program_id(0)  # query position\n\n    # Window bounds\n    window_start = tl.maximum(0, seq_pos - WINDOW_SIZE)\n    window_end = seq_pos\n\n    # Standard dense attention within window\n    # This is O(w*d) per query, where w=512\n    q = tl.load(Q_ptr + pid * HEAD_DIM + tl.arange(0, HEAD_DIM))\n    acc = tl.zeros([HEAD_DIM], dtype=tl.float32)\n    lse = float(\"-inf\")\n\n    for pos in range(window_start, window_end, BLOCK_SIZE):\n        k = tl.load(K_ptr + pos * HEAD_DIM + tl.arange(0, HEAD_DIM))\n        v = tl.load(V_ptr + pos * HEAD_DIM + tl.arange(0, HEAD_DIM))\n        score = tl.sum(q * k)\n        # Online softmax accumulation\n        new_lse = tl.where(lse > score,\n                           lse + tl.log(1 + tl.exp(score - lse)),\n                           score + tl.log(1 + tl.exp(lse - score)))\n        acc = acc * tl.exp(lse - new_lse) + v * tl.exp(score - new_lse)\n        lse = new_lse\n\n    tl.store(O_ptr + pid * HEAD_DIM + tl.arange(0, HEAD_DIM), acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/nsa.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

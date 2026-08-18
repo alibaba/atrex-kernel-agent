@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.blackwell-gpgpu-new-features-overview",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|blackwell-gpgpu-new-features-overview|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Blackwell GPGPU Architecture New Features Overview",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Blackwell GPGPU Architecture New Features Overview"
+  },
+  "title": "Blackwell GPGPU Architecture New Features Overview",
+  "summary": "A summary of Blackwell compute GPU (SM100) architecture updates derived from analysis of CUTLASS, PTX documentation, and Hopper feature comparisons, combined with information disclosed at GTC 2025.",
+  "sections": [
+   {
+    "heading": "1. Base Specifications",
+    "anchor": "1-base-specifications",
+    "gist": "The full Blackwell die contains 160 SMs, but **each die has only 80 SMs** — a significant reduction from Hopper's full 144 SMs."
+   },
+   {
+    "heading": "2. 5th Generation Tensor Core",
+    "anchor": "2-5th-generation-tensor-core",
+    "gist": "The fifth-generation Tensor Core introduces new FP4/FP6 number formats and achieves **2x FMA/SM/clock throughput**."
+   },
+   {
+    "heading": "3. Thread Block Clusters",
+    "anchor": "3-thread-block-clusters",
+    "gist": "For H100-SXM, cluster size 2 is optimal because any cluster size greater than 2 causes some SMs to remain idle due to yield limitations."
+   },
+   {
+    "heading": "4. Cluster Launch Control (CLC)",
+    "anchor": "4-cluster-launch-control-clc",
+    "gist": "Cluster Launch Control first appeared with CUDA 12.8 / CUTLASS 3.8."
+   },
+   {
+    "heading": "5. New PTX/SASS Instructions",
+    "anchor": "5-new-ptx-sass-instructions",
+    "gist": "- **FP32x2**: FFMA2, FMUL2, FADD2 - **FP8x4**: QFMA4, QMUL4, QADD4 - **Mixed Precision FP**: FHFMA, FHADD"
+   },
+   {
+    "heading": "6. Blackwell Ultra (B300)",
+    "anchor": "6-blackwell-ultra-b300",
+    "gist": "Blackwell Ultra achieves **50% FP4 dense throughput improvement to 15 PF**."
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nauto cluster_layout_vmnk = tiled_divide(make_layout(cluster_shape), make_tile(typename TiledMma::AtomThrID{}));\nauto cluster_shape_fallback = cutlass::detail::select_cluster_shape(ClusterShape{}, hw_info.cluster_shape_fallback);\nauto cluster_layout_vmnk_fallback = tiled_divide(make_layout(cluster_shape_fallback), make_tile(typename TiledMma::AtomThrID{}));\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/blackwell-gpgpu-new-features-overview.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

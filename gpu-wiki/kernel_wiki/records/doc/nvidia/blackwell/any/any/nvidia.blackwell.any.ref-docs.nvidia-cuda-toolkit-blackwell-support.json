@@ -1,0 +1,141 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.nvidia-cuda-toolkit-blackwell-support",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|nvidia-cuda-toolkit-blackwell-support|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): NVIDIA CUDA Toolkit Now Supports Blackwell Architecture",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "NVIDIA CUDA Toolkit Now Supports Blackwell Architecture"
+  },
+  "title": "NVIDIA CUDA Toolkit Now Supports Blackwell Architecture",
+  "summary": "Overview of CUDA Toolkit 12.8 as the first release with full Blackwell support across the developer suite, including profiling tools, libraries, and compilers.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "CUDA Toolkit 12.8 is the **first** version to support NVIDIA Blackwell architecture across the entire developer suite (performance tools, profilers, libraries, compilers)."
+   },
+   {
+    "heading": "2. Blackwell Key Capabilities",
+    "anchor": "2-blackwell-key-capabilities",
+    "gist": "- **20.8 billion transistors**, over 2.5x Hopper - Second-generation Transformer Engine + custom Tensor Cores (accelerating LLM/MoE training and inference) - Hardware decompression: LZ4 / Snappy / Deflate - NVLink and NVLink Switches for a…"
+   },
+   {
+    "heading": "3. CUDA Graphs: Runtime Kernel Selection with 2x Speedup",
+    "anchor": "3-cuda-graphs-runtime-kernel-selection-with-2x-speedup",
+    "gist": "CUDA 12.8 adds two new conditional node types: **IF/ELSE composite nodes** and **SWITCH nodes**."
+   },
+   {
+    "heading": "4. CUTLASS 3.8 for Blackwell",
+    "anchor": "4-cutlass-3-8-for-blackwell",
+    "gist": "- GEMM achieves **98%** of peak performance - **Grouped GEMM (common in MoE inference)** FP4 delivers **5x** improvement over H200 FP16 (for DeepSeek-V3, R1 MoE) - New data types: MX narrow precision + NVIDIA FP4"
+   },
+   {
+    "heading": "5. Nsight Compute 2025.1 (First Official Blackwell Support)",
+    "anchor": "5-nsight-compute-2025-1-first-official-blackwell-support",
+    "gist": "- **Tensor Memory visualization in Memory Chart** - Tensor Core performance data surfaced - Range Profiling major improvements: - Source-level metrics within ranges (executed instructions + memory accesses) - Range-guided analysis rule eva…"
+   },
+   {
+    "heading": "6. Math Libraries",
+    "anchor": "6-math-libraries",
+    "gist": "- **cuBLAS**: MX 4-bit/8-bit mixed-precision matrix multiplication (CC >= 10.0); preliminary CUDA-in-Graphics (CIG) support for Windows x64 + Ampere/Blackwell GeForce GPUs - cuSOLVER: New `zsytrf/zsytrs` (pivotless complex symmetric direct…"
+   },
+   {
+    "heading": "7. cudaStreamGetDevice and Compiler Updates",
+    "anchor": "7-cudastreamgetdevice-and-compiler-updates",
+    "gist": "- New `cudaStreamGetDevice` simplifies multi-device applications - GCC 14 host compiler support - Blackwell default advanced optimizer based on LLVM 18 - `nvdisasm` supports JSON-format SASS disassembly"
+   },
+   {
+    "heading": "8. Accelerated Python (Beta)",
+    "anchor": "8-accelerated-python-beta",
+    "gist": "- `cuda.core` early prototype + CUDA bindings moved to `cuda.bindings` - CCCL parallel/cooperative algorithm Python prototypes, enabling thread-level parallelism expression in pure Python - CuPy Blackwell patch validated for full release"
+   },
+   {
+    "heading": "9. Architecture Lifecycle Changes",
+    "anchor": "9-architecture-lifecycle-changes",
+    "gist": "Maxwell / Pascal / Volta are now considered **feature-complete**."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/nvidia-cuda-toolkit-blackwell-support.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

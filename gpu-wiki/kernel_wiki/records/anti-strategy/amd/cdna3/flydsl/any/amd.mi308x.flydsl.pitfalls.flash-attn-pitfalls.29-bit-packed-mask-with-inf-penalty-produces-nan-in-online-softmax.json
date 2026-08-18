@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.29-bit-packed-mask-with-inf-penalty-produces-nan-in-online-softmax",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#29-bit-packed-mask-with-inf-penalty-produces-nan-in-online-softmax|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '29. Bit-packed mask with -inf penalty produces NaN in online softmax' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 29. Bit-packed mask with -inf penalty produces NaN in online softmax",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 29. Bit-packed mask with -inf penalty produces NaN in online softmax"
+  },
+  "attempted": "When packing a binary f32 mask ({0.0, -1e6}) into a u32 bitmask, the natural choice for the masked-out penalty is `float(\"-inf\")` — it's semantically correct (exp(-inf) = 0, fully suppressing masked positions).",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Use -1e6 (or any large finite negative), NEVER -inf, as the mask penalty in online softmax with bit-packed masks. The -inf→NaN path exists whenever any Q row has zero attend positions across all KV tiles, which is common with sparse masks (56.4% in our test case).",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Online softmax tracks a running max `m`. If the penalty is -inf and there are no attend positions, `m_old = m_new = -inf`, and `m_old - m_new = NaN` (IEEE 754: inf - inf = NaN). With -1e6 as penalty, `m_old - m_new ≈ 0` (both are -1e6), and `exp2(0) = 1` — the correction factor is 1.0, which is correct (uniform attention over masked-out values, matching reference SDPA behavior)."
+  },
+  "observed": "rel_err = 0.50, output corrupted. 56.4% of Q rows in the test mask (B=1024, H=8, S=316) have ZERO attend positions across all 316 KV positions. For these rows, `m_running` stays at `-inf` (the initial value). When the next KV tile also has all-masked positions, the online softmax correction factor computes: `corr = exp2((m_old - m_new) * log2e) = exp2((-inf - (-inf)) * 0.18) = exp2(NaN) = NaN`. This NaN propagates through all accumulator updates.",
+  "root_cause": "Online softmax tracks a running max `m`. If the penalty is -inf and there are no attend positions, `m_old = m_new = -inf`, and `m_old - m_new = NaN` (IEEE 754: inf - inf = NaN). With -1e6 as penalty, `m_old - m_new ≈ 0` (both are -1e6), and `exp2(0) = 1` — the correction factor is 1.0, which is correct (uniform attention over masked-out values, matching reference SDPA behavior)."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

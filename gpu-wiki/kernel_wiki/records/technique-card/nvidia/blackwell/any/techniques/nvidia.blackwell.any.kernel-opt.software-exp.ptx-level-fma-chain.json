@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.software-exp.ptx-level-fma-chain",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|software-exp#ptx-level-fma-chain|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "ptx-level-fma-chain"
+  ],
+  "triggers": [
+   "the 'PTX-Level FMA Chain' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): PTX-Level FMA Chain",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Software-Emulated Exponential -- PTX-Level FMA Chain"
+  },
+  "technique": "PTX-Level FMA Chain",
+  "what": "At the PTX level, the Horner polynomial compiles to a tight chain of `fma.rn.f32` instructions:",
+  "when": "At the PTX level, the Horner polynomial compiles to a tight chain of `fma.rn.f32` instructions:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```ptx\n// Software exp2 via Horner polynomial in PTX\n// Input: %x (float, range-reduced to [-0.5, 0.5])\n// Output: %result (float, approximation of 2^x)\n\n.reg .f32 %x, %r, %n, %poly, %result;\n.reg .f32 %c0, %c1, %c2, %c3, %c4;\n\n// Load polynomial coefficients\nmov.f32 %c0, 0f3F800000;    // 1.0\nmov.f32 %c1, 0f3F317218;    // 0.6931471805599453  (ln2)\nmov.f32 %c2, 0f3E75FDF0;    // 0.2402265069591007\nmov.f32 %c3, 0f3D635847;    // 0.05550410866482158\nmov.f32 %c4, 0f3C1D9539;    // 0.009618129107628477\n\n// Range reduction: n = rintf(x), r = x - n\ncvt.rni.f32.f32 %n, %x;     // Round to nearest int\nsub.f32         %r, %x, %n; // Fractional part\n\n// Horner evaluation: 4 dependent FMAs\n//   poly = c4\n//   poly = poly * r + c3\n//   poly = poly * r + c2\n//   poly = poly * r + c1\n//   poly = poly * r + c0\nmov.f32         %poly, %c4;\nfma.rn.f32      %poly, %poly, %r, %c3;  // FMA 1\nfma.rn.f32      %poly, %poly, %r, %c2;  // FMA 2\nfma.rn.f32      %poly, %poly, %r, %c1;  // FMA 3\nfma.rn.f32      %poly, %poly, %r, %c0;  // FMA 4\n\n// Reconstruct: result = poly * 2^n\n// Convert n to int and use ex2 scaling via bit manipulation\ncvt.rzi.s32.f32 %ni, %n;\nex2.approx.f32  %scale, %n;    // Or use integer exponent manipulation\nmul.f32         %result, %poly, %scale;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/software-exp.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

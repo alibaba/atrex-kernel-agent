@@ -1,0 +1,110 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.flydsl.pitfalls.chunk-gdn-pitfalls.1-silent-corruption-caused-by-a-single-large-smemptr-memref",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|flydsl|gdn|chunk-gdn-pitfalls#1-silent-corruption-caused-by-a-single-large-smemptr-memref|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on AMD CDNA4 (gfx950 / MI355X) risks the '1. Silent Corruption Caused by a Single Large SmemPtr Memref' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD CDNA4 (gfx950 / MI355X): 1. Silent Corruption Caused by a Single Large SmemPtr Memref",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "Pitfalls: FlyDSL Chunk-GDN on MI355X (gfx950) -- 1. Silent Corruption Caused by a Single Large SmemPtr Memref"
+  },
+  "attempted": "To implement k-LDS double buffering (4 buffers), a natural approach is to allocate a single large memref covering all buffersmq, and select them using a dynamic offset:",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "In FlyDSL, never use a single large SmemPtr memref to simulate multiple logical buffers. Each independent LDS region should have its own SmemPtr instance.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "This is a bug in FlyDSL SmemPtr / MLIR memref lowering. Possible causes: - The base pointer + offset calculation for large memrefs may produce integer overflow or incorrect address computation during LLVM lowering - memref alias analysis may assume different regions of a large memref can alias, leading to incorrect load/store reordering - LDS alignment constraints may not be satisfied with a large memref"
+  },
+  "root_cause": "This is a bug in FlyDSL SmemPtr / MLIR memref lowering. Possible causes: - The base pointer + offset calculation for large memrefs may produce integer overflow or incorrect address computation during LLVM lowering - memref alias analysis may assume different regions of a large memref can alias, leading to incorrect load/store reordering - LDS alignment constraints may not be satisfied with a large memref",
+  "implementation": {
+   "snippet": "```python\n# ❌ This approach produces incorrect results\nLDS_K_ELEMS = 64 * 72  # 4608 per buffer\nlds_k_all = SmemPtr(lds_base_val, base_offset, T.bf16,\n                    shape=(LDS_K_ELEMS * 4,)).get()  # One large memref\n\ndef k_lds_buf_offset(i_t_val, kc):\n    buf = arith.remui(i_t_val, arith.constant(2, type=T.i32))\n    base_idx = arith.addi(arith.muli(buf, arith.constant(2, type=T.i32)),\n                          arith.constant(kc, type=T.i32))\n    return arith.muli(base_idx, arith.constant(LDS_K_ELEMS, type=T.i32))\n\n# Add dynamic offset during read/write\nlds_k_off = k_lds_buf_offset(i_t_i32, kc) + dk * stride + t\nvector.store(val, lds_k_all, [to_idx(lds_k_off)])\n```\n\n```python\n# ✅ Correct approach: 4 independent SmemPtrs\nlds_k_kc0_buf0 = SmemPtr(lds_base_val, offset0, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc1_buf0 = SmemPtr(lds_base_val, offset1, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc0_buf1 = SmemPtr(lds_base_val, offset2, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc1_buf1 = SmemPtr(lds_base_val, offset3, T.bf16, shape=(LDS_K_ELEMS,)).get()\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/pitfalls/flydsl/chunk-gdn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

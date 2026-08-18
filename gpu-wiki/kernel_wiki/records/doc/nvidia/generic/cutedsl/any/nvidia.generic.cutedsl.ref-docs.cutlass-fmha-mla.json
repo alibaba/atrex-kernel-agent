@@ -1,0 +1,173 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-fmha-mla",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|flash-attention|cutlass-fmha-mla|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention",
+    "mla"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "mla"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Deep Dive into CUTLASS FMHA and MLA Implementations",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Deep Dive into CUTLASS FMHA and MLA Implementations"
+  },
+  "title": "Deep Dive into CUTLASS FMHA and MLA Implementations",
+  "summary": "CUTLASS provides reference implementations of Fused Multi-Head Attention (FMHA) for two generations of architectures: Hopper (SM90, example 88) and Blackwell (SM100, example 77), covering forward inference (context / generation), backward training, and Multi-Latent Attention (MLA) inference. This article, based on CUTLASS source code, systematically organizes the core design patterns of FMHA kernels.",
+  "sections": [
+   {
+    "heading": "Table of Contents",
+    "anchor": "table-of-contents",
+    "gist": "- Two-Phase GEMM Structure - Shared Memory Management - Pipeline Orchestration - Online Softmax - Masking Strategy…"
+   },
+   {
+    "heading": "Two-Phase GEMM Structure",
+    "anchor": "two-phase-gemm-structure",
+    "gist": "The core computation of FMHA is a GEMM-Softmax-GEMM fused pipeline:"
+   },
+   {
+    "heading": "Shared Memory Management",
+    "anchor": "shared-memory-management",
+    "gist": "The K and V matrices are temporally mutually exclusive (first load K for QK matmul, then load V for PV matmul), so they share the same block of SMEM:"
+   },
+   {
+    "heading": "Pipeline Orchestration",
+    "anchor": "pipeline-orchestration",
+    "gist": "Blackwell FMHA uses 5 warp roles (Softmax0/1, Correction, MMA, Load, Epilogue) and up to 16 warps, decoupled through 6 pipelines:"
+   },
+   {
+    "heading": "Online Softmax",
+    "anchor": "online-softmax",
+    "gist": "FMHA uses online softmax (also known as the FlashAttention algorithm), which computes softmax without requiring two passes:"
+   },
+   {
+    "heading": "Masking Strategy",
+    "anchor": "masking-strategy",
+    "gist": "CUTLASS defines 4 mask types, all implemented in `collective/fmha_fusion.hpp`:"
+   },
+   {
+    "heading": "Attention Variants: MQA/GQA/MLA",
+    "anchor": "attention-variants-mqa-gqa-mla",
+    "gist": "By leveraging CuTe's stride algebra, all attention variants can be expressed without special-case code:"
+   },
+   {
+    "heading": "Variable Sequence Length",
+    "anchor": "variable-sequence-length",
+    "gist": "Fixed integer dimensions in the problem shape are replaced with `VariableLength` type:"
+   },
+   {
+    "heading": "FP8 KV Cache and Mixed Precision",
+    "anchor": "fp8-kv-cache-and-mixed-precision",
+    "gist": "- QK GEMM accumulator can be FP32 or FP16 (`ElementAccumulatorQK`) - Blackwell: `SM100_MMA_F8F6F4_SS` / `SM100_MMA_F8F6F4_TS` instructions - Supports `scale_q`, `scale_k`, `scale_v` dequantization factors + `inv_scale_o` output quantizatio…"
+   },
+   {
+    "heading": "Hopper vs Blackwell FMHA Architecture Differences",
+    "anchor": "hopper-vs-blackwell-fmha-architecture-differences",
+    "gist": "table columns: Feature, Hopper (SM90, Example 88), Blackwell (SM100, Example 77)"
+   },
+   {
+    "heading": "Low-Latency GQA (Example 93)",
+    "anchor": "low-latency-gqa-example-93",
+    "gist": "Example 93 (`tgv_gqa`) is a Blackwell GQA kernel optimized for low batch generation scenarios:"
+   },
+   {
+    "heading": "Backward Pass",
+    "anchor": "backward-pass",
+    "gist": "FMHA backward consists of 3 kernels:"
+   },
+   {
+    "heading": "Reference File Index",
+    "anchor": "reference-file-index",
+    "gist": "table columns: File, Content"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n                 QK^T matmul          Softmax          PV matmul\n               +-----------+      +-----------+     +-----------+\n  Q [M x D] -->| GEMM #1   |--S-->|  Online   |--P->| GEMM #2   |--> O [M x D]\n  K [N x D] -->| Q * K^T   |     |  Softmax  |     | P * V     |\n               +-----------+      +-----------+     +-----------+\n                                                   V [N x D] -->\n```\n\n```cpp\n// QK GEMM: (M, N, K) = (SeqQ_tile, SeqK_tile, HeadDim)\nusing TileShapeQK = Shape<SeqQ_tile/ThreadShape_M, SeqK_tile/ThreadShape_N, HeadDim>;\n\n// PV GEMM: Rearrange dimensions via select<0,2,1>\n// (M, N, K) = (SeqQ_tile, HeadDim, SeqK_tile) -- Note K=SeqK_tile\nusing TileShapePV = select<0,2,1>(TileShapeQK);\n```\n\n```cpp\narray_aligned<Element, cosize_v<SmemLayoutQ>> smem_q;  // Q allocated independently\n    union {\n      array_aligned<Element, cosize_v<SmemLayoutK>> smem_k;  // K and V shared\n      array_aligned<Element, cosize_v<SmemLayoutV>> smem_v;\n    };\n```\n\n```\nTMEM address space:\n  S0 [128 cols] | S1 [128 cols] | O0 [128 cols] | O1 [128 cols]\n  ^               ^               ^               ^\n  |-- QK acc #0   |-- QK acc #1   |-- PV acc #0   |-- PV acc #1\n  |-- P0 (32 cols embedded in S0)         |\n  |-- V0 (statistics, overlaps with S0)       |-- V1 (statistics, overlaps with S1)\n```\n\n```\nLoad ──PipelineQ──> MMA ──PipelineS0──> Softmax0 ──PipelineC0──> Correction ──PipelineE──> Epilogue\n     ──PipelineKV──>     ──PipelineS1──> Softmax1 ──PipelineC1──>\n                         ──PipelineO───────────────────────────>\n```\n\n```\nLoad WG ──PipelineQ (TmaAsync, 2 stages)──> MMA WG0, MMA WG1\n         ──PipelineKV (TmaAsync, 5 stages)──> MMA WG0, MMA WG1\n```\n\n```\nTimeline:\n  Q1*K1->S0 | Q2*K1->S1 | P0*V1->O0 | Q1*K2->S0 | P1*V1->O1 | Q2*K2->S1 | P0*V2->O0 | ...\n```\n\n```\nFor each new K block:\n  1. Compute S = Q * K^T * scale\n  2. Update row_max: new_max = max(old_max, max(S))\n  3. Compute correction = exp2(scale_log2 * (old_max - new_max))\n  4. Rescale: O *= correction, row_sum *= correction\n  5. Compute P = exp2(scale_log2 * (S - new_max))\n  6. Accumulate: O += P * V, row_sum += sum(P)\n\nFinal: O /= row_sum\n```\n\n```cpp\n// 1. TMEM_LOAD: Load S from TMEM to registers\ncopy(tiled_tmem_load, tTMEM_LOADtS, tTMEM_LOADrS);\n\n// 2. Optional: apply_mask (masked iterations only)\nMask{}.apply_mask(tTMEM_LOADrS, tTMEM_LOADcS, problem_size);\n\n// 3. Row-wise max\nfloat row_max = ...;  // 4-way unrolled reduction\n\n// 4. Write old/new row_max to TMEM's V region (for correction warp)\ntTMEM_STOREVrS(kIdxOldRowMax) = old_row_max;\ntTMEM_STOREVrS(kIdxNewRowMax) = row_max_safe;\ncopy(tiled_tmem_storev, tTMEM_STOREVrS, tTMEM_STOREVtS);\n\n// 5. scale + exp2 + type conversion (FP32 -> Element)\n// Use log2(e) to avoid exp, use faster exp2f instead\nfloat out = scale_log2 * S[i] - row_max * scale_log2;\nP[i] = exp2f(out);\n\n// 6. TMEM_STORE: Write P back to TMEM for MMA PV matmul\ncopy(tiled_tmem_store, tTMEM_STORErS_x4, tTMEM_STOREtS_x4);\n```\n\n```cpp\n// CausalMask::get_trip_count: Skip unnecessary KV tiles using causality\nint max_blocks_q = ceil_div((blk_coord_m + 1) * tile_M, tile_N);\nreturn min(max_blocks_k, max_blocks_q);  // Upper triangular part completely skipped\n\n// get_masked_trip_count: 1-2 tile requires mask\nreturn min(trip_count, ceil_div(tile_M, tile_N));\n```\n\n```\nMHA:  Q layout = (numHeads : headStride)     KV layout = (numHeads : headStride)\nMQA:  Q layout = (numHeads : headStride)     KV layout = (numHeads : 0)          // stride=0 broadcast\nGQA:  Q layout = (numHeads : headStride)     KV layout = (numHeads/G, G : headStride, 0)\n```\n\n```cpp\nint max_length;              // Maximum length for chunked computation\nint* cumulative_seqlen_ptr;  // Cumulative sequence length array [0, len0, len0+len1, ...]\nint total_length = -1;\n\noperator int() const { return max_length; }  // Implicitly convert to int for ceil_div etc\n```\n\n```cpp\nauto logical_shape = apply_variable_length(params.problem_shape, batch_idx);\n// VariableLength in shape is replaced with:\n//   cumulative_length[batch_idx+1] - cumulative_length[batch_idx]\n```\n\n```cpp\nTiledMmaPV tiled_mma_pv;  // = convert_to_gmma_rs(CollectiveMmaPV::TiledMma)\n// Convert P to RS operand format\nTensor acc_qk_fixed = make_acc_into_op<Element>(acc_qk, TiledMmaPV::LayoutA_TV{});\n// Execute PV matmul directly as A operand\ncute::gemm(tiled_mma_pv, acc_qk_fixed, tOrV, acc_pv);\n```\n\n```cpp\nTiledMMA mma_pv_ts = to_tiled_mma_sm100_ts(mma_pv);  // SS -> TS conversion\n// P already in TMEM (softmax writes directly)\ngemm_zero_acc(mma_pv_ts, tOrP0, tOrV, tOtO0);  // P0 in TMEM, V in SMEM\n```\n\n```cpp\n// Softmax warps: 192 regs (need many registers for row reduction)\n// Correction warps: 96 regs\n// MMA/Load/Epilogue: 32-48 regs\n// Empty warp: 24 regs (donate registers to other warps)\n```\n\n```\nEach CTA independently computes partial attention:\n  1. MMA warp: Q*K^T -> S, softmax(S)*V -> partial_O\n  2. EPILOG warps: Compute local fmax, fsum\n\nCross-CTA reduction:\n  3. fmax: credux + inter-warp reduction -> store to remote dsmem\n  4. fsum: reswizzle through smem -> intra-thread/warp reduction -> dsmem\n  5. acc2: Reduction CTAs collect partial_O from each CTA, rescale with fmax/fsum and accumulate\n```\n\n```\nGEMM 1: S = K * Q^T                (recompute attention scores)\nGEMM 2: dP = V * dO^T              (compute dP from V and dO)\n         P = softmax(S)             (recompute softmax)\n         dS = P * (dP - D)          (elementwise: P .* (dP - rowsum(dO*O)))\nGEMM 3: dQ += dS^T * K             (accumulate dQ)\nGEMM 4: dK += dS * Q               (accumulate dK -- in TMEM)\nGEMM 5: dV += P^T * dO             (accumulate dV -- in TMEM)\n```\n\n```cpp\nstruct TmemAllocation {\n  kDK = 0;                       // dK accumulator\n  kDV = kDK + TileShapeDQK;      // dV accumulator (adjacent to dK)\n  kDQ = kDV + TileShapeDVO;      // dQ accumulator\n  kDP = kDQ;                     // dP shares with dQ (time-mutual)\n  kS  = kDQ + max(Q,DQK);        // S (recomputed attention scores)\n  kP  = kS;                      // P shares with S\n};\n```\n\n```\nWarp assignment: 0x12'3333'3333'4444\n  Warps  0-3: Reduce (4 warps)\n  Warps  4-11: Compute (8 warps, softmax/correction)\n  Warp   12: MMA\n  Warp   13: Load\n  Warp 14-15: Empty (donate regs)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-fmha-mla.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

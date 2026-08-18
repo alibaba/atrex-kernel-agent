@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-moe-data-prep.anti-patterns-do-not-apply-all-regressed",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep#anti-patterns-do-not-apply-all-regressed|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "anti-patterns-do-not-apply-all-regressed",
+   "moe"
+  ],
+  "triggers": [
+   "the 'Anti-patterns (DO NOT apply, all REGRESSED)' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Anti-patterns (DO NOT apply, all REGRESSED)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 MoE Data-Prep — Quick Reference -- Anti-patterns (DO NOT apply, all REGRESSED)"
+  },
+  "technique": "Anti-patterns (DO NOT apply, all REGRESSED)",
+  "what": "| Anti-pattern | Why it regresses on this workload | |---|---| | `__match_any_sync` warp-aggregated smem atomicAdd | Bank conflicts are inter-warp not intra-warp at NUM_EXPERTS >> warp_size; expected intra-warp dup rate ≈ 1.94 per warp at E=256/K=8 — primitive cost (~16 cyc/iter) > savings. V8: +24.5% regression. | | `cub::BlockRadixSort` over chunk_size > 1K keys for sort-then-flush a_map coalescing | 8-pass radix sort over 6144 keys = 5.8× instruction inflation, dwarfs the partial coalescing win. Plus c_map loses V7's source-stride coalescing. V10: +41.5% regression. | | Warp-specialize barrier-bound histogram by exiting non-leader warps after Phase 1 | Achieved Occupancy collapses (64% → 21%); top stall just shifts from `Stall Barrier` to `Stall LongScoreboard` at comparable cost; lane-0-serial Phase A becomes fully exposed. V11-A: +25.1% regression. | | Trust NCU \"% est. speedup\" as wall-time delta when 3+ stalls each > 30% CPI | Multi-bottleneck rebalances rather than reduces wall time. See cross-arch meta-rule. |",
+  "when": "| Anti-pattern | Why it regresses on this workload | |---|---| | `__match_any_sync` warp-aggregated smem atomicAdd | Bank conflicts are inter-warp not intra-warp at NUM_EXPERTS >> warp_size; expected intra-warp dup rate ≈ 1.94 per warp at …",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-moe-data-prep.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

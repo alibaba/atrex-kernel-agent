@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-decode-pitfalls.5-cpasync-copyop-is-abstract-can-t-instantiate-directly",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-decode-pitfalls#5-cpasync-copyop-is-abstract-can-t-instantiate-directly|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '5. `cpasync.CopyOp()` is abstract — can't instantiate directly' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 5. `cpasync.CopyOp()` is abstract — can't instantiate directly",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL GDN Decode on sm_120 — Pitfalls -- 5. `cpasync.CopyOp()` is abstract — can't instantiate directly"
+  },
+  "attempted": "To set up a generic SMEM→GMEM TiledCopy for ht store with cache hint:",
+  "verdict": "not-worth-it-here",
+  "lesson": "For S2G with cache hint, either use `CopyBulkS2GOp` (TMA bulk, needs descriptor + mbarrier) or fall back to `cute.arch.store(ptr, val, cop='cs')` manually. Don't grep for an \"Op\" class that doesn't exist.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`CopyOp` is the abstract base. Concrete subclasses are `CopyG2SOp`, `CopyBulkG2SOp`, `CopyBulkS2GOp`, `CopyDsmemStoreOp`, `CopyReduceBulkTensorTileS2GOp`, etc. There is **no concrete generic SIMT S2G atom** with cache hint exposed."
+  },
+  "root_cause": "`CopyOp` is the abstract base. Concrete subclasses are `CopyG2SOp`, `CopyBulkG2SOp`, `CopyBulkS2GOp`, `CopyDsmemStoreOp`, `CopyReduceBulkTensorTileS2GOp`, etc. There is **no concrete generic SIMT S2G atom** with cache hint exposed.",
+  "implementation": {
+   "snippet": "```python\ncp_atom_ht = cute.make_copy_atom(cpasync.CopyOp(), cutlass.Float32, num_bits_per_copy=128)\n```\n\n```\nTypeError: Can't instantiate abstract class CopyOp with abstract method _make_trait\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.49-block-m-64-regresses-occupancy-3-2-on-mi308x-flash-attention",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#49-block-m-64-regresses-occupancy-3-2-on-mi308x-flash-attention|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '49. BLOCK_M=64 regresses occupancy 3→2 on MI308X flash attention' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 49. BLOCK_M=64 regresses occupancy 3→2 on MI308X flash attention",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 49. BLOCK_M=64 regresses occupancy 3→2 on MI308X flash attention"
+  },
+  "attempted": "With BLOCK_M=128 at occupancy 3, try BLOCK_M=64 for better tail handling (S=316 with BLOCK_M=64 gives 5 Q tiles instead of 3, better CU utilization). Smaller tiles should also reduce register pressure.",
+  "verdict": "performance-ceiling",
+  "lesson": "On CDNA3 with MFMA32, BLOCK_M=128 (4 waves, 256 threads) is the sweet spot for flash attention. BLOCK_M=64 only makes sense if the VGPR footprint can be kept under 256/thread (occupancy 2 with 2 waves needs 256 VGPRs/wave from 512 total).",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "BLOCK_M=64 uses 128 threads (2 waves × 64 threads) instead of 256 threads (4 waves × 64 threads). With only 2 waves and head_dim=64, each thread must hold more Q and accumulator state, pushing VGPRs above the 128 limit. At 2 waves/SIMD, each KV iteration has half the compute throughput but the same fixed overhead (LDS loads, mask loads, barriers)."
+  },
+  "observed": "50.2 TFLOPS (from 64.9). Occupancy dropped from 3 to 2 waves/SIMD. KV iterations doubled (10 iterations for S=320 with BLOCK_M=64 vs 5 with BLOCK_M=128).",
+  "root_cause": "BLOCK_M=64 uses 128 threads (2 waves × 64 threads) instead of 256 threads (4 waves × 64 threads). With only 2 waves and head_dim=64, each thread must hold more Q and accumulator state, pushing VGPRs above the 128 limit. At 2 waves/SIMD, each KV iteration has half the compute throughput but the same fixed overhead (LDS loads, mask loads, barriers)."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

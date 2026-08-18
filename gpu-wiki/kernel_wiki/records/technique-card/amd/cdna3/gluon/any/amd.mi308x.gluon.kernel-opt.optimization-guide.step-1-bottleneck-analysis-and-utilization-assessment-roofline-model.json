@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization-guide.step-1-bottleneck-analysis-and-utilization-assessment-roofline-model",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|optimization-guide#step-1-bottleneck-analysis-and-utilization-assessment-roofline-model|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "step-1-bottleneck-analysis-and-utilization-assessment-roofline-model"
+  ],
+  "triggers": [
+   "the 'Step 1: Bottleneck Analysis and Utilization Assessment (Roofline Model)' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Step 1: Bottleneck Analysis and Utilization Assessment (Roofline Model)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Gluon Kernel Performance Optimization Guide -- Step 1: Bottleneck Analysis and Utilization Assessment (Roofline Model)"
+  },
+  "technique": "Step 1: Bottleneck Analysis and Utilization Assessment (Roofline Model)",
+  "what": "Before optimization, **you must first determine whether the operator is compute-bound or memory-bound**, as this determines the subsequent optimization direction and utilization assessment metrics.",
+  "when": "Before optimization, **you must first determine whether the operator is compute-bound or memory-bound**, as this determines the subsequent optimization direction and utilization assessment metrics.",
+  "caveats": [
+   "\"Precision passed\" — Precision is a prerequisite, not a stop condition.",
+   "\"Benchmark numbers are available\" — Having numbers only means it runs, not that optimization is complete.",
+   "\"Conversion is done\" — Conversion is separate from optimization and is not a stop condition for this guide."
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```bash\n# use local benchmarkelapsed time\npython <benchmark-command> <kernel.py> <ref.py> \\\n    --wrapper-name <wrapper> --setup-name <setup>\n\n# or use the single-kernel measurement helper\npython tools/measure_kernel_time.py <kernel.py> --wrapper-name <wrapper> --setup-name <setup>\n```\n\n```\nactual (TFLOPS) = FLOPs / elapsed time (seconds) / 1e12\nactualbandwidth (TB/s) = Bytes_transferred / elapsed time (seconds) / 1e12\n```\n\n```bash\n# data: bandwidthupper bound\npython tools/measure_bandwidth_ceiling.py --bytes <Bytes> --dtype bf16 --emit-flag\n\n# completeutilizationanalysis\npython tools/compute_utilization.py \\\n    --flops <FLOPs> --bytes <Bytes> --time-ms <time> \\\n    --gpu mi300x --dtype bf16 \\\n    --measured-bandwidth-tb-s 3.200\n```\n\n```bash\npython tools/compute_utilization.py \\\n    --gpu mi308x --dtype bf16 \\\n    --flops-expr \"2*BM*BN*K\" --bytes-expr \"(BM*K + BN*K + BM*BN)*2\" \\\n    --time-ms 0.5 --grid-blocks 64 --num-cus 80\n```\n\n```bash\n# Tile Roofline analysis(recommended)\n# --flops / --flops-expr: single tile FLOPs\n# --bytes / --bytes-expr: single tile HBM total bytes\n# --time-ms: entire kernel elapsed time(toolautomatic grid blocks obtain per-tile elapsed time)\npython tools/compute_utilization.py \\\n    --gpu mi308x \\\n    --dtype bf16 \\\n    --flops-expr \"2*BM*BN*K\" \\\n    --bytes-expr \"(BM*K + BN*K + BM*BN)*2\" \\\n    --time-ms 0.5 \\\n    --grid-blocks 64\n\n# data kernel: usebandwidthupper bound\npython tools/compute_utilization.py \\\n    --flops-expr \"2*BM*BN*K\" \\\n    --bytes-expr \"(BM*K + BN*K + BM*BN)*2\" \\\n    --time-ms 0.05 \\\n    --grid-blocks 16 \\\n    --gpu mi308x \\\n    --dtype bf16 \\\n    --measured-bandwidth-tb-s 3.2\n\n# ordirect tile\npython tools/compute_utilization.py \\\n    --flops 134217728 \\\n    --bytes 1212416 \\\n    --time-ms 0.5 \\\n    --grid-blocks 64 \\\n    --gpu mi308x \\\n    --dtype bf16\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

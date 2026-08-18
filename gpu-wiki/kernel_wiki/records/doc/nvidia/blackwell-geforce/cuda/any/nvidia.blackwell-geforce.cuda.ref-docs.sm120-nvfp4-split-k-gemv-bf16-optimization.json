@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cuda.ref-docs.sm120-nvfp4-split-k-gemv-bf16-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cuda|gemv|sm120-nvfp4-split-k-gemv-bf16-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cuda",
+   "operator_family": "gemv",
+   "operators": [
+    "gemv"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cuda",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemv"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): SM120 CUDA NVFP4 Split-K GEMV (BF16 out) on RTX PRO 5000",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 CUDA NVFP4 Split-K GEMV (BF16 out) on RTX PRO 5000"
+  },
+  "title": "SM120 CUDA NVFP4 Split-K GEMV (BF16 out) on RTX PRO 5000",
+  "summary": "> Path-of-record for the CUDA Split-K decode GEMV route used by the > Qwen3.5 NVFP4 MLP C2 shapes. This is a CUDA C++ / inline-PTX archive, > not a CuTeDSL optimization.",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "- GPU: NVIDIA RTX PRO 5000 Blackwell-GeForce / `sm_120`, 110 SMs."
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "Baseline C2 decode GEMV has too few output tiles:"
+   },
+   {
+    "heading": "Kernel resource footprint",
+    "anchor": "kernel-resource-footprint",
+    "gist": "table columns: Field, Value"
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "The v3 decode GEMV path was exact but C2 remained under-filled."
+   },
+   {
+    "heading": "Final perf vs baseline",
+    "anchor": "final-perf-vs-baseline",
+    "gist": "table columns: Scope, Baseline, C1 CUTLASS + C2 Split-K, Delta, Notes"
+   },
+   {
+    "heading": "Remaining bottlenecks",
+    "anchor": "remaining-bottlenecks",
+    "gist": "The archived evidence identifies Split-K as a parallelism fix: C2 has only `160` output CTAs before splitting."
+   },
+   {
+    "heading": "What would close the remaining gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "- Use a library path with proven split-K / Stream-K scheduling if it can consume the same NVFP4 scale layout and preserve prompt exactness."
+   },
+   {
+    "heading": "Sustained recipe",
+    "anchor": "sustained-recipe",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Code: reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/ - Pitfalls:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nbase_cta = ceil(M / 1) * ceil(N / TILE_N)\nTILE_N = 32\nC2 TP=2: N=5120  -> 160 CTA  -> 1.45 CTA/SM on 110 SMs\n```\n\n```text\nS = 4\nK_split = K / S\ngrid = (ceil(N / TILE_N), S)\nC2 TP=2: 160 CTA -> 640 CTA -> 5.8 CTA/SM\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-split-k-gemv-bf16-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

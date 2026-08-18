@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.1-cp-async-bf16-val-layout-must-be-1-8-not-1-4-for-128-bit-copies",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#1-cp-async-bf16-val-layout-must-be-1-8-not-1-4-for-128-bit-copies|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '1. cp.async bf16 val_layout must be (1,8) not (1,4) for 128-bit copies' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 1. cp.async bf16 val_layout must be (1,8) not (1,4) for 128-bit copies",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 1. cp.async bf16 val_layout must be (1,8) not (1,4) for 128-bit copies"
+  },
+  "attempted": "You set `num_bits_per_copy=128` and pick `val_layout=(1,4)` because you're used to fp32 where 4 elements = 128 bits. Seems right for bf16 too — 4 elements per thread per copy.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Always compute val_layout from copy width and element size. For bf16 128-bit: `(1, 8)`. Working config for 32x128 bf16 with 128 threads:",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`val_layout` tells CuTeDSL how many contiguous elements each thread handles per copy invocation. For bf16 (16 bits), `val_layout=(1,4)` = 4 x 16 = 64 bits per thread. CuTeDSL computes per-thread pointer alignment from val_layout, not from the copy atom. 64 bits < 128-bit copy requirement = alignment error at compile time, regardless of runtime address alignment."
+  },
+  "observed": "Compile-time error:",
+  "root_cause": "`val_layout` tells CuTeDSL how many contiguous elements each thread handles per copy invocation. For bf16 (16 bits), `val_layout=(1,4)` = 4 x 16 = 64 bits per thread. CuTeDSL computes per-thread pointer alignment from val_layout, not from the copy atom. 64 bits < 128-bit copy requirement = alignment error at compile time, regardless of runtime address alignment.",
+  "implementation": {
+   "snippet": "```\n'cute.copy' op src ptr alignment (64 bits) does not meet requirement (128 bits)\nof atom 'simt_async_copy<bf16, cache = global, 128 b>'\n```\n\n```python\nthr_layout = (32, 4), stride=(4, 1)   # 128 threads\nval_layout = (1, 8), stride=(8, 1)    # 8 bf16 = 128 bits per copy\n# tiles 32x32 per copy, K_DIM/32 = 4 copies per thread\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

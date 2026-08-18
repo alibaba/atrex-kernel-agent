@@ -1,0 +1,37 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.cp-async",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "cp.async",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes",
+   "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes.multicast"
+  ],
+  "semantics": "Bulk tensor copy: global → shared; Multicast to cluster SMs"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "TMA (Tensor Memory Accelerator)",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

@@ -1,0 +1,1727 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alibaba/atrex-kernel-agent/gpu-wiki/schema/kernel/schema.json",
+  "title": "GPU kernel-experience record (clean-1.3)",
+  "description": "Four isolated layers. retrieval: uniform shape across all types, used for hard scope filtering and recall. payload: SELF-CONTAINED actionable knowledge -- an agent that retrieves exactly one record must be able to act on payload alone, without reading retrieval, without resolving a relation id, and without a second query. evidence: retained for validation and maintenance but never served to the consuming agent. worth: derived ranking counters, regenerated from feedback/events.jsonl.\n\nSelf-containment contract, enforced by tools/check_kernel_wiki.py: every payload carries goal (why am I reading this), problem (which operator, which workload, which bottleneck), and expected_gain (how much, as a PERCENTAGE -- absolute latencies are never a gain statement here). It contains no ids and no paths: everything it needs is words, numbers and code. Records that describe a change also carry trace (which solution this was built on top of) and implementation (the code).\n\nPUBLIC STORE. Seeded from curated documentation rather than from a measured optimization ladder, so three requirements are relaxed: worth.gain is reported as qualitative (documentation states no measured benefit), anti-strategy needs no measured lineage, and evidence.summary.confidence accepts 'documented' (distilled from a doc page, not a harness run). Scope vocabularies cover every vendor, architecture and DSL this wiki documents, and scope.architectures carries an explicit multi-architecture scope. Records mined later from traces or agent sessions fill the measured fields normally.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "type",
+    "level",
+    "status",
+    "episode_key",
+    "retrieval",
+    "payload",
+    "evidence",
+    "worth"
+  ],
+  "properties": {
+    "schema": {
+      "const": "clean-1.3"
+    },
+    "id": {
+      "type": "string",
+      "description": "Deterministic primary key: <vendor>.<product>.<dsl>.<operator_family>.<technique>-<discriminator>. Rebuilding from the same corpus must produce the same id. 'any' is a legal segment for cross-cutting records.",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "type": {
+      "enum": [
+        "strategy",
+        "anti-strategy",
+        "technique-card",
+        "symptom-card",
+        "reference-kernel",
+        "doc",
+        "numerics-rule",
+        "dispatch-rule"
+      ]
+    },
+    "level": {
+      "enum": [
+        "operator",
+        "cross-operator",
+        "generic"
+      ],
+      "description": "Which fallback tier this record lands on: L0 exact operator, L1 sibling transfer, L2 generic."
+    },
+    "status": {
+      "enum": [
+        "active",
+        "superseded",
+        "deprecated"
+      ]
+    },
+    "episode_key": {
+      "type": "string",
+      "description": "Merge handle '<arch>|<dsl>|<operator_family>|<technique>|<level>'. Several versions of the same technique on the same operator share it and collapse into one memory.",
+      "minLength": 1
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "generality",
+        "signals",
+        "technique_tags",
+        "triggers"
+      ],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "vendor",
+            "arch",
+            "dsl"
+          ],
+          "description": "Hard identity. Measured evidence never crosses vendor/arch/product/dsl.",
+          "properties": {
+            "vendor": {
+              "enum": [
+                "nvidia",
+                "amd",
+                "generic"
+              ]
+            },
+            "arch": {
+              "enum": [
+                "ampere",
+                "hopper",
+                "blackwell",
+                "blackwell-ultra",
+                "blackwell-geforce",
+                "cdna3",
+                "cdna4",
+                "rdna4",
+                "generic"
+              ]
+            },
+            "product": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Product overlay slug when the record is product-specific (b200, b300, mi300x, mi308x, mi355x, sm120). 'any' or null for architecture- or vendor-general records."
+            },
+            "dsl": {
+              "enum": [
+                "cuda",
+                "cutedsl",
+                "flydsl",
+                "gluon",
+                "triton",
+                "aiter",
+                "any"
+              ]
+            },
+            "operator_family": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Precise operator identity (the wiki page slug), e.g. moe-expert-compute. Drives L0 exact hits and provenance isolation. null for records that are not tied to one operator."
+            },
+            "operators": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Benchmark operator names this record was measured on. Part of hard identity, and what --operator filters against."
+            },
+            "shape_signature": {
+              "type": "object",
+              "description": "Semantic constants only (hidden_size, head_dim, block_scale, num_experts...). Size axes that vary across the benchmark (M/N/K/num_tokens/batch) must NOT appear here; they belong in signals.shape_regime.",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "architectures": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Explicit multi-architecture scope for a record that applies to several architectures at once (an H100->B200 comparison). Empty when the single arch field is sufficient."
+            }
+          }
+        },
+        "generality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "arch",
+            "language"
+          ],
+          "description": "Transfer keys. Decide whether a coarser query can still reach this record.",
+          "properties": {
+            "arch": {
+              "enum": [
+                "ampere",
+                "hopper",
+                "blackwell",
+                "blackwell-ultra",
+                "blackwell-geforce",
+                "cdna3",
+                "cdna4",
+                "rdna4",
+                "generic",
+                "any"
+              ],
+              "description": "'any' promotes the record into the generic tier and makes it reachable across architectures."
+            },
+            "language": {
+              "enum": [
+                "cuda",
+                "cutedsl",
+                "flydsl",
+                "gluon",
+                "triton",
+                "aiter",
+                "any"
+              ]
+            },
+            "workload_family": {
+              "enum": [
+                "attention",
+                "conv-vision",
+                "decoder-layer",
+                "gemm-projection",
+                "mask-index",
+                "misc",
+                "mlp-activation",
+                "moe",
+                "norm",
+                "rope",
+                "ssm-linear-attention",
+                "any"
+              ],
+              "description": "Coarse family. The key that actually carries L1 sibling transfer, because exact operator_family hits are frequently zero."
+            }
+          }
+        },
+        "locator": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "ENGINE ONLY. Where the retrieval tool can find the related source inside this repository. Stripped from the agent-facing projection: the agent cannot access this repository. The agent-facing code is implementation.snippet, inlined verbatim in the payload; the retrieval tool never resolves this path.",
+          "properties": {
+            "kernel_source": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Wiki-relative path to the operator's published implementation."
+            }
+          }
+        },
+        "signals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metrics",
+            "shape_regime",
+            "symptoms"
+          ],
+          "description": "Normalized profiler signals. The agent profiles first, then retrieves with these.",
+          "properties": {
+            "bottleneck": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "launch-overhead",
+                "host-sync-stall",
+                "store-bandwidth-bound",
+                "alu-saturated",
+                "tiny-m-gemm",
+                "occupancy-register-capped",
+                "precision-gate-failure",
+                "vendor-library-floor",
+                "tail-effect",
+                "moe-load-imbalance",
+                null
+              ],
+              "description": "Optional on purpose. Absent means the engine classifies from metrics. Never use it as a hard filter: a misclassification would silently hide the right record."
+            },
+            "metrics": {
+              "type": "object",
+              "description": "Normalized numbers used for ranking and for engine-side bottleneck fallback.",
+              "additionalProperties": {
+                "type": [
+                  "number",
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "shape_regime": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Where the record applies along the SIZE axes. R1: size axes live only here, never in scope.",
+              "properties": {
+                "predicate": {
+                  "type": "string",
+                  "description": "Applicability range, e.g. 'h>=512' or '*' for all benchmarked shapes."
+                },
+                "var_axes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "n_shapes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "symptoms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "technique_tags": {
+          "type": "array",
+          "description": "Technique labels. Drive recall and dedup ('do not recommend a lever already tried').",
+          "items": {
+            "type": "string"
+          }
+        },
+        "triggers": {
+          "type": "array",
+          "description": "Natural-language conditions: when should this record be considered.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "links": {
+          "$ref": "#/$defs/links"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "description": "Self-contained actionable knowledge. Shape depends on type; enforced by the allOf branches below.",
+      "required": [
+        "goal",
+        "problem"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "raw"
+      ],
+      "properties": {
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "confidence"
+          ],
+          "description": "Agent-visible. Lets the agent judge how much to trust the record and lets the engine rank it. Absolute latencies live here, not in payload.expected_gain.",
+          "properties": {
+            "bottleneck_evidence": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "basis": {
+                  "enum": [
+                    "profiler",
+                    "microbenchmark",
+                    "bench-only",
+                    "asserted",
+                    "none"
+                  ]
+                },
+                "tool": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            },
+            "mechanism_metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Machine-level numbers that explain WHY the gain happened, and which decide whether it will transfer. Not benefits, so they are deliberately outside payload.expected_gain: launch count and memory traffic are work removed, and the occupancy cluster says which resource was capping the kernel.",
+              "properties": {
+                "launch_count": {
+                  "$ref": "#/$defs/metric_delta"
+                },
+                "memory_traffic": {
+                  "$ref": "#/$defs/metric_delta"
+                },
+                "occupancy_limiter": {
+                  "enum": [
+                    "registers",
+                    "shared-memory",
+                    "warps",
+                    "grid-size",
+                    "spill",
+                    null
+                  ]
+                },
+                "occupancy_pct": {
+                  "$ref": "#/$defs/metric_delta"
+                },
+                "registers_per_thread": {
+                  "$ref": "#/$defs/metric_delta"
+                },
+                "smem_bytes_per_block": {
+                  "$ref": "#/$defs/metric_delta"
+                },
+                "spill": {
+                  "$ref": "#/$defs/metric_delta"
+                }
+              }
+            },
+            "confidence": {
+              "enum": [
+                "measured",
+                "inferred",
+                "documented"
+              ],
+              "description": "measured = harness numbers; inferred = reasoned from partial evidence; documented = distilled from a curated documentation page, no harness run."
+            },
+            "measured_on": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which toolchain / harness produced the numbers. The agent must see this: conclusions can expire when the environment changes."
+            }
+          }
+        },
+        "raw": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "HUMAN ONLY. Never serialized into any agent-facing output. Holds the de-anonymized provenance: contributor repo, version label, commit, absolute corpus paths.",
+          "properties": {
+            "source_repo": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "git_commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "detail_file": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hunk_index": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "file_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "page_path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The markdown page this record was distilled from, relative to the wiki root. markdown stays the source of truth; this is the reconciliation link."
+            },
+            "page_anchor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "evidence_extra": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "The long tail of per-step evidence keys that were not normalized into summary. Kept for fidelity, not served."
+            },
+            "effect": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "basis"
+              ],
+              "properties": {
+                "basis": {
+                  "enum": [
+                    "measured",
+                    "qualitative"
+                  ],
+                  "description": "qualitative when there is no clean number; such records are down-weighted."
+                },
+                "new_geomean_us": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "parent_geomean_us": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "baseline_geomean_us": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "delta_pct": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "measurement": {
+                  "type": "string"
+                },
+                "comparable": {
+                  "type": "boolean",
+                  "description": "false when the number is only meaningful against a different baseline (sibling run), so it must not be compared with the main ladder."
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "description": "HUMAN ONLY. Absolute geomeans for auditing the extraction. Lives in raw because a microsecond is meaningless without the shape set; the agent gets the normalized percentages in worth.gain."
+            }
+          }
+        }
+      }
+    },
+    "worth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "gain"
+      ],
+      "description": "Everything about how much this record is worth, in one field. Merged on purpose: the agent asks a single question -- is this worth my next version? -- and the engine needs a single scalar to sort by, so the benefit and the standing derived from it must not live in two places. rank and track are GENERATED; do not hand-edit.",
+      "properties": {
+        "rank": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "score",
+            "tier"
+          ],
+          "description": "What the engine sorts by and what the agent reads to judge standing. Only score and tier are served.",
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "The single sort key, in [0, 1]."
+            },
+            "tier": {
+              "enum": [
+                "proven",
+                "promising",
+                "provisional",
+                "cautionary"
+              ],
+              "description": "Coarse standing, so the agent never has to guess whether 0.80 is high. Derived from the same base-rate-corrected signal as the score, never from raw counts: this corpus rejects about twenty attempts per retained step, so 'reverted more often than kept' is true of nearly every lever and says nothing. proven = outcomes clearly better than this lever normally gets, with enough of them to say so; promising = our own harness number, no verdict yet; provisional = the number is someone else's or purely qualitative; cautionary = negative evidence, or outcomes clearly below the lever's own rate."
+            },
+            "formula": {
+              "type": "string"
+            },
+            "components": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "description": "ENGINE ONLY. Score decomposition, so --explain can show why a record ranked where it did."
+            },
+            "computed_at": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "ENGINE ONLY."
+            },
+            "builder_version": {
+              "type": "string",
+              "description": "ENGINE ONLY."
+            }
+          }
+        },
+        "gain": {
+          "$ref": "#/$defs/gain"
+        },
+        "track": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "counters",
+            "prior"
+          ],
+          "description": "ENGINE ONLY, never served. The bookkeeping that produced rank: online counters plus the corpus cold start. Withheld from the agent because raw counts invite it to re-derive a ranking that was already computed here, and tier answers the same question in one word.",
+          "properties": {
+            "counters": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "query_count",
+                "served_count",
+                "applied_count",
+                "verified_effective",
+                "verified_ineffective",
+                "fallback_served"
+              ],
+              "properties": {
+                "query_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Times this record was returned as a real query match (top-k)."
+                },
+                "served_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Times the agent actually expanded/read the payload."
+                },
+                "applied_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Times the agent reported adopting it."
+                },
+                "verified_effective": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Believing this record was the right call: a strategy was adopted and kept, or an anti-strategy's warning held."
+                },
+                "verified_ineffective": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Believing it was the wrong call: a strategy was adopted and reverted, or an anti-strategy's warning turned out not to hold."
+                },
+                "fallback_served": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Served only by the random fallback sample. Counted separately so exploration never inflates query_count."
+                },
+                "first_seen_ts": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "last_used_ts": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "description": "Cache of feedback/events.jsonl, which is the truth. Rebuildable at any time by rebuild_importance.py."
+            },
+            "prior": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Cold-start belief derived from the corpus itself, so a never-queried record is not stuck at the bottom. Also absorbs what used to be evidence.summary.corpus_prior: the technique's whole-corpus track record is a prior on believability, which is exactly what this block is.",
+              "properties": {
+                "corpus_kept_ratio": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "How often this lever survives across the whole corpus (all retained versions)."
+                },
+                "corpus_ladder_ratio": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "How often this lever entered a milestone ladder versus being rejected. Measured on the same data as importance.counters, so it is the correct neutral reference for them; corpus_kept_ratio uses a different denominator."
+                },
+                "best_speedup_x": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "step_gain_pct": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "n_independent_runs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "How many independent runs reproduced this operator."
+                },
+                "rediscovered": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "For anti-strategy: how many independent runs fell into the same trap. High means a hard limit, not bad luck."
+                },
+                "n_operators": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "technique": {
+                  "type": "string"
+                },
+                "attempts": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "kept": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "confirm_keys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "ENGINE ONLY. Identity of every incoming record already counted into counters.verified_effective, so re-running a trace scan cannot inflate the count with the same rediscovery twice. Written by the wiki-gate confirm path."
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "strategy"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "trace",
+              "change",
+              "mechanism",
+              "implementation",
+              "cost",
+              "next_steps"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "trace": {
+                "$ref": "#/$defs/trace"
+              },
+              "change": {
+                "type": "string",
+                "minLength": 1,
+                "description": "What this step changed, verbatim from the corpus."
+              },
+              "mechanism": {
+                "type": "string",
+                "description": "Why it worked, at the machine level (launch cost, HBM traffic, occupancy). Absolute latency restatements are stripped: the number belongs in expected_gain as a percentage."
+              },
+              "implementation": {
+                "$ref": "#/$defs/implementation"
+              },
+              "cost": {
+                "$ref": "#/$defs/cost"
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Key knobs plus the range that was actually explored. Empty when the corpus records none; do not infer."
+              },
+              "applies_when": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Mechanistic preconditions only. Size conditions live in retrieval.signals.shape_regime."
+              },
+              "next_steps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Known untried directions, verbatim from open_directions."
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "anti-strategy"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "attempted",
+              "verdict",
+              "lesson"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "trace": {
+                "$ref": "#/$defs/trace"
+              },
+              "attempted": {
+                "type": "string",
+                "minLength": 1,
+                "description": "What was tried."
+              },
+              "established_fact": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "condition",
+                  "mechanism"
+                ],
+                "description": "A negative record is only worth keeping if it states a FACT: under checkable condition C, doing X necessarily yields the bad result. Without this, a single 'measured, no gain' run reads like a hard limit and steers later agents away from a direction that may well work.",
+                "properties": {
+                  "condition": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Where the failure is a law rather than an incident. At least one field must be set. The operator alone is NOT a condition: a lever that failed on one operator is an observation, not a fact.",
+                    "properties": {
+                      "sm_arch": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "e.g. sm_100. Set when the failure follows from the architecture."
+                      },
+                      "shape_regime": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "e.g. 'M<=8', 'large-N'. Set when the failure only holds in part of the shape space."
+                      },
+                      "dtype": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "e.g. bf16. Set when the failure follows from the precision."
+                      },
+                      "toolchain": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "e.g. 'triton <= 3.2'. Set when a compiler or library version is what forbids it."
+                      }
+                    }
+                  },
+                  "mechanism": {
+                    "type": "string",
+                    "minLength": 40,
+                    "description": "Why it NECESSARILY fails under that condition. A measurement ('no improvement found', 'flat within noise', 'tested 4 approaches') is not a mechanism -- it records an outcome without explaining it, so it cannot be generalised or refuted."
+                  }
+                }
+              },
+              "hypothesis": {
+                "type": "string",
+                "description": "The assumption at the time. Marked when inferred."
+              },
+              "observed": {
+                "type": "string",
+                "description": "What actually happened. Empty when the page states no separate result, rather than echoing the lesson."
+              },
+              "root_cause": {
+                "type": "string"
+              },
+              "would_retry_if": {
+                "type": "string",
+                "description": "Under which changed condition this becomes worth retrying."
+              },
+              "verdict": {
+                "description": "'unknown' and 'unstable' are deliberately absent: a run that ended without a conclusion has nothing to record as a negative fact.",
+                "enum": [
+                  "accuracy-gate/ceiling",
+                  "api-limitation",
+                  "not-worth-it-here",
+                  "performance-ceiling"
+                ]
+              },
+              "lesson": {
+                "type": "string",
+                "minLength": 1
+              },
+              "implementation": {
+                "$ref": "#/$defs/implementation"
+              },
+              "cost": {
+                "$ref": "#/$defs/cost"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "technique-card"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "technique",
+              "what",
+              "when",
+              "caveats"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "technique": {
+                "type": "string"
+              },
+              "what": {
+                "type": "string",
+                "description": "What the lever is."
+              },
+              "when": {
+                "type": "string",
+                "description": "When it pays off and when it does not."
+              },
+              "success_rate_pct": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "Share of corpus attempts that were retained. NOT a speedup."
+              },
+              "typical_gain_pct": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "Median percentage gain among the retained wins."
+              },
+              "best_gain_pct": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "attempts": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "kept": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "How many of those attempts were retained."
+              },
+              "measured_wins": {
+                "type": "array",
+                "description": "Best measured applications. Each carries the gain as a percentage and the id of the record with the code.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "operator": {
+                      "type": "string"
+                    },
+                    "dsl": {
+                      "type": "string"
+                    },
+                    "gain_pct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "change": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "caveats": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cost": {
+                "$ref": "#/$defs/cost"
+              },
+              "implementation": {
+                "$ref": "#/$defs/implementation"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "symptom-card"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "candidate_techniques"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "likely_causes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "candidate_techniques": {
+                "type": "array",
+                "description": "Ordered candidate levers, each with its corpus success rate and typical percentage gain so one query is enough to choose.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "technique": {
+                      "type": "string"
+                    },
+                    "success_rate_pct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "typical_gain_pct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "best_gain_pct": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "corpus_example": {
+                "type": "string"
+              },
+              "measured_on_operators": {
+                "type": "array",
+                "description": "Operators where this really was the measured bottleneck.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "operator": {
+                      "type": "string"
+                    },
+                    "measured_as": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "reference-kernel"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "trace",
+              "implementation"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "trace": {
+                "$ref": "#/$defs/trace"
+              },
+              "implementation": {
+                "$ref": "#/$defs/implementation"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "doc"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "title",
+              "summary",
+              "sections"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "title": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "sections": {
+                "type": "array",
+                "description": "Section-level index so an agent can jump instead of reading the whole page.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "heading": {
+                      "type": "string"
+                    },
+                    "anchor": {
+                      "type": "string"
+                    },
+                    "gist": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "key_facts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "implementation": {
+                "$ref": "#/$defs/implementation"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "numerics-rule",
+              "dispatch-rule"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "goal",
+              "problem",
+              "rule",
+              "rationale"
+            ],
+            "properties": {
+              "goal": {
+                "$ref": "#/$defs/goal"
+              },
+              "problem": {
+                "$ref": "#/$defs/problem"
+              },
+              "rule": {
+                "type": "string",
+                "minLength": 1
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "applies_when": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "violation_symptom": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One line telling the agent why this record is in front of it. First thing to read."
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "statement"
+      ],
+      "description": "What this record is about, restated so payload never depends on retrieval. Deliberately redundant with retrieval.scope: retrieval is for the engine, this is for the agent.",
+      "properties": {
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The problem in one sentence: which operator, and what was wrong with it."
+        },
+        "operator": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Human-readable operator name."
+        },
+        "operator_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Wiki slug, usable as --operator."
+        },
+        "dsl": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string",
+          "description": "Hardware the numbers were measured on, spelled out."
+        },
+        "workload": {
+          "type": "string",
+          "description": "The benchmark contract: what the kernel computes and over which shapes."
+        },
+        "shape_contract": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Semantic constants, the variable axes, and how many shapes were benchmarked."
+        },
+        "bottleneck": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Normalized bottleneck, when the corpus identified one."
+        },
+        "observed_symptom": {
+          "type": "string",
+          "description": "What the profile or bench actually showed."
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builds_on"
+      ],
+      "description": "Lineage. Which solution this record improves on, and which levers were already spent on this chain, so the agent can tell an incremental tweak from a rewrite and does not re-recommend something already tried.",
+      "properties": {
+        "builds_on": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "approach"
+          ],
+          "properties": {
+            "approach": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What the previous state of the code did, in words, so one query is enough and no relation id has to be resolved."
+            },
+            "is_baseline": {
+              "type": "boolean",
+              "description": "true when this is the first change on top of the untouched reference."
+            }
+          }
+        },
+        "techniques_applied_before": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Levers already used earlier in this chain. Do not recommend these again."
+        },
+        "technique_here": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rediscovered": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "anti-strategy: how many independent runs hit this same trap."
+        },
+        "n_operators": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "anti-strategy: across how many operators."
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format"
+      ],
+      "description": "The code, always verbatim from the corpus; the distiller never writes code of its own. format carries the reading convention, so no separate explanation field is needed. No path ever appears here: the agent has no access to this repository, so a path would be something it cannot open.",
+      "properties": {
+        "snippet": {
+          "type": "string",
+          "description": "The hunk or source excerpt."
+        },
+        "format": {
+          "enum": [
+            "unified-diff (verbatim; '-' = before this step, '+' = after)",
+            "source (verbatim)",
+            "none"
+          ],
+          "description": "Self-describing on purpose: a diff is useless if the agent cannot tell which side is which, and a constant explanation repeated on every record would be pure duplication."
+        },
+        "core_kernel_name": {
+          "type": "string"
+        },
+        "dispatch_snippet": {
+          "type": "string",
+          "description": "Shape-dependent routing, where most tuning knowledge lives."
+        },
+        "source_text": {
+          "type": "string",
+          "description": "RESERVED, not produced by tools/query_wiki.py. A serve-time inliner may place a full implementation here; the agent-facing code is implementation.snippet. Never stored in a record; check_kernel_wiki fails if it is."
+        },
+        "source_truncated": {
+          "type": "boolean",
+          "description": "SERVE TIME ONLY. true when source_text was capped."
+        }
+      }
+    },
+    "gain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis"
+      ],
+      "description": "Expected benefit as a list of normalized metrics, so a record can report more than one axis and say which one it was actually optimizing. Absolute latency never appears here: a millisecond means nothing without the shape set and it tempts an agent into comparing across operators, so a latency entry carries only delta_pct and the raw geomeans stay in evidence.raw.effect, which is not served. Non-time metrics (sol, mfu, throughput percentages) may carry before/after because those ARE comparable. Anything the corpus did not state is left out rather than guessed.",
+      "properties": {
+        "basis": {
+          "enum": [
+            "measured",
+            "reported",
+            "qualitative"
+          ],
+          "description": "measured = we have the harness number; reported = the number comes from someone else's write-up; qualitative = no clean number."
+        },
+        "kind": {
+          "enum": [
+            "performance",
+            "accuracy",
+            "footprint",
+            "none"
+          ],
+          "description": "Which kind of benefit this is. none for records that claim no benefit of their own, such as a symptom card or a rejected attempt."
+        },
+        "primary": {
+          "$ref": "#/$defs/metric_name",
+          "description": "Which metric was the actual target of this change, when several moved."
+        },
+        "pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Sign-normalized delta_pct of the primary metric, lifted out of the list so ranking and --min-gain never have to walk metrics[]. Positive is always an improvement. Null when the basis is qualitative."
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gain_metric"
+          },
+          "description": "Improvements. Empty when the record claims no gain."
+        },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gain_metric"
+          },
+          "description": "The price of the gain, which the corpus does record: a slower compile, or the same metric going the wrong way on one shape bucket. Reading a gain without this is how a record gets over-generalized."
+        },
+        "correctness": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Proof the gain was not bought with lost precision.",
+          "properties": {
+            "gate": {
+              "type": "string",
+              "description": "Which gate was run."
+            },
+            "observed": {
+              "type": "string",
+              "description": "Outcome, e.g. pass, or 16/16 PASS."
+            },
+            "max_diff": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Largest numerical deviation, when recorded."
+            }
+          }
+        },
+        "comparable": {
+          "type": "boolean",
+          "description": "false when the percentages are relative to a different baseline than the main chain, so they must not be compared with it."
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "metric_delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit"
+      ],
+      "description": "One machine-level diagnostic reading. before/after when the corpus stated both, value when it stated one level, saved when it stated only the amount removed. quote keeps the source sentence because these are regex-extracted from prose and a human must be able to audit them.",
+      "properties": {
+        "before": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "after": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "A single stated level, when it is not clear whether it is before or after."
+        },
+        "saved": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Amount removed, when that is all the corpus gave."
+        },
+        "delta_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Derived, only when before and after are both known."
+        },
+        "unit": {
+          "type": "string"
+        },
+        "quote": {
+          "type": "string",
+          "description": "Verbatim source sentence, for auditing the extraction."
+        }
+      }
+    },
+    "metric_name": {
+      "enum": [
+        "latency",
+        "sol",
+        "mfu",
+        "dram_throughput",
+        "compute_throughput",
+        "arithmetic_intensity",
+        "compile_time",
+        "memory_footprint"
+      ],
+      "description": "Closed vocabulary. latency plus the roofline coordinates (sol / mfu / dram_throughput / compute_throughput / arithmetic_intensity) are the benefit axes; compile_time and memory_footprint exist because the corpus records them as costs. Machine-level diagnostics such as occupancy, register pressure or launch count are NOT benefits and live in evidence.summary.mechanism_metrics."
+    },
+    "gain_metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "direction",
+        "source"
+      ],
+      "description": "One normalized measurement. delta_pct is sign-normalized so a POSITIVE value always means improvement, whichever way the underlying metric points.",
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/metric_name"
+        },
+        "direction": {
+          "enum": [
+            "lower-better",
+            "higher-better"
+          ],
+          "description": "Which way the raw metric improves. Stated so delta_pct can be read without knowing the metric."
+        },
+        "delta_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Sign-normalized change: positive = improvement, negative = regression."
+        },
+        "before": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Only for non-time metrics. A latency entry must omit this; absolute runtimes belong in evidence.summary.effect."
+        },
+        "after": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Only for non-time metrics."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Never a time unit on a benefit metric; the no-absolute-latency gate rejects it."
+        },
+        "measured_over": {
+          "type": "string",
+          "description": "The measurement scope: which shapes, which configuration."
+        },
+        "note": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "harness",
+            "step-record",
+            "profiler",
+            "corpus-aggregate",
+            "pr-body",
+            "inferred"
+          ],
+          "description": "Where the number came from. Required so a no-fabrication check can tell a measured number from an inferred one."
+        }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edit_scope",
+        "risk"
+      ],
+      "properties": {
+        "edit_scope": {
+          "enum": [
+            "one-line",
+            "epilogue",
+            "kernel-rewrite",
+            "architecture"
+          ]
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "med",
+            "high"
+          ]
+        },
+        "risk_basis": {
+          "type": "string",
+          "description": "Why that risk level, in corpus terms."
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ENGINE ONLY. The internal id graph, kept so the retrieval tool can offer a follow-up hop. Stripped from the agent-facing projection: an id the agent cannot dereference within the same query is noise, and payload is required to be usable without it. The readable part of an edge is already in payload, for example trace.builds_on.approach describes the parent in words.",
+      "properties": {
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The record this one builds on."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conflicts_with": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "see_also": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cited_records": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Records this one quotes, such as the measured wins on a technique card or the candidates on a symptom card."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.flashmla.dense-mla-decoding-sm90",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|mla|flashmla#dense-mla-decoding-sm90|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "mla",
+   "operators": [
+    "mla"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "dense-mla-decoding-sm90",
+   "mla"
+  ],
+  "triggers": [
+   "the 'Dense MLA Decoding (SM90)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Dense MLA Decoding (SM90)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FlashMLA -- Multi-head Latent Attention -- Dense MLA Decoding (SM90)"
+  },
+  "technique": "Dense MLA Decoding (SM90)",
+  "what": "The decode kernel targets memory-bound inference with paged KV cache (block size 64). It achieves up to 3000 GB/s memory bandwidth and 660 TFLOPS on H800.",
+  "when": "The decode kernel targets memory-bound inference with paged KV cache (block size 64).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Dense MLA decode kernel structure (SM90, BF16)\n// Memory-bound: bandwidth utilization is the primary metric\n\ntemplate <int HEAD_DIM, int BLOCK_KV>\n__global__ void flashmla_decode_dense(\n    const half* __restrict__ Q,       // [batch, num_heads, head_dim]\n    const int8_t* __restrict__ KV,    // Paged KV cache (FP8)\n    const float* __restrict__ scales, // Per-head scales\n    const half* __restrict__ rope,    // RoPE embeddings\n    const int* __restrict__ page_table,\n    half* __restrict__ O,\n    float* __restrict__ L              // Log-sum-exp\n) {\n    // Each warpgroup handles one query head\n    const int head_id = blockIdx.x;\n    const int batch_id = blockIdx.y;\n\n    // Load query into registers\n    half Q_reg[HEAD_DIM];\n    load_query(Q, batch_id, head_id, Q_reg);\n\n    float acc[HEAD_DIM] = {0.0f};\n    float lse = -INFINITY;\n\n    // Iterate over KV pages\n    for (int page = 0; page < num_pages; page++) {\n        int page_idx = page_table[batch_id * max_pages + page];\n\n        // TMA load KV page into shared memory\n        __shared__ int8_t KV_smem[BLOCK_KV * 656];\n        tma_load_async(KV_smem, KV + page_idx * BLOCK_KV * 656);\n        cp_async_wait();\n\n        // Compute attention scores for this page\n        for (int t = 0; t < BLOCK_KV; t++) {\n            // Dequantize KV: fp8 -> bf16, apply scale\n            half K_token[HEAD_DIM], V_token[HEAD_DIM];\n            dequant_kv(KV_smem + t * 656, scales, K_token, V_token);\n\n            // Apply RoPE\n            apply_rope(K_token, rope + (page * BLOCK_KV + t) * 64);\n\n            // Score and accumulate (online softmax)\n            float score = dot_product(Q_reg, K_token, HEAD_DIM);\n            float new_lse = logaddexp(lse, score);\n            float rescale = exp(lse - new_lse);\n            for (int d = 0; d < HEAD_DIM; d++)\n                acc[d] = acc[d] * rescale + exp(score - new_lse) * V_token[d];\n            lse = new_lse;\n        }\n    }\n\n    // Write output\n    store_output(O, batch_id, head_id, acc);\n    L[batch_id * num_heads + head_id] = lse;\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/flashmla.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

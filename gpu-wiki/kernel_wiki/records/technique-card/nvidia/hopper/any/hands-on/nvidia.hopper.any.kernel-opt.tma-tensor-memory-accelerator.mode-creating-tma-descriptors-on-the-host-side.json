@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.tma-tensor-memory-accelerator.mode-creating-tma-descriptors-on-the-host-side",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|hands-on|tma-tensor-memory-accelerator#mode-creating-tma-descriptors-on-the-host-side|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mode-creating-tma-descriptors-on-the-host-side"
+  ],
+  "triggers": [
+   "the 'Mode: Creating TMA Descriptors on the Host Side' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Mode: Creating TMA Descriptors on the Host Side",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "TMA (Tensor Memory Accelerator) -- Mode: Creating TMA Descriptors on the Host Side"
+  },
+  "technique": "Mode: Creating TMA Descriptors on the Host Side",
+  "what": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`",
+  "when": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\nfrom cutlass.cute.runtime import from_dlpack\n\n# Host side: create TMA descriptor (zero-copy pass to kernel)\ntma_a = cute.make_tma_copy(\n    cute.SM90_TMA_LOAD,           # TMA operation type\n    a_tensor,                      # source tensor\n    smem_layout_a,                 # shared memory target layout\n    tile_shape_a,                  # tile size\n    cluster_shape                  # cluster shape (multi-CTA cooperation)\n)\n```\n\n```python\n# Inside kernel: TMA async load global → shared\ncute.copy(tma_a, tma_a.get_slice(coord), smem_a)\n# No need to manually manage address calculation, bounds checking, or padding — TMA hardware handles it automatically\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/tma-tensor-memory-accelerator.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

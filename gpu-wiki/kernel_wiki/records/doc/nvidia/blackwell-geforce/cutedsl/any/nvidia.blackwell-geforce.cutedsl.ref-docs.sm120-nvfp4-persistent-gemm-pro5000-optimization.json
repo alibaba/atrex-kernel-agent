@@ -1,0 +1,145 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.sm120-nvfp4-persistent-gemm-pro5000-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|sm120-nvfp4-persistent-gemm-pro5000-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): SM120 NVFP4 Persistent GEMM (NVFP4×NVFP4, fp32 accum) on RTX PRO 5000",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 NVFP4 Persistent GEMM (NVFP4×NVFP4, fp32 accum) on RTX PRO 5000"
+  },
+  "title": "SM120 NVFP4 Persistent GEMM (NVFP4×NVFP4, fp32 accum) on RTX PRO 5000",
+  "summary": "NVIDIA RTX PRO 5000 Blackwell-GeForce / sm_120, 110 SMs.",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "NVIDIA RTX PRO 5000 Blackwell-GeForce / sm_120, 110 SMs."
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "Standard GEMM `C = A @ B^T` where A, B are NVFP4 (Float4E2M1FN, 1 ue4m3 SF per 16 fp4 elements), accumulator is fp32."
+   },
+   {
+    "heading": "Kernel resource footprint (final = v43)",
+    "anchor": "kernel-resource-footprint-final-v43",
+    "gist": "table columns: Field, Value"
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "TMA-less, single warp per output tile, byte-by-byte SF reads."
+   },
+   {
+    "heading": "Final perf vs baseline",
+    "anchor": "final-perf-vs-baseline",
+    "gist": "table columns: Shape, v15, v32 (persistent), v38 (prefetch), **v43**, CUTLASS C++, v43 % CUTLASS"
+   },
+   {
+    "heading": "Remaining bottlenecks (PMC evidence at 4096³)",
+    "anchor": "remaining-bottlenecks-pmc-evidence-at-4096",
+    "gist": "table columns: Metric, v32, v38, v43"
+   },
+   {
+    "heading": "What would close the remaining gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "The CUTLASS sm_120 cooperative-pingpong recipe (verified by reading `include/cutlass/gemm/collective/sm120_blockscaled_mma_tma.hpp`) does two more things we couldn't easily replicate:"
+   },
+   {
+    "heading": "Sustained recipe (do these, in this order)",
+    "anchor": "sustained-recipe-do-these-in-this-order",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Atom-level inline-PTX demo + register packing convention: - Pitfalls (recast, pack, bulk+pipeline): […"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-persistent-gemm-pro5000-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,76 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.ampere.spec-sheet.ampere",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "ampere",
+  "product": null,
+  "sm_arch": "sm_80",
+  "compute_capability": "8.0"
+ },
+ "facts": {
+  "summary": "This page uses NVIDIA's published A100 80 GB SXM figures. Values in the \"With sparsity\" column assume NVIDIA's documented structured sparsity mode; use the dense column for ordinary kernels.",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 9.7,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 19.5,
+    "provenance": "architecture-analysis"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 156,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 312
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 312,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 624
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 624,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 1248
+   }
+  ],
+  "memory": {
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVIDIA A100 SXM 80 GB Hardware Compute Specifications",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/ampere/hardware-specs/hardware_specs_ampere.md"
+   }
+  ]
+ }
+}

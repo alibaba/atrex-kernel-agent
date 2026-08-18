@@ -1,0 +1,144 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.cutedsl.ref-docs.colfax-blackwell-gemm-part1-basics",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|colfax-blackwell-gemm-part1-basics|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): Blackwell Matrix Multiplication Part 1: Fundamentals",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "Blackwell Matrix Multiplication Part 1: Fundamentals"
+  },
+  "title": "Blackwell Matrix Multiplication Part 1: Fundamentals",
+  "summary": "Introduction to GPU architecture fundamentals, Tensor Core evolution from Ampere through Blackwell, and a baseline 4-line matrix multiplication in Mojo achieving 5 TFLOPS on B200.",
+  "sections": [
+   {
+    "heading": "1. Series Overview",
+    "anchor": "1-series-overview",
+    "gist": "This series demonstrates how to: - Write a high-performance GPU kernel on Blackwell that matches NVIDIA cuBLAS - Leverage Mojo's features to simplify kernel code"
+   },
+   {
+    "heading": "2. Why Matmul Matters",
+    "anchor": "2-why-matmul-matters",
+    "gist": "All large language models (Llama / Qwen / Deepseek / Claude / ChatGPT / Gemini) are built on matrix multiplication (MLP / Attention / MoE)."
+   },
+   {
+    "heading": "3. GPU Architecture from a Hardware Architect's Perspective",
+    "anchor": "3-gpu-architecture-from-a-hardware-architect-s-perspective",
+    "gist": "- A GPU consists of multiple Streaming Multiprocessors (SMs), a shared L2 cache, and global memory - Threads are grouped into CTAs (Cooperative Thread Arrays); each CTA is scheduled to one SM - Within an SM, threads access: registers (per-…"
+   },
+   {
+    "heading": "4. Three-Generation Comparison",
+    "anchor": "4-three-generation-comparison",
+    "gist": "table columns: Metric, A100, H100, H200, B100, B200"
+   },
+   {
+    "heading": "5. Optimization Paradigm Evolution",
+    "anchor": "5-optimization-paradigm-evolution",
+    "gist": "Memory operations block compute: load → wait → compute → wait → store."
+   },
+   {
+    "heading": "6. Four-Line Matmul Implementation",
+    "anchor": "6-four-line-matmul-implementation",
+    "gist": "- Create a 2D thread grid covering the entire C matrix - Each thread computes one element of C based on its thread ID"
+   },
+   {
+    "heading": "7. Data Type Selection",
+    "anchor": "7-data-type-selection",
+    "gist": "- **BF16**: 1-bit sign + 8-bit exponent + 7-bit mantissa; max positive value 3.39×10³⁸ (FP16 only 6.55×10⁴) - **FP32 accumulation**: BF16 accumulating many values causes rounding error to grow rapidly; Tensor Cores also accumulate BF16 inp…"
+   },
+   {
+    "heading": "8. Performance",
+    "anchor": "8-performance",
+    "gist": "The 4-line Mojo implementation achieves **5 TFLOPS** (baseline)."
+   }
+  ],
+  "implementation": {
+   "snippet": "```mojo\nfn matmul(A: LayoutTensor[...], B: LayoutTensor[...], C: LayoutTensor[...]):\n    let row = global_idx.y\n    let col = global_idx.x\n    if row < M and col < N:\n        var acc: Float32 = 0.0\n        for k in range(K):\n            acc += Float32(A[row, k]) * Float32(B[k, col])\n        C[row, col] = BFloat16(acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/cutedsl/colfax-blackwell-gemm-part1-basics.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

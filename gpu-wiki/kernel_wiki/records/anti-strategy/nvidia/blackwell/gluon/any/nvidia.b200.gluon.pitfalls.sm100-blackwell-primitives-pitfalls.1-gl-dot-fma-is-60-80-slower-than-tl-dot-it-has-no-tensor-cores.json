@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.gluon.pitfalls.sm100-blackwell-primitives-pitfalls.1-gl-dot-fma-is-60-80-slower-than-tl-dot-it-has-no-tensor-cores",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|gluon|pitfalls|sm100-blackwell-primitives-pitfalls#1-gl-dot-fma-is-60-80-slower-than-tl-dot-it-has-no-tensor-cores|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA B200 (GB200 / SM100) risks the '1. `gl.dot_fma` is ~60-80× slower than `tl.dot` — it has no tensor cores' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA B200 (GB200 / SM100): 1. `gl.dot_fma` is ~60-80× slower than `tl.dot` — it has no tensor cores",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "sm_100 Gluon Blackwell-primitive pitfalls -- 1. `gl.dot_fma` is ~60-80× slower than `tl.dot` — it has no tensor cores"
+  },
+  "attempted": "Port a `tl.dot` to Gluon's `gl.dot_fma` as the \"matmul op.\" It compiles and is bit-correct.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "To get tensor-core throughput in Gluon you **must** use `bw.tcgen05_mma` with tensor-memory descriptors (`bw.alloc_tmem`) + shared-memory staging. Treat `gl.dot_fma` as a correctness scaffold only — never benchmark against it as if it were the perf path.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_100",
+    "toolchain": "gluon"
+   },
+   "mechanism": "Gluon exposes the MMA hardware only through the Blackwell primitives. `dot_fma` is a portable scalar fallback."
+  },
+  "observed": "Large-shape median **1.30 ms vs 0.016 ms** for the Triton `tl.dot` original — ~80× slower. `gl.dot_fma` is pure **software FMA**; it never touches the tensor cores.",
+  "root_cause": "Gluon exposes the MMA hardware only through the Blackwell primitives. `dot_fma` is a portable scalar fallback."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/pitfalls/gluon/sm100-blackwell-primitives-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

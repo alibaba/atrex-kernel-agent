@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.lds-bank-conflict-swizzle.pattern-xor16-swizzle",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|lds-bank-conflict-swizzle#pattern-xor16-swizzle|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-xor16-swizzle"
+  ],
+  "triggers": [
+   "the 'Pattern: XOR16 Swizzle' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: XOR16 Swizzle",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "LDS Bank Conflict Elimination -- Pattern: XOR16 Swizzle"
+  },
+  "technique": "Pattern: XOR16 Swizzle",
+  "what": "**Source**: `cdna/flydsl/FlyDSL/preshuffle_gemm.py`, `cdna4/gluon/triton/`",
+  "when": "**Source**: `cdna/flydsl/FlyDSL/preshuffle_gemm.py`, `cdna4/gluon/triton/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CDNA4 LDS has 64 banks (CDNA3 has 32 banks)\n# Without swizzle, column-major access will cause 64-way bank conflict\n\n# XOR16 swizzle principle:\n# XOR the high bits of the LDS address with the low bits to disperse accesses to the same bank\n# addr_swizzled = addr ^ ((addr >> 4) & 0xF) << 4\n\n# In FlyDSL\nsmem_a = flyc.shared_memory(shape, swizzle='xor16')\n\n# In Gluon\n# The compiler usually applies swizzle automatically, but it can be manually specified\na_smem = tl.make_block_ptr(\n    base=smem_a,\n    shape=(BLOCK_M, BLOCK_K),\n    strides=(BLOCK_K, 1),\n    offsets=(0, 0),\n    block_shape=(BLOCK_M, BLOCK_K),\n    order=(1, 0),  # column-major\n)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/lds-bank-conflict-swizzle.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

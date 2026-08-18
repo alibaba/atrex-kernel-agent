@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.3-q-norm-k-norm-need-b-h-t-k-layout-for-rank-2-slice-alignment",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#3-q-norm-k-norm-need-b-h-t-k-layout-for-rank-2-slice-alignment|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '3. q_norm/k_norm need (B,H,T,K) layout for rank-2 slice alignment' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 3. q_norm/k_norm need (B,H,T,K) layout for rank-2 slice alignment",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 3. q_norm/k_norm need (B,H,T,K) layout for rank-2 slice alignment"
+  },
+  "attempted": "You allocate `q_norm` as `(B,T,H,K)` (matching input tensor layout) and slice with `mQnorm[(i_b, None, i_h, None)]` for cp.async. Seems natural — matches the input tensor convention.",
+  "verdict": "not-worth-it-here",
+  "lesson": "When using cp.async TiledCopy, the sliced dimensions must be innermost. For rank-2 `(T, K)` slices indexed by `(i_b, i_h)`, use layout `(B, H, T, K)`. K0 writes to `mKnorm[i_b, i_h, t0+r, c]`; K1 reads via `gK_full = mKnorm[(i_b, i_h, None, None)]`.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "cp.async requires contiguous GMEM source. With `(B,T,H,K)`, the slice `[i_b, :, i_h, :]` has stride `(H*K, 1)` in the T dimension — contiguous only if H=1. With `(B,H,T,K)`, the slice `[i_b, i_h, :, :]` is physically contiguous (stride (K, 1) in (T, K))."
+  },
+  "observed": "The rank-2 slice `(T,K)` is NOT contiguous because H is sandwiched between T and K in memory. CuTeDSL generates strided loads, defeating cp.async's contiguous requirement.",
+  "root_cause": "cp.async requires contiguous GMEM source. With `(B,T,H,K)`, the slice `[i_b, :, i_h, :]` has stride `(H*K, 1)` in the T dimension — contiguous only if H=1. With `(B,H,T,K)`, the slice `[i_b, i_h, :, :]` is physically contiguous (stride (K, 1) in (T, K))."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

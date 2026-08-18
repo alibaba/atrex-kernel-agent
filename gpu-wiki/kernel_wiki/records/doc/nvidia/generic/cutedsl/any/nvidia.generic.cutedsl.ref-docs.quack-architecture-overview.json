@@ -1,0 +1,147 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.quack-architecture-overview",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|quack-architecture-overview|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "blackwell-geforce",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): QuACK Architecture Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "QuACK Architecture Overview"
+  },
+  "title": "QuACK Architecture Overview",
+  "summary": "QuACK (\"Quirky Assortment of CuTe Kernels\") is a high-performance CUDA kernel library developed by Dao-AILab (Tri Dao), written entirely in CuTeDSL (Python), targeting SM90 (H100), SM100 (B200), SM103 (B300), and SM120 (GeForce/workstation) architectures. The library provides two major kernel categories: **reduction kernels** (RMSNorm, Softmax, Cross Entropy, LayerNorm, TopK) and **GEMM kernels** (with various epilogue fusion variants), all deeply integrated with PyTorch via `torch.library.custom_op`.",
+  "sections": [
+   {
+    "heading": "Project Structure and Kernel Types",
+    "anchor": "project-structure-and-kernel-types",
+    "gist": "`rmsnorm.py`, `softmax.py`, `cross_entropy.py`, and other reduction kernels inherit from `ReductionBase` (`reduction_base.py`), sharing a unified pattern: configure cluster size, build tiled copy, allocate reduction buffer + mbarrier, and …"
+   },
+   {
+    "heading": "Compilation Pipeline: Python → AST → MLIR → PTX → Binary",
+    "anchor": "compilation-pipeline-python-ast-mlir-ptx-binary",
+    "gist": "QuACK uses CuTeDSL's `@cute.jit` and `@cute.kernel` decorators to compile Python functions into GPU kernels."
+   },
+   {
+    "heading": "Autotuner",
+    "anchor": "autotuner",
+    "gist": "QuACK's autotuner (`autotuner.py`) is adapted from Triton's autotuner and supports searching for the optimal solution across multiple tile/cluster/swap configurations."
+   },
+   {
+    "heading": "PyTorch Integration",
+    "anchor": "pytorch-integration",
+    "gist": "QuACK achieves seamless integration with eager mode and `torch.compile` through three PyTorch mechanisms."
+   },
+   {
+    "heading": "Variable-Length (Ragged) Sequence Support",
+    "anchor": "variable-length-ragged-sequence-support",
+    "gist": "QuACK supports variable-length sequences (ragged inputs) without padding, achieved through the TMA descriptor's ptr_shift technique."
+   },
+   {
+    "heading": "Key Design Patterns",
+    "anchor": "key-design-patterns",
+    "gist": "The core distinction in CuTeDSL is **compile-time (Constexpr) vs runtime (Dynamic)** values."
+   },
+   {
+    "heading": "Two-Phase Test Workflow",
+    "anchor": "two-phase-test-workflow",
+    "gist": "QuACK leverages the compile-execute separation mechanism to significantly accelerate testing:"
+   },
+   {
+    "heading": "Key File Index",
+    "anchor": "key-file-index",
+    "gist": "table columns: File, Responsibility"
+   },
+   {
+    "heading": "Cross-References",
+    "anchor": "cross-references",
+    "gist": "- CuTeDSL Programming Model -- CuTeDSL programming model fundamentals, `@jit`/`@kernel` decorators, type system - Pipeline Patterns -- CuTeDSL pipeline patterns (WGMMA, TMA, m…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nclass RMSNorm(ReductionBase):\n    def __init__(self, dtype, N, is_layernorm=False):\n        super().__init__(dtype, N, stage=2 if is_layernorm else 1)\n        self.reload_from = None if N <= (16384 if is_layernorm else 8192) else \"smem\"\n```\n\n```python\n@jit_cache\ndef _compile_gemm(a_dtype, b_dtype, d_dtype, ..., device_capacity, ...):\n    sm_to_cls = {\n        9: GemmDefaultSm90,\n        10: GemmDefaultSm100,\n        11: GemmDefaultSm100,\n        12: GemmDefaultSm120,\n    }\n    GemmCls = sm_to_cls[device_capacity[0]]\n```\n\n```python\ncompiled_fn = cute.compile(gemm_obj, *fake_args, options=\"--enable-tvm-ffi\")\n```\n\n```python\nm, n, k, l = cute.sym_int(), cute.sym_int(), cute.sym_int(), cute.sym_int()\n\n# m A D shared -- TVM-FFI row D.shape[0] == A.shape[0]\nmA = fake_tensor(a_dtype, (m, k, l), leading_dim=..., divisibility=...)\nmD = fake_tensor(d_dtype, (m, n, l), leading_dim=..., divisibility=...)\n```\n\n```python\n@jit_cache\ndef _compile_softmax_fwd(dtype, out_dtype, N):\n    # ... build fake tensors ...\n    return cute.compile(softmax_op, ...)\n```\n\n```\n@jit_cache wrapper(dtype, out_dtype, N)\n |-- In-memory dict lookup --> hit ( 0ns)\n  |\n  |-- hash(fn.__qualname__, *args) --> SHA-256 hex\n |-- Shared lock: check if .o exists --> load via tvm_ffi ( 1ms)\n  |\n  |-- Cache miss --> call fn(dtype, out_dtype, N)\n  |     \\-- cute.compile(...) --> MLIR --> PTX --> binary\n  |\n  \\-- Exclusive lock: export_to_c() --> write .o to cache\n```\n\n```python\nt_check = time.time()\nself.fn(*args, **configs[0].all_kwargs())\nif time.time() - t_check < 0.5:\n    return  # cache is warm, no need for workers\n```\n\n```python\n@dataclass(frozen=True)\nclass GemmConfig:\n    tile_m: int = 128\n    tile_n: int = 192\n    pingpong: bool = True\n    is_dynamic_persistent: bool = True\n    cluster_m: int = 2\n    cluster_n: int = 1\n    swap_ab: bool = False\n    max_swizzle_size: int = 8\n    device_capacity: int = 9\n    use_tma_gather: bool = False\n```\n\n```python\n@autotune(\n    configs=[AutotuneConfig(tile_m=128, tile_n=192, ...), ...],\n    key=[\"A\", \"B\"],\n    cache_results=True,\n)\ndef gemm_tuned(A, B, out, *, tile_m, tile_n, cluster_m, cluster_n, swap_ab, ...):\n    ...\n```\n\n```python\n@torch.library.custom_op(\"quack::_softmax_fwd\", mutates_args={\"out\"})\ndef _softmax_fwd(x: Tensor, out: Tensor) -> None:\n    ...\n```\n\n```python\n@_softmax_fwd.register_fake\ndef _softmax_fwd_fake(x, out):\n    from quack.cache_utils import COMPILE_ONLY\n    if COMPILE_ONLY and not isinstance(x.size(1), torch.SymInt):\n        N = x.size(1)\n        dtype, out_dtype = [torch2cute_dtype_map[t.dtype] for t in [x, out]]\n        _compile_softmax_fwd(dtype, out_dtype, N)\n```\n\n```python\nclass SoftmaxFunction(torch.autograd.Function):\n    @staticmethod\n    def forward(ctx, x, ...):\n        _softmax_fwd(x, out)\n        ctx.save_for_backward(out)\n        return out\n\n    @staticmethod\n    def backward(ctx, dout):\n        (out,) = ctx.saved_tensors\n        _softmax_backward(dout, out, dx)\n        return dx, None\n```\n\n```python\n@mlir_namedtuple\nclass VarlenArguments(NamedTuple):\n    mCuSeqlensM: Optional[cute.Tensor] = None\n    mCuSeqlensK: Optional[cute.Tensor] = None\n    mAIdx: Optional[cute.Tensor] = None\n```\n\n```python\ndef offset_batch_A(self, mA_mkl, batch_idx):\n    if const_expr(self.varlen_k):\n        offset = params.cu_seqlens_k[batch_idx]\n        ragged_rank = const_expr(cute.rank(mA_mkl))\n if const_expr(ragged_rank == 2): # create ragged tensor\n            mA_mk = cute.domain_offset((None, offset), mA_mkl)\n        else:\n            length = params.cu_seqlens_k[batch_idx + 1] - offset\n            ptr_shift = const_expr(ragged_rank == 3)  # rank 3 = 1-extra-dim\n            mA_mk = copy_utils.offset_ragged_tensor(\n                mA_mkl, offset, length, ragged_dim=1, ptr_shift=ptr_shift,\n            )\n```\n\n```python\nif const_expr(self.varlen_m):\n # varlen_m=True compilation\n    mA_mk = cute.domain_offset((params.cu_seqlens_m[batch_idx], None), mA_mkl)\n```\n\n```python\n@mlir_namedtuple\nclass EpilogueArguments(NamedTuple):\n    mPostAct: cute.Tensor\n act_fn: cutlass.Constexpr[Callable] = None # compilation\n    alpha: Optional[Float32 | cute.Tensor] = None\n    beta: Optional[Float32 | cute.Tensor] = None\n```\n\n```python\n@dataclass\nclass ParamsBase:\n    def __extract_mlir_values__(self):\n        _, non_constexpr_fields = _partition_fields(self)\n        values, self._values_pos = [], []\n        for obj in non_constexpr_fields.values():\n            obj_values = cutlass.extract_mlir_values(obj)\n            values += obj_values\n            self._values_pos.append(len(obj_values))\n        return values\n```\n\n```python\nif varlen_m:\n m = cute.sym_int # m total_m(column)\n a_m = cute.sym_int if gather_A else m # A differentrow\n    mA = fake_tensor(a_dtype, (a_m, k), ...)\n    mD = fake_tensor(d_dtype, (m, n), ...)\n```\n\n```bash\n# Pass 1: rowcompilation kernel(requires GPU memory)\npytest tests/test_softmax.py --compile-only -n 64\n\n# Pass 2: row( .o cache)\npytest tests/test_softmax.py\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/quack-architecture-overview.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

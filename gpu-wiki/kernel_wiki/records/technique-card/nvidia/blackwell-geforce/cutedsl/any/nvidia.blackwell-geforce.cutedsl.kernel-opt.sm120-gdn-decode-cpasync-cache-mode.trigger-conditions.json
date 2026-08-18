@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-gdn-decode-cpasync-cache-mode.trigger-conditions",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|sm120-gdn-decode-cpasync-cache-mode#trigger-conditions|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn",
+   "trigger-conditions"
+  ],
+  "triggers": [
+   "the 'Trigger Conditions' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Trigger Conditions",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 GDN Decode: cp.async + GLOBAL Cache Quick Reference (kernel-opt) -- Trigger Conditions"
+  },
+  "technique": "Trigger Conditions",
+  "what": "You are writing a CuTeDSL kernel targeting **sm_120** (RTX PRO 5000/4000 Blackwell, RTX 50xx GeForce), and ncu shows: - L2 throughput **>= 95%** (appears saturated) - DRAM Throughput **< 50%** (actually far from saturated) - L1/TEX Hit Rate **>= 50%**",
+  "when": "You are writing a CuTeDSL kernel targeting **sm_120** (RTX PRO 5000/4000 Blackwell, RTX 50xx GeForce), and ncu shows: - L2 throughput **>= 95%** (appears saturated) - DRAM Throughput **< 50%** (actually far from saturated) - L1/TEX Hit Rat…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-gdn-decode-cpasync-cache-mode.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.nsa.three-path-architecture",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|kernels|nsa#three-path-architecture|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "kernels",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "three-path-architecture"
+  ],
+  "triggers": [
+   "the 'Three-Path Architecture' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Three-Path Architecture",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Native Sparse Attention (NSA) -- Three-Path Architecture"
+  },
+  "technique": "Three-Path Architecture",
+  "what": "Code pattern: Three-Path Architecture",
+  "when": "Code pattern: Three-Path Architecture",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nInput Query Q\n    |\n    +---> [Compression Path]  Learned MLP creates coarse-grained KV\n    |         |                representations (token compression)\n    |         v\n    |     S_compressed = Q @ K_compressed^T\n    |\n    +---> [Selection Path]    Blockwise importance scores select\n    |         |                top-n fine-grained token blocks\n    |         v\n    |     S_selected = Q @ K_selected^T   (sparse)\n    |\n    +---> [Sliding Window]    Local context window (w=512)\n              |\n              v\n          S_local = Q @ K_local^T         (banded)\n\nOutput = Combine(softmax(S_compressed) @ V_compressed,\n                 softmax(S_selected) @ V_selected,\n                 softmax(S_local) @ V_local)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/nsa.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

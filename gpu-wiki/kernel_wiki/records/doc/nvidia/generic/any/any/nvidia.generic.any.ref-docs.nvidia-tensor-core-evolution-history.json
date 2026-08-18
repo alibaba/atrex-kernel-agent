@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.nvidia-tensor-core-evolution-history",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|nvidia-tensor-core-evolution-history|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): NVIDIA Tensor Core Evolution: Volta to Blackwell",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "NVIDIA Tensor Core Evolution: Volta to Blackwell"
+  },
+  "title": "NVIDIA Tensor Core Evolution: Volta to Blackwell",
+  "summary": "A systematic overview of Tensor Core evolution across NVIDIA GPU generations, based on analysis of the SemiAnalysis technical report on Tensor Core architecture history. Covers performance engineering principles, generational architecture changes, and design trend analysis.",
+  "sections": [
+   {
+    "heading": "1. Key Conclusions",
+    "anchor": "1-key-conclusions",
+    "gist": "- Tensor Core size has grown far more than SM count: from m8n8k4 (Volta) → m16n8k16 (Ampere) → m64nNk16 (Hopper) → m256nNk16 (Blackwell)."
+   },
+   {
+    "heading": "2. Performance Engineering First Principles",
+    "anchor": "2-performance-engineering-first-principles",
+    "gist": "For fixed-size problems, Amdahl's Law defines maximum speedup through parallelization."
+   },
+   {
+    "heading": "3. Tensor Core Generational Overview",
+    "anchor": "3-tensor-core-generational-overview",
+    "gist": "**PTX Programming Model**: Virtual ISA abstracting GPU generations."
+   },
+   {
+    "heading": "4. Volta Architecture (1st Generation Tensor Core)",
+    "anchor": "4-volta-architecture-1st-generation-tensor-core",
+    "gist": "By 2015, Google deployed TPU v1 for ML acceleration."
+   },
+   {
+    "heading": "5. Turing Architecture (2nd Generation)",
+    "anchor": "5-turing-architecture-2nd-generation",
+    "gist": "Enhanced Volta Tensor Cores with INT8/INT4 support."
+   },
+   {
+    "heading": "6. Ampere Architecture (3rd Generation)",
+    "anchor": "6-ampere-architecture-3rd-generation",
+    "gist": "Volta's data path was inefficient: either load directly from GMEM to RF (no reuse, high GMEM pressure) or bridge through RF to SMEM (register pressure)."
+   },
+   {
+    "heading": "7. Hopper Architecture (4th Generation)",
+    "anchor": "7-hopper-architecture-4th-generation",
+    "gist": "Software hierarchy mapping: Grid → TBC → CTA → WarpGroup → Warp → Thread, corresponding to hardware: GPU → GPC → TPC → SM."
+   },
+   {
+    "heading": "8. Blackwell Architecture (5th Generation)",
+    "anchor": "8-blackwell-architecture-5th-generation",
+    "gist": "Eliminates register dependency for matrix operands: - A: SMEM or TMEM - B: SMEM only - D: TMEM only (+ quantization scales in TMEM)"
+   },
+   {
+    "heading": "9. Design Trend Analysis",
+    "anchor": "9-design-trend-analysis",
+    "gist": "Prioritized over core count increase."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/nvidia-tensor-core-evolution-history.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

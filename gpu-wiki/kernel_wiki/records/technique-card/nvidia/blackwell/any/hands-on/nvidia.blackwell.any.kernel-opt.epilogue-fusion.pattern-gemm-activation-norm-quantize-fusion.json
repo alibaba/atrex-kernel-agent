@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.epilogue-fusion.pattern-gemm-activation-norm-quantize-fusion",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|epilogue-fusion#pattern-gemm-activation-norm-quantize-fusion|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-gemm-activation-norm-quantize-fusion"
+  ],
+  "triggers": [
+   "the 'Pattern: GEMM + Activation/Norm/Quantize Fusion' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Pattern: GEMM + Activation/Norm/Quantize Fusion",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Epilogue Fusion -- Pattern: GEMM + Activation/Norm/Quantize Fusion"
+  },
+  "technique": "Pattern: GEMM + Activation/Norm/Quantize Fusion",
+  "what": "**Source**: `cutedsl/flashinfer/*_fusion.py`, `cutedsl/cutlass/`",
+  "when": "**Source**: `cutedsl/flashinfer/*_fusion.py`, `cutedsl/cutlass/`",
+  "caveats": [
+   "The value of epilogue fusion depends on the size of the GEMM output: the larger the output, the more HBM reads and writes are avoided"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# Blackwell's 3-role warp specialization enables complex fusion in the epilogue\n\n# Pattern 1: GEMM + SwiGLU\n# y = silu(x @ W_gate) * (x @ W_up)\n# Two GEMMs share input x, SwiGLU fusion is performed in the epilogue\ngate_out = gemm(x, W_gate)  # GEMM 1\nup_out = gemm(x, W_up)      # GEMM 2\n# Epilogue fusion:\ny = silu(gate_out) * up_out  # No intermediate results written back to HBM\n\n# Pattern 2: GEMM + RMSNorm + FP4 Quantize\n# Inference scenario: GEMM output directly goes through norm + quantization, reducing HBM reads/writes\nout = gemm(x, W)\n# Epilogue fusion:\nout_normed = rmsnorm(out)\nout_fp4, scale = fp4_quantize(out_normed)  # Directly output FP4 + scale\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/epilogue-fusion.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

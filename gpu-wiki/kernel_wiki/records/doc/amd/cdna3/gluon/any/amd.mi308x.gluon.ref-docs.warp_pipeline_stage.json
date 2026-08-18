@@ -1,0 +1,169 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.ref-docs.warp_pipeline_stage",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|gemm|warp_pipeline_stage|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): Warp Pipeline Stage Full Packaging (Key GEMM Optimization)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Warp Pipeline Stage Full Packaging (Key GEMM Optimization)"
+  },
+  "title": "Warp Pipeline Stage Full Packaging (Key GEMM Optimization)",
+  "summary": "pattern: matmul type: pipeline priority: ⭐⭐⭐ performance_gain: +27% applicable_scenarios: - Large tile GEMM (256×256 and above) - Scenarios requiring extreme performance optimization - Configurations with manageable VGPR pressure pitfalls: - 9",
+  "sections": [
+   {
+    "heading": "Objective",
+    "anchor": "objective",
+    "gist": "Use `warp_pipeline_stage` to package **all stages** of the GEMM loop (prep/compute/store, etc.) and hand them to the compiler, allowing the compiler to automatically perform ping-pong pipeline scheduling."
+   },
+   {
+    "heading": "Background",
+    "anchor": "background",
+    "gist": "`warp_pipeline_stage` is not simply a \"scheduling hint\" — it packages different process stages of the GEMM and hands them to the compiler's WarpPipeliner, enabling automatic ping-pong pipelining across iterations."
+   },
+   {
+    "heading": "❌ Common Mistake: Only Packaging Compute",
+    "anchor": "common-mistake-only-packaging-compute",
+    "gist": "**Result**: 161 TFLOPS (GEMM 256×256×64 bf16, MI308X)"
+   },
+   {
+    "heading": "✅ Correct Approach (Round 1): Package All Stages",
+    "anchor": "correct-approach-round-1-package-all-stages",
+    "gist": "**Result**: 182 TFLOPS (+13%, reaching 91% of Triton)"
+   },
+   {
+    "heading": "✅✅ Round 2 Optimization: Place buffer_load Between Stages + Split A/B",
+    "anchor": "round-2-optimization-place-buffer-load-between-stages-split-a-b",
+    "gist": "**Result**: 193 TFLOPS (+6.3%, reaching 96.7% of Triton)"
+   },
+   {
+    "heading": "✅✅✅ Best Practice (Round 3): Insert ds_write Between MFMAs to Achieve Compute↔Store Overlap",
+    "anchor": "best-practice-round-3-insert-ds-write-between-mfmas-to-achieve-compute-store-overlap",
+    "gist": "**Result**: 204.7 TFLOPS (+5.8% more, **surpassing Triton's 202 TFLOPS!**)"
+   },
+   {
+    "heading": "Why Placing buffer_load Outside the Stage is Better",
+    "anchor": "why-placing-buffer-load-outside-the-stage-is-better",
+    "gist": "table columns: Placement, Effect, Reason"
+   },
+   {
+    "heading": "Why Splitting A/B Loads to Different Positions",
+    "anchor": "why-splitting-a-b-loads-to-different-positions",
+    "gist": "- Load for A is issued earliest, with 4 subslices of compute time to hide the 400+ cycle latency - Load for B is issued slightly later, with 2 subslices (64 MFMA instructions) to hide latency - If A and B are issued simultaneously, they co…"
+   },
+   {
+    "heading": "Why Inserting ds_write Between MFMAs Works Better",
+    "anchor": "why-inserting-ds-write-between-mfmas-works-better",
+    "gist": "**Round 2** (subslice 2+3 MFMA merged → ds_write at the end):"
+   },
+   {
+    "heading": "Key Rules",
+    "anchor": "key-rules",
+    "gist": "1."
+   },
+   {
+    "heading": "Why Not Manually Write gl.barrier()",
+    "anchor": "why-not-manually-write-gl-barrier",
+    "gist": "table columns: Method, Low-Level Implementation, Effect"
+   },
+   {
+    "heading": "WPS Diagnostic Methods",
+    "anchor": "wps-diagnostic-methods",
+    "gist": ""
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Prerequisites**: CDNA3 ISA Instruction Patterns - **GEMM Chain Upstream**: Optimization Strategy → This document → Stopping Conditions"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# ❌ MFMA (compute), ds_read\n# compilation compute , none prep/compute iteration\nfor k_iter in range(num_k_iter - 1):\n    a0 = a_tile.slice(0, 16, dim=1).load(layout=dot_layout_a)\n    b0 = b_tile.slice(0, 16, dim=0).load(layout=dot_layout_b)\n\n    with warp_pipeline_stage(\"compute\"):\n        acc = ttgl.amd.cdna3.mfma(a0, b0, acc)\n\n # ... subslices compute\n    gl.barrier()\n    a_tile.store(next_a_val)\n    b_tile.store(next_b_val)\n    gl.barrier()\n```\n\n```python\n# ✅ ds_read \"prep\", MFMA \"compute\", ds_write \"prep\"\n# compilationcomplete pipeline stage column, automatic ping-pong\nfor k_iter in range(num_k_iter - 1):\n    with warp_pipeline_stage(\"prep\"):\n        a0 = a_tile.slice(0, 16, dim=1).load(layout=dot_layout_a)\n        b0 = b_tile.slice(0, 16, dim=0).load(layout=dot_layout_b)\n\n    with warp_pipeline_stage(\"compute\"):\n        acc = ttgl.amd.cdna3.mfma(a0, b0, acc)\n\n # ... subslices ...\n\n # ds_write prep\n    with warp_pipeline_stage(\"prep\"):\n        a_tile.store(next_a_val)\n        b_tile.store(next_b_val)\n # manual gl.barrier\n```\n\n```python\n# ✅✅ buffer_load pipeline stage , A/B differentbit\n# subslice 2+3 MFMA compute block\nfor k_iter in range(num_k_iter - 1):\n next_a_val = ttgl.amd.cdna3.buffer_load(...) # ① A\n    # prep→compute (subslice 0)\n    # prep→compute (subslice 1)\n next_b_val = ttgl.amd.cdna3.buffer_load(...) # ② B subslice 1\n # prep (subslice 2&3 ds_read coalesced)\n # compute (subslice 2&3 MFMA coalesced)\n    # prep (ds_write)\n```\n\n```python\n# ✅✅✅ critical: ds_write \"prep\" stage subslice 2 3 \"compute\"\n# subslice 2+3 MFMA . compilation MFMA execute ds_write .\n# ⚠️ buffer_load do not other=0.0, otherwise WarpPipeliner pingpong failure！\nfor k_iter in range(num_k_iter - 1):\n # ① buffer_load A loop( stage , other)\n    next_a_val = ttgl.amd.cdna3.buffer_load(a_ptr, next_offs_a, mask=next_k_mask_a)\n\n    with warp_pipeline_stage(\"prep\"):        # subslice 0: ds_read\n        a0 = a_tile.slice(0, 16, dim=1).load(layout=dot_layout_a)\n        b0 = b_tile.slice(0, 16, dim=0).load(layout=dot_layout_b)\n\n    with warp_pipeline_stage(\"compute\"):     # subslice 0: MFMA (32 ops)\n        acc = ttgl.amd.cdna3.mfma(a0, b0, acc)\n\n    with warp_pipeline_stage(\"prep\"):        # subslice 1: ds_read\n        a1 = a_tile.slice(16, 16, dim=1).load(layout=dot_layout_a)\n        b1 = b_tile.slice(16, 16, dim=0).load(layout=dot_layout_b)\n\n    with warp_pipeline_stage(\"compute\"):     # subslice 1: MFMA (32 ops)\n        acc = ttgl.amd.cdna3.mfma(a1, b1, acc)\n\n # ② buffer_load B subslice 1 after( stage , other)\n    next_b_val = ttgl.amd.cdna3.buffer_load(b_ptr, next_offs_b, mask=next_k_mask_b)\n\n with warp_pipeline_stage(\"prep\"): # subslice 2&3: ds_read (coalescedread)\n        a2 = a_tile.slice(32, 16, dim=1).load(layout=dot_layout_a)\n        b2 = a_tile.slice(32, 16, dim=0).load(layout=dot_layout_b)\n        a3 = a_tile.slice(48, 16, dim=1).load(layout=dot_layout_a)\n        b3 = a_tile.slice(48, 16, dim=0).load(layout=dot_layout_b)\n\n with warp_pipeline_stage(\"compute\"): # ③ subslice 2 MFMA (32 ops)\n        acc = ttgl.amd.cdna3.mfma(a2, b2, acc)\n\n with warp_pipeline_stage(\"prep\"): # ④ ds_write subslice 2 3 ！\n        a_tile.store(next_a_val)\n        b_tile.store(next_b_val)\n\n with warp_pipeline_stage(\"compute\"): # ⑤ subslice 3 MFMA (32 ops)\n        acc = ttgl.amd.cdna3.mfma(a3, b3, acc)\n # manual gl.barrier\n\n# EPILOGUE: K-subslicing, directloadcompilationoptimization\na_full = a_tile.load(layout=dot_layout_a)\nb_full = b_tile.load(layout=dot_layout_b)\nacc = ttgl.amd.cdna3.mfma(a_full, b_full, acc)\n```\n\n```\nloop:\n buffer_load A ────── ( ds_write ~4 subslice )\n  subslice 0: prep → compute\n  subslice 1: prep → compute\n buffer_load B ────── ( ds_write ~2 subslice )\n  subslice 2&3: prep → compute\n ds_write A,B ─────── ( A/B complete)\n```\n\n```\nsubslice 2&3: 64 MFMA → ds_write → barrier\n```\n\n```\nsubslice 2: 32 MFMA → ds_write → subslice 3: 32 MFMA → barrier\n```\n\n```asm\n; subslice 2: 32× v_mfma (line 911-942)\nsched_barrier mask(0x00000000)\ns_barrier ; subslice 2\nsched_barrier mask(0x00000000)\ns_waitcnt vmcnt(6) ; buffer_load A 2 complete\nds_write2st64_b64 ... ; ds_write A ( LDS)\ns_waitcnt vmcnt(4)\nds_write2st64_b64 ...\n...\ns_waitcnt vmcnt(0) ; buffer_load complete\nds_write2st64_b64 ...              ; ds_write B\nsched_barrier mask(0x00000000)\ns_waitcnt lgkmcnt(0)\ns_barrier ; ds_write complete\nsched_barrier mask(0x00000000)\n; subslice 3: 32× v_mfma (line 967-998) ← ds_write LDS ！\n```\n\n```bash\n# 1. check warp_pipeline\n# if sched_barrier(0) + s_barrier , description WarpPipeliner success\ngrep -c 'sched_barrier\\|s_barrier' kernel.amdgcn\n\n# 2. checkwhether there is scratch (ping-pong increase VGPR )\ngrep 'private_segment_fixed_size' kernel.amdgcn\n# : 0 bytes\n\n# 3. optimization s_waitcnt count\ngrep -c 's_waitcnt' kernel.amdgcn\n# ping-pong success s_waitcnt countdecreaseor\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/gluon/warp_pipeline_stage.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

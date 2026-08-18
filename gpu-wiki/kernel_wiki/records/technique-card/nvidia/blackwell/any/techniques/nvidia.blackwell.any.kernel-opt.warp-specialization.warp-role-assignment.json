@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.warp-specialization.warp-role-assignment",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|warp-specialization#warp-role-assignment|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "warp-role-assignment"
+  ],
+  "triggers": [
+   "the 'Warp Role Assignment' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Warp Role Assignment",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Warp Specialization on Blackwell -- Warp Role Assignment"
+  },
+  "technique": "Warp Role Assignment",
+  "what": "The kernel entry point assigns each warp its role based on `threadIdx.x`:",
+  "when": "The kernel entry point assigns each warp its role based on `threadIdx.x`:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Blackwell 16-warp specialized GEMM kernel skeleton\n// 16 warps = 512 threads per CTA\n__global__ void __launch_bounds__(512)\nblackwell_gemm_warp_specialized(\n    const __grid_constant__ GemmParams params)\n{\n    const int warp_id = threadIdx.x / 32;\n    const int lane_id = threadIdx.x % 32;\n\n    // Shared memory for A/B tiles and mbarrier objects\n    extern __shared__ char smem[];\n    half* smem_A = reinterpret_cast<half*>(smem);\n    half* smem_B = reinterpret_cast<half*>(smem + SMEM_A_SIZE);\n\n    // mbarrier pairs: TMA hardware signals \"data ready\", MMA signals \"buffer free\"\n    __shared__ uint64_t mbar_data_ready[NUM_STAGES];\n    __shared__ uint64_t mbar_buffer_free[NUM_STAGES];\n    // MMA→epilogue handoff barrier\n    __shared__ uint64_t mbar_acc_complete;\n    // Phase tracking: mbarriers alternate parity on each reuse cycle\n    int phase_data[NUM_STAGES];\n    int phase_free[NUM_STAGES];\n\n    if (warp_id == 0) {\n        if (lane_id == 0) {\n            for (int s = 0; s < NUM_STAGES; s++) {\n                // TMA expects arrive.expect_tx → hardware completes\n                mbarrier_init(&mbar_data_ready[s], 1);\n                mbarrier_init(&mbar_buffer_free[s], 1);\n            }\n            mbarrier_init(&mbar_acc_complete, 1);\n        }\n    }\n    // Initialize phase counters (all start at 0)\n    for (int s = 0; s < NUM_STAGES; s++) {\n        phase_data[s] = 0;\n        phase_free[s] = 0;\n    }\n    __syncthreads();\n\n    if (warp_id == 0) {\n        // === TMA PRODUCER WARP ===\n        for (int k_tile = 0; k_tile < num_k_tiles; k_tile++) {\n            int stage = k_tile % NUM_STAGES;\n\n            // Wait for consumer to release this buffer (with phase tracking)\n            if (k_tile >= NUM_STAGES) {\n                mbarrier_wait_parity(&mbar_buffer_free[stage], phase_free[stage]);\n                phase_free[stage] ^= 1;  // flip parity for next reuse\n            }\n\n            // Set expected TX bytes, then issue TMA. TMA hardware will\n            // signal mbar_data_ready upon transfer completion.\n            // Do NOT manually arrive -- that races with the async transfer.\n            if (lane_id == 0) {\n                uint32_t tx_bytes = TILE_A_BYTES + TILE_B_BYTES;\n                mbarrier_arrive_expect_tx(&mbar_data_ready[stage], tx_bytes);\n                tma_copy_async(smem_A + stage * TILE_A_SIZE,\n                               &params.A[k_tile * TILE_K], TILE_A_SIZE,\n                               &mbar_data_ready[stage]);\n                tma_copy_async(smem_B + stage * TILE_B_SIZE,\n                               &params.B[k_tile * TILE_K], TILE_B_SIZE,\n                               &mbar_data_ready[stage]);\n                // TMA hardware arrives on mbar_data_ready when transfer completes\n            }\n        }\n\n    } else if (warp_id == 1) {\n        // === MMA CONSUMER WARP ===\n        for (int k_tile = 0; k_tile < num_k_tiles; k_tile++) {\n            int stage = k_tile % NUM_STAGES;\n\n            // Wait for TMA to complete this stage (with phase tracking)\n            mbarrier_wait_parity(&mbar_data_ready[stage], phase_data[stage]);\n            phase_data[stage] ^= 1;\n\n            // Critical fence: ensure TMA data visible before MMA reads SMEM\n            tcgen05_fence_after_thread_sync();\n\n            if (lane_id == 0) {\n                tcgen05_mma(smem_A + stage * TILE_A_SIZE,\n                            smem_B + stage * TILE_B_SIZE);\n            }\n            __syncwarp();\n\n            // Signal buffer is free for reuse\n            if (lane_id == 0) {\n                mbarrier_arrive(&mbar_buffer_free[stage]);\n            }\n        }\n\n        // Signal epilogue warps that accumulation is complete\n        if (lane_id == 0) {\n            mbarrier_arrive(&mbar_acc_complete);\n        }\n\n    } else {\n        // === EPILOGUE WARPS (2-15) ===\n        // Wait for MMA completion via dedicated mbarrier (not __syncthreads,\n        // which would deadlock since producer/MMA warps don't reach it)\n        mbarrier_wait(&mbar_acc_complete);\n\n        // Each epilogue warp handles a partition of the TMEM output.\n        // Use ceiling division to cover tail rows when TILE_M % 14 != 0.\n        constexpr int NUM_EPI_WARPS = 14;  // warps 2-15\n        int epi_warp = warp_id - 2;  // 0..13\n        int rows_per_warp = (TILE_M + NUM_EPI_WARPS - 1) / NUM_EPI_WARPS;\n        int my_row_start = epi_warp * rows_per_warp;\n        int my_row_end = min(my_row_start + rows_per_warp, TILE_M);\n\n        for (int r = my_row_start; r < my_row_end; r++) {\n            for (int c = lane_id; c < TILE_N; c += 32) {\n                // Read accumulator from TMEM\n                float acc = tmem_load(r, c);\n                // Apply epilogue: scale + bias + activation\n                float result = epilogue_op(acc, params.scale, params.bias[c]);\n                // Write to global memory\n                params.C[r * params.N + c] = __float2half(result);\n            }\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/warp-specialization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

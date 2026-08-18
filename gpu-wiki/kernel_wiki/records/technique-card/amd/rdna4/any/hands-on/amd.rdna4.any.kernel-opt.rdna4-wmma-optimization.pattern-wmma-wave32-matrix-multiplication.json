@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.rdna4.any.kernel-opt.rdna4-wmma-optimization.pattern-wmma-wave32-matrix-multiplication",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "rdna4|any|hands-on|rdna4-wmma-optimization#pattern-wmma-wave32-matrix-multiplication|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "rdna4",
+   "architectures": [
+    "rdna4"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "rdna4",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-wmma-wave32-matrix-multiplication"
+  ],
+  "triggers": [
+   "the 'Pattern: WMMA (Wave32) Matrix Multiplication' technique is being considered on AMD RDNA4 (gfx1250)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD RDNA4 (gfx1250): Pattern: WMMA (Wave32) Matrix Multiplication",
+  "problem": {
+   "target": "AMD RDNA4 (gfx1250)",
+   "statement": "RDNA4-Specific Optimizations -- Pattern: WMMA (Wave32) Matrix Multiplication"
+  },
+  "technique": "Pattern: WMMA (Wave32) Matrix Multiplication",
+  "what": "**Source**: `rdna4/flydsl/FlyDSL/`, `rdna4/gluon/triton/`",
+  "when": "**Source**: `rdna4/flydsl/FlyDSL/`, `rdna4/gluon/triton/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# RDNA4 uses Wave32 (32 threads/wave, CDNA uses 64 threads/wavefront)\n# WMMA instruction: v_wmma_f32_16x16x16_f16\n\n# FlyDSL\n@flyc.kernel(target='gfx1250')\ndef rdna4_gemm(a, b, c, ...):\n    # 16×16×16 tile per WMMA instruction\n    acc = flyc.wmma(a_tile, b_tile, acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/rdna4/kernel-opt/hands-on/rdna4-wmma-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

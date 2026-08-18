@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-prebuilt-kernels",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-prebuilt-kernels|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Documentation] Pre-built Kernel Library Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Documentation] Pre-built Kernel Library Guide"
+  },
+  "title": "[FlyDSL Original Documentation] Pre-built Kernel Library Guide",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Quick Reference",
+    "anchor": "quick-reference",
+    "gist": "table columns: Kernel, Builder Function, API Style, Dtypes, Key Feature"
+   },
+   {
+    "heading": "1. Normalization Kernels",
+    "anchor": "1-normalization-kernels",
+    "gist": "Computes `LayerNorm(x) = (x - mean) / sqrt(var + eps) * gamma + beta` for each row."
+   },
+   {
+    "heading": "2. Softmax Kernel",
+    "anchor": "2-softmax-kernel",
+    "gist": "Computes row-wise softmax: `softmax(x)_i = exp(x_i - max(x)) / sum(exp(x - max(x)))`."
+   },
+   {
+    "heading": "3. GEMM Kernel",
+    "anchor": "3-gemm-kernel",
+    "gist": "MFMA 16x16-based GEMM with B-matrix preshuffle layout: `C[M,N] = A[M,K] @ B[N,K]^T`."
+   },
+   {
+    "heading": "4. Shared Utilities",
+    "anchor": "4-shared-utilities",
+    "gist": "Reusable warp and block reduction functions (used by normalization and softmax kernels)."
+   },
+   {
+    "heading": "5. Kernel API Comparison",
+    "anchor": "5-kernel-api-comparison",
+    "gist": "Used by `preshuffle_gemm.py`:"
+   },
+   {
+    "heading": "6. Kernel Decision Tree",
+    "anchor": "6-kernel-decision-tree",
+    "gist": "---"
+   },
+   {
+    "heading": "7. Source Files",
+    "anchor": "7-source-files",
+    "gist": "table columns: File, Description"
+   },
+   {
+    "heading": "8. Test Files",
+    "anchor": "8-test-files",
+    "gist": "table columns: File, Tests"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfrom kernels.layernorm_kernel import build_layernorm_module\n\nexecutor = build_layernorm_module(M=32768, N=8192, dtype_str=\"bf16\")\n```\n\n```\nGPU_MODULE_NAME = \"layernorm_module\"\n\n@kernel\nlayernorm_kernel(self, Input, Gamma, Beta, Output, m_in)\n\n@jit\n__call__(self, Input, Gamma, Beta, Output, m_in)\n```\n\n```python\nfrom kernels.rmsnorm_kernel import build_rmsnorm_module\n\nexecutor = build_rmsnorm_module(M=32768, N=8192, dtype_str=\"bf16\")\n```\n\n```\nGPU_MODULE_NAME = \"rmsnorm_module\"\n\n@kernel\nrmsnorm_kernel(self, Input, Gamma, Output, m_in)\n```\n\n```python\nfrom kernels.softmax_kernel import build_softmax_module\n\nexecutor = build_softmax_module(M=32768, N=8192, dtype_str=\"bf16\")\n```\n\n```\nGPU_MODULE_NAME = f\"softmax_{dtype_str}\"\n\n@kernel\nsoftmax_kernel(self, A, C, m_in)\n```\n\n```python\nfrom kernels.preshuffle_gemm import compile_preshuffle_gemm_a8\n\nlaunch_fn = compile_preshuffle_gemm_a8(\n    M=16, N=5120, K=8192,\n    tile_m=16, tile_n=128, tile_k=256,\n    in_dtype=\"fp8\",\n    lds_stage=2,\n    use_cshuffle_epilog=False,\n)\n```\n\n```python\nlaunch_fn(arg_c, arg_a, arg_b, arg_scale_a, arg_scale_b, M_val, N_val, stream)\n```\n\n```python\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\nfrom flydsl.expr import arith, gpu, buffer_ops, rocdl\n\n@flyc.kernel\ndef gemm_kernel(arg_c: fx.Tensor, arg_a: fx.Tensor, ...):\n    tid = gpu.thread_idx.x\n    # ... uses fx.*, arith.*, buffer_ops.*, rocdl.* ...\n\n@flyc.jit\ndef launch_fn(arg_c: fx.Tensor, ..., stream: fx.Stream = fx.Stream(None)):\n    gemm_kernel(arg_c, ...).launch(grid=..., block=..., stream=stream)\n```\n\n```\nWhat operation do you need?\n│\n├── Normalization\n│   ├── Need bias (beta) term? → LayerNorm (layernorm_kernel.py)\n│   └── No bias term?         → RMSNorm (rmsnorm_kernel.py)\n│\n├── Softmax\n│   └── Row-wise softmax      → Softmax (softmax_kernel.py)\n│\n├── Matrix Multiply (GEMM)\n│   ├── Standard GEMM (uniform precision)\n│   │   ├── FP8 / INT8 / INT4(W4A8) / FP16 / BF16 / FP4\n│   │   └── → compile_preshuffle_gemm_a8()\n│   │\n│   └── Uses new @flyc.kernel API\n│       └── See kernels/preshuffle_gemm.py\n│\n├── MoE (Mixture of Experts)\n│   ├── Blockscale MoE (gate+up+reduce)\n│   │   └── → kernels/moe_blockscale_2stage.py\n│   └── Standard MoE (fp8/f16/bf16/int8/int4)\n│       └── → kernels/moe_gemm_2stage.py\n│\n└── Building blocks\n    ├── Warp/block reduction     → reduce.py\n    ├── MFMA epilogue selection  → mfma_epilogues.py\n    └── Preshuffle data movement → mfma_preshuffle_pipeline.py\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-prebuilt-kernels.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

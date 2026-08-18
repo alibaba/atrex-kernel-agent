@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.software-pipelining.cdna3-register-based-pipeline",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|software-pipelining#cdna3-register-based-pipeline|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "cdna3-register-based-pipeline"
+  ],
+  "triggers": [
+   "the 'CDNA3: Register-Based Pipeline' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): CDNA3: Register-Based Pipeline",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Software Pipeline (Cross-Architecture Differences) -- CDNA3: Register-Based Pipeline"
+  },
+  "technique": "CDNA3: Register-Based Pipeline",
+  "what": "**Source**: `cdna/flydsl/FlyDSL/`, CDNA3 docs",
+  "when": "**Source**: `cdna/flydsl/FlyDSL/`, CDNA3 docs",
+  "caveats": [
+   "Triple buffering is generally not worthwhile (VGPR spilling leads to scratch access)"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CDNA3 does not have hardware async copy\n# Pipeline implemented via register buffers: global → register → LDS\n\n# Prologue: Prefetch first batch of data\na_reg = buffer_load(a_ptr)       # global → register\nb_reg = buffer_load(b_ptr)       # global → register\n\nfor k in range(1, K_tiles):\n    # Write current data to LDS\n    lds_store(smem_a, a_reg)\n    lds_store(smem_b, b_reg)\n\n    # Simultaneously prefetch next batch\n    a_reg_next = buffer_load(a_ptr + k * stride)\n    b_reg_next = buffer_load(b_ptr + k * stride)\n\n    barrier()\n\n    # Compute\n    acc = mfma(smem_a, smem_b, acc)\n\n    a_reg = a_reg_next\n    b_reg = b_reg_next\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/software-pipelining.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

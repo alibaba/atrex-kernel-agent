@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.kernel-opt.mamba-ssm-state-management.pattern-chunk-wise-ssm-state-update",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|mamba|mamba-ssm-state-management#pattern-chunk-wise-ssm-state-update|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "mamba",
+   "operators": [
+    "mamba"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mamba",
+   "pattern-chunk-wise-ssm-state-update"
+  ],
+  "triggers": [
+   "the 'Pattern: Chunk-wise SSM State Update' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: Chunk-wise SSM State Update",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Mamba / SSM State Management -- Pattern: Chunk-wise SSM State Update"
+  },
+  "technique": "Pattern: Chunk-wise SSM State Update",
+  "what": "**Source**: `flashinfer/ssd_chunk_state.py`",
+  "when": "**Source**: `flashinfer/ssd_chunk_state.py`",
+  "caveats": [
+   "The decay factor is computed using `exp` (not `exp2` as in attention), because SSM's A parameter does not require a log2 transform"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.jit\ndef chunk_state_kernel(B, C, dt, states, ...):\n    \"\"\"Mamba2 SSD: Update SSM state per chunk\"\"\"\n    # Perform matrix operations within each chunk\n    # Pass state between chunks (similar to RNN)\n\n    # 1. Compute decay matrix within chunk\n    decay = tl.exp(-dt * A)  # A is a diagonal matrix\n\n    # 2. Accumulate state\n    state = prev_state * decay + tl.dot(B_chunk.T, X_chunk)\n\n    # 3. Compute output\n    Y_chunk = tl.dot(C_chunk, state)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/kernel-opt/hands-on/mamba-ssm-state-management.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

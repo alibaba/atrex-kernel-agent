@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.sm120-gdn-chunk-fwd-bf16-neumann-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|sm120-gdn-chunk-fwd-bf16-neumann-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): CuTeDSL Gated DeltaNet Chunk Forward (bf16, Precomputed Neumann) on SM120",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL Gated DeltaNet Chunk Forward (bf16, Precomputed Neumann) on SM120"
+  },
+  "title": "CuTeDSL Gated DeltaNet Chunk Forward (bf16, Precomputed Neumann) on SM120",
+  "summary": "This document supersedes the earlier 1.18 ms and V31 0.615 ms SM120 GDN chunk-forward notes. The old 1.18 ms reference kernel was preserved as `sm120_gdn_chunk_fwd_3k.pre-v31-1p18ms.bak`; the V31 production snapshot was preserved as `sm120_gdn_chunk_fwd_3k.v31-0p615ms.bak`; the current production reference is `sm120_gdn_chunk_fwd_3k.py`.",
+  "sections": [
+   {
+    "heading": "Target Hardware",
+    "anchor": "target-hardware",
+    "gist": "table columns: Item, Value"
+   },
+   {
+    "heading": "Algorithm Baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "The accepted implementation uses a 3-kernel no-cache pipeline."
+   },
+   {
+    "heading": "Kernel Resource Footprint (Final)",
+    "anchor": "kernel-resource-footprint-final",
+    "gist": "V113 launch stats were captured with NCU `LaunchStats` on the archived accepted CuTeDSL path."
+   },
+   {
+    "heading": "Final Performance vs FLA",
+    "anchor": "final-performance-vs-fla",
+    "gist": "The final accepted V113 numbers are same-process CuTeDSL vs FLA measurements on the archived directional final-state comparison contract."
+   },
+   {
+    "heading": "Optimization Journey",
+    "anchor": "optimization-journey",
+    "gist": "The first correct implementation split preprocessing, inverse construction, and state scan."
+   },
+   {
+    "heading": "Remaining Bottlenecks",
+    "anchor": "remaining-bottlenecks",
+    "gist": "- K1 is still a serial chunk scan; inter-chunk parallelism is not available without changing the recurrence."
+   },
+   {
+    "heading": "What Would Close the Remaining Gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "1."
+   },
+   {
+    "heading": "Sustained Recipe",
+    "anchor": "sustained-recipe",
+    "gist": "1."
+   },
+   {
+    "heading": "Related Docs",
+    "anchor": "related-docs",
+    "gist": "- Reference kernel: `reference-kernels/nvidia/blackwell-geforce/cutedsl/gdn_chunk_fwd/sm120_gdn_chunk_fwd_3k.py` - Pitfalls: [`doc…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nkS = K_norm @ state\nqS = Q_norm @ state\nRHS = beta * (V - exp_gc * kS)\nv_new = M_neumann @ RHS\nO = scale * (exp_gc * qS + gated_qk @ v_new)\nstate = exp_gc_last * state + K^T @ (exp_decay * v_new)\n```\n\n```text\nsum_t (K[t,k] * exp_decay[t]) * v_new[t,v]\n==\nsum_t K[t,k] * (exp_decay[t] * v_new[t,v])\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-gdn-chunk-fwd-bf16-neumann-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

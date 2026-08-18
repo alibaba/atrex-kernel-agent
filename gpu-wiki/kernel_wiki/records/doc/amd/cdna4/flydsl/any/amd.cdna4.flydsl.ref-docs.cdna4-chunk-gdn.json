@@ -1,0 +1,124 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.flydsl.ref-docs.cdna4-chunk-gdn",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|flydsl|gdn|cdna4-chunk-gdn|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): FlyDSL Chunk-GDN Optimization (MI355X / gfx950)",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "FlyDSL Chunk-GDN Optimization (MI355X / gfx950)"
+  },
+  "title": "FlyDSL Chunk-GDN Optimization (MI355X / gfx950)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "1. Pipeline Overview",
+    "anchor": "1-pipeline-overview",
+    "gist": "5 kernels execute in order:"
+   },
+   {
+    "heading": "2. Performance Summary",
+    "anchor": "2-performance-summary",
+    "gist": "table columns: Kernel, T=4K, Ratio, T=16K, Ratio, T=65K, Ratio, T=262K"
+   },
+   {
+    "heading": "3. Optimization Techniques per Kernel",
+    "anchor": "3-optimization-techniques-per-kernel",
+    "gist": "fwd_h is the hottest kernel in the pipeline (~55% of total time), implementing the recurrence update for chunked linear attention."
+   },
+   {
+    "heading": "4. General Optimization Takeaways",
+    "anchor": "4-general-optimization-takeaways",
+    "gist": "All 5 kernels should use the O=3 monkey-patch."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ng_cumsum = cumsum(g) # block\nA = kkt_solve(k, g_cumsum, beta) # k@k^T + gating +\nw, u = recompute_wu(k, v, beta, A, g) # w u\nh, v_new = fwd_h(k, w, u, g_cumsum) # h + v fix\no = fwd_o(q, k, v_new, h, g_cumsum) # outputcompute\n```\n\n```python\nfrom flydsl.compiler.backends.rocm import RocmBackend\n\n_orig_pipeline = RocmBackend.pipeline_fragments\ndef _patched_pipeline(self, *, compile_hints=None, **kw):\n    if compile_hints is None: compile_hints = {}\n    frags = _orig_pipeline(self, compile_hints=compile_hints, **kw)\n    return [f.replace('O=2', 'O=3') if 'rocdl-attach-target' in f else f for f in frags]\nRocmBackend.pipeline_fragments = _patched_pipeline\n```\n\n```python\nK_LDS_STRIDE = 72 # BT(64) + 8 padding, bank conflict\n\n# columnmainwrite: k[dk][t] layout\nfor j in range_constexpr(8):\n    k_elem = vector.extract(k_vec, static_position=[j], dynamic_position=[])\n    lds_k_off = (dk_start + j) * K_LDS_STRIDE + t_local\n    k_elem_vec = vector.from_elements(v1bf16_type, [k_elem])\n    vector.store(k_elem_vec, lds_k[kc], [to_idx(lds_k_off)])\n```\n\n```python\n# 4 independent SmemPtr(2 kc × 2 ping-pong)\nlds_k_kc0_buf0 = SmemPtr(lds_base_val, offset_kc0_buf0, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc1_buf0 = SmemPtr(lds_base_val, offset_kc1_buf0, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc0_buf1 = SmemPtr(lds_base_val, offset_kc0_buf1, T.bf16, shape=(LDS_K_ELEMS,)).get()\nlds_k_kc1_buf1 = SmemPtr(lds_base_val, offset_kc1_buf1, T.bf16, shape=(LDS_K_ELEMS,)).get()\n\n# row buffer (scf.IfOp, uniform branch, none divergence)\nis_buf0 = arith.cmpi(arith.CmpIPredicate.eq,\n                     arith.remui(i_t_i32, arith.constant(2, type=T.i32)),\n                     arith.constant(0, type=T.i32))\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/flydsl/cdna4-chunk-gdn.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

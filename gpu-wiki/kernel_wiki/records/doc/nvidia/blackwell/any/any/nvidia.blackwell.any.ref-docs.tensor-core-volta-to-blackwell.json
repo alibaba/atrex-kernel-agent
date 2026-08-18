@@ -1,0 +1,136 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.tensor-core-volta-to-blackwell",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|tensor-core-volta-to-blackwell|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Tensor Core from Volta to Blackwell",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Tensor Core from Volta to Blackwell"
+  },
+  "title": "Tensor Core from Volta to Blackwell",
+  "summary": "A detailed technical walkthrough of NVIDIA Tensor Core architecture evolution from Volta through Blackwell, covering PTX programming models, each generation's MMA instructions, memory hierarchy changes, and the progression toward fully asynchronous execution.",
+  "sections": [
+   {
+    "heading": "1. Performance Engineering First Principles",
+    "anchor": "1-performance-engineering-first-principles",
+    "gist": "For a fixed-size problem, Amdahl's Law defines the maximum speedup achievable through parallelization."
+   },
+   {
+    "heading": "2. PTX Programming Model",
+    "anchor": "2-ptx-programming-model",
+    "gist": "Parallel Thread Execution (PTX) is a virtual ISA abstracting GPU generations."
+   },
+   {
+    "heading": "3. Volta: 1st Generation Tensor Core",
+    "anchor": "3-volta-1st-generation-tensor-core",
+    "gist": "GPU instruction dispatch consumes ~30 pJ, while a basic floating-point operation (HFMA) costs only ~1.5 pJ — a 20x overhead ratio."
+   },
+   {
+    "heading": "4. Turing: 2nd Generation Tensor Core",
+    "anchor": "4-turing-2nd-generation-tensor-core",
+    "gist": "Enhanced Volta design with INT8 and INT4 precision support."
+   },
+   {
+    "heading": "5. Ampere: 3rd Generation Tensor Core",
+    "anchor": "5-ampere-3rd-generation-tensor-core",
+    "gist": "Ampere introduced `cp.async` — direct asynchronous GMEM→SMEM copy bypassing registers."
+   },
+   {
+    "heading": "6. Hopper: 4th Generation Tensor Core",
+    "anchor": "6-hopper-4th-generation-tensor-core",
+    "gist": "New hierarchy between CTA and grid: clusters correspond to SMs within a GPC."
+   },
+   {
+    "heading": "7. Blackwell: 5th Generation Tensor Core",
+    "anchor": "7-blackwell-5th-generation-tensor-core",
+    "gist": "New 256 KB per-SM memory (128 lanes × 512 columns × 4 bytes)."
+   },
+   {
+    "heading": "8. Architectural Trends",
+    "anchor": "8-architectural-trends",
+    "gist": "NVIDIA aggressively scales individual Tensor Core size over core count."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/tensor-core-volta-to-blackwell.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

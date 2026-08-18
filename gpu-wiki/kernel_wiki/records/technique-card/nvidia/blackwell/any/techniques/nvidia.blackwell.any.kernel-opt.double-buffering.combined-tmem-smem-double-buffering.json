@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.double-buffering.combined-tmem-smem-double-buffering",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|double-buffering#combined-tmem-smem-double-buffering|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "combined-tmem-smem-double-buffering"
+  ],
+  "triggers": [
+   "the 'Combined TMEM + SMEM Double-Buffering' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Combined TMEM + SMEM Double-Buffering",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Double/Multi-Buffering Patterns -- Combined TMEM + SMEM Double-Buffering"
+  },
+  "technique": "Combined TMEM + SMEM Double-Buffering",
+  "what": "A fully optimized Blackwell GEMM uses both levels simultaneously:",
+  "when": "A fully optimized Blackwell GEMM uses both levels simultaneously:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Combined double-buffering: SMEM (3-stage) + TMEM (2-buffer)\n//\n// Outer loop: output tiles (TMEM double-buffered)\n//   Inner loop: K-tiles (SMEM 3-stage pipelined)\n//\n// Timeline for 2 output tiles, 6 K-tiles each:\n//\n// TMEM buf:     |---- A (tile 0) ----|---- B (tile 1) ----|\n// MMA warp:     | k0  k1  k2  k3  k4  k5 | k0  k1  k2 ...\n// TMA warp:     |k2 k3 k4 k5  -  -  k2 k3 k4 k5 ...\n// Epilogue:     | idle                | drain A  | drain B |\n// SMEM stage:   |0  1  2  0  1  2    |0  1  2  0  1  2   |\n//\n// Key insight: the epilogue of tile 0 overlaps with the MMA of tile 1.\n// This is only possible because they use different TMEM buffers.\n\n__device__ void full_double_buffered_gemm(const GemmParams& params) {\n    int warp_id = threadIdx.x / 32;\n\n    for (int out_tile = 0; out_tile < num_output_tiles; out_tile++) {\n        int tmem_buf = out_tile % 2;\n\n        if (warp_id == 0) {\n            // TMA producer: fill SMEM stages for this output tile's K-loop\n            tma_producer_loop(params, out_tile);\n        } else if (warp_id == 1) {\n            // MMA: consume SMEM stages, accumulate into TMEM[tmem_buf]\n            mma_consumer_loop(params, tmem_buf);\n        } else {\n            // Epilogue: drain TMEM[1-tmem_buf] from previous tile\n            if (out_tile > 0) {\n                epilogue_drain(params, out_tile - 1, 1 - tmem_buf);\n            }\n        }\n\n        // Lightweight sync point between tiles\n        // (mbarrier-based, not __syncthreads)\n    }\n\n    // Final epilogue for last tile\n    if (warp_id >= 2) {\n        epilogue_drain(params, num_output_tiles - 1,\n                       (num_output_tiles - 1) % 2);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/double-buffering.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

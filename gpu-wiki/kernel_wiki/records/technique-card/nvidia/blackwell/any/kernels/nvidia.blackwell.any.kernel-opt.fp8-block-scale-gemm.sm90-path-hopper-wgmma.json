@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fp8-block-scale-gemm.sm90-path-hopper-wgmma",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|fp8-block-scale-gemm#sm90-path-hopper-wgmma|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "sm90-path-hopper-wgmma"
+  ],
+  "triggers": [
+   "the 'SM90 Path (Hopper, WGMMA)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): SM90 Path (Hopper, WGMMA)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FP8 Block-Scale GEMM -- SM90 Path (Hopper, WGMMA)"
+  },
+  "technique": "SM90 Path (Hopper, WGMMA)",
+  "what": "Hopper accumulator has ~22-bit precision (FP22)",
+  "when": "Hopper accumulator has ~22-bit precision (FP22)",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper accumulator has ~22-bit precision (FP22)\n// Every Nc=128 WGMMAs, promote partial sum to FP32 on CUDA cores\n// This retains precision without adding MMA overhead\n\n__device__ void sm90_fp8_gemm_with_promotion(...) {\n    float acc_fp32 = 0.0f;\n\n    for (int k = 0; k < K; k += 128) {\n        float acc_fp22 = 0.0f;\n        #pragma unroll 4\n        for (int kk = 0; kk < 128; kk += 32) {\n            wgmma_fp8_e4m3(acc_fp22, A_frag, B_frag);\n        }\n        // Promote to FP32 accumulator on CUDA cores\n        acc_fp32 += acc_fp22 * scale_a * scale_b;\n    }\n\n    // Write acc_fp32 to output\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/fp8-block-scale-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

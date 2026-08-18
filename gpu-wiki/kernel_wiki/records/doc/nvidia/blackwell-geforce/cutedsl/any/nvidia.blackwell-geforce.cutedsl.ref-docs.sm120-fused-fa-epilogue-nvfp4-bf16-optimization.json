@@ -1,0 +1,175 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.sm120-fused-fa-epilogue-nvfp4-bf16-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|quantization|sm120-fused-fa-epilogue-nvfp4-bf16-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Stage 3 Closeout — Path-1 fused sigmoid·gate + NVFP4 quant on sm_120",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "Stage 3 Closeout — Path-1 fused sigmoid·gate + NVFP4 quant on sm_120"
+  },
+  "title": "Stage 3 Closeout — Path-1 fused sigmoid·gate + NVFP4 quant on sm_120",
+  "summary": "`fused_sigmoid_mul_nvfp4_kernel` — module-level `@cute.kernel` + `@cute.jit` launcher in the sm_120 GDN reference style: - 4× `ldg.E.128` PTX inline per thread (one per attn pair + one per gate pair, 16 B vec) - 1 thread per SF block, 256 threads × 2 rows / block, 440 blocks (4 waves per SM × 110 SMs) - `bfloat2_sigmoid_mul` inline-PTX folds sigmoid+mul into one bf16x2 op - amax → e4m3 scale → e2m1x16 pack via vendored flashinfer helpers - `stg.E.64` for x_fp4, scalar `stg.E.u8` for x_bs swizzled SF",
+  "sections": [
+   {
+    "heading": "§1 Punchline",
+    "anchor": "1-punchline",
+    "gist": "table columns: Path, Wall-clock, vs SDPA+V0, Note"
+   },
+   {
+    "heading": "§2 Baseline & ceiling (V0)",
+    "anchor": "2-baseline-ceiling-v0",
+    "gist": "`fused_sigmoid_mul_nvfp4_kernel` — module-level `@cute.kernel` + `@cute.jit` launcher in the sm_120 GDN reference style: - 4× `ldg.E.128` PTX inline per thread (one per attn pair + one per gate pair, 16 B vec) - 1 thread per SF block, 256 …"
+   },
+   {
+    "heading": "§3 Standalone architecture trio — three-way memory wall confirmation",
+    "anchor": "3-standalone-architecture-trio-three-way-memory-wall-confirmation",
+    "gist": "table columns: Variant, Mechanism, Duration, DRAM, L1 hit, Eligible warps, Achieved Occ, Verdict"
+   },
+   {
+    "heading": "§4 sm_120 ncu pitfall discovered during V2",
+    "anchor": "4-sm-120-ncu-pitfall-discovered-during-v2",
+    "gist": "`l1tex__t_sector_hit_rate.pct` (displayed as \"L1/TEX Hit Rate\" in ncu Speed-of-Light + Memory Workload sections) **includes shared-memory `ld.shared` hits on sm_120**, not just global hits."
+   },
+   {
+    "heading": "§5 cute 4.4.2 sm_120 traps documented (5 traps from V2 implementation)",
+    "anchor": "5-cute-4-4-2-sm-120-traps-documented-5-traps-from-v2-implementation",
+    "gist": "V2 implementation surfaced 5 cute 4.4.2 sm_120 API traps not present in any wiki doc; all workarounds documented in ``:"
+   },
+   {
+    "heading": "§6 V3 implementation attempts",
+    "anchor": "6-v3-implementation-attempts",
+    "gist": "- ❌ FAIL — no PyPI wheel."
+   },
+   {
+    "heading": "§7 Why V3 hybrid only 1.07× — the unexpected ceiling",
+    "anchor": "7-why-v3-hybrid-only-1-07-the-unexpected-ceiling",
+    "gist": "vllm's `flash_attn_varlen_func` on sm_120 RTX PRO 5000 takes **1645 us** vs the projected ~99 us (memory-ceiling estimate for Q+K+V+O = 100 MB / 1010 GB/s)."
+   },
+   {
+    "heading": "§8 Forward path (resume when cutlass 4.5+ available)",
+    "anchor": "8-forward-path-resume-when-cutlass-4-5-available",
+    "gist": "The true V3 fusion plan was fully designed (kept in inbox + archived as ``) but blocked at implementation by cutlass 4.4.2 vs flash_attn-required 4.5+."
+   },
+   {
+    "heading": "§8b Standalone V_final tactical (D) — non-warp-spec TMA, deferred",
+    "anchor": "8b-standalone-v-final-tactical-d-non-warp-spec-tma-deferred",
+    "gist": "Parallel deferred-plan track for the **standalone** fused-quant kernel (independent of §8 attention fusion)."
+   },
+   {
+    "heading": "§9 Wiki contributions",
+    "anchor": "9-wiki-contributions",
+    "gist": "Six pitfall / reference docs staged in `wiki_drafts/`, ready for `gpu-wiki-kernel-archive` wiki maintenance process:"
+   },
+   {
+    "heading": "§10 Iteration ledger",
+    "anchor": "10-iteration-ledger",
+    "gist": "table columns: Step, Commit, Outcome"
+   },
+   {
+    "heading": "§11 Stage 3 verdict",
+    "anchor": "11-stage-3-verdict",
+    "gist": "**V_final = V0 standalone fused-quant** (commit `6f7f213`, 88 us cuda.Event / 103.58 us ncu / 91.9% memcpy ceiling on M=6144 K=4096)."
+   },
+   {
+    "heading": "§12 Stage 4 prep checklist",
+    "anchor": "12-stage-4-prep-checklist",
+    "gist": "Stage 4 = final validation."
+   },
+   {
+    "heading": "§13 Stage 4 final validation results",
+    "anchor": "13-stage-4-final-validation-results",
+    "gist": "Stage 4 final committed `a65a3a4` (after fix (C) for the SEQ_LEN=512 oracle-stack divergence)."
+   },
+   {
+    "heading": "Stage 4 Final Validation Report` section (commit `a65a3a4`)",
+    "anchor": "stage-4-final-validation-report-section-commit-a65a3a4",
+    "gist": "— Stage 3 closeout, 2026-04-28 (revised after `acf6e79` V_final declaration; Stage 4 final results integrated from commit `a65a3a4`)"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-fused-fa-epilogue-nvfp4-bf16-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

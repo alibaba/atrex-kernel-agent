@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.kernel-opt.cascade-state-merge.pattern-distributed-attention-result-merging",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|cascade-state-merge#pattern-distributed-attention-result-merging|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-distributed-attention-result-merging"
+  ],
+  "triggers": [
+   "the 'Pattern: Distributed Attention Result Merging' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: Distributed Attention Result Merging",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Cascade / State Merge (FlashInfer Pattern) -- Pattern: Distributed Attention Result Merging"
+  },
+  "technique": "Pattern: Distributed Attention Result Merging",
+  "what": "**Source**: `flashinfer/cascade.py`",
+  "when": "**Source**: `flashinfer/cascade.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.jit\ndef merge_state_kernel(v1, s1, v2, s2, v_out, s_out, ...):\n    \"\"\"Merge two partial attention results (for split-KV or distributed attention)\"\"\"\n    # s1, s2 are their respective log-sum-exp values\n    # v1, v2 are their respective attention outputs\n\n    s_max = tl.maximum(s1, s2)\n    exp1 = tl.exp(s1 - s_max)\n    exp2 = tl.exp(s2 - s_max)\n\n    # Weighted merge\n    v_out = (v1 * exp1[:, None] + v2 * exp2[:, None]) / (exp1 + exp2)[:, None]\n    s_out = s_max + tl.log(exp1 + exp2)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/kernel-opt/hands-on/cascade-state-merge.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,150 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Flash Attention Backward bf16 — Arbitrary Mask Integration on MI308X (gfx942)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Flash Attention Backward bf16 — Arbitrary Mask Integration on MI308X (gfx942)"
+  },
+  "title": "FlyDSL Flash Attention Backward bf16 — Arbitrary Mask Integration on MI308X (gfx942)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target hardware",
+    "anchor": "target-hardware",
+    "gist": "- Chip: AMD MI308X (CDNA3, gfx942) - Peak bf16 MFMA: 206 TFLOPS - HBM BW: 5.3 TB/s - CUs: 80, LDS: 64 KB/CU, VGPR: 512/SIMD"
+   },
+   {
+    "heading": "Algorithm baseline",
+    "anchor": "algorithm-baseline",
+    "gist": "End-to-end backward pass for flash attention with **arbitrary (non-causal) additive mask**: - Split dQ + dK/dV design (two separate kernel launches, no atomic_add) - Mask: (B, 1, S, S) f32 additive format → bit-packed u32 bitmask on host -…"
+   },
+   {
+    "heading": "API architecture",
+    "anchor": "api-architecture",
+    "gist": "Key design decisions: 1."
+   },
+   {
+    "heading": "Optimization journey",
+    "anchor": "optimization-journey",
+    "gist": "Direct F.pad of Q, K, V, dO from (B,H,316,64) to (B,H,320,64) before kernel launch."
+   },
+   {
+    "heading": "Final perf vs alternatives",
+    "anchor": "final-perf-vs-alternatives",
+    "gist": "Test shape: B=1024, H=8, S=316, D=64, arbitrary sparse mask (~43% valid Q-rows)."
+   },
+   {
+    "heading": "Remaining bottlenecks",
+    "anchor": "remaining-bottlenecks",
+    "gist": "1."
+   },
+   {
+    "heading": "What would close the remaining gap",
+    "anchor": "what-would-close-the-remaining-gap",
+    "gist": "1."
+   },
+   {
+    "heading": "Sustained recipe (API integration)",
+    "anchor": "sustained-recipe-api-integration",
+    "gist": "1."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- Kernel-level optimization journey: - Forward mask optimization: [cdna3-flash-attention-bf16-mask-optimizatio…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nflash_attn_bwd_build()         → compile + cache dQ and dK/dV kernels\nflash_attn_bwd_precompute_mask() → pack_mask_to_u32 + compute_dq/dkdv_loop_bounds\nflash_attn_bwd()               → orchestrate both kernels with mask context\n```\n\n```\nrow_in_bounds = arith.cmpi(slt, row_idx, seq_len)\nrow_safe = arith.select(row_in_bounds, row_idx, arith.index(0))\nvec = vector.load(base_ptr + row_safe * stride)\nvec_safe = arith.select(row_in_bounds, vec, zero_vec)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-flash-attn-bwd-bf16-arbitrary-mask-integration.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,160 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-moe-norm-conv",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|conv|ck-moe-norm-conv|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "conv",
+   "operators": [
+    "conv",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "conv-vision"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "conv",
+   "moe",
+   "norm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CK Tile MoE / Norm / Conv / Reduce Operations",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CK Tile MoE / Norm / Conv / Reduce Operations"
+  },
+  "title": "CK Tile MoE / Norm / Conv / Reduce Operations",
+  "summary": "In addition to GEMM and Attention, Composable Kernel (CK) Tile provides a rich set of commonly used operator implementations for LLM inference and training, including Fused MoE (sorting + GEMM + activation fusion), TopK Softmax, LayerNorm/RMSNorm (with quantization fusion), Grouped Convolution, im2col, Reduce, and Pooling. All operators follow the CK Tile three-layer architecture of kernel / pipeline / block.",
+  "sections": [
+   {
+    "heading": "Fused MoE GEMM",
+    "anchor": "fused-moe-gemm",
+    "gist": "`include/ck_tile/ops/fused_moe/` implements the complete Mixture-of-Experts inference pipeline, including token sorting and back-to-back dual GEMM fusion."
+   },
+   {
+    "heading": "TopK Softmax",
+    "anchor": "topk-softmax",
+    "gist": "`include/ck_tile/ops/topk_softmax/` implements TopK + Softmax for the MoE routing layer:"
+   },
+   {
+    "heading": "LayerNorm2d",
+    "anchor": "layernorm2d",
+    "gist": "`include/ck_tile/ops/layernorm2d/` implements 2D LayerNorm (normalization along the last dimension)."
+   },
+   {
+    "heading": "RMSNorm2d",
+    "anchor": "rmsnorm2d",
+    "gist": "`include/ck_tile/ops/rmsnorm2d/` implements RMSNorm (Root Mean Square Normalization)."
+   },
+   {
+    "heading": "Grouped Convolution",
+    "anchor": "grouped-convolution",
+    "gist": "`include/ck_tile/ops/grouped_convolution/` implements forward/backward computation of grouped convolution."
+   },
+   {
+    "heading": "Image to Column (im2col)",
+    "anchor": "image-to-column-im2col",
+    "gist": "`include/ck_tile/ops/image_to_column/` implements the im2col transformation:"
+   },
+   {
+    "heading": "Reduce2d",
+    "anchor": "reduce2d",
+    "gist": "`include/ck_tile/ops/reduce/` implements a generic 2D reduction operation."
+   },
+   {
+    "heading": "Pooling",
+    "anchor": "pooling",
+    "gist": "`include/ck_tile/ops/pooling/` implements generic pooling operations (Max / Average)."
+   },
+   {
+    "heading": "Activation Functions",
+    "anchor": "activation-functions",
+    "gist": "`include/ck_tile/ops/elementwise/unary_element_wise_operation.hpp` defines composable activation functions:"
+   },
+   {
+    "heading": "Example Code",
+    "anchor": "example-code",
+    "gist": "CK Tile provides the following examples (`example/ck_tile/` directory):"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- CK Quantization GEMM and MX Format -- Detailed implementation of SmoothQuant and Quantized GEMM - CK Dispatcher and Kernel Selection -- Automatic kernel selection mechanism fo…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n                    N0 (intermediate)            N1 (hidden)\n         +------+------+                    +----------+\n    A    | Gate |  Up  |              Down  |          |\n  [M,K]  +------+------+  --ACT(SiLU)-->   +----------+  --> Out [M, K]\n         |      |      |                    |          |\n         +------+------+                    +----------+\n         [E, 2N, K]                         [E, K, N]\n```\n\n```cpp\nFusedMoeGemmShape<\n BlockTile_0, // stage GEMM: sequence<M, N, K>\n WarpPerBlock_0, // stage warp\n WarpTile_0, // stage warp tile\n BlockTile_1, // stage GEMM: sequence<M, N, K>\n WarpPerBlock_1, // stage warp\n WarpTile_1 // stage warp tile\n>\n```\n\n```cpp\ntemplate <bool IsGateOnly_, // true: Gate, false: Gate+Up\n bool UseSmoothQuant_, // use SmoothQuant\n index_t OAtomic_, // 0: noneatomic, 1: atomic pk f16/bf16, 2: atomic f32\n FusedMoeGemmWeightPermuteEnum PermuteEnum_, // weightmode\n bool PadHiddenSize_, // hidden_size requires padding\n          bool PadIntermediateSize_,\n bool PipeInterleave_> // pipeline\n```\n\n```cpp\nstruct TopkSoftmaxHostArgs {\n    const void* p_input;    // [num_rows, num_experts], router logits\n    void* p_output;         // [num_rows, topk], softmax(top-k logits)\n void* p_indices; // [num_rows, topk], expert indices\n index_t num_rows; // token count\n index_t num_experts; // expert total count\n index_t topk; // top-K\n index_t stride_input; // inputrow\n index_t stride_output; // outputrow\n};\n```\n\n```cpp\nstruct Layernorm2dFwdHostArgs {\n const void* p_x; // [M, N] input\n const void* p_x_residual; // [M, N] input(optional)\n const void* p_sm_scale; // [1, N] smooth scale(optional)\n    const void* p_x_bias;     // [1, N] bias\n    const void* p_gamma;      // [1, N] gamma\n    const void* p_beta;       // [1, N] beta\n void* p_y; // [M, N] output\n void* p_y_residual; // [M, N] output(optional)\n void* p_y_scale; // [M, 1] quantization scale(optional)\n void* p_mean; // [M, 1] (optional)\n void* p_invStd; // [M, 1] standard(optional)\n    float epsilon;\n};\n```\n\n```cpp\n// forward: TransformConvFwdToGemm\n// backwarddata: TransformConvBwdDataToGemm\n// backwardweight: TransformConvBwdWeightToGemm\n```\n\n```cpp\n// [N, H, W, G, C] [N*Ho*Wo, G, Fh*Fw*C] matrix\n// stride, dilation, padding\nstruct Kargs {\n const void* p_in; // input\n void* p_out; // matrix\n    long_index_t G, N, C;   // Group, Batch, Channel\n    array<long_index_t, 2> input_spatial_lengths;\n    array<long_index_t, 2> filter_spatial_lengths;\n    array<long_index_t, 2> output_spatial_lengths;\n    array<long_index_t, 2> conv_filter_strides;\n    array<long_index_t, 2> conv_filter_dilations;\n    array<long_index_t, 2> input_left_pads;\n    array<long_index_t, 2> input_right_pads;\n};\n```\n\n```\nGlobal Memory → Thread-level Reduce → Warp-level Reduce → Block-level Reduce → Output\n```\n\n```cpp\n// automaticcomputevectorloadsize\nconstexpr index_t memory_vector_size = 16 / sizeof(XDataType);\nconstexpr index_t stride_based_vector_size =\n    is_innermost_contiguous ? min(memory_vector_size, thread_tile_vector_size) : 1;\n```\n\n```cpp\ntemplate <typename TensorShape, typename WindowShape>\nstruct PoolHostArgs {\n    const void* input_ptr;\n    void* output_ptr;\n void* output_index_ptr; // Max pooling index output\n    TensorShape input_shape;\n    TensorShape output_shape;\n    TensorShape input_strides;\n    TensorShape output_strides;\n    WindowShape window_lengths;\n    WindowShape window_strides;\n    WindowShape window_dilations;\n    WindowShape input_left_pads;\n    WindowShape input_right_pads;\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-moe-norm-conv.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

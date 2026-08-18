@@ -1,0 +1,127 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ptx-instruction-evolution-a100-h100-b200",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ptx-instruction-evolution-a100-h100-b200|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "ampere",
+    "b200",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): PTX Instruction Evolution: A100, H100, B200",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "PTX Instruction Evolution: A100, H100, B200"
+  },
+  "title": "PTX Instruction Evolution: A100, H100, B200",
+  "summary": "A comparative analysis of PTX instruction set evolution across three generations of NVIDIA AI-accelerating GPUs, covering memory access, synchronization, and Tensor Core MMA instructions.",
+  "sections": [
+   {
+    "heading": "1. Background",
+    "anchor": "1-background",
+    "gist": "NVIDIA's AI-accelerating GPUs have achieved a claimed 40-million-fold performance increase from Pascal to Rubin over 10 years — seemingly impossible under Moore's Law's doubling every two years."
+   },
+   {
+    "heading": "2. A100 / H100 / B200 Specifications",
+    "anchor": "2-a100-h100-b200-specifications",
+    "gist": "table columns: Metric, A100 SXM4 80GB, H100 SXM5 80GB, B200 (HGX)"
+   },
+   {
+    "heading": "3. PTX Instruction Comparison",
+    "anchor": "3-ptx-instruction-comparison",
+    "gist": "- **A100**: introduced `cp.async` - **H100**: introduced `cp.async.bulk.tensor` (TMA) - **B200**: introduced `tcgen05` family (`tcgen05.cp/ld/st/alloc`, etc.)"
+   },
+   {
+    "heading": "4. Typical GEMM Kernel Data Flow",
+    "anchor": "4-typical-gemm-kernel-data-flow",
+    "gist": "---"
+   },
+   {
+    "heading": "5. Key Evolution Summary",
+    "anchor": "5-key-evolution-summary",
+    "gist": "- **Volta → Ampere**: Introduced `cp.async` for asynchronous GMEM→SMEM copy (bypassing RF), reducing register pressure; introduced `ldmatrix` for optimized SMEM→RF loading; 3rd-gen Tensor Core added TF32/BF16/FP64 - **Ampere → Hopper**: In…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nA100: GMEM --[cp.async]--> SMEM --[ldmatrix]--> RF --[mma.sync]--> RF (accumulator)\n        Sync: cp.async.commit_group / wait_group\n\nH100: GMEM --[TMA]--> SMEM --[wgmma descriptor]--> RF (accumulator)\n        Sync: mbarrier (TMA) + wgmma.commit/wait/fence (MMA)\n\nB200: GMEM --[TMA]--> SMEM --[tcgen05.cp]--> TMEM --[tcgen05.mma]--> TMEM (accumulator)\n       TMEM --[tcgen05.ld]--> RF --[store]--> GMEM\n        Sync: mbarrier (TMA + MMA via tcgen05.commit)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ptx-instruction-evolution-a100-h100-b200.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

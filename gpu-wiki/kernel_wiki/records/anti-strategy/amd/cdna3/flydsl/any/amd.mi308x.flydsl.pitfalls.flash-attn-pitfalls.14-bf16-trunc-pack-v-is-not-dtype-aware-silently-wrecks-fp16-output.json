@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.14-bf16-trunc-pack-v-is-not-dtype-aware-silently-wrecks-fp16-output",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#14-bf16-trunc-pack-v-is-not-dtype-aware-silently-wrecks-fp16-output|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '14. `bf16_trunc_pack_v*` is not dtype-aware — silently wrecks fp16 output' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 14. `bf16_trunc_pack_v*` is not dtype-aware — silently wrecks fp16 output",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 14. `bf16_trunc_pack_v*` is not dtype-aware — silently wrecks fp16 output"
+  },
+  "attempted": "To pack 4/8 f32 accumulator values into v4bf16 / v8bf16 for the P softmax output (and v13's O writeback), it's tempting to AND off the low 16 bits of each f32 and OR-shift them into i32 dwords. bf16 IS the upper 16 bits of f32 (same exponent layout, same bias, just truncated mantissa) so this is ~2 fewer ops per element than `arith.TruncFOp`. Helper named `bf16_trunc_pack_v4` made this explicit.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "16-bit float pack helpers must branch on dtype:",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "fp16 (IEEE binary16) has a 5-bit exponent and bias 15. f32 has 8-bit exponent and bias 127. The high 16 bits of f32 are NOT a valid fp16 representation — different exponent field width, different bias, completely different bit layout. Bitwise truncation produces an fp16 with whatever random bits happened to be in the top half of the f32 → essentially random data."
+  },
+  "observed": "fp16 outputs are garbage (max abs err ≫ noise — the kernel \"runs\" but values are arbitrary). Bug went unnoticed because the entire optimization journey (v0 → v14, all perf benches, all correctness checks) was run on bf16 only. fp16 build only flagged when a downstream user exercised it.",
+  "root_cause": "fp16 (IEEE binary16) has a 5-bit exponent and bias 15. f32 has 8-bit exponent and bias 127. The high 16 bits of f32 are NOT a valid fp16 representation — different exponent field width, different bias, completely different bit layout. Bitwise truncation produces an fp16 with whatever random bits happened to be in the top half of the f32 → essentially random data.",
+  "implementation": {
+   "snippet": "```python\n_IS_BF16 = (dtype_str == \"bf16\")\n\ndef pack_v4(f32_vals):\n    if _IS_BF16:\n        # bit truncation: bf16 is upper 16 bits of f32\n        return ...bitwise OR/AND/shift code...\n    # fp16 path: real round-to-nearest f32 → f16\n    elems = [arith.trunc_f(elem_type, v) for v in f32_vals]\n    return vector.from_elements(v4f16_type, elems)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

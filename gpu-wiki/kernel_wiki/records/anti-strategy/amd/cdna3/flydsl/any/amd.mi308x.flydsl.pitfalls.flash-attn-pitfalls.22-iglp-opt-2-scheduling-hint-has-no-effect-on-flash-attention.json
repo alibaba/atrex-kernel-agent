@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.22-iglp-opt-2-scheduling-hint-has-no-effect-on-flash-attention",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#22-iglp-opt-2-scheduling-hint-has-no-effect-on-flash-attention|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '22. `iglp_opt(2)` scheduling hint has no effect on flash attention' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 22. `iglp_opt(2)` scheduling hint has no effect on flash attention",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 22. `iglp_opt(2)` scheduling hint has no effect on flash attention"
+  },
+  "attempted": "CK (Composable Kernel) uses `iglp_opt(1)` in GEMM kernels with measurable gains. The variant `iglp_opt(2)` is documented as enabling \"interleave scheduling\" for overlapping MFMA with memory ops. Adding `rocdl.iglp_opt(2)` before the GEMM1 section should help the compiler interleave KV loads with MFMA. \"CK does it, so should we.\"",
+  "verdict": "api-limitation",
+  "lesson": "`iglp_opt` is effective for GEMM-only loops where CK's template structure matches the hint's assumptions. For complex fused kernels (attention = GEMM + softmax + GEMM), use targeted `sched_mfma` / `sched_dsrd` / `sched_group_barrier` instead. Don't stack multiple scheduling hint systems.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "`iglp_opt` provides hints to the AMDGPU post-RA scheduler. But the flash attention loop structure (alternating GEMM1 → softmax → GEMM2) is very different from a standalone GEMM. The scheduler already does a reasonable job with the existing `sched_mfma` / `sched_dsrd` hints (which are more targeted). Adding `iglp_opt` on top of existing scheduling hints results in conflicting guidance — the scheduler falls back to its default behavior."
+  },
+  "observed": "Neutral (1.681 ms vs 1.683 ms, within noise).",
+  "root_cause": "`iglp_opt` provides hints to the AMDGPU post-RA scheduler. But the flash attention loop structure (alternating GEMM1 → softmax → GEMM2) is very different from a standalone GEMM. The scheduler already does a reasonable job with the existing `sched_mfma` / `sched_dsrd` hints (which are more targeted). Adding `iglp_opt` on top of existing scheduling hints results in conflicting guidance — the scheduler falls back to its default behavior."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

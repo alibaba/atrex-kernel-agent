@@ -1,0 +1,140 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.gluon.ref-docs.isa_patterns",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|gluon|ref-docs|isa_patterns|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Hopper (H20 / H100 / H200 / SM90) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Hopper (H20 / H100 / H200 / SM90): Hopper (sm_90) SASS Instruction Patterns and Optimization Reference",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Hopper (sm_90) SASS Instruction Patterns and Optimization Reference"
+  },
+  "title": "Hopper (sm_90) SASS Instruction Patterns and Optimization Reference",
+  "summary": "- A coalesced `LDG.E.128` from a warp (32 threads) accesses 32 × 16B = 512B - Hopper supports 128-byte sector-granularity coalescing - Uncoalesced accesses are split into multiple sector requests, severely reducing bandwidth utilization",
+  "sections": [
+   {
+    "heading": "1. Global Memory Instructions",
+    "anchor": "1-global-memory-instructions",
+    "gist": "table columns: SASS Instruction, Width, Bytes, Throughput (Relative)"
+   },
+   {
+    "heading": "2. Shared Memory Instructions",
+    "anchor": "2-shared-memory-instructions",
+    "gist": "table columns: SASS Instruction, Width, Bytes"
+   },
+   {
+    "heading": "3. Tensor Core Instructions",
+    "anchor": "3-tensor-core-instructions",
+    "gist": "table columns: SASS Instruction, Input Type, Shape, Description"
+   },
+   {
+    "heading": "4. Synchronization and Wait Instructions",
+    "anchor": "4-synchronization-and-wait-instructions",
+    "gist": "table columns: SASS Instruction, Description, Performance Impact"
+   },
+   {
+    "heading": "5. Scalar and Control Instructions",
+    "anchor": "5-scalar-and-control-instructions",
+    "gist": "table columns: SASS Instruction, Description"
+   },
+   {
+    "heading": "6. Floating-Point Instructions",
+    "anchor": "6-floating-point-instructions",
+    "gist": "table columns: SASS Instruction, Description, Precision"
+   },
+   {
+    "heading": "7. Instruction Pattern Recognition Reference",
+    "anchor": "7-instruction-pattern-recognition-reference",
+    "gist": "---"
+   },
+   {
+    "heading": "Reference Documentation",
+    "anchor": "reference-documentation",
+    "gist": "- NVIDIA CUDA ISA (PTX/SASS) - Hopper Architecture Whitepaper - [NVIDIA Nsight Compute Documentation…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nbank_id = (byte_address / 4) % 32\n```\n\n```sass\n; load + async copy + wgmma pipeline\nLDGSTS.E.128 [smem_addr], [global_addr]  ; CP_ASYNC: global → shared (128-bit)\nLDGSTS.E.128 [smem_addr+16], [global_addr+16]\nDEPBAR.LE SB0, 0x0 ; wait async copy complete\nFENCE.PROXY.ASYNC.SHARED                 ; shared memory fence\nWGMMA.MMA_ASYNC.SYNC... ; wgmma matrixmultiplication\nWGMMA.WAIT ; wait wgmma complete\n\n; store\nSTG.E.128 [global_addr], reg            ; 128-bit global store\n```\n\n```sass\n; load ( LDG.E.128 or LDGSTS.E.128)\nLDG.E.32 R0, [global_addr] ; 32-bit load -> 1/4\nLDG.E.32 R1, [global_addr+4]\n\n; use async_copy ( LDGSTS)\nLDG.E.128 R0, [global_addr] ; load register\nSTS.128 [smem_addr], R0 ; store shared memory\n; -> LDGSTS.E.128 [smem_addr], [global_addr]\n\n; register\nSTL [local_addr], R0                     ; store to local memory (DRAM!)\nEnglish description\nLDL R0, [local_addr]                     ; load from local memory (DRAM!)\n\n; shared memory access\nLDS.32 R0, [smem_addr] ; 32-bit smem load -> 1/4\n; -> LDS.128\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/ref-docs/gluon/isa_patterns.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

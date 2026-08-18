@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.wgmma-warpgroup-mma.pattern-128-thread-warpgroup-cooperative-mma",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|hands-on|wgmma-warpgroup-mma#pattern-128-thread-warpgroup-cooperative-mma|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-128-thread-warpgroup-cooperative-mma"
+  ],
+  "triggers": [
+   "the 'Pattern: 128-Thread Warpgroup Cooperative MMA' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Pattern: 128-Thread Warpgroup Cooperative MMA",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "WGMMA (Warpgroup Matrix Multiply-Accumulate) -- Pattern: 128-Thread Warpgroup Cooperative MMA"
+  },
+  "technique": "Pattern: 128-Thread Warpgroup Cooperative MMA",
+  "what": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`, `cutedsl/cutlass/fmha.py`",
+  "when": "**Source**: `cutedsl/cutlass/dense_gemm_persistent_warp_specialized_sm90.py`, `cutedsl/cutlass/fmha.py`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# WGMMA: 4 warps (128 threads) cooperatively execute matrix multiplication\n# The A operand is read from shared memory (not register), reducing register pressure\ntiled_mma = cute.make_tiled_mma(\n    cute.SM90_16x8x16_F32BF16BF16F32_SS,  # SS = both A and B read from shared memory\n    # or cute.SM90_16x8x16_F32BF16BF16F32_RS  # RS = A from register, B from shared\n)\n```\n\n```python\n# Gluon automatically maps to wgmma via tl.dot\n# but we need to ensure that BLOCK_M is a multiple of 128 (warpgroup requirement)\nc = tl.dot(a, b)  # compiler automatically selects wgmma instruction\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/wgmma-warpgroup-mma.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

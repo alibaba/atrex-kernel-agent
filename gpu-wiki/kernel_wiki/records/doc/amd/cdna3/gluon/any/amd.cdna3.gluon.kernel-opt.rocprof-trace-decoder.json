@@ -1,0 +1,115 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna3.gluon.kernel-opt.rocprof-trace-decoder",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|rocprof-trace-decoder|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "cdna3"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "kernel-opt reference for AMD CDNA3 (gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA3 (gfx942): ROCprof Trace Decoder",
+  "problem": {
+   "target": "AMD CDNA3 (gfx942)",
+   "statement": "ROCprof Trace Decoder"
+  },
+  "title": "ROCprof Trace Decoder",
+  "summary": "A plugin library for rocprofiler-sdk: https://github.com/ROCm/rocm-systems/tree/develop/projects/rocprofiler-sdk",
+  "sections": [
+   {
+    "heading": "Description",
+    "anchor": "description",
+    "gist": "A plugin library for rocprofiler-sdk: https://github.com/ROCm/rocm-systems/tree/develop/projects/rocprofiler-sdk"
+   },
+   {
+    "heading": "Usage",
+    "anchor": "usage",
+    "gist": "By default, rocprofv3 searches ``LD_LIBRARY_PATH`` and the rocprofiler-sdk install location, normally ``/opt/rocm/lib``."
+   },
+   {
+    "heading": "End User License Agreement",
+    "anchor": "end-user-license-agreement",
+    "gist": "- Headers are provided under the MIT license."
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\nrocprofv3 --att -- ./a.out\n```\n\n```bash\nrocprofv3 --att --att-library-path /path/to/lib -- ./a.out\n```\n\n```bash\nrocprofiler_thread_trace_decoder_handle_t decoder{};\n# Notes: Passing null string \"\" searches in LD_LIBRARY_PATH. Passing nullptr is not allowed.\nauto status = rocprofiler_thread_trace_decoder_create(&decoder, \"/opt/rocm/lib\");\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/kernel-opt/gluon/rocprof-trace-decoder.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.coalesced-access-load-store-width.relationship-with-other-optimizations",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|coalesced-access-load-store-width#relationship-with-other-optimizations|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "memory-bound"
+   ]
+  },
+  "technique_tags": [
+   "relationship-with-other-optimizations"
+  ],
+  "triggers": [
+   "the 'Relationship with Other Optimizations' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Relationship with Other Optimizations",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Coalesced Memory Access and Load/Store Instruction Width Optimization -- Relationship with Other Optimizations"
+  },
+  "technique": "Relationship with Other Optimizations",
+  "what": "- **LDS bank conflict**: Coalesced access addresses global memory efficiency. LDS bank conflicts require separate swizzle-based elimination. See LDS Bank Conflict Optimization for details. - **Scratch overflow**: Increasing `size_per_thread` increases VGPR usage and may cause register spilling. See Eliminating Scratch Operations for details. - **Occupancy**: Increased VGPR usage also reduces occupancy. See Occupancy Optimization for details.",
+  "when": "- **LDS bank conflict**: Coalesced access addresses global memory efficiency.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/coalesced-access-load-store-width.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

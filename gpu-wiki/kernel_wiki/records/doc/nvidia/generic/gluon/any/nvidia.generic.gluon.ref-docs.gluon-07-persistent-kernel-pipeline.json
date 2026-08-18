@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.gluon.ref-docs.gluon-07-persistent-kernel-pipeline",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|gluon|ref-docs|gluon-07-persistent-kernel-pipeline|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "low-sm-utilization"
+   ]
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Gluon Tutorial 07: Persistent Kernels and Pipeline Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Gluon Tutorial 07: Persistent Kernels and Pipeline Optimization"
+  },
+  "title": "Gluon Tutorial 07: Persistent Kernels and Pipeline Optimization",
+  "summary": "This tutorial covers building a unified MMA abstraction layer across Hopper and Blackwell, implementing pipelined matrix multiplication, persistent kernel design with tile schedulers, and outer-loop pipeline optimization using the STEALB buffer-borrowing technique.",
+  "sections": [
+   {
+    "heading": "1. Unified MMA Abstraction Layer",
+    "anchor": "1-unified-mma-abstraction-layer",
+    "gist": "To support both Hopper (WGMMA) and Blackwell (tcgen05_mma) with a single kernel, a unified abstraction is built using Gluon's `@aggregate` decorator."
+   },
+   {
+    "heading": "2. Pipelined Matrix Multiplication",
+    "anchor": "2-pipelined-matrix-multiplication",
+    "gist": "The kernel pipelines both loads and MMA operations using multiple buffers."
+   },
+   {
+    "heading": "3. Persistent Kernel Implementation",
+    "anchor": "3-persistent-kernel-implementation",
+    "gist": "A persistent kernel wraps the computation in an outer loop, processing multiple tiles per program."
+   },
+   {
+    "heading": "4. Grouped Tile Scheduler",
+    "anchor": "4-grouped-tile-scheduler",
+    "gist": "To improve L2 locality, tiles are grouped along the M dimension so that adjacent tiles share B matrix data in cache:"
+   },
+   {
+    "heading": "5. Outer-Loop Pipeline Optimization",
+    "anchor": "5-outer-loop-pipeline-optimization",
+    "gist": "By deferring the TMA store wait, the current tile's store operation overlaps with the next tile's computation."
+   },
+   {
+    "heading": "6. Key Observations",
+    "anchor": "6-key-observations",
+    "gist": "Performance gaps relative to cuBLAS stem from:"
+   },
+   {
+    "heading": "7. Summary",
+    "anchor": "7-summary",
+    "gist": "- Persistent kernels replace GPU-native block scheduling with static scheduling, enabling better resource coordination and computation overlap across tiles at the cost of dynamic load balancing - Grouped tile scheduling improves L2 cache l…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n@aggregate\nclass WGMMA:\n    acc: Union[warpgroup_mma_accumulator, gl.tensor]\n    use_acc: gl.tensor\n\n    @gluon.jit\n    def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):\n        mma_layout: gl.constexpr = t5.pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)\n        acc = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)\n        return WGMMA(acc, gl.to_tensor(False))\n\n    @gluon.jit\n    def issue_async_mma(self, a, b):\n        acc = warpgroup_mma(a, b, self.acc, is_async=True, use_acc=self.use_acc)\n        return WGMMA(acc, gl.to_tensor(True))\n\n    @gluon.jit\n    def wait_num_outstanding(self, num_outstanding: gl.constexpr):\n        acc = warpgroup_mma_wait(num_outstanding, (self.acc, ))\n        return WGMMA(acc, self.use_acc)\n\n    @gluon.jit\n    def take_result(self):\n        return self.acc, WGMMA(self.acc, gl.to_tensor(False))\n```\n\n```python\n@aggregate\nclass MMAv5:\n    use_acc: gl.tensor\n    acc_tmem: tensor_memory_descriptor\n    bar: gl.shared_memory_descriptor\n    counter: gl.tensor\n    reg_layout: gl.constexpr\n\n    @gluon.jit\n    def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):\n        layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)\n        acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)\n        bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())\n        mbarrier.init(bar, count=1)\n        reg_layout: gl.constexpr = get_tmem_reg_layout(gl.float32, (BLOCK_M, BLOCK_N), layout, num_warps)\n        return MMAv5(gl.to_tensor(False), acc_tmem, bar, gl.to_tensor(0), reg_layout)\n\n    @gluon.jit\n    def issue_async_mma(self, a, b):\n        tcgen05_mma(a, b, self.acc_tmem, use_acc=self.use_acc)\n        tcgen05_commit(self.bar)\n        return MMAv5(gl.to_tensor(True), self.acc_tmem, self.bar, self.counter + 1, self.reg_layout)\n\n    @gluon.jit\n    def wait_num_outstanding(self, num_outstanding: gl.constexpr):\n        mbarrier.wait(self.bar, (self.counter - 1 - num_outstanding) & 1)\n        return self\n\n    @gluon.jit\n    def take_result(self):\n        next = MMAv5(gl.to_tensor(False), self.acc_tmem, self.bar, self.counter, self.reg_layout)\n        return self.acc_tmem.load(self.reg_layout), next\n```\n\n```python\n@gluon.jit\ndef issue_loads(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,\n                num_buffers: gl.constexpr, pred=True):\n    index = producer % num_buffers\n    producer += 1\n    bar = bars.index(index)\n    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)\n    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)\n    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(index), pred)\n    return producer\n\n@gluon.jit\ndef issue_mma(consumer, mma, bars, a_bufs, b_bufs, num_buffers: gl.constexpr):\n    index = consumer % num_buffers\n    phase = consumer // num_buffers & 1\n    consumer += 1\n    mbarrier.wait(bars.index(index), phase)\n    mma = mma.wait_num_outstanding(0)\n    mma = mma.issue_async_mma(a_bufs.index(index), b_bufs.index(index))\n    return consumer, mma\n```\n\n```python\n@aggregate\nclass PersistentTileScheduler:\n    pid_start: gl.tensor\n    pid_end: gl.tensor\n    num_pid_m: gl.tensor\n\n    @gluon.jit\n    def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):\n        kernel_id = gl.program_id(axis=0)\n        num_kernels = gl.num_programs(axis=0)\n        num_pid_m = gl.cdiv(M, BLOCK_M)\n        num_pid_n = gl.cdiv(N, BLOCK_N)\n        num_pid = num_pid_m * num_pid_n\n        pid_per_kernel = gl.cdiv(num_pid, num_kernels)\n        pid_start = kernel_id * pid_per_kernel\n        pid_end = min(pid_start + pid_per_kernel, num_pid)\n        return PersistentTileScheduler(pid_start, pid_end, num_pid_m)\n\n    @gluon.jit\n    def get_num_tiles(self):\n        return self.pid_end - self.pid_start\n\n    @gluon.jit\n    def get_tile(self, idx):\n        pid = self.pid_start + idx\n        pid_m = pid % self.num_pid_m\n        pid_n = pid // self.num_pid_m\n        return pid_m, pid_n\n```\n\n```python\ndef GroupedPersistentTileScheduler(GROUP_SIZE_M):\n    GROUP_SIZE_M = gl.constexpr(GROUP_SIZE_M)\n\n    @aggregate\n    class GroupedPersistentTileSchedulerImpl:\n        start_pid: gl.tensor\n        num_pid_m: gl.tensor\n        num_pid_in_group: gl.tensor\n        num_pid: gl.tensor\n\n        @gluon.jit\n        def initialize(M, N, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr):\n            start_pid = gl.program_id(axis=0)\n            num_pid_m = gl.cdiv(M, BLOCK_M)\n            num_pid_n = gl.cdiv(N, BLOCK_N)\n            num_pid_in_group = GROUP_SIZE_M * num_pid_n\n            num_pid = num_pid_m * num_pid_n\n            return GroupedPersistentTileSchedulerImpl(start_pid, num_pid_m, num_pid_in_group, num_pid)\n\n        @gluon.jit\n        def get_tile(self, idx):\n            tile_id = self.start_pid + idx * gl.num_programs(axis=0)\n            group_id = tile_id // self.num_pid_in_group\n            first_pid_m = group_id * GROUP_SIZE_M\n            group_size_m = min(self.num_pid_m - first_pid_m, GROUP_SIZE_M)\n            pid_m = first_pid_m + (tile_id % group_size_m)\n            pid_n = (tile_id % self.num_pid_in_group) // group_size_m\n            return pid_m, pid_n\n\n    return GroupedPersistentTileSchedulerImpl\n```\n\n```python\n@gluon.jit\ndef issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs,\n                       stealb: gl.constexpr, num_buffers: gl.constexpr, pred=True):\n    index = producer % num_buffers          # A uses modulo num_buffers\n    b_index = producer % (num_buffers + stealb)  # B uses modulo (num_buffers + 1)\n    producer += 1\n    bar = bars.index(index)\n    mbarrier.expect(bar, a_desc.block_type.nbytes + b_desc.block_type.nbytes, pred=pred)\n    tma.async_copy_global_to_shared(a_desc, [off_m, k], bar, a_bufs.index(index), pred)\n    tma.async_copy_global_to_shared(b_desc, [k, off_n], bar, b_bufs.index(b_index), pred)\n    return producer\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/gluon/gluon-07-persistent-kernel-pipeline.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

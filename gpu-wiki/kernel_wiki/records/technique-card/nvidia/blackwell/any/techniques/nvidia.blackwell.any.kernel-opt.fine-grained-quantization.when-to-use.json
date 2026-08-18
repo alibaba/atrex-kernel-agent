@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.when-to-use",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#when-to-use|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "quantization",
+   "when-to-use"
+  ],
+  "triggers": [
+   "the 'When to Use' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): When to Use",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- When to Use"
+  },
+  "technique": "When to Use",
+  "what": "- **FP8 training**: Use tile-wise 1x128 for activations and block-wise 128x128 for weights (DeepGEMM pattern). This is the validated approach for training 671B+ parameter models. - **FP4 inference on Blackwell**: Use NVFP4 with E4M3 block scales (block size 16) for highest precision, or MXFP4 with UE8M0 scales (block size 32) for native hardware acceleration. - **Hopper FP8 inference**: Use CUDA core promotion with Nc=128 interval to maintain precision despite limited TC accumulation.",
+  "when": "- **FP8 training**: Use tile-wise 1x128 for activations and block-wise 128x128 for weights (DeepGEMM pattern).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

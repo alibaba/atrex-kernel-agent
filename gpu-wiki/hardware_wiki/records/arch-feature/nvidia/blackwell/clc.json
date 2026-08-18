@@ -1,0 +1,41 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.clc",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "clc",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "Cluster Launch Control (CLC) is a Blackwell hardware mechanism for **dynamic tile scheduling** in persistent kernels. It replaces the static grid scheduling model where the CUDA runtime pre-assigns tile coordinates to CTAs at launch time.",
+  "why_it_matters": "With CLC, persistent CTAs dynamically request work from a hardware queue, enabling:",
+  "related_instructions": [
+   "clusterlaunchcontrol.try_acquire",
+   "clusterlaunchcontrol.try_cancel",
+   "clusterlaunchcontrol.try_cancel.async.shared",
+   "tcgen05",
+   "tcgen05.mma.cta_group",
+   "tcgen05.mma.fence"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Cluster Launch Control (CLC)",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/clc.md"
+   }
+  ]
+ }
+}

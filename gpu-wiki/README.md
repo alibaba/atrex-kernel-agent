@@ -1,131 +1,283 @@
 # GPU Wiki
 
-GPU Wiki is the curated knowledge and reference-code base for GPU kernel
-development, optimization, profiling, and cross-platform migration.
+GPU Wiki is the structured knowledge system used by ATREX Kernel Agent (AKA).
+It turns optimization traces and agent sessions into validated JSON knowledge,
+serves that knowledge through a lightweight query path, and mines completed AKA
+optimization traces for the next generation of reusable knowledge.
 
-The documentation is **architecture first**:
+![GPU Wiki knowledge flywheel: skills distill traces into structured knowledge, AKA queries it for optimization, and complete traces feed new knowledge back into the Wiki.](gpu-wiki-knowledge-flywheel.png)
+
+## The knowledge flywheel
+
+The diagram is the operating model of this directory:
 
 ```text
-docs/<vendor>/<architecture>/<role>/<dsl-or-topic>/...
+optimization traces + agent sessions
+                ↓
+deterministic extraction → semantic distillation → Wiki Gate
+                ↓
+       structured GPU Wiki records
+                ↓
+natural-language query → deterministic retrieval → AKA optimization
+                ↓
+          complete optimization trace
+                └──────────────→ mined again as new candidate knowledge
 ```
 
-Vendor-general knowledge lives in `<vendor>/common/`. Product-only knowledge
-uses an overlay below its architecture, such as `nvidia/blackwell/b200/` or
-`amd/cdna3/mi308x/`. See [the documentation index](docs/README.md) for the full
-tree.
+The loop is intentionally asymmetric: retrieval is lightweight and read-only;
+knowledge admission is slower and guarded. A completed optimization does not
+write directly into the Wiki. It becomes input to the mining skills, and only a
+candidate that passes the Wiki Gate can become a record.
 
-## Recommended workflow
+## 1. Inputs become candidate knowledge
 
-1. Identify the target GPU or architecture.
-2. Run `scripts/query.py --arch <target>` to establish the safe search scope.
-3. Optionally narrow by role, DSL, symptom, kernel type, or operator.
-4. Read concise `kernel-opt/` cards first, then detailed `ref-docs/` and
-   `pitfalls/` evidence.
-5. Use `reference-kernels/` for concrete implementation patterns and upstream
-   sources or vendor documentation for API/ISA ground truth.
+The flywheel accepts two primary inputs:
 
-Examples:
+- **Optimization traces**: the version history of a kernel, including attempts,
+  failures, measurements, and the final result.
+- **Agent sessions**: the reasoning and tool-use history that explains why an
+  optimization path was selected, rejected, or revised.
+
+The Skills Workshop in the diagram represents three distinct responsibilities:
+
+1. **Extract** — deterministic scripts reconstruct versions, measurements,
+   events, and source relationships without interpreting them.
+2. **Distill** — an agent turns the extracted packet into a self-contained
+   candidate: a technique, failure mode, symptom, or reference.
+3. **Validate** — `wiki-gate` checks schema, scope, provenance, relations, and
+   conflicts before admitting anything.
+
+| Skill | Input | Output |
+|---|---|---|
+| [`opt-trace-mining`](skills/opt-trace-mining/) | Git history of successive kernel versions | Candidate optimization experience |
+| [`session-trace-mining`](skills/session-trace-mining/) | AI coding-agent session transcripts | Candidate agent-discovered knowledge |
+| [`wiki-gate`](skills/wiki-gate/) | One candidate record | Insert, confirm, conflict, or reject decision |
+
+`wiki-gate` is the only writer. Scripts establish what happened, the distillation
+agent explains what can be reused, and the gate prevents unsupported conclusions
+from entering the store.
+
+## 2. Validated knowledge enters two isolated stores
+
+GPU Wiki separates benchmark-falsifiable experience from vendor-defined facts.
+The boundary question is: **can a measurement prove this statement wrong?**
+
+| | `kernel_wiki` — experience | `hardware_wiki` — facts |
+|---|---|---|
+| Contains | Techniques, failures, symptoms, reference knowledge | Products, capacities, architecture features, ISA |
+| Record types | `technique-card`, `anti-strategy`, `symptom-card`, `doc` | `spec-sheet`, `arch-feature`, `instruction` |
+| Retrieval | Ranked and scope-aware | Exact and fail-loud |
+| Ranking | Engine-side `worth` | None |
+| Zero matches | Labelled fallback sample within scope | Explicit error or missing-data procedure |
+
+The stores are isolated because their failure modes differ. Returning an
+unrelated optimization example can still be useful when clearly labelled;
+returning an unrelated peak-FLOPS number would silently corrupt every utilization
+calculation derived from it.
+
+```text
+gpu-wiki/
+├── kernel_wiki/
+│   └── records/       <type>/<vendor>/<arch>/<dsl>/<family>/<id>.json + index.json
+├── hardware_wiki/
+│   └── records/       <type>/<vendor>/<arch>/<slug>.json + index.json
+├── schema/
+│   ├── kernel/        clean-1.3 contract and generated template
+│   └── hardware/      hw-1.0 contract
+├── skills/            trace mining, session mining, and admission gate
+├── tools/             query, validation, indexing, migration, and ranking tools
+└── query_intent.json  typed bridge-agent output contract
+```
+
+The distributed knowledge base is JSON-only. Seed records retain historical
+source paths for provenance, but the source Markdown corpus is not distributed
+in this repository. The builders remain available to replay that migration
+against a compatible external checkout.
+
+## 3. AKA describes the optimization problem
+
+The default entry point is natural language. AKA should describe the real
+optimization context instead of guessing Wiki flags:
+
+- true public GPU product, such as `B200`, `B300`, `H20`, or `MI308X`;
+- runtime architecture exactly as reported, such as `sm_100` or `gfx942`;
+- operator, framework, shapes, and dtypes;
+- measured symptoms with numbers, separated from unverified assumptions;
+- previous attempts, failures, and relevant error text;
+- the decision or stopping condition the retrieved knowledge should inform.
 
 ```bash
-# Hardware facts: section is optional but useful for narrowing.
-python3 gpu-wiki/scripts/query.py --arch a100 --area docs --section hardware-specs
-python3 gpu-wiki/scripts/query.py --arch h20 --area docs --section hardware-specs
-python3 gpu-wiki/scripts/query.py --arch pro5000 --area docs --section hardware-specs
-
-# Search an operator within an isolated architecture/DSL scope.
-python3 gpu-wiki/scripts/query.py "gdn" --arch sm120 --dsl cutedsl
-python3 gpu-wiki/scripts/query.py "flash attention" --arch mi308x --dsl flydsl
-
-# Optional diagnostic filters.
-python3 gpu-wiki/scripts/query.py --arch b200 \
-  --section kernel-opt --symptom pipeline-stalls
-
-# Typo-tolerant lookup after architecture/DSL scope isolation.
-python3 gpu-wiki/scripts/query.py rms_nrom --arch h20 --fuzzy
-python3 gpu-wiki/scripts/query.py flash_attenion --arch mi308x --dsl flydsl --fuzzy
-
-# Search only concrete source implementations (docs + reference kernels are
-# searched together by default when --area is omitted).
-python3 gpu-wiki/scripts/query.py gemm --arch h20 --area reference-kernels
-
-# Restrict references to an explicitly classified usability status.
-python3 gpu-wiki/scripts/query.py gemm --arch sm120 \
-  --area reference-kernels --status diagnostic-archive
-
-# Restrict by upstream source or source role. Test/build/package files are
-# omitted by default; add --include-auxiliary when they are specifically needed.
-python3 gpu-wiki/scripts/query.py gemm --arch b300 --source cutlass --kind kernel
-
-# A copied source filename or relative path works without fuzzy mode.
-python3 gpu-wiki/scripts/query.py dense_blockscaled_gemm_sm103.py \
-  --arch sm103 --area reference-kernels
+python3 gpu-wiki/tools/query_nl.py \
+  "Target B200, runtime sm_100. A BF16 Triton fused RMSNorm is memory-bound; \
+   profiling shows 75% of DRAM peak. Which fusion and launch strategies apply, \
+   and what hardware facts should constrain the decision?" \
+  --brief --max-records 6
 ```
 
-`--section`, `--symptom`, `--kernel-type`, and `--operator` are optional. They
-reduce results; they are not required for normal keyword or architecture
-search. `--status` selects reference kernels with an explicit usability status
-including the honest `unclassified` fallback. `--source` and `--kind` narrow by
-upstream project and source role. Unknown filter values fail closed.
+Do not substitute a scheduler label for the product name. Product normalization
+only repairs formatting differences such as case, separators, or vendor wrappers;
+it does not translate one hardware identity into another.
 
-Normal keyword queries treat whitespace and filename/path separators (`_`,
-`-`, `.`, `/`) as equivalent term boundaries. `--fuzzy` applies
-`SequenceMatcher` plus trigram similarity to normalized titles, paths, and
-summaries for actual spelling uncertainty. Architecture, vendor, DSL, and
-section filters remain hard boundaries and are applied first. Adjust
-false-positive tolerance with `--fuzzy-threshold` (default `0.78`). Fuzzy
-matching does not make architecture-specific advice portable.
+## 4. The bridge stays small; scripts perform retrieval
 
-By default, keyword searches cover curated `docs/` pages, source files under
-`reference-kernels/`, and a small manifest-selected set of substantive
-reference guides. Use `--area docs` or
-`--area reference-kernels` to isolate one area. A documentation-role filter
-such as `--section kernel-opt` selects `docs/` pages because reference kernels
-do not have a documentation role; omit `--section` or query the reference area
-separately when concrete implementations are needed.
+`query_bridge_agent` has one job: convert prose into typed semantic intent. It
+cannot query either Wiki store, read records, rank results, or write files.
 
-Reference-kernel scope comes from
-[`manifest.json`](manifest.json) first,
-with path inference retained as a fallback for files not yet declared. Search
-results show an explicit status when one is available.
+After the bridge returns plain JSON, deterministic code owns the rest:
 
-The same manifest also provides the architecture/vendor scope for `docs/`,
-including exact cross-architecture overrides for selected common pages.
-`--arch blackwell` is a family query covering B200 and B300; use `--arch sm100`
-for the exact SM100/B200 scope and `--arch sm103` for B300.
+1. strictly validate the intent;
+2. normalize product, architecture, DSL, operator, and symptom vocabulary;
+3. construct isolated kernel and hardware lookups;
+4. widen safely without dropping the architecture boundary;
+5. execute the store-specific query tools;
+6. deduplicate, project, budget, and return the records.
 
-Accepted card aliases include:
+The Claude success path uses one tool-free bridge call. Invalid bridge JSON gets
+at most one fresh repair attempt. `claude` is the default agent CLI; `codex` and
+`qodercli` are also supported.
 
-| Query input | Canonical scope |
+The consuming agent receives only two top-level fields:
+
+```json
+{
+  "records": {
+    "stable.record.id": {
+      "store": "gpu_wiki",
+      "source": "kernel_wiki",
+      "type": "technique-card",
+      "applies_to": {},
+      "match": {},
+      "payload": {}
+    }
+  },
+  "notes": []
+}
+```
+
+Record IDs are stable mapping keys, and every payload remains an independent JSON
+value. Evidence, retrieval metadata, rank decomposition, bridge commentary, and
+other engine-side fields are deliberately not served, so they cannot anchor AKA's
+judgement.
+
+### Direct structured queries
+
+Use the lower-level tools when the address is already known or a script needs a
+deterministic interface.
+
+```bash
+# Ranked kernel experience. Architecture is a hard isolation boundary.
+python3 gpu-wiki/tools/query_wiki.py "rmsnorm" \
+  --arch sm_100 --dsl triton --emit-json --brief --limit 5
+python3 gpu-wiki/tools/query_wiki.py \
+  --symptom register-pressure --arch blackwell --brief --limit 2
+python3 gpu-wiki/tools/query_wiki.py --arch sm_100 --dsl triton --coverage
+
+# Exact hardware facts. Unknown addresses fail loudly and never return samples.
+python3 gpu-wiki/tools/query_hardware.py \
+  --product b200 --field peak_compute.bf16.dense
+python3 gpu-wiki/tools/query_hardware.py --product b300 --vs b200
+python3 gpu-wiki/tools/query_hardware.py --instruction tcgen05.mma
+python3 gpu-wiki/tools/query_hardware.py --feature tma
+```
+
+For `kernel_wiki`, a zero-text-match fallback is explicitly labelled and stays
+inside the resolved scope. Do not remove `--arch` merely to obtain results. For
+`hardware_wiki`, every number carries an evidence class; provisional
+`architecture-analysis` values should be verified with runtime attributes or the
+vendor tool before launch geometry is hard-coded.
+
+## 5. AKA optimizes with traceable Wiki references
+
+AKA reads the isolated payloads and decides whether any record materially informs
+the next optimization step. Retrieval alone is not adoption.
+
+When a record changes an optimization decision, AKA preserves its stable record ID
+with that iteration's memory. This creates a traceable link between:
+
+- the Wiki knowledge that was actually used;
+- the code version produced from it;
+- correctness and performance measurements;
+- the decision to keep, revise, or reject the attempt.
+
+Rejected records are not recorded as adopted knowledge, and payload text is not
+copied into the provenance field. The stable ID is sufficient to reconnect the
+optimization trace to the exact structured record.
+
+## 6. The complete trace closes the loop
+
+After optimization finishes, the complete trace contains more than the winning
+kernel. It preserves:
+
+- every significant version and code change;
+- successful, neutral, and regressed attempts;
+- correctness gates and performance measurements;
+- Wiki record IDs that informed specific decisions;
+- new insights the agent derived while reconciling knowledge with measurements.
+
+That complete trace returns to `opt-trace-mining` and
+`session-trace-mining`. Deterministic scripts reconstruct the evidence, an agent
+distills reusable lessons, and `wiki-gate` decides whether each candidate is safe
+to admit. In this way AKA can bootstrap new knowledge from real optimization work
+without allowing the optimization agent to write unverified conclusions directly
+into the Wiki.
+
+The next AKA run can then retrieve the validated lesson, completing the flywheel:
+
+```text
+GPU Wiki → query → optimize → complete trace → mine → validate → GPU Wiki
+```
+
+## Validation and maintenance
+
+Run all integrity gates after changing records, indexes, schemas, or retrieval
+tools:
+
+```bash
+# Record integrity.
+python3 gpu-wiki/tools/check_kernel_wiki.py --full
+python3 gpu-wiki/tools/check_hardware_wiki.py
+
+# Generated artifacts and indexes.
+python3 gpu-wiki/tools/build_hardware_index.py --check
+python3 gpu-wiki/schema/kernel/render_template.py --check
+
+# Retrieval and bridge contracts.
+python3 -m unittest discover -s gpu-wiki/tools
+```
+
+The gates cover schema conformance, deterministic IDs, index consistency,
+anonymization, payload isolation, relation resolution, self-containment,
+provenance, fact/advice separation, and fabrication checks.
+
+### Migration replay
+
+The seed builders are retained for provenance and reproducibility. They require a
+compatible external Markdown checkout:
+
+```bash
+python3 gpu-wiki/tools/build_kernel_records.py \
+  --docs-root /path/to/docs --sample
+python3 gpu-wiki/tools/build_hardware_records.py \
+  --docs-root /path/to/docs --sample
+```
+
+Full `--all --clean` rebuilds overwrite generated record trees. Run them only in a
+disposable or clean checkout and review the complete diff.
+
+## Tool map
+
+| Flywheel stage | Main tools |
 |---|---|
-| A100 / SM80 | NVIDIA Ampere |
-| H20 / H100 / H200 / SM90 | NVIDIA Hopper |
-| B200 / GB200 | NVIDIA Blackwell product overlay |
-| B300 / GB300 / SM103 | NVIDIA Blackwell Ultra |
-| RTX PRO 5000 / Pro5000 / SM120 | NVIDIA Blackwell GeForce/workstation |
-| MI300X / MI308X / gfx942 | AMD CDNA3 and product overlays |
-| MI355X / gfx950 | AMD CDNA4 |
+| Extract and distill | `skills/opt-trace-mining/`, `skills/session-trace-mining/` |
+| Validate and admit | `skills/wiki-gate/` |
+| Natural-language query | `tools/query_nl.py`, `skills/query_bridge_agent/` |
+| Kernel retrieval | `tools/query_wiki.py` |
+| Hardware lookup | `tools/query_hardware.py` |
+| Store validation | `tools/check_kernel_wiki.py`, `tools/check_hardware_wiki.py` |
+| Index maintenance | `tools/reindex_kernel_wiki.py`, `tools/build_hardware_index.py` |
+| Ranking maintenance | `tools/wiki_score.py`, `tools/rebuild_importance.py` |
+| Historical migration | `tools/build_kernel_records.py`, `tools/build_hardware_records.py` |
 
-## Hardware fact entry points
-
-- [A100 / Ampere](docs/nvidia/ampere/hardware-specs/hardware_specs_ampere.md)
-- [H20, H100, H200 / Hopper](docs/nvidia/hopper/hardware-specs/hardware_specs_hopper.md)
-- [B200](docs/nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md)
-- [B300](docs/nvidia/blackwell-ultra/hardware-specs/hardware_specs_b300.md)
-- [RTX PRO 5000 / SM120](docs/nvidia/blackwell-geforce/hardware-specs/hardware_specs_sm120.md)
-- [MI300X](docs/amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md)
-- [MI308X](docs/amd/cdna3/mi308x/hardware-specs/hardware_specs_mi308x.md)
-- [MI355X](docs/amd/cdna4/hardware-specs/hardware_specs_mi355x.md)
-
-## Repository areas
-
-- [`docs/`](docs/): curated architecture-scoped knowledge.
-- [`reference-kernels/`](reference-kernels/): runnable or illustrative kernels,
-  already organized by hardware architecture and framework.
-- [`manifest.json`](manifest.json): explicit search metadata and exact-file
-  overrides for indexed repository areas.
-- `reference-projects/`: optional local upstream source snapshots.
-- `3rdparty/`: supplementary external knowledge, used after local scoped search.
-- `scripts/`: query, consistency, and maintenance checks.
-
-The source wiki does not define downstream task-runtime filenames or submission
-protocols. Examples must be adapted to the consuming benchmark harness.
+For the full record contracts, see
+[`schema/kernel/README.md`](schema/kernel/README.md) and
+[`schema/hardware/README.md`](schema/hardware/README.md).

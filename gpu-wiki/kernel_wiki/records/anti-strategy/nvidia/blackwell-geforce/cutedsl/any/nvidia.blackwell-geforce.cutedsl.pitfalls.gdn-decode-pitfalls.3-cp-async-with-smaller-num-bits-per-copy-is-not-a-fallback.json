@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-decode-pitfalls.3-cp-async-with-smaller-num-bits-per-copy-is-not-a-fallback",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-decode-pitfalls#3-cp-async-with-smaller-num-bits-per-copy-is-not-a-fallback|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '3. cp.async with smaller `num_bits_per_copy` is NOT a fallback' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 3. cp.async with smaller `num_bits_per_copy` is NOT a fallback",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL GDN Decode on sm_120 — Pitfalls -- 3. cp.async with smaller `num_bits_per_copy` is NOT a fallback"
+  },
+  "attempted": "When 128b alignment fails, try `num_bits_per_copy=64` (8B vec) instead.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Either fix the alignment (Pitfall 2) or change the layout so each thread's V slice is exactly 4 fp32 / 8 bf16 contiguous. Don't try smaller vec.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "cp.async with `LoadCacheMode.GLOBAL` only supports the 128-bit (16-byte) form. There is no 8-byte cp.async.cg variant."
+  },
+  "root_cause": "cp.async with `LoadCacheMode.GLOBAL` only supports the 128-bit (16-byte) form. There is no 8-byte cp.async.cg variant.",
+  "implementation": {
+   "snippet": "```\n'cute.copy' op '!cute_nvgpu.atom.simt_async_copy<f32, cache = global, 64 b>'\n'cp_size' only supports (128), but got 64.\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

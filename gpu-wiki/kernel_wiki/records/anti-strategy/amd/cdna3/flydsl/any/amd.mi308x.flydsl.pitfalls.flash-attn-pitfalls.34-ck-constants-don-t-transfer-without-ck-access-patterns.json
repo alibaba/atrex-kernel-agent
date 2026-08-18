@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.34-ck-constants-don-t-transfer-without-ck-access-patterns",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#34-ck-constants-don-t-transfer-without-ck-access-patterns|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '34. CK constants don't transfer without CK access patterns' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 34. CK constants don't transfer without CK access patterns",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 34. CK constants don't transfer without CK access patterns"
+  },
+  "attempted": "CK FMHA uses `VT_STRIDE = BLOCK_N + 8` and `_QK_PREFETCH_DEPTH = 3`. Copying these into the FlyDSL kernel should close the gap.",
+  "verdict": "performance-ceiling",
+  "lesson": "Never copy stride/depth/padding constants from a reference kernel without also copying the access pattern that makes those constants optimal. Re-derive from first principles using the actual ds_read pattern of your kernel.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "CK's MFMA tile shape produces different ds_read access patterns than FlyDSL's. CK's depth-3 wins because their kernel doesn't have mask VALU on the critical path competing for the same VALU slots as extra prefetch scheduling. Bank-conflict arithmetic (gcd with bank count) depends on the access pattern, not just the stride constant. Constants that are optimal in one pipeline topology can be counterproductive in another."
+  },
+  "observed": "VT_STRIDE+8 caused 5x worse bank conflicts and +0.65% regression (trap #1, confirmed on bit-packed mask shape). Prefetch depth 3 caused -0.23% regression vs depth 2.",
+  "root_cause": "CK's MFMA tile shape produces different ds_read access patterns than FlyDSL's. CK's depth-3 wins because their kernel doesn't have mask VALU on the critical path competing for the same VALU slots as extra prefetch scheduling. Bank-conflict arithmetic (gcd with bank count) depends on the access pattern, not just the stride constant. Constants that are optimal in one pipeline topology can be counterproductive in another."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

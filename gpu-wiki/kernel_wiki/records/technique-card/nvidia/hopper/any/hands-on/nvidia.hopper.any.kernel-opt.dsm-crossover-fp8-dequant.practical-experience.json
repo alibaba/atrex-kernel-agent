@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.dsm-crossover-fp8-dequant.practical-experience",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|quantization|dsm-crossover-fp8-dequant#practical-experience|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "practical-experience",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'Practical Experience' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Practical Experience",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "DSM Crossover FP8 Dequantization -- Practical Experience"
+  },
+  "technique": "Practical Experience",
+  "what": "- DSM crossover doubles dequantization throughput (2 CTAs dequantize in parallel), making dequantization no longer the bottleneck - `st.async` is key: asynchronous writes do not block computation, enabling overlap between dequantization and WGMMA - Cluster Size must be 2 (larger clusters increase scheduling complexity with diminishing returns) - This pattern can be generalized to any \"preprocessing → matrix multiplication\" scenario where preprocessing is the bottleneck",
+  "when": "- DSM crossover doubles dequantization throughput (2 CTAs dequantize in parallel), making dequantization no longer the bottleneck - `st.async` is key: asynchronous writes do not block computation, enabling overlap between dequantization an…",
+  "caveats": [
+   "`st.async` is key: asynchronous writes do not block computation, enabling overlap between dequantization and WGMMA"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/dsm-crossover-fp8-dequant.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

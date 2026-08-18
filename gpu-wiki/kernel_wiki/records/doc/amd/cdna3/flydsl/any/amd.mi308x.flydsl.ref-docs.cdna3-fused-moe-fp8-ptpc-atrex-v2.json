@@ -1,0 +1,159 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-fused-moe-fp8-ptpc-atrex-v2",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|cdna3-fused-moe-fp8-ptpc-atrex-v2|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Fused MoE FP8 PTPC atrex-open v2 on MI308X",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Fused MoE FP8 PTPC atrex-open v2 on MI308X"
+  },
+  "title": "FlyDSL Fused MoE FP8 PTPC atrex-open v2 on MI308X",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Scope",
+    "anchor": "scope",
+    "gist": "This is not a new Roofline analysis and does not introduce new hardware-spec derived targets."
+   },
+   {
+    "heading": "Provenance",
+    "anchor": "provenance",
+    "gist": "The `src/triton/...` provenance path is inherited from the historical repository layout; the archived file is the FlyDSL FP8 source, not an instruction to implement the kernel in Triton."
+   },
+   {
+    "heading": "Archived Validation Context",
+    "anchor": "archived-validation-context",
+    "gist": "The following commands record how this historical reference package was checked when the archive was produced."
+   },
+   {
+    "heading": "Validation Summary",
+    "anchor": "validation-summary",
+    "gist": "Correctness followed the archived atrex-open task16 FP8 PTPC tolerance: `checkAllclose(..., rtol=1e-2, atol=1e-2)` error ratio must remain within the atrex-open v2 correctness threshold, with no NaN and matching output shape."
+   },
+   {
+    "heading": "atrex-open Baseline",
+    "anchor": "atrex-open-baseline",
+    "gist": "Full-pipeline profile from atrex-open v2:"
+   },
+   {
+    "heading": "gpu-wiki Migrated Profile",
+    "anchor": "gpu-wiki-migrated-profile",
+    "gist": "Full-pipeline profile from the standalone gpu-wiki package:"
+   },
+   {
+    "heading": "Parity Gate",
+    "anchor": "parity-gate",
+    "gist": "For each token row:"
+   },
+   {
+    "heading": "Migration Details",
+    "anchor": "migration-details",
+    "gist": "The standalone package keeps the v2 full-pipeline path but changes imports:"
+   },
+   {
+    "heading": "Distinctions From Adjacent Archives",
+    "anchor": "distinctions-from-adjacent-archives",
+    "gist": "Do not compare these rows directly to task66 `target_us` rows:"
+   },
+   {
+    "heading": "M=1 Event Jitter",
+    "anchor": "m-1-event-jitter",
+    "gist": "M=1 has a tiny stage1 launch and can show event-average jitter."
+   },
+   {
+    "heading": "Review Checklist",
+    "anchor": "review-checklist",
+    "gist": "- Keep `moe_fp8_ptpc_mi308x/` as the task66 checkpoint package."
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nhardware: AMD MI308X / CDNA3 / gfx942\nframework: FlyDSL\nkernel: FP8 PTPC fused_moe v2 full pipeline\nshape: E=512, topk=10, model_dim=4096, inter_dim=256\ntokens: 1/16/32/64/128/256/512\ndtype: FP8 GEMM inputs, BF16 stage/output activations, F32 scales, I32 metadata\n```\n\n```text\natrex-open path: $ATREX_OPEN_ROOT\nbranch: feature/fused-moe-ptpc\nHEAD: c917d1e12f7a8eaf49e3e6f0453dc025173a5239\ndirty tracked source: src/triton/fused_moe/fused_moe_flydsl_fp8.py\ngpu-wiki path: current gpu-wiki checkout root\ngpu-wiki branch: sumu/fused-moe-308x\ngpu-wiki base HEAD before task11: a61ec34c28d20eaed97c521e83c5dab69967ebef\n```\n\n```bash\ncd \"$ATREX_OPEN_ROOT/op_test\"\nPYTHONPATH=\"$ATREX_OPEN_ROOT/python:$ATREX_OPEN_ROOT\" \\\n${PYTHON:-python3} -m pytest -sv \\\n  test_fused_moe.py::test_profile_fp8_ptpc_flydsl_vs_aiter\n```\n\n```bash\ncd reference-kernels/amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x_atrex_v2\nPYTHONPATH=\"..:$AITER_BASE\" \\\n${PYTHON:-python3} -m pytest -sv \\\n  test_fused_moe_atrex_v2.py::test_fused_moe_flydsl_v2_correctness\n```\n\n```bash\ncd reference-kernels/amd/cdna3/flydsl/FlyDSL/moe_fp8_ptpc_mi308x_atrex_v2\nPYTHONPATH=\"..:$AITER_BASE\" \\\n${PYTHON:-python3} -m pytest -sv \\\n  test_fused_moe_atrex_v2.py::test_profile_fp8_ptpc_flydsl_v2_vs_aiter\n```\n\n```text\nproj/proj_011_gpu_wiki_kernel_archive/assets/task_11_archive_atrex_open_flydsl_v2_perf_parity/atrex_open_baseline_profile.log\nproj/proj_011_gpu_wiki_kernel_archive/assets/task_11_archive_atrex_open_flydsl_v2_perf_parity/gpu_wiki_correctness.log\nproj/proj_011_gpu_wiki_kernel_archive/assets/task_11_archive_atrex_open_flydsl_v2_perf_parity/gpu_wiki_profile.log\n```\n\n```text\natrex-open baseline: 7 passed in 13.26s\ngpu-wiki correctness: 7 passed in 8.08s\ngpu-wiki profile parity: 7 passed in 7.32s\n```\n\n```text\ne2e_avg <= atrex_open_e2e_avg * 1.03 + 5us\nstage1 <= atrex_open_stage1 * 1.03 + slack\nstage2 <= atrex_open_stage2 * 1.03 + slack\nslack = 6us if the atrex-open stage baseline is below 20us, otherwise 2us\n```\n\n```text\nno profiler-visible Memcpy DtoD / DtoH / HtoD\nother == 0.0\nrouting <= AITER routing * 1.15 + 2us\n```\n\n```python\nfrom aiter import ActivationType\nfrom aiter.fused_moe import moe_sorting\nfrom . import moe_kernels as flydsl_v2_kernels\n```\n\n```python\nfrom aiter.utility import dtypes\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-fp8-ptpc-atrex-v2.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

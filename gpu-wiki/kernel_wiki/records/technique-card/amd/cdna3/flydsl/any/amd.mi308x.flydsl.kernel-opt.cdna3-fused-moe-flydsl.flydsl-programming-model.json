@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.kernel-opt.cdna3-fused-moe-flydsl.flydsl-programming-model",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|cdna3-fused-moe-flydsl#flydsl-programming-model|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "flydsl-programming-model",
+   "moe"
+  ],
+  "triggers": [
+   "the 'FlyDSL Programming Model' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): FlyDSL Programming Model",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Fused MoE Optimization (FlyDSL on MI308X) -- FlyDSL Programming Model"
+  },
+  "technique": "FlyDSL Programming Model",
+  "what": "FlyDSL is based on the MLIR compilation stackNord, using FLIR (Flexible Layout IR) — a layout algebra system inspired by CuTe:",
+  "when": "FlyDSL is based on the MLIR compilation stackNord, using FLIR (Flexible Layout IR) — a layout algebra system inspired by CuTe:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/flydsl/cdna3-fused-moe-flydsl.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

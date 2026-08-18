@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.18-k-v-lds-sharing-with-extra-barriers-regresses-30",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#18-k-v-lds-sharing-with-extra-barriers-regresses-30|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '18. K/V LDS sharing with extra barriers regresses 30%' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 18. K/V LDS sharing with extra barriers regresses 30%",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 18. K/V LDS sharing with extra barriers regresses 30%"
+  },
+  "attempted": "K and V each occupy ~8.4 KB of LDS (33 KB total per WG at K_PAD=4). The CU has 64 KB LDS, so only 1 WG fits. Sharing a single LDS region for both K and V would halve the LDS footprint to ~17 KB, allowing 2 WGs per CU (4 waves/SIMD) and doubling occupancy. \"That's an easy 2× occupancy win.\"",
+  "verdict": "performance-ceiling",
+  "lesson": "Higher occupancy is NOT automatically better. Extra barriers have a fixed cost per iteration. If the existing occupancy already fills pipeline bubbles, the barriers are pure overhead. Measure before sharing LDS regions. (**Trap 50 resolves this**: SHARE_KV_LDS works when combined with `waves_per_eu=4` + only 1 barrier + `K_INTERBLOCK=0`.)",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Sharing K/V LDS requires 2 additional `s_barrier` synchronizations per KV block iteration — one before loading V (to ensure K GEMM is complete) and one before loading the next K (to ensure V is consumed). At 2 waves/SIMD, the MFMA pipeline is already kept busy enough that the extra barriers stall the pipeline more than the occupancy gain helps. The barriers insert ~200 cycles of dead time per KV iteration that cannot be filled because the wavefront is stalled waiting for all waves in the workgroup."
+  },
+  "observed": "30% slower. The kernel went from 1.683 ms to ~2.2 ms.",
+  "root_cause": "Sharing K/V LDS requires 2 additional `s_barrier` synchronizations per KV block iteration — one before loading V (to ensure K GEMM is complete) and one before loading the next K (to ensure V is consumed). At 2 waves/SIMD, the MFMA pipeline is already kept busy enough that the extra barriers stall the pipeline more than the occupancy gain helps. The barriers insert ~200 cycles of dead time per KV iteration that cannot be filled because the wavefront is stalled waiting for all waves in the workgroup."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

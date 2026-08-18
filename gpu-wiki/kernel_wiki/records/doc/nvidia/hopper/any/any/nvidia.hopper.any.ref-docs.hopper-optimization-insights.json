@@ -1,0 +1,116 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.ref-docs.hopper-optimization-insights",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|ref-docs|hopper-optimization-insights|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Hopper (H20 / H100 / H200 / SM90) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Hopper (H20 / H100 / H200 / SM90): Community Hopper/Blackwell Architecture Optimization Insights",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Community Hopper/Blackwell Architecture Optimization Insights"
+  },
+  "title": "Community Hopper/Blackwell Architecture Optimization Insights",
+  "summary": "A synthesis of kernel optimization insights on Hopper (SM90) and Blackwell (SM100) architectures from Zhihu community. Supplements the hands-on documentation in sm90/hands-on/.",
+  "sections": [
+   {
+    "heading": "1. DeepSeek R1 Optimization on Blackwell B200",
+    "anchor": "1-deepseek-r1-optimization-on-blackwell-b200",
+    "gist": "NVIDIA's official throughput optimization of DeepSeek R1 on Blackwell GPUs increased TPS/GPU from approximately 2,000 to **4,600** (ISL/OSL 1K/2K), achieving a **2.3×** improvement."
+   },
+   {
+    "heading": "2. Architectural Evolution of Software Pipeline / Warp Specialization / Persistent Kernel",
+    "anchor": "2-architectural-evolution-of-software-pipeline-warp-specialization-persistent-kernel",
+    "gist": "table columns: Feature, Pre-Ampere (Sync), Ampere (cp.async), Hopper (TMA / cp.async.bulk)"
+   },
+   {
+    "heading": "3. TMA Practical Experience and Pitfalls",
+    "anchor": "3-tma-practical-experience-and-pitfalls",
+    "gist": "A beginner's real-world case reveals a key lesson: using TMA on elementwise kernels actually **slows them down by 10%-30%**."
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- Hopper SM90 Optimization Practices — 13 practical documents covering TMA, WGMMA, mbarrier pipeline, warp specialization, and more - Blackwell SM100 Optimization Practices"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/ref-docs/hopper-optimization-insights.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

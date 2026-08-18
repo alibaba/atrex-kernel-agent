@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-quantization-block-scaled",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|gemm|cutlass-quantization-block-scaled|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "blackwell-geforce",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "quantization"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS Quantization and Block-Scaled GEMM",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS Quantization and Block-Scaled GEMM"
+  },
+  "title": "CUTLASS Quantization and Block-Scaled GEMM",
+  "summary": "Quantization and block-scaled GEMM implementation in CUTLASS, covering FP8 fast accumulation, SM100/SM120 block-scaled MMA, SM90 blockwise scaling, mixed-input GEMM, runtime data types, and sub-byte type handling. These mechanisms form the core infrastructure for low-precision, high-performance GEMM.",
+  "sections": [
+   {
+    "heading": "1. FP8 Fast Accumulation",
+    "anchor": "1-fp8-fast-accumulation",
+    "gist": "**Source File**: `include/cutlass/gemm/collective/fp8_accumulation.hpp`"
+   },
+   {
+    "heading": "2. Block-Scaled MMA (SM100 / Blackwell)",
+    "anchor": "2-block-scaled-mma-sm100-blackwell",
+    "gist": "**Source File**: `include/cutlass/gemm/collective/sm100_blockscaled_mma_warpspecialized.hpp`"
+   },
+   {
+    "heading": "3. Blockwise Scaling (SM90 / Software FP8)",
+    "anchor": "3-blockwise-scaling-sm90-software-fp8",
+    "gist": "**Source file**: `include/cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp`"
+   },
+   {
+    "heading": "4. Mixed-Input GEMM (SM90)",
+    "anchor": "4-mixed-input-gemm-sm90",
+    "gist": "**Source file**: `include/cutlass/gemm/collective/sm90_mma_tma_gmma_rs_warpspecialized_mixed_input.hpp`"
+   },
+   {
+    "heading": "5. Runtime Data Types (SM100)",
+    "anchor": "5-runtime-data-types-sm100",
+    "gist": "**Source file**: `include/cute/arch/mma_sm100_desc.hpp`"
+   },
+   {
+    "heading": "6. SM120 Sub-Byte Types",
+    "anchor": "6-sm120-sub-byte-types",
+    "gist": "**Source File**: `include/cutlass/float_subbyte.h`"
+   },
+   {
+    "heading": "Architecture Comparison Summary",
+    "anchor": "architecture-comparison-summary",
+    "gist": "table columns: Feature, SM90 (Hopper), SM100 (Blackwell), SM120 (GB GeForce)"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- CUTLASS GEMM Optimization — GEMM tiling and pipeline strategies - SM100 CuTeDSL — Blackwell architecture CuTeDSL programming - [Pipeline Pa…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\ntemplate <class EngineAccum, class LayoutAccum>\nstruct GmmaFP8Accumulation {\n TensorAccum accum_temp_; // TC temporary(rmem resident)\n uint32_t accum_promotion_interval_; // MMA executecount, must promote\n uint32_t mma_count_per_mainloop_iteration_; // k_tile MMA count\n uint32_t mma_count_; // currentexecute MMA count\n uint32_t reset_accum_flag_; // requireszero out TC\n};\n```\n\n```cpp\n// promote: add(FADD )\nvoid promote_core(TensorAccumOrig &accum_) {\n  warpgroup_wait<0>();\n  for (int i = 0; i < size(accum_); ++i) {\n    accum_(i) += accum_temp_(i);\n  }\n}\n\n// scale: multiply-add(FFMA ), scalar / per-element / scale\nvoid scale_core(TensorAccumOrig &accum_, ElementAccumulator const &scale) {\n  for (int i = 0; i < size(accum_); ++i) {\n    accum_(i) += accum_temp_(i) * scale;\n  }\n}\n```\n\n```cpp\nvoid promote_if_needed(TensorAccumOrig &accum_) {\n  mma_count_ += mma_count_per_mainloop_iteration_;\n  reset_accum_flag_ = __shfl_sync(0xffffffff, mma_count_ == accum_promotion_interval_, 0);\n  if (reset_accum_flag_) {\n    promote_core(accum_);\n    mma_count_ = 0;\n  }\n}\n```\n\n```cpp\nusing ElementPairA = ElementPairA_;  // cute::tuple<ElementA, ElementSF>\nusing ElementPairB = ElementPairB_;  // cute::tuple<ElementB, ElementSF>\n\n// separatedata scale\nusing ElementA = remove_cvref_t<decltype(get<0>(ElementPairA{}))>;\nusing ElementSF = remove_cvref_t<decltype(get<1>(ElementPairA{}))>;\n```\n\n```cpp\nTMA_A tma_load_a; // A matrixdata\nTMA_B tma_load_b; // B matrixdata\nTMA_SFA tma_load_sfa; // A scale factors\nTMA_SFB tma_load_sfb; // B scale factors\n```\n\n```cpp\nstatic constexpr int SFVecSize = TiledMma::SFVecSize;\nusing Sm1xxBlkScaledConfig = cutlass::detail::Sm1xxBlockScaledConfig<SFVecSize>;\n```\n\n```cpp\nusing TiledMMA_SF = TiledMMA<MMA_Atom<typename TiledMma::MMA_ScaleFactor>,\n                              Layout<Shape<_1,_1,_1>>,\n                              Tile<Underscore,Underscore,Underscore>>;\n```\n\n```cpp\n// mma loop\ncute::gemm(tiled_mma.with(tiled_mma.accumulate_,\n tCtSFA(_,_,k_block), // A scale factor (TMEM)\n tCtSFB_mma(_,_,k_block)), // B scale factor (TMEM)\n    tCrA(_,_,k_block,read_stage),\n    tCrB(_,_,k_block,read_stage),\n    accumulators);\n```\n\n```cpp\nstatic constexpr bool IsOverlappingAccum = DispatchPolicy::IsOverlappingAccum;\n```\n\n```cpp\nstruct TensorStorage : cute::aligned_struct<128, _0> {\n  ArrayEngine<SmemAllocTypeA, cosize_v<SmemLayoutA>> smem_A;\n  ArrayEngine<SmemAllocTypeB, cosize_v<SmemLayoutB>> smem_B;\n  ArrayEngine<ElementSF, cosize_v<SmemLayoutSFA>> smem_SFA;\n  ArrayEngine<ElementSF, cosize_v<SmemLayoutSFB>> smem_SFB;\n};\n```\n\n```cpp\nstatic constexpr uint32_t TmaTransactionBytes = ABTmaTransactionBytes + SFTransactionBytes;\n```\n\n```cpp\nstatic constexpr int ScaleGranularityM = size<0,0>(LayoutSFA{});\nstatic constexpr int ScaleGranularityN = size<0,0>(LayoutSFB{});\nstatic constexpr int ScaleGranularityK = size<1,0>(LayoutSFA{});\n\n// ScalePromotionInterval = K_granularity / K_atom_size\nstatic constexpr int ScalePromotionInterval = ScaleGranularityK / size<2>(typename TiledMma::AtomShape_MNK{});\n```\n\n```cpp\nusing CopyAtomSFA = Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<ElementBlockScale>, ElementBlockScale>;\nusing CopyAtomSFB = Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<ElementBlockScale>, ElementBlockScale>;\n```\n\n```cpp\nstatic constexpr bool IsTmaLoadSFA = ScaleMsPerTile >= ScaleTmaThreshold && ...;\nstatic constexpr bool IsTmaLoadSFB = ScaleNsPerTile >= ScaleTmaThreshold && ...;\n```\n\n```cpp\n// M=1, N=1: scalar scale\nElementBlockScale scale_ab = tCrSFA_local(_0{});\nscale_if_needed(accum_local, accumulation, scale_ab);\n\n// M>1, N=1: vector scale(per-M-block)\nscale_if_needed(accum_local, accumulation, tCrSFA_local);\n\n// M=1, N>1: vector scale(per-N-block)\nscale_if_needed(accum_local, accumulation, tCrSFB_local);\n\n// M>1, N>1: vector scale(per-MN-block)\nscale_if_needed(accum_local, accumulation, tCrSFA_local, tCrSFB_local);\n```\n\n```cpp\nMainloopSm90TmaGmmaRmemAWarpSpecializedMixedInput<Stages, ClusterShape, KernelSchedule>\n```\n\n```cpp\n// ElementAOptionalTuple = cute::tuple<ElementA, ElementScale, ElementZero>\nusing ElementA = detail::deduce_mixed_width_dtype_t<0, ElementAOptionalTuple>;\nusing ElementScale = ...; // optional scale factor\nusing ElementZero = ...; // optional zero point\n\nstatic_assert(cute::is_tuple<ElementAOptionalTuple>::value ^\n              cute::is_tuple<ElementBOptionalTuple>::value,\n    \"Either A OR B must be a tuple.\");\n```\n\n```cpp\nstatic constexpr bool SwapAB = !IsATransformed;\nusing SwappedElementA = conditional_t<!SwapAB, ConvertedElementA, ConvertedElementB>;\nusing SwappedStrideA  = conditional_t<!SwapAB, StrideA, StrideB>;\n```\n\n```cpp\nenum class MXF8F6F4Format : uint8_t {\n  E4M3 = 0,    // float_e4m3_t\n  E5M2 = 1,    // float_e5m2_t\n  E2M3 = 3,    // float_e2m3_t (6-bit)\n  E3M2 = 4,    // float_e3m2_t (6-bit)\n  E2M1 = 5,    // float_e2m1_t (4-bit)\n INVALID = 7 // runtime proxy bit\n};\n```\n\n```cpp\n// UMMA Descriptor bit\na_format_ : 3, // bit [7,10) - A\nb_format_ : 3, // bit [10,13) - B\n```\n\n```cpp\nstatic constexpr bool IsRuntimeDataType = IsRuntimeDataTypeA && IsRuntimeDataTypeB;\n\nstatic_assert((IsRuntimeDataTypeA && IsRuntimeDataTypeB) ||\n              (!IsRuntimeDataTypeA && !IsRuntimeDataTypeB),\n              \"ElementA and ElementB should be both runtime or both static.\");\n```\n\n```cpp\nif constexpr (IsRuntimeDataType) {\n  tiled_mma.idesc_.a_format_ = uint8_t(runtime_data_type_a_) & 0b111;\n  tiled_mma.idesc_.b_format_ = uint8_t(runtime_data_type_b_) & 0b111;\n}\n```\n\n```cpp\nnamespace cutlass::detail {\n  struct float_e2m1_unpacksmem_t;  // 4-bit, MX FP4\n  struct float_e2m3_unpacksmem_t;  // 6-bit, MX FP6 (E2M3 variant)\n  struct float_e3m2_unpacksmem_t;  // 6-bit, MX FP6 (E3M2 variant)\n}\n```\n\n```cpp\n// TMA use MMA element type type\nusing TmaInternalElementA = conditional_t<IsF8F6F4, ElementAMma, ElementA>;\n\n// sub-byte type smem use uint8_t (byte-aligned)\nusing SmemAllocTypeA = conditional_t<IsF8F6F4 && sizeof_bits_v<ElementAMma> < 8,\n                                      uint8_t, ElementAMma>;\n```\n\n```cpp\nunion type_erased_dynamic_float6_unpacksmem_t {\n  float_e2m3_unpacksmem_t e2m3_unpacksmem;\n  float_e3m2_unpacksmem_t e3m2_unpacksmem;\n};\n\nunion type_erased_dynamic_float4_unpacksmem_t {\n  float_e2m1_unpacksmem_t e2m1_unpacksmem;\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-quantization-block-scaled.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

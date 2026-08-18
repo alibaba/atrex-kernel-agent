@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.kernel-opt.nvfp4-gemv.key-lessons",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemv|nvfp4-gemv#key-lessons|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": "gemv",
+   "operators": [
+    "gemv"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemv",
+   "key-lessons"
+  ],
+  "triggers": [
+   "the 'Key Lessons' technique is being considered on NVIDIA B200 (GB200 / SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA B200 (GB200 / SM100): Key Lessons",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "NVFP4 Batched GEMV -- Key Lessons"
+  },
+  "technique": "Key Lessons",
+  "what": "1. **Memory-bound kernels need bandwidth-first thinking**: Arithmetic optimizations have minimal impact; focus on memory access patterns, cache policies, and vectorized loads 2. **PTX gives real control on Blackwell**: The gap between C intrinsics and hand-written PTX was substantial (443us to 27us in one journey) 3. **Profile first**: \"Run Nsight Compute to confirm memory-bound behavior\" (Amandeep's lesson after 12 attempts) 4. **Register budgeting matters**: Lower registers -> higher occupancy -> better memory latency hiding 5. **TMEM is irrelevant**: Memory-bound kernels do not benefit from TMEM (it helps compute-bound only)",
+  "when": "1.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/kernel-opt/kernels/nvfp4-gemv.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

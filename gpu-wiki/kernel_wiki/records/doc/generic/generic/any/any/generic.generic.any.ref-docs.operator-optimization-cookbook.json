@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.operator-optimization-cookbook",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|operator-optimization-cookbook|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community Common Operator Optimization Manual",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community Common Operator Optimization Manual"
+  },
+  "title": "Community Common Operator Optimization Manual",
+  "summary": "Comprehensive core knowledge from the Zhihu community on optimizing common GPU operators (softmax, LayerNorm, reduce, etc.). Supplements CUDA-level operator optimization details not covered in Online Softmax & Flash Attention Hands-on and Fused Kernel Patterns Hands-on.",
+  "sections": [
+   {
+    "heading": "Table of Contents",
+    "anchor": "table-of-contents",
+    "gist": "- [1."
+   },
+   {
+    "heading": "1. Reduce Optimization",
+    "anchor": "1-reduce-optimization",
+    "gist": "Reduce is one of the most fundamental and critical operations on GPUs."
+   },
+   {
+    "heading": "2. Softmax Optimization",
+    "anchor": "2-softmax-optimization",
+    "gist": "Softmax is an extremely high-frequency operator in large models."
+   },
+   {
+    "heading": "3. LayerNorm / RMSNorm Optimization",
+    "anchor": "3-layernorm-rmsnorm-optimization",
+    "gist": "LayerNorm and RMSNorm are core normalization operators in large models."
+   },
+   {
+    "heading": "4. Transformose / Data Rearrangement Optimization",
+    "anchor": "4-transformose-data-rearrangement-optimization",
+    "gist": "Matrix transformose appears simple, but on GPUs it is a classic problem that tests memory access optimization skills: coalesced reads mean scattered writes, and coalesced writes mean scattered reads."
+   },
+   {
+    "heading": "5. Elementwise Optimization",
+    "anchor": "5-elementwise-optimization",
+    "gist": "Elementwise operations (sigmoid, silu, add, etc.) appear to be the simplest, but they too have significant optimization potential."
+   },
+   {
+    "heading": "6. Other Operator Optimizations",
+    "anchor": "6-other-operator-optimizations",
+    "gist": "PyTorch's `torch.nn.EmbeddingBag` has two subtle performance issues:"
+   },
+   {
+    "heading": "7. General Optimization Principles Quick Reference",
+    "anchor": "7-general-optimization-principles-quick-reference",
+    "gist": "Don't just focus on \"how many times faster over CPU\"; pay attention to: - **Effective bandwidth utilization** = actual data movement volume / kernel execution time / theoretical peak bandwidth - **Compute Intensity**: the amount of computa…"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- Online Softmax and Flash Attention Hands-On -- Triton implementation of the online softmax algorithm and Flash Attention - Fused Kernel Patterns Hands-On"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cuda\n// Bad: tid % (2*s) == 0 causes threads within warp to take different paths\n// Good: Use consecutive thread indices\nint index = 2 * s * tid;\nif (index < blockDim.x) {\n    sdata[index] += sdata[index + s];\n}\n```\n\n```cuda\n// Good: Reverse stride, no bank conflict\nfor (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {\n    if (tid < s) {\n        sdata[tid] += sdata[tid + s];\n    }\n    __syncthreads();\n}\n```\n\n```cuda\n__device__ __forceinline__ float warpReduceSum(float sum) {\n    sum += __shfl_down_sync(0xffffffff, sum, 16);\n    sum += __shfl_down_sync(0xffffffff, sum, 8);\n    sum += __shfl_down_sync(0xffffffff, sum, 4);\n    sum += __shfl_down_sync(0xffffffff, sum, 2);\n    sum += __shfl_down_sync(0xffffffff, sum, 1);\n    return sum;\n}\n```\n\n```cuda\n// Level 1: Reduce within warp\nfloat sum = warpReduceSum(val);\nif (laneId == 0) warpLevelSums[warpId] = sum;\n__syncthreads();\n// Level 2: Reduce across warps\nif (tid < 32) {\n    sum = (tid < blockDim.x / 32) ? warpLevelSums[tid] : 0.f;\n    sum = warpReduceSum(sum);\n}\n```\n\n```cuda\nfloat sum = 0;\nfor (int i = tx; i < ITEMS_PER_BLOCK; i += BLOCK_SIZE_N) {\n    sum += (b_base + i < N) ? input[b_base + i] : 0.0f;\n}\ns_input[tx] = sum;  // Partial reduction already done\n```\n\n```cuda\n// 1D: int row_idx = blockIdx.x;\n// 2D: Each warp (threadIdx.y) handles different rows\nint row_idx = blockIdx.x * blockDim.y + threadIdx.y;\n```\n\n```cuda\n// float4 vectorized safe softmax core logic\n// First compute local max within thread\n// Compute exp and sum\n// ... Similar processing for y, z, w\n// Normalize output\n```\n\n```\nM_n = M_{n-1} + (x_n - M_{n-1}) / n\nS_n = S_{n-1} + (x_n - M_{n-1}) * (x_n - M_n)\nvariance = S_n / n\n```\n\n```cuda\n// 1. Coalesced read global -> shared (by row)\n// 2. Swap x/y coordinates\n// 3. Coalesced write shared -> global (by row, but physically columns of original matrix)\n```\n\n```cuda\n// Swizzle when writing\n// Reverse swizzle when reading\n```\n\n```cuda\n#define FLOAT4(value) (reinterpret_cast<float4*>(&(value))[0])\n\n__global__ void sigmoid_vec4(float* x, float* y, int N) {\n    int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;\n    if (idx < N) {\n        float4 reg_x = FLOAT4(x[idx]);\n        float4 reg_y;\n        reg_y.x = 1.0f / (1.0f + expf(-reg_x.x));\n        reg_y.y = 1.0f / (1.0f + expf(-reg_x.y));\n        reg_y.z = 1.0f / (1.0f + expf(-reg_x.z));\n        reg_y.w = 1.0f / (1.0f + expf(-reg_x.w));\n        FLOAT4(y[idx]) = reg_y;\n    }\n}\n```\n\n```cuda\n__device__ __forceinline__ float sigmoid(float x) {\n    if (x >= 0.0f) {\n        return 1.0f / (1.0f + __expf(-x));\n    } else {\n        float exp_x = __expf(x);\n        return exp_x / (1.0f + exp_x);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/operator-optimization-cookbook.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

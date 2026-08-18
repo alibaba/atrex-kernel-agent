@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.kernel-opt.autotune-config-pruning.pattern-multi-dimensional-parameter-search-heuristic-pruning",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|autotune-config-pruning#pattern-multi-dimensional-parameter-search-heuristic-pruning|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-multi-dimensional-parameter-search-heuristic-pruning"
+  ],
+  "triggers": [
+   "the 'Pattern: Multi-Dimensional Parameter Search + Heuristic Pruning' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: Multi-Dimensional Parameter Search + Heuristic Pruning",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Autotune Configuration and Pruning -- Pattern: Multi-Dimensional Parameter Search + Heuristic Pruning"
+  },
+  "technique": "Pattern: Multi-Dimensional Parameter Search + Heuristic Pruning",
+  "what": "**Source**: `triton-tutorials/03-matrix-multiplication.py`, `triton-kernels/matmul_details/`",
+  "when": "**Source**: `triton-tutorials/03-matrix-multiplication.py`, `triton-kernels/matmul_details/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.autotune(\n    configs=[\n        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3, num_warps=8),\n        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),\n        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_SIZE_M': 8}, num_stages=4, num_warps=4),\n # ... configuration\n    ],\n    key=['M', 'N', 'K'],\n)\n@triton.jit\ndef matmul_kernel(...):\n    ...\n```\n\n```python\ndef prune_configs(configs, named_args, **kwargs):\n    M, N, K = named_args['M'], named_args['N'], named_args['K']\n    pruned = []\n    for cfg in configs:\n        BLOCK_M, BLOCK_N = cfg.kwargs['BLOCK_M'], cfg.kwargs['BLOCK_N']\n        # Prune configurations where tile is larger than problem size\n        if BLOCK_M > M or BLOCK_N > N:\n            continue\n        # Small matrices don't need too many stages\n        if M * N < 1024 * 1024 and cfg.num_stages > 3:\n            continue\n        pruned.append(cfg)\n    return pruned\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/kernel-opt/hands-on/autotune-config-pruning.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

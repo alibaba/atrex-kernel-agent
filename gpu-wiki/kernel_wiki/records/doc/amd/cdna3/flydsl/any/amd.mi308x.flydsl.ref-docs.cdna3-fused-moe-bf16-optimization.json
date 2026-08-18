@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-fused-moe-bf16-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|cdna3-fused-moe-bf16-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL Fused MoE BF16 Step-by-Step Optimization (MI308X gfx942)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL Fused MoE BF16 Step-by-Step Optimization (MI308X gfx942)"
+  },
+  "title": "FlyDSL Fused MoE BF16 Step-by-Step Optimization (MI308X gfx942)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target Architecture",
+    "anchor": "target-architecture",
+    "gist": "table columns: Parameter, Value"
+   },
+   {
+    "heading": "MoE Computation Logic",
+    "anchor": "moe-computation-logic",
+    "gist": ""
+   },
+   {
+    "heading": "Optimization Journey (V1 → V27)",
+    "anchor": "optimization-journey-v1-v27",
+    "gist": "- V1: Basic MFMA preshuffle GEMM + host-side SiLU + host-side weighted scatter - V2: Optimized token sorting, removed unnecessary synchronization - **Baseline Performance**: tc=4096 ~60 TFLOPS"
+   },
+   {
+    "heading": "Final Performance",
+    "anchor": "final-performance",
+    "gist": "MI308X, Mixtral-7B BF16, E2E (including sort + GEMM + accumulation):"
+   },
+   {
+    "heading": "Key Lessons Learned",
+    "anchor": "key-lessons-learned",
+    "gist": "table columns: Optimization, Version, Large tc Benefit, Small tc Benefit, Type"
+   },
+   {
+    "heading": "Reference Implementations",
+    "anchor": "reference-implementations",
+    "gist": "- fused_moe_flydsl.py — Complete implementation code - moe_gemm_2stage.py"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- Fused MoE Optimization (W4A16) — Kimi-K2.5 W4A16 mixed-precision MoE optimization - FlyDSL Programming Guide — FlyDSL …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ninput: hidden_states [tc, 4096] BF16\n      topk_weights  [tc, 2]    F32\n      topk_ids      [tc, 2]    I32\n\nStage 1: sorted_x @ W1^T → gate [tc*2, 14336] + up [tc*2, 14336]\n         activated = SiLU(gate) * up\n\nStage 2: activated @ W2^T → result [tc*2, 4096]\n         output[token_id] += result * weight  (atomic f32 accumulation)\n```\n\n```python\nw1_ps = preshuffle_weight(w1_flat)  # [E*2*inter, hidden] → preshuffled\nw2_ps = preshuffle_weight(w2_flat)  # [E*hidden, inter] → preshuffled\n```\n\n```\nThread C fragments → LDS (scatter by MFMA layout) → LDS (gather coalesced) → GMEM\n```\n\n```python\n# Before: grid = (num_m_tiles, bn, 1) -> different block different A\n# After: grid = (bn, num_m_tiles, 1) -> block shared A tile\n```\n\n```python\nsched_dsrd # LDS read\nsched_mfma # MFMA\nsched_vmem # VMEM load\nsched_dswr # LDS write\n```\n\n```\nBefore: A load -> 4 MFMA (tile_n=64)\nAfter: A load -> 8 MFMA (tile_n=128) ← MFMA/load\n```\n\n```python\nTILE_M = 32 if token_count <= 128 else 64\n```\n\n```\nPrefetch A[k=0] LDS→reg\nfor k in range(K_TILES):\n    if k < K_TILES - 1:\n        load A[k+1] GMEM→LDS\n    MFMA(A[k], B[k])\n    if k < K_TILES - 1:\n        LDS→reg A[k+1]  (prefetch next)\n```\n\n```python\n# S2 epilogue ( LDS cooperative store)\nfor ii in range_constexpr(WARP_M_STEPS):\n    for kk in range_constexpr(WMMA_C_FRAG):\n        token_id = buffer_load(sorted_tids_rsrc, m_global + kk, i32)\n        weight = buffer_load(sorted_wts_rsrc, m_global + kk, f32)\n    for jj in range_constexpr(WARP_N_STEPS):\n        for kk in range_constexpr(WMMA_C_FRAG):\n            val_f32 = vector.extract(c_frag, [kk])\n            weighted = val_f32 * weight[kk]\n            byte_off = (token_id[kk] * hidden_size + n_col) * 4\n            rocdl.raw_ptr_buffer_atomic_fadd(weighted, out_rsrc, byte_off, 0, 0)\n```\n\n```python\ndef moe_stage1_kernel(arg_out, arg_x, arg_w1_ps, arg_expert_ids, arg_sorted_token_ids):\n # compute M row token index\n    token_indices = [buffer_load(tid_rsrc, m_offset + i) for i in range(WARP_M_STEPS * 4)]\n # A load: token_index * hidden_size computeglobal\n    for k_step:\n        for m_frag:\n            byte_off = token_indices[m_frag] * hidden_size * 2 + k_offset * 2\n            a_data = buffer_load(x_rsrc, byte_off, ...)\n```\n\n```python\ndef moe_stage1_kernel(arg_out, arg_x, arg_w1_ps, arg_expert_ids,\n                      arg_sorted_token_ids, arg_num_valid_tiles):\n # Early-exit guard: if block_idx >= num_valid_tiles, directreturns\n    bid_m = fx.block_idx.y                    # i32\n    nv_rsrc = buffer_ops.create_buffer_resource(arg_num_valid_tiles, max_size=True)\n    nv_i32 = buffer_ops.buffer_load(nv_rsrc, fx.Index(0), vec_width=1, dtype=T.i32)\n    blk_valid = arith.cmpi(arith.CmpIPredicate.ult, bid_m, nv_i32)\n    if_blk = scf.IfOp(blk_valid)\n    with _if_then(if_blk):\n # ... complete kernel body ( valid tiles execute GEMM)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-fused-moe-bf16-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

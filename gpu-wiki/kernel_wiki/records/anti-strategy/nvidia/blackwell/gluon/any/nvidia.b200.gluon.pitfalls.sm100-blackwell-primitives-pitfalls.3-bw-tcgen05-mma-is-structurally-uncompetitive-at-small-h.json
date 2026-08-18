@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.gluon.pitfalls.sm100-blackwell-primitives-pitfalls.3-bw-tcgen05-mma-is-structurally-uncompetitive-at-small-h",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|gluon|pitfalls|sm100-blackwell-primitives-pitfalls#3-bw-tcgen05-mma-is-structurally-uncompetitive-at-small-h|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "a kernel on NVIDIA B200 (GB200 / SM100) risks the '3. `bw.tcgen05_mma` is structurally uncompetitive at small `H`' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA B200 (GB200 / SM100): 3. `bw.tcgen05_mma` is structurally uncompetitive at small `H`",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "sm_100 Gluon Blackwell-primitive pitfalls -- 3. `bw.tcgen05_mma` is structurally uncompetitive at small `H`"
+  },
+  "attempted": "Having learned #1, port the kernel to the \"real\" `bw.tcgen05_mma` path expecting it to beat Triton.",
+  "verdict": "performance-ceiling",
+  "lesson": "Gluon/`tcgen05` only pays off when the problem fills the MMA tile. At small head counts (`H=16` MLA), Triton's scheduler wins. Consider Gluon only after restructuring to a larger effective `blockM` (e.g. fusing N tokens across batch) — otherwise it's a net regression.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_100",
+    "toolchain": "gluon"
+   },
+   "mechanism": "`tcgen05` MMA's minimum `blockM=64` forces **≥75% phantom-row padding** for `H=16`; the larger `HM=128` tile needs D-chunking to fit SMEM, compounding to ~160 MMA fences/call. Triton's `tl.dot` hides the *same* padding inside its `wgmma` scheduler with no surfaced fence — a ~5× framework-overhead advantage on this shape."
+  },
+  "observed": "Correct, but **6.1× slower** than the Triton `tl.dot` version at `H=16` (0.095 ms vs 0.016 ms). Even with all follow-on stages (mbarrier launch-tax removal, clustering) the best case stayed ~4.4× slower.",
+  "root_cause": "`tcgen05` MMA's minimum `blockM=64` forces **≥75% phantom-row padding** for `H=16`; the larger `HM=128` tile needs D-chunking to fit SMEM, compounding to ~160 MMA fences/call. Triton's `tl.dot` hides the *same* padding inside its `wgmma` scheduler with no surfaced fence — a ~5× framework-overhead advantage on this shape."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/pitfalls/gluon/sm100-blackwell-primitives-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

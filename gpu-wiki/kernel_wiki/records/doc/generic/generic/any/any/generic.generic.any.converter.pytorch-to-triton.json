@@ -1,0 +1,113 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.converter.pytorch-to-triton",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|conv|pytorch-to-triton|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "conv",
+   "operators": [
+    "conv"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "conv-vision"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "conv"
+  ],
+  "triggers": [
+   "converter reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): PyTorch → Triton cheat sheet",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "PyTorch → Triton cheat sheet"
+  },
+  "title": "PyTorch → Triton cheat sheet",
+  "summary": "Single-file reference for the **first framework migration** (V0 is a PyTorch reference wrapper; the first optimization iteration lowers it to Triton). Read once. This is the one transition where the target DSL (Triton) is well-known, so this sheet is the map + the non-obvious gotchas; no external source pointers are needed.",
+  "sections": [
+   {
+    "heading": "Rules",
+    "anchor": "rules",
+    "gist": "1."
+   },
+   {
+    "heading": "Non-obvious gotchas",
+    "anchor": "non-obvious-gotchas",
+    "gist": "- **`nn.Linear` weight is `[out, in]` = `[N, K]`.** `tl.dot` needs `[BLOCK_M,BLOCK_K] × [BLOCK_K,BLOCK_N]`, so load the weight tile as `[offs_n, offs_k]` and **transpose** it before the dot."
+   },
+   {
+    "heading": "Structure",
+    "anchor": "structure",
+    "gist": "`@triton.jit` kernel (grid over output tiles / rows) + a thin wrapper that computes the grid and launches."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/converter/pytorch-to-triton.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

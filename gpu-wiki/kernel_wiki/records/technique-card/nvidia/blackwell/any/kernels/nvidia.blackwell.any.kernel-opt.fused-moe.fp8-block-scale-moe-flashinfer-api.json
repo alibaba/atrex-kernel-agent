@@ -1,0 +1,109 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fused-moe.fp8-block-scale-moe-flashinfer-api",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|fused-moe#fp8-block-scale-moe-flashinfer-api|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "fp8-block-scale-moe-flashinfer-api",
+   "gemm",
+   "moe"
+  ],
+  "triggers": [
+   "the 'FP8 Block-Scale MoE (FlashInfer API)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): FP8 Block-Scale MoE (FlashInfer API)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fused MoE -- FP8 Block-Scale Routing + Dual GEMM -- FP8 Block-Scale MoE (FlashInfer API)"
+  },
+  "technique": "FP8 Block-Scale MoE (FlashInfer API)",
+  "what": "FlashInfer API for fused MoE",
+  "when": "FlashInfer API for fused MoE",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# FlashInfer API for fused MoE\n# Single function call replaces 5-7 separate kernel launches\nimport flashinfer\n\noutput = flashinfer.fused_moe.trtllm_fp8_block_scale_moe(\n    hidden_states=x,            # [batch, 7168] BF16 input\n    w_gate_up=w_gate_up,        # [32, 2*2048, 7168] FP8 (fused gate+up weights)\n    w_down=w_down,              # [32, 7168, 2048] FP8 (down weights)\n    router_weights=router_w,    # [batch, 32] FP32 routing logits\n    topk=8,                     # Select top-8 experts per token\n    num_groups=8,               # Expert grouping\n    topk_group=4,               # Top groups to select from\n    block_scale_gate_up=sf_gu,  # Block scales [32, 2*2048, 7168/128] FP8\n    block_scale_down=sf_d,      # Block scales [32, 7168, 2048/128] FP8\n)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/fused-moe.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

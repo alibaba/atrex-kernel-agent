@@ -1,0 +1,151 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.ref-docs.tca-51-mfu-8-hidden-performance-loss",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|ref-docs|tca-51-mfu-8-hidden-performance-loss|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): TCA 51% but MFU Under 8%: Hidden GPU Performance Losses",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "TCA 51% but MFU Under 8%: Hidden GPU Performance Losses"
+  },
+  "title": "TCA 51% but MFU Under 8%: Hidden GPU Performance Losses",
+  "summary": "An investigation into the surprising gap between Tensor Core Activity (TCA) and Model FLOPs Utilization (MFU), uncovering clock frequency scaling, tile padding waste, and instruction-level inefficiency as root causes.",
+  "sections": [
+   {
+    "heading": "1. Background",
+    "anchor": "1-background",
+    "gist": "TCA (Tensor Core Activity) is the fraction of clock cycles during which the Tensor Core is active."
+   },
+   {
+    "heading": "2. GPU Architecture Overview",
+    "anchor": "2-gpu-architecture-overview",
+    "gist": "A GPU comprises multiple Streaming Multiprocessors (SMs)."
+   },
+   {
+    "heading": "3. MFU vs TCA: The Expected Relationship",
+    "anchor": "3-mfu-vs-tca-the-expected-relationship",
+    "gist": "$$\\text{MFU} = \\frac{\\text{counted\\_FLOPs}}{\\text{wall\\_time} \\times \\text{peak\\_TFLOPS}}$$"
+   },
+   {
+    "heading": "4. Power Wall and Clock Throttling",
+    "anchor": "4-power-wall-and-clock-throttling",
+    "gist": "Running large matmul benchmarks on B200 revealed MFU consistently below TCA, with MFU capped at ~83.22% regardless of matrix size."
+   },
+   {
+    "heading": "5. Tile Padding Waste",
+    "anchor": "5-tile-padding-waste",
+    "gist": "When matrix dimensions are not integer multiples of the tile size, cuBLAS pads to tile boundaries."
+   },
+   {
+    "heading": "6. Flash Attention 2 Makes TCA Artificially High",
+    "anchor": "6-flash-attention-2-makes-tca-artificially-high",
+    "gist": "table columns: Config, Attn %, MFU, TCA, MFU/(TCA×0.588), Clock"
+   },
+   {
+    "heading": "7. NCU Root Cause Analysis",
+    "anchor": "7-ncu-root-cause-analysis",
+    "gist": "NCU data shows FA2 can fit 2 blocks/SM:"
+   },
+   {
+    "heading": "8. The 1/4 Root Cause: Wrong Instruction Generation",
+    "anchor": "8-the-1-4-root-cause-wrong-instruction-generation",
+    "gist": "The 1/4 factor comes from the HMMA instruction itself, not from warp count."
+   },
+   {
+    "heading": "9. GPU Architecture and Instruction Evolution",
+    "anchor": "9-gpu-architecture-and-instruction-evolution",
+    "gist": "MMA instruction: **HMMA** (per-warp)."
+   },
+   {
+    "heading": "10. Attention Backend Benchmark",
+    "anchor": "10-attention-backend-benchmark",
+    "gist": "Systematic comparison of 7 attention implementations on B200 across 4 configurations."
+   },
+   {
+    "heading": "11. Conclusions",
+    "anchor": "11-conclusions",
+    "gist": "All observed MFU < TCA gaps have three sources:"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/tca-51-mfu-8-hidden-performance-loss.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

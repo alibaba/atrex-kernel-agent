@@ -1,0 +1,135 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.blackwell-gemm-low-precision",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|blackwell-gemm-low-precision|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Blackwell GEMM: Low-Precision Data Types and Block Scaling",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Blackwell GEMM: Low-Precision Data Types and Block Scaling"
+  },
+  "title": "Blackwell GEMM: Low-Precision Data Types and Block Scaling",
+  "summary": "How Blackwell handles sub-byte (FP4, FP6) data formats for UMMA operations, including TMA unpacking, SMEM layout constraints, and native block-scaling support. Part 3 of the Colfax Research CUTLASS Blackwell series.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "This document covers low-precision computation, focusing on sub-byte (6-bit and 4-bit) formats and their impact on memory layout."
+   },
+   {
+    "heading": "2. Motivation for Low Precision",
+    "anchor": "2-motivation-for-low-precision",
+    "gist": "Hardware and software have co-evolved toward lower precision over the years:"
+   },
+   {
+    "heading": "3. Data Formats",
+    "anchor": "3-data-formats",
+    "gist": "NVIDIA GPUs support five basic floating-point data types at or below 1 byte:"
+   },
+   {
+    "heading": "4. Low-Precision UMMA",
+    "anchor": "4-low-precision-umma",
+    "gist": "UMMA data types are determined by the `.kind` qualifier."
+   },
+   {
+    "heading": "5. Operand Layout and TMA Loading",
+    "anchor": "5-operand-layout-and-tma-loading",
+    "gist": "Operand data in SMEM must be stored in a specific **16-byte aligned format**: 16 consecutive 4-bit or 6-bit elements are packed contiguously, then padded to a 16-byte boundary."
+   },
+   {
+    "heading": "6. CUTLASS Sub-byte UMMA",
+    "anchor": "6-cutlass-sub-byte-umma",
+    "gist": "CUTLASS defines sub-byte data types in `cutlass/float_subbyte.h`:"
+   },
+   {
+    "heading": "7. Conclusion",
+    "anchor": "7-conclusion",
+    "gist": "At the PTX/hardware level, sub-byte UMMA requires **16-byte aligned, padded SMEM formats** and supports **runtime data type selection** via the instruction descriptor."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/blackwell-gemm-low-precision.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

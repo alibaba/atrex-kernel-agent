@@ -1,0 +1,163 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.pytorch-performance-profiling-tuning",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|pytorch-performance-profiling-tuning|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): PyTorch Performance Profiling, Tuning, and Scaling",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "PyTorch Performance Profiling, Tuning, and Scaling"
+  },
+  "title": "PyTorch Performance Profiling, Tuning, and Scaling",
+  "summary": "A comprehensive methodology for profiling, debugging, and system-level tuning of PyTorch workloads on modern NVIDIA GPUs, covering the full stack from Python interpreter overhead to multi-node distributed training.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "AI training and inference pipelines can encounter performance bottlenecks at every layer — from Python interpreter overhead and CPU-side data loading stalls, to CUDA kernel underutilization and GPU memory contention."
+   },
+   {
+    "heading": "2. NVTX Markers and Profiling Toolchain",
+    "anchor": "2-nvtx-markers-and-profiling-toolchain",
+    "gist": "NVIDIA Tools Extension (NVTX) is a lightweight code annotation mechanism that inserts named time ranges into profiler timeline views."
+   },
+   {
+    "heading": "3. PyTorch Profiling in Practice",
+    "anchor": "3-pytorch-profiling-in-practice",
+    "gist": "Key parameters: - `record_shapes=True`: records tensor shapes for understanding memory/compute characteristics - `profile_memory=True`: tracks per-operation GPU memory usage - `with_flops=True`: captures FLOPs counters for measuring comput…"
+   },
+   {
+    "heading": "4. CPU-GPU Joint Profiling",
+    "anchor": "4-cpu-gpu-joint-profiling",
+    "gist": "Typical CPU hotspot breakdown:"
+   },
+   {
+    "heading": "5. PyTorch Compiler (torch.compile)",
+    "anchor": "5-pytorch-compiler-torch-compile",
+    "gist": "Three core components: - **TorchDynamo**: Captures Python bytecode at runtime, traces forward graph, detects graph breaks - **AOT Autograd**: Generates backward graph at compile time, enables cross-forward/backward fusion - **TorchInductor…"
+   },
+   {
+    "heading": "6. CUDA Stream Concurrency",
+    "anchor": "6-cuda-stream-concurrency",
+    "gist": "By default, PyTorch schedules all operations on the default stream sequentially."
+   },
+   {
+    "heading": "7. CUDA Graphs",
+    "anchor": "7-cuda-graphs",
+    "gist": "CUDA graphs capture a sequence of GPU operations as a whole, eliminating per-kernel launch overhead on replay."
+   },
+   {
+    "heading": "8. Memory Profiling and Tuning",
+    "anchor": "8-memory-profiling-and-tuning",
+    "gist": "PyTorch's caching allocator manages CUDA memory."
+   },
+   {
+    "heading": "9. Data Pipeline Optimization",
+    "anchor": "9-data-pipeline-optimization",
+    "gist": "table columns: Parameter, Recommendation"
+   },
+   {
+    "heading": "10. Multi-GPU Distributed Scaling",
+    "anchor": "10-multi-gpu-distributed-scaling",
+    "gist": "DistributedDataParallel synchronizes gradients via all-reduce."
+   },
+   {
+    "heading": "11. Multi-GPU Profiling with HTA",
+    "anchor": "11-multi-gpu-profiling-with-hta",
+    "gist": "Meta's Holistic Trace Analysis (HTA): - Merges multi-worker traces into unified timeline - Aligns NVTX markers across ranks to reveal execution differences - Reports GPU idle time, identifies stragglers and sync issues - Provides optimizat…"
+   },
+   {
+    "heading": "12. CI Performance Regression Testing",
+    "anchor": "12-ci-performance-regression-testing",
+    "gist": "Best practices: - Consistent hardware for CI runners - Regression threshold ≥5% sustained over 3 runs - Record memory usage and data loading time alongside throughput - Use `torch.allclose` with strict tolerance for correctness tests - Cap…"
+   },
+   {
+    "heading": "13. Key Principles Summary",
+    "anchor": "13-key-principles-summary",
+    "gist": "- Maintain a **profiling-first** approach: bottlenecks hide at any layer - Use **multi-tool holistic analysis** to capture data at every level - Prefer **compiled mode** over eager mode (one line: `torch.compile`) - Use the highest optimiz…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfrom torch import profiler\n\nwith profiler.profile(\n    activities=[profiler.ProfilerActivity.CPU,\n                profiler.ProfilerActivity.CUDA],\n    record_shapes=True,\n    profile_memory=True,\n    with_stack=True,\n    with_flops=True\n) as prof:\n    with profiler.record_function(\"train_step\"):\n        torch.cuda.nvtx.range_push(\"forward\")\n        with torch.autocast(device_type=\"cuda\", dtype=torch.bfloat16):\n            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)\n            loss = outputs.loss\n        torch.cuda.nvtx.range_pop()\n\n        torch.cuda.nvtx.range_push(\"backward\")\n        loss.backward()\n        torch.cuda.nvtx.range_push(\"optimizer_step\")\n        optimizer.step()\n        torch.cuda.nvtx.range_pop()\n        optimizer.zero_grad()\n        torch.cuda.nvtx.range_pop()\n```\n\n```bash\nnsys profile --output=profile --stats=true -t cuda,nvtx python train.py\n\n# Generate NVTX GPU projection summary\nnsys stats --report=nvtx_gpu_proj_sum profile.nsys-rep\n```\n\n```bash\nncu \\\n  --target-processes all \\\n  --kernel-name-regex \"matmul\" \\\n  --metrics \\\n    gpu__time_duration.avg, \\\n    gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed, \\\n    lts__throughput.avg.pct_of_peak_sustained_elapsed, \\\n    sm__sass_thread_inst_executed_op_fp32_pred_on.sum, \\\n    sm__warps_active.avg.pct_of_peak_sustained_active \\\n  --csv full \\\n  -o matmul_roofline_report \\\n  python train.py\n```\n\n```bash\nperf stat -e cycles,instructions,cache-misses,branch-misses python train.py\n\nperf record -F 2000 -g --call-graph dwarf -o perf.data python train.py\nperf report --stdio -n -g -i perf.data\n```\n\n```bash\nperf list | grep -i nvidia\nperf stat -a \\\n  -e nvidia_nvlink_c2c0_pmu_0/cycles/ \\\n  -e cycles,cache-misses \\\n  python train.py\n```\n\n```python\ncompiled_model = torch.compile(model)                                    # default\ncompiled_model = torch.compile(model, mode=\"reduce-overhead\")            # minimize overhead\ncompiled_model = torch.compile(model, mode=\"max-autotune\")               # maximum performance\ncompiled_model = torch.compile(model, mode=\"max-autotune-no-cudagraphs\") # no CUDA graphs\n```\n\n```python\ntransfer_stream = torch.cuda.Stream(device=device)\ncompute_stream = torch.cuda.default_stream(device=device)\n\n# Pre-load first batch\nwith torch.cuda.stream(transfer_stream):\n    next_inputs = first_batch[0].to(device, non_blocking=True)\n\nfor _ in range(len(dataloader)):\n    compute_stream.wait_stream(transfer_stream)\n    inputs = next_inputs\n\n    # Start next transfer\n    batch = next(dataloader_iter, None)\n    if batch:\n        with torch.cuda.stream(transfer_stream):\n            next_inputs = batch[0].to(device, non_blocking=True)\n\n    # Compute on current batch\n    with torch.cuda.stream(compute_stream):\n        outputs = model(inputs)\n        loss = loss_fn(outputs, labels)\n        loss.backward()\n        optimizer.step()\n```\n\n```python\nevent = torch.cuda.Event(enable_timing=False)\n# In stream1:\nevent.record()\n# In stream2:\nstream2.wait_event(event)  # Wait only for this specific point\n```\n\n```python\ng = torch.cuda.CUDAGraph()\ncapture_stream = torch.cuda.Stream()\nstatic_input = torch.randn(batch_shape, device='cuda')\nstatic_output = torch.empty(output_shape, device='cuda')\n\n# Warmup\nwith torch.cuda.stream(capture_stream):\n    tmp = model(static_input)\n    static_output.copy_(tmp)\ncapture_stream.synchronize()\n\n# Capture\nwith torch.cuda.graph(g, stream=capture_stream):\n    tmp = model(static_input)\n    static_output.copy_(tmp)\ncapture_stream.synchronize()\n\n# Replay\nstatic_input.copy_(new_batch)\ng.replay()\nresult = static_output.clone()\n```\n\n```bash\nexport PYTORCH_ALLOC_CONF=\\\n  max_split_size_mb:256,\\\n  roundup_power2_divisions:[256:1,512:2,1024:4,>:8],\\\n  backend:cudaMallocAsync\n```\n\n```python\nimport torch.utils.checkpoint as checkpoint\n# Wrap Transformer blocks — ~33% additional forward compute, significant memory savings\n```\n\n```python\nfsdp_model = FSDP(\n    model,\n    sharding_strategy=ShardingStrategy.FULL_SHARD,       # ZeRO Stage-3\n    cpu_offload=CPUOffload(offload_params=True, pin_memory=True),\n    mixed_precision=MixedPrecision(param_dtype=torch.bfloat16,\n                                   reduce_dtype=torch.bfloat16),\n    backward_prefetch=BackwardPrefetch.BACKWARD_PRE,\n    activation_checkpointing_policy={\n        nn.TransformerEncoderLayer,\n        nn.TransformerDecoderLayer,\n    }\n)\n```\n\n```yaml\n- name: Run MoE benchmark\n  run: torchbench run --model moe --iters 10 --batch-size 4 --json results.json\n- name: Compare throughput\n  run: python scripts/compare_perf.py baseline.json results.json\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/pytorch-performance-profiling-tuning.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

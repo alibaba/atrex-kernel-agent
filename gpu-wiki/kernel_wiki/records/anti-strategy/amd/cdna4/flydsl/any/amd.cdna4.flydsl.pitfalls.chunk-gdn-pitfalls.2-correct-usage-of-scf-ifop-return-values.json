@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.flydsl.pitfalls.chunk-gdn-pitfalls.2-correct-usage-of-scf-ifop-return-values",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|flydsl|gdn|chunk-gdn-pitfalls#2-correct-usage-of-scf-ifop-return-values|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on AMD CDNA4 (gfx950 / MI355X) risks the '2. Correct Usage of scf.IfOp Return Values' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD CDNA4 (gfx950 / MI355X): 2. Correct Usage of scf.IfOp Return Values",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "Pitfalls: FlyDSL Chunk-GDN on MI355X (gfx950) -- 2. Correct Usage of scf.IfOp Return Values"
+  },
+  "attempted": "In FlyDSL, when you need to read data from different LDS buffers based on a runtime condition, it is easy to write the return value syntax of scf.IfOp incorrectly.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "When both operands of an element‑wise override call (`__.xxx_pw_...!`) are ``O=3``, always check whether the result is silently merged (baked) with an input register. If so, explicitly copy with `.add_pw_fp16x4!(result, input, __.const(0.0))`.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "barrier 3 serializes the entire loop body. Even if w/v/g data arrives early in registers, the next iteration must still wait for barrier 3. The bottleneck is barrier serialization, not load latency."
+  },
+  "observed": "V8 = 3888 us, 24% slower than V5's 3136 us.",
+  "root_cause": "barrier 3 serializes the entire loop body. Even if w/v/g data arrives early in registers, the next iteration must still wait for barrier 3. The bottleneck is barrier serialization, not load latency.",
+  "implementation": {
+   "snippet": "```python\n# ❌ scf.if_() / scf.else_() / scf.if_result() are not FlyDSL APIs\nwith scf.if_(condition, results=[v8bf16_type]):\n    val = vector.load_op(...)\n    scf.yield_([val])\nwith scf.else_():\n    val = vector.load_op(...)\n    scf.yield_([val])\nresult = scf.if_result()  # Does not exist\n```\n\n```python\n# ✅ Use scf.IfOp + ir.InsertionPoint\nread_if = scf.IfOp(condition, results_=[v8bf16_type], has_else=True)\nwith ir.InsertionPoint(read_if.then_block):\n    a0 = vector.load_op(v8bf16_type, lds_buf0, [to_idx(offset)])\n    scf.YieldOp([a0])\nwith ir.InsertionPoint(read_if.else_block):\n    a1 = vector.load_op(v8bf16_type, lds_buf1, [to_idx(offset)])\n    scf.YieldOp([a1])\nresult = read_if.results[0]  # SSA value\n\n# IfOp without return value (side-effect only)\nwrite_if = scf.IfOp(condition, results_=[], has_else=True)\nwith ir.InsertionPoint(write_if.then_block):\n    vector.store(val, lds_buf0, [to_idx(offset)])\n    scf.YieldOp([])\nwith ir.InsertionPoint(write_if.else_block):\n    vector.store(val, lds_buf1, [to_idx(offset)])\n    scf.YieldOp([])\n```\n\n````python\n# ❌ May not exist\nRocmBackend._compile_to_hsaco  # AttributeError\n```\n\n````python\n# ✅ patch the output string of pipeline_fragments\n_orig = RocmBackend.pipeline_fragments\ndef _patched(self, *, compile_hints=None, **kw):\n    if compile_hints is None: compile_hints = {}\n    frags = _orig(self, compile_hints=compile_hints, **kw)\n    return [f.replace('O=2', 'O=3') if 'rocdl-attach-target' in f else f for f in frags]\nRocmBackend.pipeline_fragments = _patched\n```\n\n````python\n# ❌ Add 4 v8bf16 iter_args\ninit_args = [zero_v4, zero_v4] + k_prefetch  # 2 h_acc + 4 k_vecs = 6 args\n\nfor i_t, inner_iter_args, loop_results in scf.for_(..., iter_args=init_args):\n    h_acc = [inner_iter_args[0], inner_iter_args[1]]\n    k_loaded = [inner_iter_args[2], inner_iter_args[3],\n                inner_iter_args[4], inner_iter_args[5]]\n    # ...\n    k_next = load_k_global(next_i_t)\n    yield h_acc + k_next  # 6 values carried across iterations\n```\n\n```python\n# ✅ patch the output string of pipeline_fragments\n_original_pipeline_fragments = RocmBackend.pipeline_fragments\n\ndef patched_pipeline_fragments(self, *, compile_hints=None, **kwargs):\n    if compile_hints is None:\n        compile_hints = {}\n    fragments = _original_pipeline_fragments(self, compile_hints=compile_hints, **kwargs)\n    return [\n        fragment.replace('O=2', 'O=3') if 'rocdl-attach-target' in fragment else fragment\n        for fragment in fragments\n    ]\n\nRocmBackend.pipeline_fragments = patched_pipeline_fragments\n```\n\n```python\n# ❌ Adds four v8bf16 iter_args\ninit_args = [zero_v4, zero_v4] + k_prefetch  # 2 h_acc + 4 k_vecs = 6 args\n\nfor i_t, inner_iter_args, loop_results in scf.for_(..., iter_args=init_args):\n    h_acc = [inner_iter_args[0], inner_iter_args[1]]\n    k_loaded = [\n        inner_iter_args[2],\n        inner_iter_args[3],\n        inner_iter_args[4],\n        inner_iter_args[5],\n    ]\n    # ...\n    k_next = load_k_global(next_i_t)\n    yield h_acc + k_next  # 6 values carried across iterations\n```\n\n```python\n# ❌ N=128 range_constexpr → 128 complete unrolls → O=3 optimization extremely slow\nfor i in range_constexpr(128):\n    val = buffer_ops.buffer_load(rsrc, offset + i * stride, ...)\n    vector.store(val, lds, [to_idx(i)])\n```\n\n```python\n# ✅ scf.for_ keeps IR compact, O=3 can still optimize loop body\nfor i_val, _, _ in scf.for_(c0, cN, c1, iter_args=[]):\n    val = buffer_ops.buffer_load(rsrc, offset + i_val * stride, ...)\n    vector.store(val, lds, [to_idx(i_val)])\n    scf.YieldOp([])\n```\n\n```python\n# ❌ Nested scf.for_ each yield → terminator conflict\nfor i, outer_args, _ in scf.for_(0, N, 1, iter_args=[init]):\n    for j, inner_args, _ in scf.for_(0, M, 1, iter_args=[outer_args[0]]):\n        updated = some_op(inner_args[0])\n        scf.YieldOp([updated])  # inner yield\n    scf.YieldOp([inner_result])  # outer yield — CONFLICT\n```\n\n```python\n# ❌ Hardcoded MAX_NT\nMAX_NT = 1024\ngrid = (MAX_NT, H // 4, 1)  # When T>65K, blocks 1024-4095 access invalid data\n```\n\n```python\n# ✅ Dynamic NT\nNT_val = (T + BT - 1) // BT\ngrid = (NT_val, H // 4, 1)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/pitfalls/flydsl/chunk-gdn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,98 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.occupancy-optimization.tips-for-reducing-register-pressure",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|occupancy-optimization#tips-for-reducing-register-pressure|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tips-for-reducing-register-pressure"
+  ],
+  "triggers": [
+   "the 'Tips for Reducing Register Pressure' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Tips for Reducing Register Pressure",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Occupancy Optimization -- Tips for Reducing Register Pressure"
+  },
+  "technique": "Tips for Reducing Register Pressure",
+  "what": "1. **Set `__launch_bounds__`**: Tell the compiler the actual block size (default assumes 1024) 2. **Defer variable definitions**: Move variable definitions closer to their first use 3. **Avoid `pow(x, 2.0)`**: Replace with `x*x` to reduce registers 4. **Control loop unrolling**: `#pragma unroll` increases register requirements 5. **Use `__restrict__`**: Reduces SGPRs (may slightly increase VGPRs) 6. **Manual spill to LDS**: Store long-lived variables in LDS 7. **`waves_per_eu=N`**: In Triton, hint the compiler to compress VGPRs to achieve target occupancy",
+  "when": "1.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/occupancy-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.software-exp.distributing-across-fma-units",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|software-exp#distributing-across-fma-units|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "distributing-across-fma-units"
+  ],
+  "triggers": [
+   "the 'Distributing Across FMA Units' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Distributing Across FMA Units",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Software-Emulated Exponential -- Distributing Across FMA Units"
+  },
+  "technique": "Distributing Across FMA Units",
+  "what": "The key insight is that Horner polynomial evaluation is a chain of FMA operations. With the softmax warp executing on CUDA cores while the MMA warp uses tensor cores, the FMA throughput is fully available:",
+  "when": "The key insight is that Horner polynomial evaluation is a chain of FMA operations.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// FlashAttention-4 softmax with software exp2\n// Executed by dedicated softmax warpgroups (part of warp specialization)\n//\n// For each row of the score matrix S[i,:]:\n//   1. Find row max: m_new = max(S[i,:])\n//   2. Compute exp2((S[i,j] - m_new) * log2(e)) for each j\n//   3. Sum for normalization denominator\n//   4. Conditionally rescale previous output if max changed\n\n__device__ void softmax_with_software_exp(\n    float* scores,       // Input: S[i, 0..N-1] (one row)\n    float* output,       // Output: softmax(S[i,:])\n    int N,\n    float* row_max,      // Running max (for online softmax)\n    float* row_sum)      // Running sum\n{\n    int lane = threadIdx.x % 32;\n\n    // Step 1: Find max across the row (warp reduction)\n    float local_max = -INFINITY;\n    for (int j = lane; j < N; j += 32) {\n        local_max = fmaxf(local_max, scores[j]);\n    }\n    // Warp-level max reduction\n    for (int offset = 16; offset > 0; offset >>= 1) {\n        local_max = fmaxf(local_max, __shfl_xor_sync(0xFFFFFFFF, local_max, offset));\n    }\n    float m_new = local_max;\n\n    // Step 2: Compute software exp2 and sum\n    float local_sum = 0.0f;\n    const float LOG2E = 1.4426950408889634f;\n\n    for (int j = lane; j < N; j += 32) {\n        float x = (scores[j] - m_new) * LOG2E;\n        float exp_val = software_exp2(x);  // 4 FMAs instead of 1 SFU op\n        output[j] = exp_val;\n        local_sum += exp_val;\n    }\n\n    // Warp-level sum reduction\n    for (int offset = 16; offset > 0; offset >>= 1) {\n        local_sum += __shfl_xor_sync(0xFFFFFFFF, local_sum, offset);\n    }\n\n    // Step 3: Conditional rescaling (FlashAttention online softmax)\n    float m_old = *row_max;\n    if (m_new > m_old) {\n        // Rescale previous accumulated output\n        float scale = software_exp2((m_old - m_new) * LOG2E);\n        *row_sum = (*row_sum) * scale + local_sum;\n        *row_max = m_new;\n        // The output accumulator must also be rescaled by `scale`\n    } else {\n        float scale = software_exp2((m_new - m_old) * LOG2E);\n        *row_sum += local_sum * scale;\n        // Rescale current exp values, not the accumulator\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/software-exp.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}
