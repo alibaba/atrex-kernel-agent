@@ -141,6 +141,12 @@ NEUTRAL_ARCH = "generic"
 # match: both may be true, but only one was written about this chip.
 NEUTRAL_RANK_DISCOUNT = 0.85
 
+# ``dsl:any`` keeps portable knowledge reachable from a language-scoped query,
+# but it is weaker evidence than a record written for the requested DSL. Without
+# this discount a slightly higher seed importance can fill the whole top-k with
+# language-neutral records, even when exact-DSL matches have the same text hit.
+NEUTRAL_DSL_RANK_DISCOUNT = 0.85
+
 # A sibling architecture's record, discounted harder still. Scheduling-level
 # knowledge often ports across a vendor's architectures, so refusing to surface
 # it leaves the caller choosing between missing it and dropping --arch, which
@@ -463,6 +469,9 @@ def ranked(pool, terms, args) -> list[tuple[float, int, float, dict, str]]:
             key *= NEUTRAL_RANK_DISCOUNT
         elif reach == "other-architecture":
             key *= CROSS_ARCH_RANK_DISCOUNT
+        scope = e["retrieval"]["scope"]
+        if getattr(args, "dsl", None) and scope.get("dsl") == "any":
+            key *= NEUTRAL_DSL_RANK_DISCOUNT
         scored.append((key, ts, imp, e, reach))
     scored.sort(key=lambda x: (-x[0], -x[2], x[3]["id"]))
     return scored
