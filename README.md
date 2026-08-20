@@ -1,7 +1,21 @@
-# Atrex Kernel Agent
+<div align="center">
 
-AKA is an end-to-end Agent system for GPU kernel implementation, profiling, and iterative
-optimization. The current repository exposes one supported optimization entry point,
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/aka-logo-light.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/aka-logo-dark.png">
+  <img alt="Atrex Kernel Agent (AKA)" src="assets/aka-logo-dark.png" width="55%">
+</picture>
+
+**Production-ready LLM agent for high-performance GPU kernel development**
+
+</div>
+
+---
+
+## About
+
+Atrex-Kernel-Agent (AKA) is an end-to-end Agent system for GPU kernel implementation, profiling,
+and iterative optimization. The current repository exposes one supported optimization entry point,
 `orchestrator/optimize.py`; the native `long_horizon/` package is its internal episode engine,
 not a second CLI.
 
