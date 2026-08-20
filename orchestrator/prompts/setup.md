@@ -57,10 +57,11 @@ Do the following, in order, but only through baseline:
    roofline data or exact evaluator shapes.
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
 3. **Stage 1 — Baseline.** {{BASELINE_DRIVER}}: implement `kernel.py`, use the evaluator
-   route declared above, validate correctness and baseline performance, write `baseline_report.md`, write
+   route declared above, run exactly one base-seed full-workload measurement for baseline performance, write `baseline_report.md`, write
    `memory/v0.json` (via `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
-   `python test_kernel.py --version v0 --no-memory` through `tools/sandbox.py --kind run`, parse the emitted
+   `python test_kernel.py --version v0 --no-memory` exactly once through `tools/sandbox.py --kind run`.
+   Do not run `--multi-seed` for V0. Parse the emitted
    `[test_kernel] RESULT_JSON=...`, and write `memory/v0.json` locally. Reject local-GPU measurement and remotely
    written memory. The test must cover the evaluator's complete workload—hidden cases for a generalized
    `agent_problem.json`, or every legacy `shapes.json` entry—and record the aggregate result and complete

@@ -61,8 +61,9 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
         return (
             f"Invoke the `$gen-plan` skill with `{draft}` as input and `{plan}` as "
             "output. Use direct/no-discussion mode for this single-action optimization plan. "
-            "The skill is repository-local under `.agents/skills/`; freeze its Codex review in "
-            "this current session before reading the independent Qoder review, then synthesize."
+            "The skill is repository-local under `.agents/skills/`; freeze its candidate proposal "
+            "and Codex review in this current session before reading the independent Qoder review, "
+            "then synthesize."
         )
     if agent_cli == "pi":
         return (
@@ -74,8 +75,9 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
         return (
             f"Read `skills/gen-plan/SKILL.md` and execute it directly with `{draft}` as input and "
             f"`{plan}` as output in direct/no-discussion mode. Do not launch a planning subagent; "
-            "freeze the skill's Qoder review in this current session before reading the independent "
-            "Codex review, then synthesize and wait for the plan file before continuing."
+            "freeze the skill's candidate proposal and Qoder review in this current session before "
+            "reading the independent Codex review, then synthesize and wait for the plan file before "
+            "continuing."
         )
     return f"```text\n/gen-plan --input {draft} --output {plan} --direct\n```"
 

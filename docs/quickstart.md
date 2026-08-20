@@ -17,14 +17,17 @@ AKA exposes one supported execution path: the unattended, budget-bounded orchest
 The orchestrator verifies required submodules before starting and initializes missing ones
 automatically; the large `reference-projects/` collection remains optional.
 
-The repository-native `gen-plan` skill requests independent, read-only, non-persistent reviews from
-Codex and Qoder, then resolves their agreements and disagreements against repository evidence. A
+The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests
+independent, read-only reviews from Codex and Qoder against the same proposal and bounded repository
+evidence. It resolves their agreements and disagreements before producing the final plan. A
 Codex- or Qoder-owned episode performs its matching review in the current session to avoid recursion;
-external reviewers are probed once before the first optimization episode. The campaign caches that
-decision under `.atrex_long_horizon/`, reuses it after restarts, and never retries a reviewer that
-failed the startup probe. An unavailable reviewer is recorded explicitly and does not discard the
-other review. External `ask-codex` and `ask-qoder` consultations always run with maximum reasoning
-effort, independently of the primary episode's configured effort.
+external reviewers are probed once before the first optimization episode. Fast and full modes both
+use this reviewed planning path. Reviews are non-persistent
+by default; an optional campaign-private Codex reviewer thread may span episodes. The campaign
+caches that decision under `.atrex_long_horizon/`, reuses it after restarts, and never retries a
+reviewer that failed the startup probe. An unavailable reviewer is recorded explicitly and does not
+discard the other review. External `ask-codex` and `ask-qoder` consultations always run with maximum
+reasoning effort, independently of the primary episode's configured effort.
 
 ## 1. Clone the Repository
 
@@ -54,6 +57,11 @@ contains `agent_problem.json`; sandbox private-shape injection and generalized r
 production-only. The orchestrator never treats operator inputs as editable candidate files. Start a
 fresh workspace when resuming an older production campaign that exposed exact shapes.
 
+For native Atrex-Bench and SOL operators, V0 does not launch a coding Agent. The supervisor commits
+the verbatim reference wrapper, runs exactly one official full-workload base-seed evaluator, writes
+README/memory/report programmatically, and records measurement metadata in a second commit whose
+memory points to the stable source SHA. A setup Agent is retained only for derived legacy inputs.
+
 ## 2. Run the Orchestrated Loop
 
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
@@ -69,11 +77,14 @@ python orchestrator/optimize.py \
 The orchestrator initializes its required submodules on first run, creates a flat
 leaderboard workspace named `kernel_opt_<name>_<framework>_<platform>/` under `--workspace` or
 the current directory, and runs each canonical version as an isolated Long Horizon episode. One
-episode may contain many related profile/edit/validate cycles; its candidate is promoted only after
-independent same-allocation ABBA verification. GPU evaluations and profiles run through
-`tools/sandbox.py` on `--sandbox-hardware`; `memory/`, episode journals, worktrees, and Git stay
-local. It finalizes a directly submittable SOL-ExecBench output after a passing run. `--platform` is
-required and names the logical optimization target.
+episode owns one candidate direction. By default, the first 20 optimization episodes after baseline
+use fast mode: five reviewed `plan -> implement -> evaluator` trials, with no profiling, multi-seed
+run, or ABBA. The fastest passing hash-matched trial is compared with canonical incumbent memory.
+Episode 21 and later use the full profile/research/edit loop and independent same-allocation ABBA
+verification.
+GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
+`memory/`, episode journals, worktrees, and Git stay local. It finalizes a directly submittable
+SOL-ExecBench output after a passing run. `--platform` is required and names the logical target.
 
 ### Agent backends
 
@@ -170,26 +181,42 @@ python orchestrator/optimize.py \
 Production mode may omit `--framework`; like leaderboard mode, it auto-dispatches all frameworks supported
 by the detected hardware. Every child receives one explicit framework constraint. V0 remains a PyTorch
 correctness baseline, while every accepted optimization commit must implement the GPU computation exclusively
-in that child's framework. Non-standard imports, declared dependencies, and library references are
-reviewed by a separate read-only policy Agent: build/ABI/launch plumbing for a self-authored kernel may
-be accepted, while prebuilt compute, alternate frameworks, hidden dispatch, and external implementation
-loading are rejected. The orchestrator writes the policy into the workspace, injects it into every episode,
+in that child's framework. The supervisor sends every candidate to a separate read-only policy Agent for a
+complete implementation and manifest review, without package-name allowlists: build/ABI/launch plumbing for
+a self-authored kernel may be accepted, while prebuilt compute, alternate frameworks, PyTorch compute
+fallbacks, hidden dispatch, and external implementation loading are rejected. The orchestrator writes the
+policy into the workspace, injects it into every episode,
 rejects violating candidates, and refuses to
 package a non-compliant final candidate. Production runs use a separate
 `kernel_opt_<name>_<framework>_<platform>_production` workspace and cannot accidentally resume a
 leaderboard campaign.
 
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
-session after V0. It validates the base seed plus five additional seeds and pins the resulting V1.
-Use `--framework-baseline=always` to enable the same stage in leaderboard
-mode, or `never` to seed optimization directly from V0. A production Triton campaign escalates to
-Gluon after three consecutive stalls; once triggered, conversion retries until correctness and
-performance parity pass, and later episodes remain in Gluon.
+session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
+supervisor first runs isolated Codex and Qoder correctness reviews concurrently over the bounded public
+contract and immutable reference. Reviewers nominate only from a bounded local path catalog; the supervisor
+reconciles their choices and injects at most two exact reference paths alongside both reviews. V1 reads only
+that shortlist without recursively browsing siblings. The reviews are cached for restart and never receive
+private shapes or write access to the candidate. The coding Agent implements and smoke-tests only, without
+full evaluation, memory writing, or commits. The supervisor then runs policy review in parallel with one
+combined full-workload evaluator that measures the base seed and checks five additional seeds, writes memory,
+and pins V1. Use
+`--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed
+optimization directly from V0. A production Triton campaign escalates to Gluon after three
+consecutive stalls; once triggered, conversion retries until correctness and performance parity pass,
+and later episodes remain in Gluon.
+
+If the V1 coding Agent exits unexpectedly, the orchestrator takes a one-time local snapshot and starts
+a read-only progress supervisor to write
+`.atrex_long_horizon/framework_baseline/resume.json`. The progress supervisor tries the configured
+Agent CLI, then Codex, then Qoder; it does not change the CLI used by the outer V1 implementation.
+Rerunning the same command keeps the interrupted worktree and resumes V1 from this handoff.
 
 ### Common options
 
 ```text
 --max-iters N                    Hard cap on canonical versions/episodes
+--fast-episodes N                Fast post-baseline episodes (default: 20; 0 disables)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex implemented)
@@ -198,7 +225,7 @@ performance parity pass, and later episodes remain in Gluon.
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---setup-timeout S                V0 setup session timeout (default: 7200)
+--setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Gateway selector or alias
 --sandbox-profile PROFILE        Optional pre/prod endpoint profile
 --sandbox-url URL                Explicit endpoint URL
@@ -207,9 +234,9 @@ performance parity pass, and later episodes remain in Gluon.
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
---verify-repeats N               ABBA repeat pairs (default: 2)
---verify-run-timeout S           Evaluator budget per ABBA run (default: 120)
---min-improvement-pct PCT        Strict ABBA gain required for promotion
+--verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
+--verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 120)
+--min-improvement-pct PCT        Strict gain required in fast or full verification
 --arch ARCH                      Override runtime architecture detection
 ```
 
@@ -220,6 +247,8 @@ report zero token usage in stream JSON; in that case `--token-budget` cannot be 
 Optimization episodes have no wall-clock deadline: an episode runs until it publishes a terminal
 handoff or its coding-agent process exits. `memory/live.json` exposes progress during a long active
 episode, while canonical `memory/vN.json` is written only after the episode reaches a terminal state.
+The supervisor validates that this numbered record is both parseable and committed at `HEAD` before
+it advances campaign state, including failed, pivoted, blocked, and interrupted rounds.
 
 ### Local gateway
 

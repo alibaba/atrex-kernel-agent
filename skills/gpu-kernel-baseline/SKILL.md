@@ -92,11 +92,16 @@ for case in test_cases:
 
 ## Phase 4: Performance, Correctness, and Quality Gate
 
-1. Run `test_kernel.py` with a per-case timeout to prevent hanging on compilation errors or infinite loops:
+1. Run exactly one full-workload base-seed V0 measurement through the mandatory sandbox. Do not pass
+   `--multi-seed` and do not launch a separate robustness run for V0:
 
 ```bash
-timeout 60 python test_kernel.py   # default 60s per run; adjust via --timeout flag
+python tools/sandbox.py --kind run --no-sync -- \
+  python test_kernel.py --version v0 --no-memory
 ```
+
+   Parse the emitted `[test_kernel] RESULT_JSON=...`, use its performance result and accompanying
+   correctness status for `memory/v0.json`, and avoid repeating the expensive baseline workload.
 
    - Each individual test case must complete within **30 seconds** (configurable via `TEST_TIMEOUT_SEC` env var).
    - If a case exceeds the timeout, mark it as `TIMEOUT_FAIL`, kill the process, and record the failure in `baseline_report.md`.

@@ -21,12 +21,17 @@ not a second CLI.
   a generalized public problem: AKA uses a user-provided contract or derives one before optimization.
 - Creates one isolated Git workspace per framework and target, with separate campaign state for
   leaderboard and production optimization.
-- Establishes a correctness-passing V0 and, by default in production mode, a self-contained
-  framework-native V1 before optimization begins.
+- Establishes native Atrex-Bench and SOL V0 mechanically with one official evaluator run, then, by
+  default in production mode, creates a self-contained framework-native V1. Before implementation,
+  isolated Codex and Qoder reviewers concurrently produce correctness guidance from bounded public
+  evidence and nominate from a bounded local reference catalog; the supervisor exposes at most two
+  exact references to V1. Unexpected V1 Agent exits trigger a one-time local candidate snapshot and
+  a separate progress-supervisor handoff for direct restart.
 - Runs one Long Horizon campaign over the complete workload set in both modes.
-- Lets each episode perform multiple profile/research/plan/edit/repair cycles, while the
-  supervisor alone owns budgets, terminal validation, same-allocation ABBA verification, and
-  squash promotion.
+- Runs the first 20 optimization episodes in fast mode with five consecutive
+  `externally reviewed plan -> implement -> evaluator` trials per episode by default, then uses the
+  full profile/research/plan/edit/repair loop. The supervisor owns budgets, terminal validation,
+  mode-appropriate verification, canonical memory, and squash promotion.
 - Preserves Git history, canonical `memory/v<N>.json`, plans, profiler evidence, episode journals,
   verification artifacts, and aggregation provenance for recovery and audit.
 
@@ -58,15 +63,16 @@ operator inputs
   -> optional framework-native V1
   -> Long Horizon episode worktree
   -> live memory + journal + terminal handoff
-  -> policy/protected-path checks + ABBA verification
+  -> policy/protected-path checks + fast comparison or full ABBA verification
   -> squash promotion
   -> finalization
 ```
 
 Each canonical version is explored in an isolated Git branch and worktree. A fresh Claude, Qoder,
-Codex, or Pi session owns one Long Horizon episode and may execute multiple engineering cycles before
-publishing a structured terminal handoff. The supervisor validates the journal and candidate, runs
-incumbent/candidate ABBA verification in one gateway allocation, and squash-promotes only a strict
+Codex, or Pi session owns one Long Horizon episode and publishes a structured terminal handoff. Fast
+episodes skip profiling and ABBA, run five hash-matched evaluator-backed trials, and select their
+fastest passing candidate against canonical incumbent memory; later full episodes use
+incumbent/candidate ABBA in one gateway allocation. The supervisor squash-promotes only a strict
 correctness-passing improvement.
 
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
