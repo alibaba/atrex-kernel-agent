@@ -652,14 +652,14 @@ def main():
         print("Error: provide --flops or --flops-expr")
         sys.exit(1)
 
-    # ──  Bytes transferred（） ──
+    # ──  Bytes transferred (optional) ──
     bytes_transferred = None
     if args.bytes is not None:
         bytes_transferred = args.bytes
     elif args.bytes_expr:
         bytes_transferred = _eval_expr(args.bytes_expr, "Bytes")
 
-    # ──  ──
+    # ──  Hardware and launch shape ──
     gpu = args.gpu.lower()
     dtype = args.dtype.lower()
     grid_blocks = args.grid_blocks
