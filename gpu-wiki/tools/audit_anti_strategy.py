@@ -119,18 +119,19 @@ def triage(record: dict) -> tuple[str, list[str]]:
 
     # criterion 3 -- decidable by rule alone
     if payload.get("verdict") in NO_CONCLUSION_VERDICTS:
-        return "demote", ["verdict=%s 表示这次运行没有结论" % payload.get("verdict")]
+        return "demote", ["verdict=%s means the run reached no conclusion"
+                          % payload.get("verdict")]
 
     # criterion 1
     struct_cond = structured_condition(record)
     prose_cond = CONDITION_RE.search(prose)
     has_condition = bool(struct_cond or prose_cond)
     if struct_cond:
-        reasons.append("条件(结构化): %s" % struct_cond)
+        reasons.append("condition (structured): %s" % struct_cond)
     elif prose_cond:
-        reasons.append("条件(散文): %r" % prose_cond.group(0))
+        reasons.append("condition (prose): %r" % prose_cond.group(0))
     else:
-        reasons.append("无可检验条件")
+        reasons.append("no checkable condition")
 
     # criterion 2
     hollow = NON_MECHANISM_RE.search(prose)
@@ -141,20 +142,23 @@ def triage(record: dict) -> tuple[str, list[str]]:
 
     if stated and len(stated) >= MIN_MECHANISM_CHARS and not NON_MECHANISM_RE.search(stated):
         has_mechanism = True
-        reasons.append("机制: established_fact.mechanism 已填")
+        reasons.append("mechanism: established_fact.mechanism is filled in")
     elif mech and len(root_cause) >= MIN_MECHANISM_CHARS:
         has_mechanism = True
-        reasons.append("机制: root_cause 有因果表述 (%r)" % mech.group(0))
+        reasons.append("mechanism: root_cause states a cause (%r)" % mech.group(0))
     elif mech:
         has_mechanism = None            # plausible, but needs a human/model read
-        reasons.append("机制: 散文里有因果词 (%r),但未落到 root_cause" % mech.group(0))
+        reasons.append("mechanism: the prose has a causal word (%r) but it never "
+                       "reached root_cause" % mech.group(0))
     else:
         has_mechanism = False
-        reasons.append("无因果机制" + (" (措辞是测量结果: %r)" % hollow.group(0) if hollow else ""))
+        reasons.append("no causal mechanism"
+                       + (" (the wording is a measurement result: %r)"
+                          % hollow.group(0) if hollow else ""))
 
     n = rediscovered(record)
     if n > 1:
-        reasons.append("被 %d 次独立复现" % n)
+        reasons.append("independently reproduced %d times" % n)
 
     if has_condition and has_mechanism is True:
         return "keep", reasons
@@ -235,21 +239,22 @@ def cmd_report() -> int:
             samples[verdict].append((record["id"], reasons))
 
     print("main-store anti-strategy records: %d\n" % len(files))
-    for name, blurb in (("keep", "三条判据全满足,留在主库"),
-                        ("needs-review", "规则无法裁决,交模型终审"),
-                        ("demote", "规则即可判定不合格,退回暂存区")):
+    for name, blurb in (
+            ("keep", "all three criteria hold, stays in the main store"),
+            ("needs-review", "the rules cannot decide, goes to the model"),
+            ("demote", "the rules alone find it unfit, returns to staging")):
         print("%-14s %4d   %s" % (name, buckets[name], blurb))
     print()
     for name in ("demote", "needs-review", "keep"):
         if not samples[name]:
             continue
-        print("--- %s 样例 ---" % name)
+        print("--- %s samples ---" % name)
         for rid, reasons in samples[name]:
             print("  %s" % rid[:72])
             for r in reasons:
                 print("      %s" % r)
         print()
-    print("下一步: --emit-review 导出 needs-review 交模型终审")
+    print("next: --emit-review exports the needs-review records for the model")
     return 0
 
 
@@ -280,16 +285,18 @@ def cmd_emit_review(dest: str) -> int:
                           encoding="utf-8")
     print("wrote %s (%d records for model review)" % (dest, len(out)))
     print()
-    print("每条给出三者之一:")
+    print("Return one of these three for each record:")
     print('  {"id": ..., "decision": "keep",   "reason": "..."}')
     print('  {"id": ..., "decision": "demote", "reason": "..."}')
     print('  {"id": ..., "decision": "backfill",')
     print('   "established_fact": {"condition": {"sm_arch": null, "shape_regime": "large-N",')
     print('                                      "dtype": null, "toolchain": null},')
-    print('                        "mechanism": "至少 40 字,说明为何在该条件下必然失败"}}')
+    print('                        "mechanism": "at least 40 chars, why it '
+          'necessarily fails under that condition"}}')
     print()
-    print("backfill 只在机制确实写在这条记录自己的散文里时使用 —— 不要凭空编造机制。")
-    print("然后: --apply <decisions.json> [--dry-run]")
+    print("Use backfill only when the mechanism really is written in this "
+          "record's own prose -- never invent one.")
+    print("then: --apply <decisions.json> [--dry-run]")
     return 0
 
 
@@ -375,9 +382,9 @@ def cmd_apply(decisions_path: str, dry_run: bool) -> int:
             print("  ... and %d more" % (len(moved) - 12))
 
     if not dry_run and moved:
-        print("\n现在重建索引: python3 tools/build_kernel_wiki.py --all")
+        print("\nnow rebuild the index: python3 tools/build_kernel_wiki.py --all")
     if dry_run:
-        print("\ndry run: 未写入任何改动")
+        print("\ndry run: nothing was written")
     return 0
 
 
