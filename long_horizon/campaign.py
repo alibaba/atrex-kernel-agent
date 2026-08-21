@@ -367,6 +367,12 @@ class LongHorizonCampaign:
     session_runner: LongSessionRunner | None = None
     worktree_root: Path | None = None
 
+    def __post_init__(self) -> None:
+        if self.fast_episodes < 0:
+            raise ValueError("fast_episodes must be non-negative")
+        if self.fast_trials < 1:
+            raise ValueError("fast_trials must be positive")
+
     @property
     def workspace(self) -> Path:
         return self.base_campaign.workspace
@@ -374,6 +380,20 @@ class LongHorizonCampaign:
     def _is_fast_episode(self, episode: int) -> bool:
         """Use the lightweight path for the first N optimization episodes."""
         return self.fast_episodes > 0 and 1 <= episode <= self.fast_episodes
+
+    def _active_fast_trials(
+        self, active: dict[str, Any], *, fast_mode: bool
+    ) -> int:
+        """Keep an in-flight fast episode's original trial contract across restarts."""
+        value = active.get("fast_trials")
+        if (
+            fast_mode
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            return value
+        return self.fast_trials
 
     @staticmethod
     def _episode_reasoning_effort(*, fast_mode: bool) -> str:
@@ -514,12 +534,15 @@ class LongHorizonCampaign:
         conversion_pending: bool,
         fast_mode: bool,
     ) -> str:
-        if fast_mode and self.fast_trials < 1:
-            raise ValueError("fast_trials must be positive")
         directives = main_adapter.episode_directives(self.base_campaign, version)
         journal_command = (
             f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
             f"--live-path {json.dumps(str(live_memory_path))}"
+        )
+        fast_trial_plan_paths = "\n".join(
+            f"- Trial {trial}: `plans/v{version}_trial{trial}_draft.md` -> "
+            f"`plans/v{version}_trial{trial}_plan.md`"
+            for trial in range(1, self.fast_trials + 1)
         )
         return _render(
             (FAST_PROMPT_PATH if fast_mode else PROMPT_PATH).read_text(
@@ -544,6 +567,8 @@ class LongHorizonCampaign:
                 "AGENT_RUNTIME": directives["agent_runtime"],
                 "PLAN_GENERATOR": directives["plan_generator"],
                 "JOURNAL_COMMAND": journal_command,
+                "FAST_TRIALS": self.fast_trials,
+                "FAST_TRIAL_PLAN_PATHS": fast_trial_plan_paths,
                 "FAST_EVALUATOR_COMMAND": self._fast_evaluator_command(version),
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
@@ -663,6 +688,7 @@ class LongHorizonCampaign:
         handoff: EpisodeHandoff,
         *,
         fast_mode: bool = False,
+        fast_trials: int | None = None,
     ) -> str:
         candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
@@ -678,21 +704,22 @@ class LongHorizonCampaign:
         if diagnosis:
             return diagnosis
         if fast_mode and handoff.status != "blocked":
+            required_fast_trials = fast_trials or self.fast_trials
             try:
                 journal = load_journal(journal_path)
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 return f"cannot validate fast trial evidence: {exc}"
             experiments = journal.get("experiments")
             experiment_count = len(experiments) if isinstance(experiments, list) else 0
-            if experiment_count < self.fast_trials:
+            if experiment_count < required_fast_trials:
                 return (
-                    f"fast episode requires {self.fast_trials} recorded trial experiments; "
+                    f"fast episode requires {required_fast_trials} recorded trial experiments; "
                     f"found {experiment_count}"
                 )
             evaluation_count = _episode_evaluation_count(worktree.path)
-            if evaluation_count < self.fast_trials:
+            if evaluation_count < required_fast_trials:
                 return (
-                    f"fast episode requires {self.fast_trials} evaluator results; "
+                    f"fast episode requires {required_fast_trials} evaluator results; "
                     f"found {evaluation_count}"
                 )
         if handoff.status != "candidate_ready":
@@ -738,7 +765,9 @@ class LongHorizonCampaign:
         journal: dict[str, Any],
         verification: VerificationResult,
         fast_mode: bool = False,
+        fast_trials: int | None = None,
     ) -> dict[str, Any]:
+        fast_trial_count = fast_trials or self.fast_trials
         representative = _representative_candidate_result(verification)
         by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
         expected_shapes = self._expected_shape_ids()
@@ -810,7 +839,7 @@ class LongHorizonCampaign:
                     outcome.get("summary", "verified long-horizon candidate")
                 ),
                 "expected_impact": (
-                    f"best of {self.fast_trials} evaluator-backed trials against "
+                    f"best of {fast_trial_count} evaluator-backed trials against "
                     "canonical incumbent"
                     if fast_mode
                     else "independently verified incumbent/candidate latency reduction"
@@ -828,7 +857,7 @@ class LongHorizonCampaign:
                     "not_profiled_fast_mode" if fast_mode else "episode-derived"
                 ),
                 "evidence_chain": (
-                    f"{self.fast_trials} reviewed plan -> implementation -> evaluator "
+                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
                     "trials -> best-candidate promotion"
                     if fast_mode
                     else "episode evidence -> candidate -> independent ABBA -> promotion"
@@ -854,6 +883,7 @@ class LongHorizonCampaign:
                 "status": "candidate_ready",
                 "mode": "fast" if fast_mode else "full",
                 "verification": "single_evaluator" if fast_mode else "abba",
+                "fast_trials": fast_trial_count if fast_mode else None,
             },
         }
 
@@ -868,7 +898,9 @@ class LongHorizonCampaign:
         verification: VerificationResult | None = None,
         episode_workspace: Path | None = None,
         fast_mode: bool = False,
+        fast_trials: int | None = None,
     ) -> dict[str, Any]:
+        fast_trial_count = fast_trials or self.fast_trials
         outcome = (
             journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
         )
@@ -1011,7 +1043,7 @@ class LongHorizonCampaign:
                     "not_profiled_fast_mode" if fast_mode else "episode-derived"
                 ),
                 "evidence_chain": (
-                    f"{self.fast_trials} reviewed plan -> implementation -> evaluator "
+                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
                     "trials -> no promotion"
                     if fast_mode
                     else "episode evidence -> terminal handoff -> no promotion"
@@ -1039,6 +1071,7 @@ class LongHorizonCampaign:
                 "status": status,
                 "candidate_commit": candidate_commit or None,
                 "mode": "fast" if fast_mode else "full",
+                "fast_trials": fast_trial_count if fast_mode else None,
             },
         }
 
@@ -1138,6 +1171,7 @@ class LongHorizonCampaign:
         resume_count: int = 0,
         tokens: int = 0,
         invocations: tuple[Any, ...] = (),
+        fast_trials: int | None = None,
         recovered_after_supervisor_interruption: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
         """Archive and commit one terminal episode exactly once."""
@@ -1146,6 +1180,9 @@ class LongHorizonCampaign:
         journal_path = worktree.path / RUNTIME_DIR / "journal.json"
         state.episodes = max(state.episodes, episode)
         state.tokens += max(0, int(tokens))
+        fast_trial_count = fast_trials or self._active_fast_trials(
+            active, fast_mode=fast_mode
+        )
 
         episode_dir = store.episode_dir(episode)
         worktree.archive(episode_dir / "archive", "HEAD")
@@ -1163,6 +1200,7 @@ class LongHorizonCampaign:
             "episode": episode,
             "version": memory_version,
             "mode": "fast" if fast_mode else "full",
+            "fast_trials": fast_trial_count if fast_mode else None,
             "status": status,
             "accepted": accepted,
             "violation": violation or None,
@@ -1230,6 +1268,7 @@ class LongHorizonCampaign:
                 journal=journal,
                 verification=verification,
                 fast_mode=fast_mode,
+                fast_trials=fast_trial_count,
             )
             promotion_commit = promote_candidate(
                 self.workspace,
@@ -1260,6 +1299,7 @@ class LongHorizonCampaign:
                 verification=verification,
                 episode_workspace=worktree.path,
                 fast_mode=fast_mode,
+                fast_trials=fast_trial_count,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1348,11 +1388,13 @@ class LongHorizonCampaign:
         if handoff is None:
             return False
         fast_mode = active.get("mode") == "fast"
+        fast_trials = self._active_fast_trials(active, fast_mode=fast_mode)
         diagnosis = self._completion_check(
             worktree,
             runtime / "journal.json",
             handoff,
             fast_mode=fast_mode,
+            fast_trials=fast_trials,
         )
         if diagnosis:
             print(
@@ -1393,6 +1435,7 @@ class LongHorizonCampaign:
             paths=paths,
             verification=verification,
             accepted=accepted,
+            fast_trials=fast_trials,
             recovered_after_supervisor_interruption=True,
         )
         return True
@@ -1555,6 +1598,7 @@ class LongHorizonCampaign:
                 candidate_commit=candidate_commit,
                 episode_workspace=worktree_path,
                 fast_mode=fast_mode,
+                fast_trials=self._active_fast_trials(active, fast_mode=fast_mode),
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1698,6 +1742,7 @@ class LongHorizonCampaign:
                 "episode_branch": worktree.branch,
                 "worktree": str(worktree.path),
                 "mode": "fast" if fast_mode else "full",
+                "fast_trials": self.fast_trials if fast_mode else None,
                 "phase": "preparing",
             }
             store.save_active(active)

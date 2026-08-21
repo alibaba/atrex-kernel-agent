@@ -1,10 +1,10 @@
 # Fast kernel optimization episode {{EPISODE}}
 
-Run one deliberately lightweight optimization episode containing exactly 5
+Run one deliberately lightweight optimization episode containing exactly {{FAST_TRIALS}}
 consecutive trials in this isolated Git worktree. Every trial repeats **plan -> implement ->
 evaluator**. Optimize for short turnaround; do not expand any trial into the normal
 profile/research/ABBA loop. External review remains part of every plan. Do not terminate after an
-early success: complete all 5 trials unless infrastructure failure or missing
+early success: complete all {{FAST_TRIALS}} trials unless infrastructure failure or missing
 authority makes the episode `blocked`.
 
 The supervisor owns the incumbent branch, canonical memory, acceptance, and squash promotion. You
@@ -67,7 +67,7 @@ At episode start, record the incumbent `HEAD`, its canonical latency, and its ke
 so far, not automatically from the immediately preceding trial. A failed or slower trial must not
 contaminate the next trial.
 
-### 1. Plan — repeat for trials 1 through 5
+### 1. Plan — repeat for trials 1 through {{FAST_TRIALS}}
 
 Before planning a trial, restore `kernel.py` from `best_commit` when the previous trial was not kept.
 Read that kernel, recent canonical memory, and the structured results of earlier trials in this
@@ -77,11 +77,7 @@ rollback condition. Then run the matching backend-native generator below. Every 
 the configured external Codex/Qoder reviews and writes a unique synthesized plan. Use these exact
 per-trial paths:
 
-- Trial 1: `plans/v{{VERSION}}_trial1_draft.md` -> `plans/v{{VERSION}}_trial1_plan.md`
-- Trial 2: `plans/v{{VERSION}}_trial2_draft.md` -> `plans/v{{VERSION}}_trial2_plan.md`
-- Trial 3: `plans/v{{VERSION}}_trial3_draft.md` -> `plans/v{{VERSION}}_trial3_plan.md`
-- Trial 4: `plans/v{{VERSION}}_trial4_draft.md` -> `plans/v{{VERSION}}_trial4_plan.md`
-- Trial 5: `plans/v{{VERSION}}_trial5_draft.md` -> `plans/v{{VERSION}}_trial5_plan.md`
+{{FAST_TRIAL_PLAN_PATHS}}
 
 The backend-native generator pattern is below. For trial `N`, replace its displayed draft and plan
 paths with the corresponding unique paths above, while retaining direct/no-discussion mode:
@@ -99,7 +95,7 @@ data.
 Edit only `kernel.py`. Keep the change focused. You may statically inspect source and repair obvious
 syntax or logic defects before evaluation, but do not launch exploratory GPU commands. Each trial is
 one attributable candidate; do not combine unrelated optimizations merely to fill the
-5-trial budget.
+{{FAST_TRIALS}}-trial budget.
 
 ### 3. Evaluator — exactly once per trial
 
@@ -139,14 +135,14 @@ the reviewed plan, implementation, correctness, latency when available, comparis
 
 If the result passes and is faster than `best_latency`, update `best_commit`, `best_latency`, and
 `best_kernel`. Otherwise keep the prior best and restore it before planning the next trial. Continue
-until 5 evaluator results and 5 journal experiments exist. Only
+until {{FAST_TRIALS}} evaluator results and {{FAST_TRIALS}} journal experiments exist. Only
 infrastructure failure or missing authority may end early as `blocked`; a bad candidate is evidence
 for the next trial, not an early terminal `pivot`.
 
-After trial 5, select the fastest passing strict improvement over the canonical
+After trial {{FAST_TRIALS}}, select the fastest passing strict improvement over the canonical
 incumbent. If that best kernel is not the current `HEAD`, restore its exact previously evaluated bytes,
 commit only `kernel.py` as `v{{VERSION}}: select best fast candidate`, and atomically publish that
-selection commit to the same policy-review request path. Do not run a sixth evaluator: the supervisor
+selection commit to the same policy-review request path. Do not run an additional evaluator: the supervisor
 matches the selected bytes to their recorded evaluator hash. If no trial produced a passing strict
 improvement, finish as `pivot`.
 
@@ -166,10 +162,10 @@ enforces conversion parity without adding ABBA to this fast episode.
 
 Reach exactly one state:
 
-1. `candidate_ready`: all 5 trials are recorded, the selected best evaluator
+1. `candidate_ready`: all {{FAST_TRIALS}} trials are recorded, the selected best evaluator
    result passes and matches the final kernel bytes, the selected candidate is committed, and the
    worktree is clean.
-2. `pivot`: all 5 trials are recorded and none produced a passing strict
+2. `pivot`: all {{FAST_TRIALS}} trials are recorded and none produced a passing strict
    improvement; keep the incumbent.
 3. `blocked`: infrastructure or missing authority prevents the required flow.
 
@@ -182,8 +178,8 @@ candidate_commit=$(git rev-parse HEAD)
   --outcome-json '{"summary":"...","next_directions":["..."]}'
 ```
 
-For `pivot`, finalize only after 5 trial experiments and
-5 evaluator results. For `blocked`, finalize immediately with the completed trial
+For `pivot`, finalize only after {{FAST_TRIALS}} trial experiments and
+{{FAST_TRIALS}} evaluator results. For `blocked`, finalize immediately with the completed trial
 evidence available, appending a blocker experiment first if no trial experiment exists yet. Omit
 `--candidate-commit` for both. Every terminal state requires at least one experiment and a non-empty
 outcome summary.
@@ -200,5 +196,5 @@ Only after finalizing, atomically publish the control handoff by writing complet
 ```
 
 Chat text is not a handoff. The supervisor rejects non-blocked fast handoffs with fewer than
-5 journal experiments or evaluator results. Do not claim a speedup merely to
-terminate; an evidence-backed 5-trial `pivot` is a valid fast outcome.
+{{FAST_TRIALS}} journal experiments or evaluator results. Do not claim a speedup merely to
+terminate; an evidence-backed {{FAST_TRIALS}}-trial `pivot` is a valid fast outcome.

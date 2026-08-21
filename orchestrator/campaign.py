@@ -24,6 +24,7 @@ from .constants import (
     ATREX_BENCH_HARNESS,
     DEFAULT_CONVERT_AFTER,
     DEFAULT_FAST_EPISODES,
+    DEFAULT_FAST_TRIALS,
     DEFAULT_HANDOFF_RESUMES,
     DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
@@ -153,6 +154,7 @@ class Campaign:
     setup_timeout: int = 7200  # 120 min for the baseline session
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
     fast_episodes: int = DEFAULT_FAST_EPISODES  # first N post-baseline episodes
+    fast_trials: int = DEFAULT_FAST_TRIALS  # trials per fast episode
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     )
@@ -2794,6 +2796,7 @@ class Campaign:
             base_campaign=self,
             max_version=self.max_iters,
             fast_episodes=self.fast_episodes,
+            fast_trials=self.fast_trials,
             token_budget=self.token_budget,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,
