@@ -1,129 +1,164 @@
-# Schema — `hardware_wiki`(硬件事实参考库)
+# Schema — `hardware_wiki` (the hardware-fact store)
 
-与 `kernel_wiki`(优化经验库)**平级且独立**的一个库。存的是硬件与 ISA 的**事实**,不是优化经验。
+A store that is **a peer of, and independent from, `kernel_wiki` (the experience
+store)**. It holds **facts** about hardware and ISAs, not optimization experience.
 
-## 为什么必须独立
+## Why it has to be independent
 
-不是「内容不同」,而是**检索问题的性质不同**:
+Not because "the content is different", but because **the retrieval problem is a
+different kind of problem**:
 
-| | 经验库 `kernel_wiki` | 本库 `hardware_wiki` |
+| | Experience store `kernel_wiki` | This store `hardware_wiki` |
 |---|---|---|
-| 知识性质 | 某人试过、结果如何——可证伪、有成功率 | 厂商与 ISA 定义——不可证伪 |
-| 检索语义 | 模糊排序:症状 → 候选手法 top-k | 精确查询:给定地址 → 唯一答案 |
-| 排序 | 需要 `worth`(重要性、档位、反馈) | **没有排序**,也没有 `worth` 这一层 |
-| 零命中 | 返回标注过的随机兜底样本 | **必须报错**——问「BF16 峰值」时给随机样本比不回答更糟,因为这个数会被当 roofline 的分母 |
-| 反馈闭环 | 必需,驱动排序 | 无意义;只有勘误与版本换代 |
+| Nature of the knowledge | Someone tried it and this is what happened — falsifiable, has a success rate | Vendor and ISA definitions — not falsifiable |
+| Retrieval semantics | Fuzzy ranking: symptom → top-k candidate techniques | Exact lookup: given an address, one answer |
+| Ranking | Needs `worth` (importance, tier, feedback) | **No ranking**, and no `worth` layer at all |
+| Zero hits | Returns a labelled random fallback sample | **Must raise an error** — answering "BF16 peak" with a random sample is worse than not answering, because that number ends up as the denominator of a roofline |
+| Feedback loop | Required; it drives the ranking | Meaningless; only errata and generational replacement apply |
 
-所以本库的 `tools/query_hardware.py` 是 **lookup**,不是 ranked search:无排序、无兜底、地址不认识就 fail-loud。
+So this store's `tools/query_hardware.py` is a **lookup**, not a ranked search: no
+ranking, no fallback, and an address it does not recognize fails loud.
 
-## 边界:什么进本库,什么留经验库
+## The boundary: what belongs here, what stays in the experience store
 
-**判据只有一条:这句话可以被我们的 benchmark 证伪吗?**
+**There is exactly one criterion: can our benchmark falsify this sentence?**
 
-- 不能证伪 → 事实 → 本库。例:`tcgen05.ld.red` 的语法与修饰符词表;TMEM 每 SM 256 KB;B300 的 INT8 峰值 187.5 TOPS。
-- 能证伪 → 经验 → 经验库。例:「LDGSTS 在 32 KiB in-flight 附近饱和」「CLC 在均衡 GEMM 上并不总是更快」「某手法保留率 26%」——这些是实测、依设备与负载而变。
+- Cannot be falsified → a fact → this store. Examples: the syntax and modifier
+  vocabulary of `tcgen05.ld.red`; TMEM is 256 KB per SM; the B300 INT8 peak is
+  187.5 TOPS.
+- Can be falsified → experience → the experience store. Examples: "LDGSTS
+  saturates around 32 KiB in flight", "CLC is not always faster on balanced
+  GEMMs", "that technique has a 26% retention rate" — these are measurements, and
+  they vary with device and workload.
 
-来源页混合两类内容时**必须拆开**。例如 B200 tensor-core 分析页的 §12 微基准、CLC 页的 Performance Impact 小节,都明确写着「这些是 B200 观测值,不是架构保证」——它们留在经验库。
+When a source page mixes the two kinds, it **must be split**. For instance the
+§12 microbenchmarks on the B200 tensor-core analysis page, and the Performance
+Impact subsection of the CLC page, both say explicitly that "these are B200
+observations, not architectural guarantees" — those stay in the experience store.
 
-`check_hardware_wiki.py` 的 **no-advice** 门会拦下混进来的推荐语(「usually faster」「we recommend」「保留率 N%」)。
+The **no-advice** gate in `check_hardware_wiki.py` catches recommendation language
+that slips in ("usually faster", "we recommend", "retention rate N%").
 
-## 三种记录类型
+## The three record types
 
-| type | 一条记录 = | 地址 |
+| type | One record = | Address |
 |---|---|---|
-| `spec-sheet` | 一款芯片的全部数值 | `--product b300` |
-| `instruction` | 一个 ISA 指令族 | `--instruction tcgen05.ld.red` |
-| `arch-feature` | 一项架构能力 | `--feature fp4-k96-2cta` |
+| `spec-sheet` | Every number for one chip | `--product b300` |
+| `instruction` | One ISA instruction family | `--instruction tcgen05.ld.red` |
+| `arch-feature` | One architectural capability | `--feature fp4-k96-2cta` |
 
-统一信封:`identity`(定位) + `facts`(内容,给 agent) + `provenance`(证据) + `status`。**没有 worth。**
+A single envelope: `identity` (the address) + `facts` (the content, for the agent)
++ `provenance` (the evidence) + `status`. **There is no worth.**
 
-## 证据分级是强制的
+## Evidence grading is mandatory
 
-每个数字都要能回答「这是谁说的」。`provenance.evidence_class` 三档:
+Every number has to be able to answer "who says so". `provenance.evidence_class`
+has three levels:
 
-- `vendor-published` —— 厂商为这颗芯片印出来的值
-- `derived-from-system-total` —— 由 n 卡整机数值推算(**必须写清除数**,由 provenance 门强制)
-- `architecture-analysis` —— 第三方或推断,**视为暂定**,优先用运行时设备属性
+- `vendor-published` — a value the vendor printed for this exact chip
+- `derived-from-system-total` — computed from an n-card system-level number (**the
+  divisor must be stated**, which the provenance gate enforces)
+- `architecture-analysis` — third-party or inferred, **treated as provisional**;
+  prefer runtime device attributes
 
-一张厂商页里经常混着多档,所以 `memory` / `compute_units` 支持 `provenance_overrides` 做**字段级例外**。B300 就是实例:容量与带宽是厂商发布,而 L2 126 MB 属架构分析。
+One vendor page often mixes several levels, so `memory` and `compute_units`
+support `provenance_overrides` for **field-level exceptions**. B300 is the case in
+point: capacity and bandwidth are vendor-published, while the 126 MB L2 is
+architecture analysis.
 
-**未发布的字段一律留 `null`,并在 `facts.unavailable` 里写明如何获得。** 编一个峰值比缺一个峰值危险得多——它会静默污染所有由它算出的利用率。fabrication 门强制这条:`null` 必须有说明,有说明的字段不许同时带值。
+**Any unpublished field stays `null`, with `facts.unavailable` stating how to
+obtain it.** Inventing a peak is far more dangerous than missing one — it silently
+pollutes every utilization figure derived from it. The fabrication gate enforces
+this: a `null` must come with an explanation, and a field that has an explanation
+may not also carry a value.
 
-## 用法
+## Usage
 
 ```bash
-# 取 roofline 的分母,带证据等级
+# Fetch a roofline denominator, with its evidence class
 python3 tools/query_hardware.py --product b300 --field peak_compute.bf16.dense
 # → {"value": 2250, "provenance": "architecture-analysis", ...}
 
-# 未发布的字段:给处置办法,不给替代值
+# An unpublished field: you get a disposition, not a substitute value
 python3 tools/query_hardware.py --product b300 --field compute_units.shared_memory_kb_per_sm
 # → {"value": null, "unavailable": "...Query the CUDA device attribute at runtime..."}
 
-# 跨代对比:防「新一代一定更强」的想当然
+# Cross-generation comparison: guards against assuming the newer part is stronger
 python3 tools/query_hardware.py --product b300 --vs b200
-# → int8 −95.8%、fp64 −96.6%、fp4 +50%
+# → int8 −95.8%, fp64 −96.6%, fp4 +50%
 
-# 指令与特性
+# Instructions and features
 python3 tools/query_hardware.py --instruction tcgen05.ld.red
 python3 tools/query_hardware.py --feature fp4-k96-2cta
 python3 tools/query_hardware.py --capability sm_103 --list features
 ```
 
-约定与经验库一致:**stdout 只有一个 JSON**,提示信息走 stderr,所以可以直接 `json.load`。
+The convention matches the experience store: **stdout carries exactly one JSON
+document** and diagnostics go to stderr, so you can `json.load` it directly.
 
-## 维护
+## Maintenance
 
 ```bash
-python3 tools/build_hardware_index.py         # 重建 records/index.json
-python3 tools/build_hardware_index.py --check # 检查索引是否与记录一致
-python3 tools/check_hardware_wiki.py          # 六道门
-python3 -m unittest discover -s tools         # 查询契约测试
+python3 tools/build_hardware_index.py         # rebuild records/index.json
+python3 tools/build_hardware_index.py --check # check the index agrees with the records
+python3 tools/check_hardware_wiki.py          # six gates
+python3 -m unittest discover -s tools         # query contract tests
 ```
 
-六道门各自防一类**静默**损坏:`schema`(记录漂移)、`ids`(id 与路径不符,引用解析不到)、`index`(记录不可达)、`provenance`(数字没有出处)、`no-advice`(经验混进事实)、`fabrication`(编造未发布的数字)。
+Each of the six gates prevents one class of **silent** corruption: `schema`
+(record drift), `ids` (id does not match path, so references do not resolve),
+`index` (a record is unreachable), `provenance` (a number with no source),
+`no-advice` (experience mixed into facts), and `fabrication` (an unpublished
+number invented).
 
-## 现状
+## Current state
 
-30 条记录,全部由本仓库策展文档投影而来:
+30 records, all projected from this repository's curated documentation:
 
-| type | 条数 |
+| type | Count |
 |---|---:|
 | `spec-sheet` | 9 |
 | `arch-feature` | 10 |
 | `instruction` | 11 |
 
-覆盖的产品:b200、b300、mi300x、mi308x、mi355x、sm120。
+Products covered: b200, b300, mi300x, mi308x, mi355x, sm120.
 
-### 产品名称映射
+### Product name mapping
 
-`tools/hardware_identity.py` 是所有查询入口共享的固定身份表。表中的“内部地址”
-与 `hardware_wiki/records/index.json` 的 `product` 完全一致；大小写、厂商前缀、
-空格、下划线和 `GPU` / `accelerator` 后缀只影响输入写法，不产生新的内部地址。
+`tools/hardware_identity.py` is the fixed identity table shared by every query
+entry point. The "internal address" in that table is exactly the `product` value
+in `hardware_wiki/records/index.json`; case, vendor prefixes, spaces, underscores
+and `GPU` / `accelerator` suffixes only affect how the input is written and never
+produce a new internal address.
 
-| 内部地址 | vendor | arch | 允许的纯格式变化示例 |
+| Internal address | vendor | arch | Examples of permitted purely-formatting variation |
 |---|---|---|---|
-| `b200` | nvidia | blackwell | `B200`、`NVIDIA B-200 GPU` |
-| `b300` | nvidia | blackwell-ultra | `B300`、`nvidia-b300` |
-| `mi300x` | amd | cdna3 | `MI300X`、`AMD Instinct MI-300X GPU` |
-| `mi308x` | amd | cdna3 | `MI308X`、`amd_mi308x` |
-| `mi355x` | amd | cdna4 | `MI355X`、`AMD MI-355X accelerator` |
-| `sm120` | nvidia | blackwell-geforce | `SM120`、`sm_120`、`SM-120` |
+| `b200` | nvidia | blackwell | `B200`, `NVIDIA B-200 GPU` |
+| `b300` | nvidia | blackwell-ultra | `B300`, `nvidia-b300` |
+| `mi300x` | amd | cdna3 | `MI300X`, `AMD Instinct MI-300X GPU` |
+| `mi308x` | amd | cdna3 | `MI308X`, `amd_mi308x` |
+| `mi355x` | amd | cdna4 | `MI355X`, `AMD MI-355X accelerator` |
+| `sm120` | nvidia | blackwell-geforce | `SM120`, `sm_120`, `SM-120` |
 
-例如 `NVIDIA B300 GPU` → `b300`、`AMD Instinct MI308X GPU` → `mi308x`。
-A100/A800/A30/A10、L20/L40S/L4、
-H100/H200/H800/H20/GH200、B100/GB200/GB300、RTX PRO 5000/RTX 5090/5080、MI300A/MI350X
-也在同一身份表中；它们目前没有产品 spec sheet，因此返回 `not-recorded` 获取办法，
-不会借用其他产品的数字。
+For example `NVIDIA B300 GPU` → `b300` and `AMD Instinct MI308X GPU` → `mi308x`.
+A100/A800/A30/A10, L20/L40S/L4, H100/H200/H800/H20/GH200, B100/GB200/GB300,
+RTX PRO 5000/RTX 5090/5080, and MI300A/MI350X are in the same identity table; they
+currently have no product spec sheet, so they return a `not-recorded` disposition
+and never borrow another product's numbers.
 
-架构名不会被强制映射到某个产品：例如 `gfx942` 同时覆盖多个 CDNA3 SKU，不能
-据此选择 `mi300x` 或 `mi308x`；`GB200` 也保持为独立产品，不借用 B200 spec sheet。
-Query 侧只消除大小写、空格、`-`、`_` 和明确的厂商包装词，不允许把一个身份翻译
-成另一个身份。任何非产品标识都会 `unknown-product`，不会被映射到某张 spec sheet。
-运行 `python3 tools/query_hardware.py --list products` 可查看内部地址、格式规则和已识别
-但尚无 spec sheet 的产品。
+An architecture name is never force-mapped onto a particular product: `gfx942`,
+for instance, covers several CDNA3 SKUs, so it cannot be used to pick `mi300x`
+over `mi308x`, and `GB200` likewise stays a distinct product rather than borrowing
+the B200 spec sheet. The query side only eliminates case, spaces, `-`, `_` and
+unambiguous vendor wrapper words; it never translates one identity into another.
+Any non-product identifier yields `unknown-product` rather than being mapped onto
+some spec sheet. Run `python3 tools/query_hardware.py --list products` to see the
+internal addresses, the formatting rules, and the products that are recognized but
+have no spec sheet yet.
 
-**证据分级说明**:这些页面是第三方策展文档,不是厂商数据表,所以每条记录的
-`provenance.evidence_class` 一律为 `architecture-analysis`——按 schema 定义视为
-**暂定值**,优先用运行时设备属性核对。本库不会替厂商背书:任何数字都不会被标成
-`vendor-published`。
+**A note on evidence grading**: these pages are third-party curated documentation,
+not vendor datasheets, so `provenance.evidence_class` is `architecture-analysis`
+for every record here — which by the schema's definition makes them
+**provisional**, to be checked against runtime device attributes first. This store
+does not vouch on a vendor's behalf: no number here is ever marked
+`vendor-published`.
