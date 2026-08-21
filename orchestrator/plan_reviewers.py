@@ -53,6 +53,7 @@ def _failure_reason(completed: subprocess.CompletedProcess[str]) -> str:
         and "consultation failed with exit code" not in line
         and "running read-only consultation" not in line
         and "running isolated read-only consultation" not in line
+        and "running campaign-persistent read-only consultation" not in line
     ]
     if lines:
         return _single_line(lines[-1])
@@ -62,6 +63,7 @@ def _failure_reason(completed: subprocess.CompletedProcess[str]) -> str:
 def _probe_reviewer(
     reviewer: str,
     draft: Path,
+    proposal: Path,
     workspace: Path,
     agent_cli: str,
     timeout_s: int,
@@ -88,6 +90,8 @@ def _probe_reviewer(
                 str(helper),
                 "--input",
                 str(draft),
+                "--proposal",
+                str(proposal),
                 "--timeout",
                 str(timeout_s),
             ],
@@ -184,12 +188,23 @@ def discover_plan_reviewers(
             "the requested structured review sections. No repository inspection is needed.\n",
             encoding="utf-8",
         )
+        proposal = Path(directory) / "availability_proposal.md"
+        proposal.write_text(
+            "# Candidate Proposal\n\n"
+            "- Evidence: the reviewer availability probe draft requests a bounded response.\n"
+            "- Inference: a successful structured response confirms the consultation path.\n"
+            "- Optimization category: reviewer availability validation.\n"
+            "- Action: return the required review sections without repository inspection.\n"
+            "- Validation: every required response marker is present.\n",
+            encoding="utf-8",
+        )
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = {
                 name: executor.submit(
                     _probe_reviewer,
                     name,
                     draft,
+                    proposal,
                     workspace,
                     agent_cli,
                     timeout_s,

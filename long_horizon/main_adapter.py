@@ -41,7 +41,6 @@ from orchestrator.workspace_state import (
     git_head,
     head_kernel_is_initial_baseline,
     latest_version,
-    preserve_interrupted_tracked_changes,
     read_stall,
     reconstruct_stall,
     write_stall,
@@ -59,8 +58,8 @@ def prepare_campaign(campaign: Campaign) -> None:
             f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        preserve_interrupted_tracked_changes(
-            campaign.workspace, f"resume {campaign.campaign_name}"
+        campaign.preserve_interrupted_changes_for_resume(
+            f"resume {campaign.campaign_name}"
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
@@ -68,7 +67,9 @@ def prepare_campaign(campaign: Campaign) -> None:
         campaign.optimization_mode == "production"
         and latest_version(campaign.workspace) > 0
     ):
-        violations = campaign._production_kernel_violations()
+        violations = campaign._production_kernel_violations(
+            require_gluon=head_kernel_is_gluon(campaign.workspace)
+        )
         if violations and not head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
                 "cannot resume a non-compliant production HEAD: "
@@ -248,10 +249,18 @@ def run_sandbox(
     )
 
 
-def candidate_policy_violations(campaign: Campaign, workspace: Path) -> list[str]:
+def candidate_policy_violations(
+    campaign: Campaign,
+    workspace: Path,
+    *,
+    require_gluon: bool = False,
+) -> list[str]:
     if campaign.optimization_mode != "production":
         return []
-    return campaign._production_kernel_violations(workspace)
+    return campaign._production_kernel_violations(
+        workspace,
+        require_gluon=require_gluon,
+    )
 
 
 def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:

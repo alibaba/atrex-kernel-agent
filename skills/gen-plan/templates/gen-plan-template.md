@@ -13,6 +13,12 @@
 
 ## Dual Review
 
+### Candidate Proposal Reviewed
+
+- Frozen hypothesis: <candidate evidence-to-inference claim>
+- Frozen optimization category: <exactly one category>
+- Frozen proposed action: <candidate target paths, symbols, and expected mechanism>
+
 ### Codex Findings
 
 - Consultation status: <completed, current_codex_session, or unavailable with reason>
@@ -27,6 +33,7 @@
 
 - Agreements: <where both reviews align and the supporting repository evidence>
 - Disagreements resolved: <conflict, selected disposition, and decisive evidence>
+- Candidate changes after review: <evidence-based corrections, or why no change was justified>
 - Adopted suggestions: <suggestion, source reviewer or both, and supporting evidence>
 - Rejected or deferred suggestions: <suggestion, source reviewer or both, disposition, and reason>
 

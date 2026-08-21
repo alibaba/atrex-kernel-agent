@@ -24,8 +24,10 @@ implementation.
 - During this workflow, persist only the requested plan file. Consultation helpers may use
   automatically removed process scratch for isolation.
 - Do not edit source, run implementation tasks, create commits, or start another workflow.
-- The `ask_codex` and `ask_qoder` consultations are read-only and non-persistent. Give both the
-  same bounded evidence packet, isolate Codex from the project, and disable Qoder tools.
+- The `ask_codex` and `ask_qoder` consultations are read-only. They are non-persistent by default;
+  an explicitly configured long Codex reviewer session remains read-only and campaign-private. Give
+  both reviewers the same candidate proposal and bounded evidence packet, isolate Codex from the
+  project, and disable Qoder tools.
 - Preserve every requirement, constraint, measurement, search result, and rejected direction from
   the draft. The structured plan must be a superset of the draft.
 - Keep the original draft verbatim at the bottom of the plan between the template markers.
@@ -62,6 +64,13 @@ Build an evidence-to-action chain:
 4. Identify the smallest concrete file changes that test that inference.
 5. Define correctness, performance, rollback, and stop conditions.
 
+Before consulting either reviewer, populate
+`skills/gen-plan/templates/candidate-proposal-template.md` in automatically removed process scratch.
+This frozen candidate proposal is not the final plan. It must state the selected evidence-to-action
+chain, exactly one optimization category, target paths and symbols, the expected mechanism, scope
+constraints, rejected directions, validation and falsification conditions, and unresolved
+assumptions. Do not persist the candidate proposal in the campaign workspace.
+
 Check the draft for unclear scope, contradictions, missing dependencies, infeasible changes, and
 quantitative targets. Treat numeric performance targets as trends unless the draft explicitly marks
 them as hard acceptance thresholds.
@@ -79,27 +88,35 @@ retried by later plans in the same campaign; retain the helper's
 decision.
 
 After completing the initial analysis, freeze one evidence packet and use the bundled dual-review
-helper before choosing the final plan direction. Give both reviewers the original draft plus the
-same small set of directly relevant text files, normally `README.md`, `kernel.py`, the latest
-canonical memory entry, and source or profile summaries cited by the draft. Never include
+helper before finalizing the plan direction. Give both reviewers the candidate proposal, original
+draft, and the same small set of directly relevant text files, normally `README.md`, `kernel.py`, the
+latest canonical memory entry, and source or profile summaries cited by the draft. The candidate is
+the primary review target; the draft and context are evidence for testing its claims. Never include
 credentials, raw secrets, unrelated files, or large binary profile artifacts.
 
 ```bash
 bash skills/gen-plan/scripts/ask-reviewers.sh \
   --input <input> \
+  --proposal <temporary-candidate-proposal> \
   --context README.md \
   --context kernel.py
 ```
 
+`--proposal` is required and must name the non-empty frozen candidate proposal in process scratch.
 Add other `--context` arguments only when they materially affect the plan. The helper starts the
 applicable external reviewers concurrently so neither can see or anchor on the other's response.
+When proposal, draft, and context would exceed Qoder's five-attachment limit, the helper folds all
+context files into one labeled temporary bundle and gives that identical bundle to both reviewers.
+Do not manually remove evidence or issue a second full dual-review call. For an eligible transient
+failure, the helper retries only the failed reviewer once; it does not rerun a successful reviewer
+and does not retry quota, authentication, timeout, disabled, or missing-CLI failures.
 Both external reviewer processes always use maximum reasoning effort; episode/session settings,
 reviewer effort environment variables, and legacy `--reasoning-effort` arguments cannot lower it.
 By default each external review is ephemeral. `--long-reviewer-session codex` resumes one
 campaign-private, read-only Codex thread across episodes while continuing to send the complete
-current draft and bounded context on every call. Long Qoder and Claude reviewer sessions are not
-implemented and fail explicitly. Session state lives under `.atrex_long_horizon/` and must never
-enter a candidate commit.
+current candidate proposal, draft, and bounded context on every call. Long Qoder and Claude reviewer
+sessions are not implemented and fail explicitly. Session state lives under `.atrex_long_horizon/`
+and must never enter a candidate commit.
 Each review returns its backend-specific summary marker followed by the same five assessment
 sections:
 
@@ -110,17 +127,18 @@ sections:
 - `VALIDATION_RECOMMENDATIONS`
 - `QUESTIONS_OR_ASSUMPTIONS`
 
-If the current episode backend is Codex or Qoder, first complete and retain that backend's review in
-the current session using the same sections. Only then run the helper; it skips the matching nested
-process and obtains the other backend's independent review. Mark the retained review status
+If the current episode backend is Codex or Qoder, first review the frozen candidate proposal and
+retain that backend's review in the current session using the same sections. Only then run the
+helper; it skips the matching nested process and obtains the other backend's independent review.
+Mark the retained review status
 `current_codex_session` or `current_qoder_session`. Do not revise it after seeing the external review;
 resolve new information only during synthesis. Claude and Pi backends use both external reviewers.
 
-If either reviewer is unavailable, times out, or fails, do not fabricate its advice. In `direct`
-mode, continue with the available review and conservative analysis, recording each status and
-failure reason. If both fail, continue using only the primary analysis and label the result as
-unreviewed. In `discussion` mode, ask whether to retry or continue with partial or no independent
-review.
+After the helper's selective retry, if either reviewer is unavailable, times out, or fails, do not
+fabricate its advice or rerun the successful reviewer. In `direct` mode, continue with the available
+review and conservative analysis, recording each status and failure reason. If both fail, continue
+using only the primary analysis and label the result as unreviewed. In `discussion` mode, ask whether
+to retry only the failed reviewer or continue with partial or no independent review.
 
 ### 5. Synthesize both reviews and generate the plan
 
@@ -137,6 +155,10 @@ evidence rather than by majority vote. Evaluate every recommendation as follows:
    both.
 5. Convert unresolved reviewer questions into conservative assumptions or pending decisions
    according to the selected direct/discussion mode.
+
+Record how the frozen candidate changed after review. Every material correction must identify the
+reviewer and supporting evidence; if the candidate remains unchanged, state why the reviews did not
+justify a change.
 
 Both reviewers are advisory, not authoritative. The final plan must remain a superset of the human
 draft and must still contain exactly one optimization category.
@@ -166,6 +188,7 @@ Before writing, verify that the plan:
 
 - does not omit or contradict the draft;
 - uses both reviews selectively and records the disposition of material suggestions and conflicts;
+- records the frozen candidate and the evidence-based changes made after review;
 - proposes only one attributable optimization category;
 - names concrete files and validation commands;
 - distinguishes correctness from performance evidence;
@@ -195,7 +218,7 @@ count.
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Consultation completed, or nested invocation intentionally skipped for the matching backend |
-| 1 | Draft or context input is invalid |
+| 1 | Draft, candidate proposal, or context input is invalid |
 | 2 | Helper arguments or environment configuration are invalid |
 | 3 | Reviewer response is missing one or more required review sections |
 | 124 | Reviewer consultation timed out |

@@ -1,17 +1,11 @@
-"""Optimization-mode policy and mechanical production-kernel enforcement."""
+"""Optimization-mode policy and production-candidate enforcement."""
 
 from __future__ import annotations
 
 import ast
-import io
 import json
-import pkgutil
 import re
 import subprocess
-import sys
-import sysconfig
-import tokenize
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -22,19 +16,7 @@ POLICY_BEGIN = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_BEGIN -->"
 POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
 
 
-@dataclass(frozen=True)
-class DependencyReviewSignal:
-    """One non-mechanical dependency signal for independent agent review."""
-
-    id: str
-    kind: str
-    value: str
-
-
-DependencyReviewer = Callable[
-    [Path, str, tuple[DependencyReviewSignal, ...]],
-    list[str],
-]
+ProductionReviewer = Callable[[Path, str, bool], list[str]]
 
 
 def _framework_key(framework: str) -> str:
@@ -51,44 +33,6 @@ def _framework_key(framework: str) -> str:
         "fly": "flydsl",
     }
     return aliases.get(token, token)
-
-
-def _code_without_prose(source: str) -> str:
-    """Blank comments and docstrings so textual scans judge code, not description.
-
-    A docstring reading "vLLM-style paged attention" describes the algorithm; it is not a
-    dependency. Ordinary string literals are preserved because a Cuda candidate embeds its
-    C++ source (with ``#include`` and ``__global__``) in one.
-    """
-    lines = source.splitlines()
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        tree = None
-    if tree is not None:
-        for node in ast.walk(tree):
-            # Any bare string statement is discarded at runtime, so it can only be
-            # documentation. This also covers a "docstring" that Python does not count as
-            # one because `from __future__ import annotations` precedes it.
-            if (
-                isinstance(node, ast.Expr)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)
-                and node.end_lineno is not None
-            ):
-                for index in range(node.lineno, node.end_lineno + 1):
-                    lines[index - 1] = ""
-    blanked = "\n".join(lines)
-    try:
-        tokens = list(tokenize.generate_tokens(io.StringIO(blanked).readline))
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        return blanked
-    out = blanked.splitlines()
-    for token in tokens:
-        if token.type == tokenize.COMMENT:
-            row, column = token.start
-            out[row - 1] = out[row - 1][:column]
-    return "\n".join(out)
 
 
 def source_uses_gluon(source: str) -> bool:
@@ -157,16 +101,15 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         f"{framework_rule}"
         "- The V0 PyTorch reference wrapper is the only baseline exception. Every optimized candidate "
         f"committed after V0 must implement the GPU computation directly in **{candidate_framework}**.\n"
-        "- Third-party dependencies are reviewed by a separate, read-only policy agent based on how "
-        "they are actually used. Compiler bindings, header discovery, ABI/launch plumbing, and ordinary "
-        "non-compute support utilities may be accepted when they only build or launch the candidate's "
-        "self-authored kernel. Prebuilt kernels/operators/math implementations, alternate DSLs, hidden "
-        "dispatch, and external implementation loading remain forbidden. Do not assume that either an "
-        "unfamiliar package name or a familiar vendor package is automatically accepted or rejected.\n"
-        "- Update `solution.json` so its languages and dependencies contain only PyTorch/evaluator "
-        "plumbing plus the selected framework. Before committing, inspect `kernel.py` and "
-        "`solution.json` against these rules. The orchestrator will mechanically reject and revert a "
-        "kernel-changing commit that violates them, even if it is faster and correct.\n"
+        "- The supervisor sends every production candidate to a separate, read-only policy reviewer. "
+        "The reviewer judges the complete candidate by actual use, not package names: compiler bindings, "
+        "header discovery, ABI/launch plumbing, and ordinary non-compute support utilities may be accepted "
+        "when they only build or launch the candidate's self-authored kernel. Prebuilt kernels/operators/math "
+        "implementations, alternate DSLs, hidden dispatch, PyTorch compute fallbacks, and external "
+        "implementation loading remain forbidden. Ambiguous evidence is rejected.\n"
+        "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
+        "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
+        "evidence-backed production-policy verdict, even if it is faster and correct.\n"
     )
 
 
@@ -256,136 +199,68 @@ def install_workspace_policy(
             handle.write(entry + "\n")
 
 
-def _stdlib_import_names() -> frozenset[str]:
-    known = getattr(sys, "stdlib_module_names", None)
-    if known is not None:
-        return frozenset(known)
-    roots = {
-        value
-        for key in ("stdlib", "platstdlib")
-        if (value := sysconfig.get_path(key))
-    }
-    roots.update(
-        str(Path(root) / "lib-dynload")
-        for root in tuple(roots)
-        if (Path(root) / "lib-dynload").is_dir()
-    )
-    discovered = {name for _, name, _ in pkgutil.iter_modules(sorted(roots))}
-    return frozenset((*sys.builtin_module_names, *discovered))
+_SUPPORTED_PRODUCTION_FRAMEWORKS = frozenset(
+    {"triton", "gluon", "cutedsl", "cuda", "flydsl"}
+)
 
 
-_STDLIB_IMPORTS = _stdlib_import_names() | {"__future__"}
-_ALLOWED_IMPORTS = {
-    "triton": {"torch", "triton", "sol_execbench"},
-    "gluon": {"torch", "triton", "sol_execbench"},
-    "cutedsl": {"torch", "cutlass", "cuda", "sol_execbench"},
-    "cuda": {"torch", "cuda", "sol_execbench"},
-    "flydsl": {"torch", "flydsl", "sol_execbench"},
-}
-_ALLOWED_DEPENDENCY_TOKENS = {
-    "triton": {"torch", "triton"},
-    "gluon": {"torch", "triton"},
-    "cutedsl": {"torch", "cutlass", "nvidiacutlassdsl", "cuda", "cudapython"},
-    "cuda": {"torch", "cuda", "cudapython"},
-    "flydsl": {"torch", "flydsl"},
-}
-
-
-def _import_roots(tree: ast.AST) -> tuple[set[str], bool]:
-    roots: set[str] = set()
-    relative = False
+def _has_relative_import(tree: ast.AST) -> bool:
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            roots.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                relative = True
-            if node.module:
-                roots.add(node.module.split(".", 1)[0])
-    return roots, relative
+        if isinstance(node, ast.ImportFrom) and node.level:
+            return True
+    return False
 
 
-def _normalized_dependency(value: object) -> str:
-    text = re.split(r"[<>=!~\[; ]", str(value).strip(), maxsplit=1)[0]
-    return re.sub(r"[^a-z0-9]+", "", text.lower())
+def _solution_structure_violations(workspace: Path) -> list[str]:
+    """Validate only manifest structure that the campaign must be able to version."""
+    solution_path = workspace / "solution.json"
+    if not solution_path.is_file():
+        return []
+    try:
+        solution = json.loads(solution_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"solution.json is invalid: {exc}"]
+    if not isinstance(solution, dict):
+        return ["solution.json must contain a JSON object"]
+
+    spec = solution.get("spec") or {}
+    sources = solution.get("sources") or []
+    external_paths: list[str] = []
+    if isinstance(spec, dict):
+        entry_point = spec.get("entry_point")
+        if isinstance(entry_point, str) and "::" in entry_point:
+            entry_path = entry_point.split("::", 1)[0].strip()
+            if entry_path and entry_path != "kernel.py":
+                external_paths.append(entry_path)
+    if isinstance(sources, list):
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            path = source.get("path")
+            if isinstance(path, str) and path.strip() and path.strip() != "kernel.py":
+                external_paths.append(path.strip())
+    if external_paths:
+        return [
+            "solution.json references candidate source outside kernel.py that the campaign "
+            "cannot version or embed: " + ", ".join(dict.fromkeys(external_paths))
+        ]
+    return []
 
 
-_BANNED_TORCH_COMPUTE = {
-    "addmm", "amax", "amin", "bmm", "conv1d", "conv2d", "conv3d", "cumprod", "cumsum",
-    "einsum", "exp", "gelu", "layer_norm", "log", "log_softmax", "matmul", "max", "mean",
-    "min", "mm", "rms_norm", "scaled_dot_product_attention", "sigmoid", "silu", "softmax",
-    "sort", "sum", "topk",
-}
-
-
-def _dotted_name(node: ast.AST) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        base = _dotted_name(node.value)
-        return f"{base}.{node.attr}" if base else node.attr
-    return ""
-
-
-def _torch_compute_violations(tree: ast.AST) -> list[str]:
-    torch_aliases = {"torch"}
-    functional_aliases: set[str] = set()
-    direct_functional_calls: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == "torch":
-                    torch_aliases.add(alias.asname or "torch")
-                elif alias.name == "torch.nn.functional":
-                    functional_aliases.add(alias.asname or alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module == "torch.nn.functional":
-            direct_functional_calls.update(alias.asname or alias.name for alias in node.names)
-
-    violations: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
-            violations.append("Python/PyTorch matrix multiplication is not the selected kernel framework")
-            continue
-        if not isinstance(node, ast.Call):
-            continue
-        dotted = _dotted_name(node.func)
-        if not dotted:
-            continue
-        parts = dotted.split(".")
-        if parts[0] in direct_functional_calls:
-            violations.append(f"PyTorch functional call is forbidden in production candidate: {dotted}")
-            continue
-        if any(dotted == alias or dotted.startswith(alias + ".") for alias in functional_aliases):
-            violations.append(f"PyTorch functional call is forbidden in production candidate: {dotted}")
-            continue
-        if parts[0] not in torch_aliases or len(parts) < 2:
-            continue
-        suffix = parts[1:]
-        if suffix[0] == "ops":
-            violations.append(f"torch.ops dispatch is forbidden in production candidate: {dotted}")
-        elif suffix[:2] == ["nn", "functional"]:
-            violations.append(f"PyTorch functional call is forbidden in production candidate: {dotted}")
-        elif suffix[-1] in _BANNED_TORCH_COMPUTE:
-            violations.append(f"PyTorch compute call is forbidden in production candidate: {dotted}")
-    return list(dict.fromkeys(violations))
-
-
-def production_kernel_violations(
+def production_structure_violations(
     workspace: Path,
     framework: str,
     *,
     require_gluon: bool = False,
-    dependency_reviewer: DependencyReviewer | None = None,
 ) -> list[str]:
-    """Return production-policy violations for the current candidate.
+    """Return only mechanically certain production-candidate violations.
 
-    Mechanically provable rules stay local. Ambiguous dependency provenance is
-    delegated through ``dependency_reviewer`` and fails closed when no reviewer
-    is supplied. Runtime correctness and performance still use the normal sandbox.
+    Framework ownership, compute provenance, dependency use, dynamic loading, and manifest
+    semantics deliberately do not belong here. The supervisor's isolated reviewer judges
+    those questions from the complete candidate.
     """
     key = _framework_key(framework)
-    errors: list[str] = []
-    if key not in _ALLOWED_IMPORTS:
+    if key not in _SUPPORTED_PRODUCTION_FRAMEWORKS:
         return [f"unsupported production framework: {framework}"]
     kernel_path = workspace / "kernel.py"
     if not kernel_path.is_file():
@@ -396,151 +271,51 @@ def production_kernel_violations(
     except SyntaxError as exc:
         return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
 
-    roots, has_relative_import = _import_roots(tree)
-    if has_relative_import:
+    errors: list[str] = []
+    if _has_relative_import(tree):
         errors.append("relative/local-module imports are not self-contained")
-    policy_source = _code_without_prose(source)
-    # A production Triton campaign may enter the orchestrator-controlled Gluon phase.
-    # Once a Gluon marker is present, validate the candidate as Gluon (which necessarily
-    # imports the Triton package) rather than rejecting it as an alternate framework.
-    effective_key = key
-    has_gluon_import = source_uses_gluon(source)
-    if key == "triton" and has_gluon_import:
-        effective_key = "gluon"
-    if require_gluon and effective_key != "gluon":
+    if require_gluon and not source_uses_gluon(source):
         errors.append("switching back from the accepted Gluon phase to Triton is forbidden")
+    errors.extend(_solution_structure_violations(workspace))
+    return list(dict.fromkeys(errors))
 
-    allowed = _STDLIB_IMPORTS | _ALLOWED_IMPORTS[effective_key]
-    dependency_signals: list[DependencyReviewSignal] = [
-        DependencyReviewSignal(
-            id=f"import:{root}",
-            kind="import",
-            value=root,
+
+def production_kernel_violations(
+    workspace: Path,
+    framework: str,
+    *,
+    require_gluon: bool = False,
+    production_reviewer: ProductionReviewer | None = None,
+) -> list[str]:
+    """Return production-policy violations for the current candidate.
+
+    Mechanically certain structure stays local. Every otherwise viable candidate is
+    delegated in full through ``production_reviewer`` and fails closed when no reviewer
+    is supplied. Runtime correctness and performance still use the normal sandbox.
+    """
+    errors = production_structure_violations(
+        workspace,
+        framework,
+        require_gluon=require_gluon,
+    )
+    if errors:
+        return errors
+    if production_reviewer is None:
+        return ["production candidate requires supervisor policy review"]
+    try:
+        review_errors = production_reviewer(workspace, framework, require_gluon)
+    except Exception as exc:
+        errors.append(
+            "independent production policy review failed: "
+            f"{type(exc).__name__}: {exc}"
         )
-        for root in sorted(roots - allowed)
-    ]
-    for root in sorted(roots & {"ctypes", "importlib", "pkgutil", "runpy", "subprocess"}):
-        errors.append(f"dynamic external-code loading is forbidden in production candidate: {root}")
-    errors.extend(_torch_compute_violations(tree))
-
-    marker_checks = {
-        "triton": (
-            bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
-            "missing Triton implementation/import",
-        ),
-        "gluon": (has_gluon_import, "missing Gluon implementation"),
-        "cutedsl": ("cutlass.cute" in policy_source or "@cute.kernel" in policy_source, "missing CuteDSL implementation"),
-        "cuda": (
-            "__global__" in policy_source
-            and bool(re.search(r"load_inline|cpp_extension|CUDAExtension|nvrtc|cuda\.bindings", policy_source)),
-            (
-                "missing self-authored CUDA kernel/loader in kernel.py; use an in-process "
-                "loader such as cuda.bindings/NVRTC"
-            ),
-        ),
-        "flydsl": (bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)), "missing FlyDSL implementation"),
-    }
-    marker_ok, marker_error = marker_checks[effective_key]
-    if not marker_ok:
-        errors.append(marker_error)
-
-    foreign_markers = {
-        "triton": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+triton\b", policy_source)),
-        "gluon": has_gluon_import,
-        "cutedsl": "cutlass.cute" in policy_source or "@cute.kernel" in policy_source,
-        "cuda": "__global__" in policy_source,
-        "flydsl": bool(re.search(r"(?:^|\n)\s*(?:import|from)\s+flydsl\b", policy_source)),
-    }
-    compatible_markers = {effective_key}
-    if effective_key == "gluon":
-        compatible_markers.add("triton")  # Gluon is distributed under triton.experimental.
-    for other, present in foreign_markers.items():
-        if present and other not in compatible_markers:
-            errors.append(f"mixed/alternate framework marker is forbidden: {other}")
-
-    banned_source_patterns = {
-        r"\btorch\.ops\b": "torch.ops dispatch is a prebuilt/custom operator call",
-        r"\btorch\.nn\.functional\b": "torch.nn.functional is not the selected kernel framework",
-        r"\btorch\.(?:linalg|_scaled_mm)\b": "PyTorch compute fallback is not the selected kernel framework",
-    }
-    for pattern, message in banned_source_patterns.items():
-        if re.search(pattern, policy_source, flags=re.IGNORECASE):
-            errors.append(message)
-
-    review_source_patterns = {
-        "kernel_library_reference": (
-            r"\b(?:flashinfer|flash_attn|xformers|vllm|sglang|bitsandbytes)\b",
-            "third-party kernel/operator library reference",
-        ),
-        "cuda_library_reference": (
-            r"\b(?:cublas|cudnn)[A-Za-z0-9_]*\b",
-            "CUDA math/operator library reference",
-        ),
-        "cutlass_header_reference": (
-            r"#\s*include\s*[<\"]cutlass/",
-            "CUTLASS header reference",
-        ),
-    }
-    for marker, (pattern, description) in review_source_patterns.items():
-        if re.search(pattern, policy_source, flags=re.IGNORECASE) and not (
-            effective_key == "cutedsl" and marker == "cutlass_header_reference"
+    else:
+        if not isinstance(review_errors, list) or not all(
+            isinstance(item, str) and item.strip() for item in review_errors
         ):
-            dependency_signals.append(
-                DependencyReviewSignal(
-                    id=f"source:{marker}",
-                    kind="source_reference",
-                    value=description,
-                )
-            )
-
-    solution_path = workspace / "solution.json"
-    if solution_path.is_file():
-        try:
-            solution = json.loads(solution_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            errors.append(f"solution.json is invalid: {exc}")
+            errors.append("independent production policy review returned an invalid result")
         else:
-            dependencies = ((solution.get("spec") or {}).get("dependencies") or [])
-            allowed_dependencies = _ALLOWED_DEPENDENCY_TOKENS[effective_key]
-            for dependency in dependencies:
-                token = _normalized_dependency(dependency)
-                if token and token not in allowed_dependencies:
-                    dependency_signals.append(
-                        DependencyReviewSignal(
-                            id=f"solution_dependency:{dependency}",
-                            kind="solution_dependency",
-                            value=str(dependency),
-                        )
-                    )
-
-    dependency_signals = list(dict.fromkeys(dependency_signals))
-    if dependency_signals:
-        if dependency_reviewer is None:
-            errors.append(
-                "third-party dependency requires independent agent review: "
-                + ", ".join(signal.id for signal in dependency_signals)
-            )
-        else:
-            try:
-                review_errors = dependency_reviewer(
-                    workspace,
-                    framework,
-                    tuple(dependency_signals),
-                )
-            except Exception as exc:
-                errors.append(
-                    "independent dependency review failed: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-            else:
-                if not isinstance(review_errors, list) or not all(
-                    isinstance(item, str) and item.strip() for item in review_errors
-                ):
-                    errors.append(
-                        "independent dependency review returned an invalid result"
-                    )
-                else:
-                    errors.extend(review_errors)
+            errors.extend(review_errors)
     return list(dict.fromkeys(errors))
 
 

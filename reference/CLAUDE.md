@@ -63,12 +63,20 @@ NOT fixed across calls. Concretely:
 If a shortcut only works because inputs/addresses are stable, it is invalid — drop it and
 optimize the per-call work directly.
 
-### Multi-seed robustness (mandatory before commit)
+### Multi-seed robustness (mandatory from V1 onward)
 
-A single-seed PASS is NOT sufficient. Before committing any kernel change, run:
+The V0 PyTorch baseline is an explicit exception: measure it exactly once with the base seed and
+record that run's performance plus accompanying correctness status. Do not run `--multi-seed` for V0.
+
+For every optimized candidate from V1 onward, a single-seed PASS is NOT sufficient before supervisor
+acceptance. The dedicated V1 framework-baseline prompt assigns the implementation Agent only a bounded
+smoke subset; the supervisor then runs one combined base-performance plus five-extra-seed full-workload
+gate and commits mechanically. Do not duplicate that full gate inside the V1 Agent. For later optimization
+episodes whose active prompt assigns multi-seed validation to the Agent, run through the mandatory sandbox:
 
 ```bash
-python test_kernel.py --version v<N> --multi-seed 5
+python tools/sandbox.py --kind run --no-sync -- \
+  python test_kernel.py --version v<N> --multi-seed 5 --no-memory
 ```
 
 This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds

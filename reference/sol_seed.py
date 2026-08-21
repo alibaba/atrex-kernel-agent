@@ -228,16 +228,29 @@ def main(argv: list[str] | None = None) -> int:
             print("[sol_seed] WARNING: V0 baseline did not pass all workloads — check solution.json / reference.",
                   file=sys.stderr)
 
-    # 6) git init + single baseline commit
+    # 6) Git source commit. Keep memory out of this commit so its stable SHA can
+    # be recorded without an impossible self-referential amend loop.
     if not (ws / ".git").exists():
         subprocess.run(["git", "init"], cwd=str(ws), check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["git", "config", "user.email", "gpu-kernel-optimizer@local"], cwd=str(ws), check=True)
         subprocess.run(["git", "config", "user.name", "GPU Kernel Optimizer"], cwd=str(ws), check=True)
-    subprocess.run(["git", "add", "-A"], cwd=str(ws), check=True)
+    source_paths = [
+        *GROUND_TRUTH,
+        "config.json",
+        "kernel.py",
+        "solution.json",
+        "test_kernel.py",
+        "profile_driver.py",
+        "README.md",
+        ".gitignore",
+    ]
+    if (ws / "CLAUDE.md").is_file():
+        source_paths.append("CLAUDE.md")
+    subprocess.run(["git", "add", *source_paths], cwd=str(ws), check=True)
     subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
                    stdout=subprocess.DEVNULL)
-    # Record the baseline commit hash into memory/v0.json (marks V0 as committed),
-    # then fold it into the same commit — matches the iteration commit convention.
+    # 7) Record measurement metadata in a second commit. This deliberately leaves
+    # kernel.py untouched, so memory can point at the immutable source commit.
     v0 = ws / "memory" / "v0.json"
     if v0.exists():
         h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws), capture_output=True, text=True).stdout.strip()
@@ -246,7 +259,12 @@ def main(argv: list[str] | None = None) -> int:
         mem.setdefault("optimization", {})["action_category"] = "baseline"
         v0.write_text(json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         subprocess.run(["git", "add", "memory/v0.json"], cwd=str(ws), check=True)
-        subprocess.run(["git", "commit", "--amend", "--no-edit"], cwd=str(ws), check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ["git", "commit", "-m", "V0: record baseline measurement"],
+            cwd=str(ws),
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
 
     print(f"[sol_seed] workspace ready: {ws}")
     return 0

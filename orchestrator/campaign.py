@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +23,8 @@ from .constants import (
     ATREX_PRIVATE_REFERENCE_ENV,
     ATREX_BENCH_HARNESS,
     DEFAULT_CONVERT_AFTER,
+    DEFAULT_FAST_EPISODES,
+    DEFAULT_FAST_TRIALS,
     DEFAULT_HANDOFF_RESUMES,
     DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
@@ -38,22 +44,30 @@ from .constants import (
     WORKSPACE_INIT,
 )
 from .hardware import hardware_directive, kernel_is_gluon
+from .framework_baseline_progress import (
+    capture_unexpected_exit as capture_framework_baseline_exit,
+    load_progress as load_framework_baseline_progress,
+    mark_accepted as mark_framework_baseline_accepted,
+    progress_path as framework_baseline_progress_path,
+    restore_latest_candidate as restore_latest_framework_baseline_candidate,
+    save_supervisor_recovery as save_framework_baseline_recovery,
+)
 from .optimization_policy import (
-    DependencyReviewSignal,
     install_workspace_policy,
     optimization_mode_directive,
     production_kernel_violations,
+    production_structure_violations,
 )
 from .plan_reviewers import discover_plan_reviewers, plan_reviewer_environment
 from .session_io import (
     SessionResult,
-    _dependency_review_candidate_paths,
-    _dependency_review_digest,
+    _production_review_candidate_paths,
+    _production_review_digest,
     _record_local_test_result,
     _render,
     _sandbox_command,
     _test_result_from_stdout,
-    _validate_dependency_review,
+    _validate_production_review,
     run_session,
     sandbox_directive,
 )
@@ -89,6 +103,40 @@ _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
 }
 
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS = ("codex", "qodercli")
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
+    ".atrex_long_horizon/framework_baseline/correctness_guidance.json"
+)
+_FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS = (
+    "README.md",
+    "reference.py",
+    "input.py",
+    "agent_problem.json",
+    "shapes.json",
+    "definition.json",
+    "workload.jsonl",
+)
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
+    "SEMANTIC_CHECKLIST:",
+    "EDGE_CASES:",
+    "CUDA_IMPLEMENTATION_RISKS:",
+    "PRE_SMOKE_CHECKS:",
+    "TARGETED_REFERENCES:",
+    "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
+)
+_FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT = 80
+_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT = 2
+_FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
+    ".cu",
+    ".cuh",
+    ".h",
+    ".hpp",
+    ".md",
+    ".py",
+}
+
 
 @dataclass
 class Campaign:
@@ -105,6 +153,8 @@ class Campaign:
     target_util: float = 90.0
     setup_timeout: int = 7200  # 120 min for the baseline session
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
+    fast_episodes: int = DEFAULT_FAST_EPISODES  # first N post-baseline episodes
+    fast_trials: int = DEFAULT_FAST_TRIALS  # trials per fast episode
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     )
@@ -129,8 +179,8 @@ class Campaign:
     min_improvement_pct: float = 0.0
     long_reviewer_session: str = ""
     tokens_spent: int = field(default=0, init=False)
-    _dependency_review_cache: dict[str, tuple[str, ...]] = field(
-        default_factory=dict, init=False, repr=False, compare=False
+    _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
+        field(default_factory=dict, init=False, repr=False, compare=False)
     )
     _generated_agent_problem_digest: str = field(
         default="", init=False, repr=False, compare=False
@@ -409,30 +459,64 @@ class Campaign:
                 flush=True,
             )
 
-    def _review_third_party_dependencies(
+    @staticmethod
+    def _persist_production_review_record(
+        workspace: Path,
+        candidate_digest: str,
+        review_record: dict[str, object],
+    ) -> list[str]:
+        record_path = (
+            workspace
+            / ".atrex_long_horizon"
+            / "production_reviews"
+            / f"{candidate_digest}.json"
+        )
+        try:
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = record_path.with_suffix(".json.tmp")
+            temporary_path.write_text(
+                json.dumps(review_record, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(record_path)
+        except OSError as exc:
+            return [
+                "could not persist production policy verdict: "
+                f"{type(exc).__name__}: {exc}"
+            ]
+        return []
+
+    def _review_production_candidate(
         self,
         workspace: Path,
         framework: str,
-        signals: tuple[DependencyReviewSignal, ...],
+        require_gluon: bool,
     ) -> list[str]:
-        """Delegate ambiguous dependency provenance to a fresh, isolated agent."""
-        cache_key = (
-            _dependency_review_digest(workspace, framework, signals)
-            + ":"
-            + self.agent_cli
+        """Delegate complete candidate policy review to a fresh, isolated agent."""
+        candidate_digest = _production_review_digest(
+            workspace, framework, require_gluon
         )
-        cached = self._dependency_review_cache.get(cache_key)
+        cache_key = candidate_digest + ":" + self.agent_cli
+        cached = self._production_review_cache.get(cache_key)
         if cached is not None:
-            return list(cached)
+            cached_errors, review_record = cached
+            persistence_errors = self._persist_production_review_record(
+                workspace,
+                candidate_digest,
+                review_record,
+            )
+            return list(dict.fromkeys([*cached_errors, *persistence_errors]))
 
         errors: list[str]
+        review_payload: object | None = None
+        review_summary = ""
         with tempfile.TemporaryDirectory(
-            prefix="atrex-dependency-review-"
+            prefix="atrex-production-review-"
         ) as directory:
             review_workspace = Path(directory)
             candidate_root = review_workspace / "candidate"
             source_hashes: dict[str, str] = {}
-            for source in _dependency_review_candidate_paths(workspace):
+            for source in _production_review_candidate_paths(workspace):
                 relative = source.relative_to(workspace)
                 destination = candidate_root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -444,15 +528,9 @@ class Campaign:
             request = {
                 "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
                 "framework": framework,
+                "required_phase": "gluon" if require_gluon else "selected_framework",
                 "optimization_mode": "production",
-                "signals": [
-                    {
-                        "id": review_signal.id,
-                        "kind": review_signal.kind,
-                        "value": review_signal.value,
-                    }
-                    for review_signal in signals
-                ],
+                "candidate_digest": candidate_digest,
                 "candidate_files": sorted(source_hashes),
             }
             (review_workspace / "review_request.json").write_text(
@@ -464,13 +542,13 @@ class Campaign:
                 DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
                 timeout=DEPENDENCY_REVIEW_TIMEOUT_S,
                 agent_cli=self.agent_cli,
-                reasoning_effort="low",
+                reasoning_effort="high",
                 agent_plugins=False,
             )
-            self._account(result, "independent dependency review")
+            self._account(result, "independent production policy review")
             if result.exit_status != 0 or result.timed_out:
                 errors = [
-                    "independent dependency review agent failed "
+                    "independent production policy review agent failed "
                     f"(exit={result.exit_status}, timeout={result.timed_out})"
                 ]
             else:
@@ -485,14 +563,19 @@ class Campaign:
                         changed.append(relative)
                 if changed:
                     errors = [
-                        "independent dependency review modified candidate evidence: "
+                        "independent production policy review modified candidate evidence: "
                         + ", ".join(sorted(changed))
                     ]
                 else:
                     review_path = review_workspace / "dependency_review.json"
                     try:
-                        payload = json.loads(review_path.read_text(encoding="utf-8"))
-                        errors, summary = _validate_dependency_review(payload, signals)
+                        review_payload = json.loads(
+                            review_path.read_text(encoding="utf-8")
+                        )
+                        errors, review_summary = _validate_production_review(
+                            review_payload,
+                            candidate_files=frozenset(source_hashes),
+                        )
                     except (
                         OSError,
                         UnicodeError,
@@ -500,19 +583,48 @@ class Campaign:
                         ValueError,
                     ) as exc:
                         errors = [
-                            "independent dependency review produced no valid verdict: "
+                            "independent production policy review produced no valid verdict: "
                             f"{type(exc).__name__}: {exc}"
                         ]
                     else:
                         status = "accepted" if not errors else "rejected"
                         print(
-                            f"[production-policy] independent dependency review {status}: "
-                            f"{summary}",
+                            f"[production-policy] independent full-candidate review {status}: "
+                            f"{review_summary}",
                             flush=True,
                         )
 
-        self._dependency_review_cache[cache_key] = tuple(errors)
-        return list(errors)
+        try:
+            reviewed_digest = _production_review_digest(
+                workspace, framework, require_gluon
+            )
+        except OSError as exc:
+            errors = [
+                "production candidate changed during policy review: "
+                f"{type(exc).__name__}: {exc}"
+            ]
+        else:
+            if reviewed_digest != candidate_digest:
+                errors = ["production candidate changed during policy review"]
+        review_record = {
+            "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
+            "candidate_digest": candidate_digest,
+            "framework": framework,
+            "required_phase": "gluon" if require_gluon else "selected_framework",
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "agent_runtime": self.agent_cli,
+            "accepted": not errors,
+            "errors": errors,
+            "summary": review_summary,
+            "review": review_payload,
+        }
+        persistence_errors = self._persist_production_review_record(
+            workspace,
+            candidate_digest,
+            review_record,
+        )
+        self._production_review_cache[cache_key] = (tuple(errors), review_record)
+        return list(dict.fromkeys([*errors, *persistence_errors]))
 
     def _production_kernel_violations(
         self,
@@ -524,7 +636,7 @@ class Campaign:
             workspace or self.workspace,
             self.framework,
             require_gluon=require_gluon,
-            dependency_reviewer=self._review_third_party_dependencies,
+            production_reviewer=self._review_production_candidate,
         )
 
     def _link_runtime(self) -> None:
@@ -656,6 +768,15 @@ class Campaign:
         self._link_runtime()
         self._install_native_evaluator()
         self._install_profile_driver()
+        # A native Atrex-Bench V0 is already materialized as the verbatim reference
+        # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
+        # Agent session adds no implementation value here.  Commit the sources, run the
+        # one required remote measurement, and record the result mechanically.  The
+        # derived legacy boundary below retains the Agent fallback because its harness
+        # and input layout are not canonical enough to synthesize safely.
+        if self.atrex_bench_root:
+            self._setup_baseline_native(op_dir, generalized=generalized)
+            return
         prompt = _render(
             PROMPTS_DIR / "setup.md",
             WORKSPACE=str(self.workspace),
@@ -716,7 +837,8 @@ class Campaign:
                 "autonomously. "
                 "Do not ask the user for confirmation or permission. Inspect the current workspace, "
                 "implement `kernel.py`, preserve the evaluator route described below, run the complete "
-                "workspace workload through the mandatory sandbox with `--no-memory`, parse its "
+                "workspace workload exactly once with the base seed through the mandatory sandbox "
+                "with `--no-memory`; do not run `--multi-seed` for V0. Parse its "
                 "`[test_kernel] RESULT_JSON=...`, write local `memory/v0.json` and `baseline_report.md`, "
                 "then Git commit `V0: baseline kernel`. Do not enter optimization iterations.\n\n"
                 + self._evaluator_directive()
@@ -763,6 +885,291 @@ class Campaign:
                     + (f": {detail}" if detail else "")
                 )
 
+    def _native_v0_readme(self, *, generalized: bool) -> str:
+        contract = (
+            "`agent_problem.json` is the authoritative public contract. Exact evaluator "
+            "cases remain private; latency-map keys are opaque ids."
+            if generalized
+            else "`shapes.json` and the other copied operator files define the public workload."
+        )
+        runtime_arch = self.arch or "unknown (use the runtime GPU API before choosing codegen)"
+        notes = self.notes.strip() or "none"
+        return (
+            f"# kernel_opt_{self.campaign_name}\n\n"
+            "Profile-driven optimization of one native Atrex-Bench operator.\n\n"
+            "## Goal\n\n"
+            "Minimize the full-workload geomean latency while every evaluator case remains "
+            "correct. V0 is the verbatim PyTorch reference wrapper; optimized versions must "
+            f"migrate the computation to `{self.framework}`.\n\n"
+            "## Campaign\n\n"
+            f"- Target platform: `{self.platform}`\n"
+            f"- Runtime architecture: `{runtime_arch}`\n"
+            f"- Optimization mode: `{self.optimization_mode}`\n"
+            f"- Target framework: `{self.framework}`\n"
+            f"- Target utilization stop condition: `{self.target_util:g}%`\n"
+            f"- Additional notes: {notes}\n\n"
+            "## Contract and evaluator\n\n"
+            f"- {contract}\n"
+            "- `test_kernel.py` is the immutable supervisor-installed adapter to the official "
+            "`atrex-bench/scripts/run_eval.py`.\n"
+            "- V0 uses exactly one full-workload base-seed evaluator run. It does not profile, "
+            "run multi-seed correctness, or perform ABBA.\n"
+            "- Ground-truth operator files and `profile_driver.py` are immutable after V0.\n\n"
+            "## Hardware evidence policy\n\n"
+            "V0 records identity only and does not speculate about peak specifications. Before an "
+            "optimization plan uses a hardware limit, source it from the workspace `gpu-wiki/` "
+            "and cite the exact path. The runtime architecture API is authoritative when a device "
+            "name or vendor SMI is desensitized.\n\n"
+            "## Stop conditions\n\n"
+            "The supervisor stops at the configured iteration/token/stall limits, when the target "
+            "utilization is reached, or on a terminal repeated blocker. Correctness is mandatory "
+            "for every promoted version.\n"
+        )
+
+    @staticmethod
+    def _print_v0_evaluator_output(test: subprocess.CompletedProcess[str]) -> None:
+        if test.stdout:
+            print(
+                test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True
+            )
+        if test.stderr:
+            print(
+                test.stderr,
+                end="" if test.stderr.endswith("\n") else "\n",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _run_v0_evaluator(self) -> dict:
+        """Run the sole V0 evaluator and persist its local transport record."""
+        failed_memory_path = self.workspace / "memory" / "v0.failed.json"
+        failed_memory_path.unlink(missing_ok=True)
+        test = _sandbox_command(
+            self.workspace,
+            self.sandbox_hardware,
+            self.sandbox_profile,
+            self.sandbox_url,
+            self.sandbox_timeout,
+            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+            gateway_kind="run",
+            private_reference_dir=self.private_reference_dir,
+        )
+        self._print_v0_evaluator_output(test)
+        try:
+            result = _test_result_from_stdout(test.stdout)
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"sandbox V0 baseline produced no usable result: {exc}"
+            ) from exc
+        memory_path = _record_local_test_result(self.workspace, "v0", result)
+        if test.returncode != 0 or not result.get("all_pass"):
+            # Keep diagnostics without making latest_version() treat a failed or
+            # interrupted baseline as canonical. A rerun will retry V0 directly.
+            memory_path.replace(failed_memory_path)
+            raise RuntimeError(
+                "sandbox V0 baseline failed correctness/performance validation"
+            )
+        return result
+
+    def _run_v0_evaluator_with_correctness_prefetch(self) -> dict:
+        """Measure V0 while prefetching the source-only V1 correctness review.
+
+        The review packet deliberately excludes V0 measurement artifacts, so its
+        digest is stable before and after the evaluator writes memory/v0.json and
+        baseline_report.md. Review failure remains non-fatal here: the ordinary V1
+        entry point validates the cache and retries synchronously when necessary.
+        """
+        print(
+            "[orchestrator] V0 evaluator: prefetching V1 correctness review in parallel",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            review_future = executor.submit(
+                self._ensure_framework_baseline_correctness_guidance
+            )
+            try:
+                return self._run_v0_evaluator()
+            finally:
+                try:
+                    review_future.result()
+                except Exception as exc:
+                    print(
+                        "[orchestrator] WARNING: V1 correctness review prefetch failed; "
+                        "the V1 stage will retry it: "
+                        f"{type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+    def _write_v0_baseline_report(self, result: dict, source_commit: str) -> Path:
+        def metric(name: str) -> str:
+            value = result.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return "unknown"
+            return f"{float(value):.6g}"
+
+        by_shape = result.get("latency_us_by_shape")
+        by_shape = by_shape if isinstance(by_shape, dict) else {}
+        evaluator = str(result.get("evaluator") or "workspace test_kernel.py")
+        eval_id = result.get("eval_id")
+        shape_note = (
+            "Shape ids are opaque; exact production inputs remain evaluator-private."
+            if (self.workspace / AGENT_PROBLEM_FILENAME).is_file()
+            else "The complete public workload was evaluated."
+        )
+        report = (
+            "# V0 baseline report\n\n"
+            "This report was generated mechanically by the campaign supervisor.\n\n"
+            "## Provenance\n\n"
+            f"- Source commit: `{source_commit}`\n"
+            "- Implementation: verbatim `reference.py` copied to `kernel.py`\n"
+            f"- Evaluator: `{evaluator}`\n"
+            "- Route: remote sandbox, one base-seed full-workload run\n"
+            f"- Evaluator id: `{eval_id if eval_id is not None else 'unknown'}`\n\n"
+            "## Result\n\n"
+            "- Correctness: `PASS`\n"
+            f"- Measured shapes: `{len(by_shape)}`\n"
+            f"- Geomean latency: `{metric('latency_us_geomean')} us`\n"
+            f"- Arithmetic mean latency: `{metric('latency_us_arith_mean')} us`\n"
+            f"- Maximum absolute error: `{metric('max_abs_err')}`\n"
+            f"- Maximum relative error: `{metric('max_rel_err')}`\n\n"
+            f"{shape_note} Per-shape values are stored once in `memory/v0.json`; they are "
+            "not duplicated here.\n"
+        )
+        path = self.workspace / "baseline_report.md"
+        path.write_text(report, encoding="utf-8")
+        return path
+
+    def _finalize_v0_measurement(
+        self,
+        result: dict,
+        source_commit: str,
+        *,
+        extra_paths: tuple[str, ...] = (),
+    ) -> None:
+        """Commit V0 measurement metadata without rewriting its source commit SHA."""
+        memory_path = self.workspace / "memory" / "v0.json"
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+        memory["git_commit_hash"] = source_commit
+        optimization = memory.setdefault("optimization", {})
+        optimization["action_category"] = "baseline"
+        optimization["action_description"] = (
+            "verbatim reference wrapper measured by the official full-workload evaluator"
+        )
+        optimization["expected_impact"] = "correctness and latency reference for later versions"
+        optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
+        memory_path.write_text(
+            json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        coverage_problem = self._generalized_memory_coverage_problem(memory)
+        if coverage_problem:
+            raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
+        self._write_v0_baseline_report(result, source_commit)
+
+        staged = ["memory/v0.json", "baseline_report.md"]
+        staged.extend(
+            path for path in extra_paths if (self.workspace / path).is_file()
+        )
+        subprocess.run(
+            ["git", "add", *staged], cwd=str(self.workspace), check=True
+        )
+        if (
+            subprocess.run(
+                ["git", "diff", "--cached", "--quiet"],
+                cwd=str(self.workspace),
+                check=False,
+            ).returncode
+            == 0
+        ):
+            raise RuntimeError("V0 evaluator produced no measurement metadata to commit")
+        subprocess.run(
+            ["git", "commit", "-m", "V0: record baseline measurement"],
+            cwd=str(self.workspace),
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        recorded = read_memory(self.workspace, 0) or {}
+        if recorded.get("git_commit_hash") != source_commit:
+            raise RuntimeError("memory/v0.json does not point to the V0 source commit")
+        if git_path_blob(self.workspace, source_commit, "kernel.py") != git_worktree_blob(
+            self.workspace, "kernel.py"
+        ):
+            raise RuntimeError("V0 kernel.py differs from its recorded source commit")
+
+    def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
+        """Seed native Atrex-Bench V0 without launching a coding Agent."""
+        kernel_path = self.workspace / "kernel.py"
+        reference_path = self.workspace / "reference.py"
+        if not kernel_path.is_file() or not reference_path.is_file():
+            raise RuntimeError("native V0 requires workspace kernel.py and reference.py")
+        if kernel_path.read_bytes() != reference_path.read_bytes():
+            raise RuntimeError(
+                "native V0 kernel.py is not the verbatim reference wrapper; refusing "
+                "mechanical baseline generation"
+            )
+        (self.workspace / "README.md").write_text(
+            self._native_v0_readme(generalized=generalized), encoding="utf-8"
+        )
+        source_paths = [
+            ".gitignore",
+            "CLAUDE.md",
+            "README.md",
+            "kernel.py",
+            "test_kernel.py",
+            "profile_driver.py",
+            *agent_visible_operator_files(op_dir, generalized=generalized),
+        ]
+        source_paths = list(
+            dict.fromkeys(
+                path for path in source_paths if (self.workspace / path).is_file()
+            )
+        )
+        subprocess.run(
+            ["git", "add", *source_paths], cwd=str(self.workspace), check=True
+        )
+        if (
+            subprocess.run(
+                ["git", "diff", "--cached", "--quiet"],
+                cwd=str(self.workspace),
+                check=False,
+            ).returncode
+            != 0
+        ):
+            subprocess.run(
+                ["git", "commit", "-m", "V0: baseline kernel"],
+                cwd=str(self.workspace),
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+        source_commit = v0_baseline_commit(self.workspace)
+        if not source_commit:
+            raise RuntimeError("native V0 has no committed kernel.py")
+        if git_path_blob(self.workspace, source_commit, "kernel.py") != git_worktree_blob(
+            self.workspace, "kernel.py"
+        ):
+            raise RuntimeError("native V0 source history does not match the reference wrapper")
+
+        result = self._run_v0_evaluator_with_correctness_prefetch()
+        self._finalize_v0_measurement(result, source_commit)
+        self._assert_generalized_inputs_are_private()
+        contract_problem = self._generalized_contract_commit_problem()
+        if contract_problem:
+            raise RuntimeError(f"invalid native V0 source commit: {contract_problem}")
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=str(self.workspace),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if status:
+            print(
+                "[orchestrator] WARNING: native V0 is continuing with a dirty "
+                f"workspace:\n{status}",
+                file=sys.stderr,
+                flush=True,
+            )
+
     def _setup_baseline_sol(self, op_dir: Path) -> None:
         if not SOL_SEED.exists():
             raise FileNotFoundError(f"missing {SOL_SEED}")
@@ -785,56 +1192,14 @@ class Campaign:
         ]
         subprocess.run(cmd, check=True)
         self._link_runtime()
-        test = _sandbox_command(
-            self.workspace,
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_timeout,
-            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
-            gateway_kind="run",
-        )
-        if test.stdout:
-            print(
-                test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True
-            )
-        if test.stderr:
-            print(
-                test.stderr,
-                end="" if test.stderr.endswith("\n") else "\n",
-                file=sys.stderr,
-                flush=True,
-            )
-        try:
-            result = _test_result_from_stdout(test.stdout)
-        except (RuntimeError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"sandbox V0 baseline produced no usable result: {exc}"
-            ) from exc
-        memory_path = _record_local_test_result(self.workspace, "v0", result)
-        if test.returncode != 0 or not result.get("all_pass"):
-            raise RuntimeError(
-                "sandbox V0 baseline failed correctness/performance validation"
-            )
-
-        # sol_seed committed the source-only baseline. Fold the locally-owned
-        # memory record into that commit without ever sending memory to the pod.
-        mem = json.loads(memory_path.read_text(encoding="utf-8"))
-        mem["git_commit_hash"] = git_head(self.workspace)
-        mem.setdefault("optimization", {})["action_category"] = "baseline"
-        memory_path.write_text(
-            json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        subprocess.run(
-            ["git", "add", "memory/v0.json", "CLAUDE.md", ".gitignore"],
-            cwd=str(self.workspace),
-            check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "--amend", "--no-edit"],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
+        source_commit = v0_baseline_commit(self.workspace)
+        if not source_commit:
+            raise RuntimeError("SOL V0 has no committed kernel.py")
+        result = self._run_v0_evaluator_with_correctness_prefetch()
+        self._finalize_v0_measurement(
+            result,
+            source_commit,
+            extra_paths=("CLAUDE.md", ".gitignore"),
         )
 
     def ensure_framework_baseline(self) -> None:
@@ -863,45 +1228,77 @@ class Campaign:
         baseline_commit = self._v0_baseline_commit()
         v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
         pre_head = git_head(self.workspace)
+        self._ensure_framework_baseline_solution_manifest()
 
         if action == "run":
             self._link_runtime()
-            self._sync_framework_baseline_live(phase="framework_baseline")
-            res = run_session(
-                self.workspace,
-                self._framework_baseline_prompt(n),
-                timeout=self.framework_baseline_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_timeout=self.sandbox_timeout,
-                reasoning_effort="high",
-                extra_environment=self.agent_environment(),
+            self._restore_framework_baseline_candidate(v0_blob)
+            self._sync_framework_baseline_live(
+                phase="framework_baseline_correctness_review"
             )
-            self._assert_generalized_inputs_are_private()
-            self._account(res, f"framework baseline v{n}")
+            self._ensure_framework_baseline_correctness_guidance()
+            self._sync_framework_baseline_live(phase="framework_baseline")
+            try:
+                res = self._run_framework_baseline_agent(
+                    n=n,
+                    label="framework baseline",
+                )
+            finally:
+                self._warn_restored_baseline_paths(baseline_commit)
             if res.exit_status != 0 and res.tokens == 0:
                 raise RuntimeError(
-                    "framework baseline session produced no output "
-                    f"(likely API key / auth issue — {_agent_runtime.auth_hint(self.agent_cli)})"
+                    "the framework baseline Agent exited without usable output; "
+                    f"inspect {framework_baseline_progress_path(self.workspace)}"
                 )
-            self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(v0_blob, baseline_commit)
+            recovery_used = False
+            problem = self._framework_baseline_problem(
+                v0_blob, baseline_commit, include_policy_review=False
+            )
             if problem:
                 self._recover_framework_baseline(
                     problem, v0_blob, baseline_commit, pre_head
                 )
+                recovery_used = True
                 self._warn_restored_baseline_paths(baseline_commit)
-                problem = self._framework_baseline_problem(v0_blob, baseline_commit)
+                problem = self._framework_baseline_problem(
+                    v0_blob, baseline_commit, include_policy_review=False
+                )
         else:  # adopt: our own interrupted run already committed the kernel
+            recovery_used = False
             self._sync_framework_baseline_live(phase="framework_baseline")
             self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(v0_blob, baseline_commit)
+            problem = self._framework_baseline_problem(
+                v0_blob, baseline_commit, include_policy_review=False
+            )
         result: Optional[dict] = None
         if not problem:
-            result, problem = self._validate_framework_baseline(n)
+            result, problem = self._framework_baseline_external_gates(n)
+        if problem and not recovery_used:
+            # The implementation Agent intentionally runs only a bounded smoke subset.
+            # Give one focused repair turn when the authoritative combined gate finds a
+            # full-domain or policy problem, then rerun the independent gates once.
+            self._recover_framework_baseline(
+                problem, v0_blob, baseline_commit, pre_head
+            )
+            recovery_used = True
+            self._warn_restored_baseline_paths(baseline_commit)
+            problem = self._framework_baseline_problem(
+                v0_blob, baseline_commit, include_policy_review=False
+            )
+            if not problem:
+                result, problem = self._framework_baseline_external_gates(n)
         if problem:
+            # Undo any session-authored commits while retaining every worktree file.  A hard reset
+            # here used to erase the exact candidate and debugging experience needed by a restart.
+            if pre_head and git_head(self.workspace) != pre_head:
+                subprocess.run(
+                    ["git", "reset", "--mixed", pre_head],
+                    cwd=str(self.workspace),
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            self._warn_restored_baseline_paths(baseline_commit)
             self._record_framework_baseline_failure(problem)
             self._sync_framework_baseline_live(
                 phase="failed",
@@ -909,17 +1306,22 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            if pre_head:
-                subprocess.run(
-                    ["git", "reset", "--hard", pre_head],
-                    cwd=str(self.workspace),
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
             raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
+        try:
+            mark_framework_baseline_accepted(
+                self.workspace,
+                commit=commit,
+                latency_us=(result or {}).get("latency_us_geomean"),
+            )
+        except (OSError, RuntimeError) as exc:
+            print(
+                "[orchestrator] WARNING: could not close the V1 crash record after "
+                f"acceptance: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         self._sync_framework_baseline_live(
             phase="recorded",
             state="candidate_ready",
@@ -1007,26 +1409,55 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        violations = self._production_kernel_violations()
         progressed = not head_kernel_is_initial_baseline(self.workspace)
-        if not violations and not progressed:
-            return (
-                "pin",
-                "the V0 kernel is already a compliant framework implementation",
-            )
-        if any(v.startswith("unsupported production framework") for v in violations):
-            return "skip", "; ".join(violations)
+        dirty_candidate = git_worktree_blob(
+            self.workspace, "kernel.py"
+        ) != git_path_blob(self.workspace, "HEAD", "kernel.py")
+        restart_journal = framework_baseline_progress_path(self.workspace).is_file()
+        # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
+        # interrupted V1 worktree and needs validation/recovery first.
+        if restart_journal:
+            return "run", "resuming the unexpected-exit V1 handoff"
+        if not progressed and dirty_candidate:
+            return "run", "resuming preserved framework-baseline work"
+
         if self.framework_baseline == "auto" and self.optimization_mode != "production":
             return (
                 "skip",
                 "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
             )
         if not progressed:
+            structural = production_structure_violations(
+                self.workspace, self.framework
+            )
+            if any(
+                value.startswith("unsupported production framework")
+                for value in structural
+            ):
+                return "skip", "; ".join(structural)
+            baseline_commit = self._v0_baseline_commit()
+            reference_blob = git_path_blob(
+                self.workspace, baseline_commit, "reference.py"
+            )
+            known_reference_wrapper = bool(
+                reference_blob
+                and reference_blob
+                == git_path_blob(self.workspace, baseline_commit, "kernel.py")
+            ) or is_sol_op(Path(self.kernel_demo).resolve().parent)
+            if known_reference_wrapper:
+                return (
+                    "run",
+                    f"the supervisor-seeded V0 is the PyTorch reference wrapper, not "
+                    f"a self-contained {self.framework} kernel",
+                )
+            violations = self._production_kernel_violations()
+            if not violations:
+                return (
+                    "pin",
+                    "the V0 kernel is already a compliant framework implementation",
+                )
             return "run", f"V0 is not a self-contained {self.framework} kernel"
-        if (
-            latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION
-            and not violations
-        ):
+        if latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION:
             return "adopt", "an interrupted framework baseline is already committed"
         return "skip", (
             "HEAD has progressed beyond V0 without a framework-baseline pin; "
@@ -1039,7 +1470,927 @@ class Campaign:
             raise RuntimeError("framework baseline requires a committed V0 kernel.py")
         return commit
 
+    def _framework_baseline_restart_pending(self) -> bool:
+        """Whether resume must preserve an in-flight V1 worktree instead of stashing it."""
+        if self.framework_baseline == "never":
+            return False
+        if self.framework_baseline == "auto" and self.optimization_mode != "production":
+            return False
+        pinned_commit, _pinned_version = resolve_framework_baseline_commit(
+            self.workspace
+        )
+        if pinned_commit or not v0_baseline_commit(self.workspace):
+            return False
+        restart_journal = framework_baseline_progress_path(self.workspace).is_file()
+        if (
+            latest_version(self.workspace) > FRAMEWORK_BASELINE_VERSION
+            and not restart_journal
+        ):
+            return False
+        dirty_kernel = git_worktree_blob(self.workspace, "kernel.py") != git_path_blob(
+            self.workspace, "HEAD", "kernel.py"
+        )
+        return bool(
+            restart_journal
+            or dirty_kernel
+            or (
+                not head_kernel_is_initial_baseline(self.workspace)
+                and latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION
+            )
+        )
+
+    def preserve_interrupted_changes_for_resume(self, context: str) -> str:
+        """Keep V1 candidate files in place; use the normal stash policy after V1."""
+        if self._framework_baseline_restart_pending():
+            from long_horizon.store import CampaignStore
+
+            CampaignStore.ensure_excluded(self.workspace)
+            print(
+                "[orchestrator] preserving interrupted V1 worktree in place "
+                f"({context}); restart journal: "
+                f"{framework_baseline_progress_path(self.workspace)}",
+                flush=True,
+            )
+            return ""
+        from .workspace_state import preserve_interrupted_tracked_changes
+
+        return preserve_interrupted_tracked_changes(self.workspace, context)
+
+    def _framework_baseline_supervisor_order(self) -> tuple[str, ...]:
+        """Runtime order for the post-exit progress-saving supervisor only."""
+        ordered: list[str] = []
+        for agent_cli in (self.agent_cli, "codex", "qodercli"):
+            if agent_cli not in ordered:
+                ordered.append(agent_cli)
+        return tuple(ordered)
+
+    def _save_framework_baseline_exit_progress(
+        self,
+        *,
+        crash_progress: dict,
+    ) -> None:
+        """Ask a separate read-only Agent to turn crash artifacts into a restart handoff."""
+        exits = crash_progress.get("unexpected_exits")
+        if not isinstance(exits, list) or not exits or not isinstance(exits[-1], dict):
+            return
+        crash_record = exits[-1]
+        snapshot = crash_record.get("snapshot")
+        snapshot_root = (
+            self.workspace / str(snapshot.get("root"))
+            if isinstance(snapshot, dict) and snapshot.get("root")
+            else None
+        )
+        order = self._framework_baseline_supervisor_order()
+        prompt = (PROMPTS_DIR / "framework_baseline_exit_supervisor.md").read_text(
+            encoding="utf-8"
+        )
+        for index, supervisor_cli in enumerate(order):
+            with tempfile.TemporaryDirectory(
+                prefix="atrex-v1-exit-supervisor-"
+            ) as directory:
+                review_workspace = Path(directory)
+                if snapshot_root is not None and snapshot_root.is_dir():
+                    shutil.copytree(snapshot_root, review_workspace / "candidate")
+                (review_workspace / "crash_record.json").write_text(
+                    json.dumps(crash_record, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                print(
+                    "[orchestrator] V1 exit progress supervisor: launching "
+                    f"{supervisor_cli} ({index + 1}/{len(order)})",
+                    flush=True,
+                )
+                try:
+                    result = run_session(
+                        review_workspace,
+                        prompt,
+                        timeout=600,
+                        agent_cli=supervisor_cli,
+                        reasoning_effort="high",
+                        agent_plugins=False,
+                    )
+                except Exception as exc:
+                    print(
+                        "[orchestrator] V1 exit progress supervisor failed: "
+                        f"{supervisor_cli}: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                self._account(
+                    result, f"framework baseline exit supervisor ({supervisor_cli})"
+                )
+                if result.exit_status != 0 or result.timed_out:
+                    continue
+                try:
+                    recovery = json.loads(
+                        (review_workspace / "resume.json").read_text(encoding="utf-8")
+                    )
+                    destination = save_framework_baseline_recovery(
+                        self.workspace, recovery, agent_cli=supervisor_cli
+                    )
+                except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                    print(
+                        "[orchestrator] V1 exit progress supervisor produced an invalid "
+                        f"handoff via {supervisor_cli}: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
+                print(
+                    f"[orchestrator] V1 restart handoff saved: {destination}",
+                    flush=True,
+                )
+                return
+        print(
+            "[orchestrator] WARNING: no progress supervisor produced a structured V1 "
+            f"handoff; mechanical crash record remains at {framework_baseline_progress_path(self.workspace)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def _capture_framework_baseline_exit(
+        self,
+        *,
+        exit_status: int,
+        timed_out: bool,
+        tokens: int,
+        session_id: str,
+        stdout_tail: str,
+        stderr_tail: str,
+        error: str = "",
+    ) -> None:
+        order = self._framework_baseline_supervisor_order()
+        progress = capture_framework_baseline_exit(
+            self.workspace,
+            agent_cli=self.agent_cli,
+            exit_status=exit_status,
+            timed_out=timed_out,
+            tokens=tokens,
+            session_id=session_id,
+            stdout_tail=stdout_tail,
+            stderr_tail=stderr_tail,
+            error=error,
+            supervisor_order=order,
+        )
+        self._save_framework_baseline_exit_progress(crash_progress=progress)
+
+    def _framework_baseline_correctness_context(self) -> list[Path]:
+        """Return the bounded public packet shown to the two V1 correctness reviewers."""
+        context: list[Path] = []
+        for relative in _FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS:
+            path = self.workspace / relative
+            if path.is_file():
+                context.append(path)
+        return context
+
+    def _framework_baseline_reference_keywords(self) -> set[str]:
+        """Derive bounded path-ranking terms from the public operator contract."""
+        keywords = {
+            token
+            for token in re.findall(
+                r"[a-z0-9]+", f"{self.name} {self.framework} {self.arch}".lower()
+            )
+            if len(token) >= 3
+        }
+        public_text = ""
+        for relative in ("agent_problem.json", "reference.py", "input.py"):
+            path = self.workspace / relative
+            if not path.is_file():
+                continue
+            try:
+                public_text += "\n" + path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).lower()
+            except OSError:
+                continue
+        for term in (
+            "attention",
+            "causal",
+            "decode",
+            "gqa",
+            "mask",
+            "mla",
+            "nvrtc",
+            "paged",
+            "prefill",
+            "ragged",
+            "softmax",
+            "varlen",
+        ):
+            if term in public_text:
+                keywords.add(term)
+        if self.arch.lower().startswith("sm_12"):
+            keywords.update({"blackwell", "sm120"})
+        return keywords
+
+    def _framework_baseline_reference_catalog(self) -> list[str]:
+        """Rank a small exact-path catalog; reviewers may select only from this list."""
+        roots = (REPO_ROOT / "gpu-wiki", REPO_ROOT / "reference-projects")
+        candidates: list[str] = []
+        if shutil.which("rg"):
+            completed = subprocess.run(
+                ["rg", "--files", *(str(root) for root in roots if root.is_dir())],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode in {0, 1}:
+                candidates = [line.strip() for line in completed.stdout.splitlines()]
+        if not candidates:
+            for root in roots:
+                if not root.is_dir():
+                    continue
+                for path in root.rglob("*"):
+                    if path.is_file():
+                        candidates.append(path.relative_to(REPO_ROOT).as_posix())
+
+        keywords = self._framework_baseline_reference_keywords()
+        ranked: list[tuple[int, str]] = []
+        for raw_path in candidates:
+            path = Path(raw_path)
+            try:
+                absolute = path if path.is_absolute() else REPO_ROOT / path
+                relative = absolute.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+            except (OSError, ValueError):
+                continue
+            source = REPO_ROOT / relative
+            if (
+                source.suffix.lower() not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
+                or not source.is_file()
+            ):
+                continue
+            lowered = relative.lower().replace("-", "_")
+            score = sum(10 for keyword in keywords if keyword in lowered)
+            if score == 0:
+                continue
+            if relative.startswith("reference-projects/") and source.suffix.lower() != ".md":
+                score += 4
+            if relative.startswith("gpu-wiki/"):
+                score += 2
+            if "/sources/prs/" in lowered:
+                score -= 5
+            if any(term in lowered for term in ("paged", "varlen", "gqa", "sm120")):
+                score += 3
+            ranked.append((score, relative))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return [
+            path
+            for _score, path in ranked[
+                :_FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT
+            ]
+        ]
+
+    def _framework_baseline_reference_catalog_text(self) -> str:
+        catalog = self._framework_baseline_reference_catalog()
+        lines = [
+            "# Bounded implementation reference catalog",
+            "",
+            "Select at most two exact paths from this list. A path is navigational evidence only; "
+            "do not claim facts about file contents you have not read.",
+            "",
+        ]
+        lines.extend(f"- `{path}`" for path in catalog)
+        return "\n".join(lines) + "\n"
+
+    def _framework_baseline_review_references(
+        self, guidance: str
+    ) -> list[dict[str, str]]:
+        catalog = set(self._framework_baseline_reference_catalog())
+        references: list[dict[str, str]] = []
+        in_section = False
+        for line in guidance.splitlines():
+            stripped = line.strip()
+            if stripped == "TARGETED_REFERENCES:":
+                in_section = True
+                continue
+            if in_section and stripped.endswith(":") and not stripped.startswith("-"):
+                break
+            if not in_section:
+                continue
+            match = re.fullmatch(
+                r"- path: ([^|]+?)\s*\|\s*purpose: (.+)", stripped
+            )
+            if match is None:
+                continue
+            path = match.group(1).strip().strip("`")
+            purpose = " ".join(match.group(2).split())[:500]
+            if path not in catalog or any(item["path"] == path for item in references):
+                continue
+            references.append({"path": path, "purpose": purpose})
+            if len(references) >= _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT:
+                break
+        return references
+
+    def _framework_baseline_selected_references(
+        self, reviews: dict[str, object]
+    ) -> list[dict[str, object]]:
+        """Choose at most two reviewer-nominated paths, preferring consensus then rank."""
+        catalog = self._framework_baseline_reference_catalog()
+        rank = {path: index for index, path in enumerate(catalog)}
+        nominations: dict[str, dict[str, object]] = {}
+        for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS:
+            record = reviews.get(reviewer)
+            if not isinstance(record, dict):
+                continue
+            references = record.get("references")
+            if not isinstance(references, list):
+                continue
+            for item in references:
+                if not isinstance(item, dict) or item.get("path") not in rank:
+                    continue
+                path = str(item["path"])
+                current = nominations.setdefault(
+                    path,
+                    {"path": path, "purpose": str(item.get("purpose", "")), "votes": 0},
+                )
+                current["votes"] = int(current["votes"]) + 1
+        ordered = sorted(
+            nominations.values(),
+            key=lambda item: (-int(item["votes"]), rank[str(item["path"])]),
+        )
+        return ordered[:_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT]
+
+    def _framework_baseline_correctness_context_digest(self) -> str:
+        digest = hashlib.sha256()
+        digest.update(
+            f"v1-correctness-review-v{_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION}"
+            .encode()
+        )
+        for value in (self.framework, self.platform, self.arch):
+            digest.update(b"\0")
+            digest.update(value.encode("utf-8", errors="replace"))
+        for path in self._framework_baseline_correctness_context():
+            relative = path.relative_to(self.workspace).as_posix()
+            contents = path.read_bytes()
+            digest.update(b"\0")
+            digest.update(relative.encode())
+            digest.update(len(contents).to_bytes(8, "big"))
+            digest.update(contents)
+        digest.update(b"\0reference-catalog\0")
+        digest.update(self._framework_baseline_reference_catalog_text().encode())
+        return digest.hexdigest()
+
+    def _load_framework_baseline_correctness_guidance(
+        self,
+    ) -> dict[str, object] | None:
+        path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        if (
+            value.get("schema_version")
+            != _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION
+            or value.get("context_digest")
+            != self._framework_baseline_correctness_context_digest()
+        ):
+            return None
+        reviews = value.get("reviews")
+        if not isinstance(reviews, dict):
+            return None
+        if not any(
+            isinstance(reviews.get(reviewer), dict)
+            and reviews[reviewer].get("status") == "ok"
+            and isinstance(reviews[reviewer].get("guidance"), str)
+            and reviews[reviewer]["guidance"].strip()
+            for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS
+        ):
+            return None
+        selected_references = value.get("selected_references")
+        catalog = set(self._framework_baseline_reference_catalog())
+        if (
+            not isinstance(selected_references, list)
+            or len(selected_references)
+            > _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or item["path"] not in catalog
+                or not isinstance(item.get("purpose"), str)
+                or not isinstance(item.get("votes"), int)
+                for item in selected_references
+            )
+        ):
+            return None
+        return value
+
+    def _run_framework_baseline_correctness_reviewer(
+        self,
+        agent_cli: str,
+    ) -> tuple[dict[str, object], SessionResult | None]:
+        """Run one isolated read-only reviewer and return its bounded guidance."""
+        label = "Qoder" if agent_cli == "qodercli" else "Codex"
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix=f"atrex-v1-correctness-{agent_cli}-"
+            ) as directory:
+                review_workspace = Path(directory)
+                context_root = review_workspace / "context"
+                source_hashes: dict[str, str] = {}
+                for source in self._framework_baseline_correctness_context():
+                    relative = source.relative_to(self.workspace)
+                    destination = context_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                    source_hashes[relative.as_posix()] = hashlib.sha256(
+                        destination.read_bytes()
+                    ).hexdigest()
+                catalog_path = context_root / "reference_catalog.md"
+                catalog_path.parent.mkdir(parents=True, exist_ok=True)
+                catalog_path.write_text(
+                    self._framework_baseline_reference_catalog_text(),
+                    encoding="utf-8",
+                )
+                source_hashes["reference_catalog.md"] = hashlib.sha256(
+                    catalog_path.read_bytes()
+                ).hexdigest()
+
+                prompt = _render(
+                    PROMPTS_DIR / "framework_baseline_correctness_review.md",
+                    REVIEWER=label,
+                    FRAMEWORK=self.framework,
+                    PLATFORM=self.platform,
+                    ARCH=self.arch or "the runtime GPU architecture",
+                )
+                result = run_session(
+                    review_workspace,
+                    prompt,
+                    timeout=_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S,
+                    agent_cli=agent_cli,
+                    reasoning_effort="max",
+                    agent_plugins=False,
+                )
+                if result.exit_status != 0 or result.timed_out:
+                    detail = result.stderr_tail or result.stdout_tail
+                    return (
+                        {
+                            "status": "failed",
+                            "reason": " ".join(detail.split())[:500]
+                            or (
+                                f"exit={result.exit_status}, "
+                                f"timeout={result.timed_out}"
+                            ),
+                            "session_id": result.session_id,
+                        },
+                        result,
+                    )
+
+                changed = []
+                for relative, expected_hash in source_hashes.items():
+                    candidate = context_root / relative
+                    if (
+                        not candidate.is_file()
+                        or hashlib.sha256(candidate.read_bytes()).hexdigest()
+                        != expected_hash
+                    ):
+                        changed.append(relative)
+                if changed:
+                    return (
+                        {
+                            "status": "failed",
+                            "reason": "reviewer modified bounded context: "
+                            + ", ".join(sorted(changed)),
+                            "session_id": result.session_id,
+                        },
+                        result,
+                    )
+
+                output = review_workspace / "correctness_review.md"
+                try:
+                    guidance = output.read_text(encoding="utf-8").strip()
+                except (OSError, UnicodeError) as exc:
+                    return (
+                        {
+                            "status": "failed",
+                            "reason": f"missing correctness_review.md: {type(exc).__name__}",
+                            "session_id": result.session_id,
+                        },
+                        result,
+                    )
+                missing = [
+                    marker
+                    for marker in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS
+                    if guidance.count(marker) != 1
+                ]
+                if missing:
+                    return (
+                        {
+                            "status": "failed",
+                            "reason": "malformed guidance; missing " + ", ".join(missing),
+                            "session_id": result.session_id,
+                        },
+                        result,
+                    )
+                return (
+                    {
+                        "status": "ok",
+                        "guidance": guidance[:16000],
+                        "references": self._framework_baseline_review_references(
+                            guidance
+                        ),
+                        "session_id": result.session_id,
+                    },
+                    result,
+                )
+        except Exception as exc:
+            return (
+                {
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}"[:500],
+                    "session_id": "",
+                },
+                None,
+            )
+
+    def _ensure_framework_baseline_correctness_guidance(self) -> None:
+        """Ask Codex and Qoder concurrently for correctness-first V1 guidance."""
+        if self._load_framework_baseline_correctness_guidance() is not None:
+            print(
+                "[orchestrator] V1 pre-implementation correctness review: using cached "
+                "Codex/Qoder guidance",
+                flush=True,
+            )
+            return
+
+        print(
+            "[orchestrator] V1 pre-implementation correctness review: launching Codex "
+            "and Qoder in parallel",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                reviewer: executor.submit(
+                    self._run_framework_baseline_correctness_reviewer, reviewer
+                )
+                for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS
+            }
+            completed = {
+                reviewer: future.result() for reviewer, future in futures.items()
+            }
+
+        reviews: dict[str, object] = {}
+        statuses: list[str] = []
+        for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS:
+            record, result = completed[reviewer]
+            reviews[reviewer] = record
+            if result is not None:
+                self._account(result, f"V1 correctness review ({reviewer})")
+            status = str(record.get("status", "failed"))
+            statuses.append(f"{reviewer}={status}")
+
+        value: dict[str, object] = {
+            "schema_version": _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION,
+            "context_digest": self._framework_baseline_correctness_context_digest(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "reviews": reviews,
+            "selected_references": self._framework_baseline_selected_references(
+                reviews
+            ),
+        }
+        path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+        print(
+            "[orchestrator] V1 pre-implementation correctness review: "
+            + "; ".join(statuses),
+            flush=True,
+        )
+        if self._load_framework_baseline_correctness_guidance() is None:
+            print(
+                "[orchestrator] WARNING: neither Codex nor Qoder produced valid V1 "
+                "correctness guidance; continuing with the public contract",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    @staticmethod
+    def _framework_baseline_guidance_without_reference_nominations(
+        guidance: str,
+    ) -> str:
+        """Hide raw nominations so V1 sees only the supervisor's final shortlist."""
+        lines: list[str] = []
+        skipping = False
+        for line in guidance.splitlines():
+            stripped = line.strip()
+            if stripped == "TARGETED_REFERENCES:":
+                skipping = True
+                continue
+            if skipping and stripped in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS:
+                skipping = False
+            if not skipping:
+                lines.append(line)
+        return "\n".join(lines).strip()
+
+    def _framework_baseline_correctness_guidance_text(self) -> str:
+        value = self._load_framework_baseline_correctness_guidance()
+        if value is None:
+            return (
+                "## External pre-implementation correctness guidance\n\n"
+                "No valid external guidance is available. Derive every correctness requirement "
+                "directly from the public contract and immutable reference before editing.\n"
+            )
+        reviews = value["reviews"]
+        assert isinstance(reviews, dict)
+        sections = [
+            "## Mandatory external pre-implementation correctness guidance\n",
+            "Codex and Qoder independently reviewed the bounded public packet. Before editing "
+            "`kernel.py`, reconcile both reviews against the immutable reference. Shared "
+            "requirements are mandatory; reviewer suggestions never override the public contract.\n",
+        ]
+        for reviewer, label in (("codex", "Codex"), ("qodercli", "Qoder")):
+            record = reviews.get(reviewer)
+            record = record if isinstance(record, dict) else {}
+            sections.append(f"\n### {label}\n")
+            if record.get("status") == "ok":
+                guidance = self._framework_baseline_guidance_without_reference_nominations(
+                    str(record.get("guidance", ""))
+                )
+                sections.append(guidance + "\n")
+            else:
+                sections.append(
+                    "Reviewer unavailable: "
+                    + str(record.get("reason", "no valid response"))
+                    + "\n"
+                )
+        sections.append("\n### Supervisor-selected implementation references\n")
+        selected_references = value.get("selected_references")
+        if isinstance(selected_references, list) and selected_references:
+            for item in selected_references:
+                assert isinstance(item, dict)
+                sections.append(
+                    f"- `{item['path']}` — {item['purpose']} "
+                    f"(nominated by {item['votes']}/2 reviewers)\n"
+                )
+            sections.append(
+                "Read only these exact files as static design evidence. Do not open sibling "
+                "files, follow imports or links recursively, execute/import the reference, "
+                "delegate computation to it, or copy a prebuilt implementation. Raw reviewer "
+                "nominations were reconciled and are not additional authorization.\n"
+            )
+        else:
+            sections.append(
+                "- None selected. Do not broaden research unless the bounded fallback in Step B "
+                "is needed for framework/toolchain syntax.\n"
+            )
+        sections.append(
+            "\nBefore implementation, write a concise internal checklist that resolves any "
+            "disagreement and covers output initialization/padding, paged addressing, causal "
+            "alignment, ragged batches, launch ABI, and numerical stability. Do not create a "
+            "plan file.\n"
+        )
+        return "".join(sections)
+
+    def _run_framework_baseline_agent(
+        self,
+        *,
+        n: int,
+        label: str,
+        rejection: str = "",
+    ) -> SessionResult:
+        """Run the configured outer V1 Agent; other CLIs only summarize an exit."""
+        prompt = self._framework_baseline_prompt(n)
+        if rejection:
+            prompt = (
+                "# Repair the preserved V1 candidate\n\n"
+                f"The supervisor rejected the current candidate: **{rejection}**\n"
+                "Keep sound work, fix this exact rejection, and finish V1. If a prior targeted "
+                "smoke passed but the supervisor's combined full-workload validation failed, "
+                "you may run exactly one full base-seed evaluator while repairing; do not run "
+                "multi-seed or a separate benchmark because the supervisor will repeat the "
+                "combined authoritative gate.\n\n"
+                + prompt
+            )
+        if framework_baseline_progress_path(self.workspace).is_file():
+            prompt = (
+                "# Resume V1 from an unexpected-exit handoff\n\n"
+                "Do not start over. Read "
+                "`.atrex_long_horizon/framework_baseline/resume.json` when present, then inspect "
+                "the existing candidate and debug files. Continue at the recorded `next_step` and "
+                "avoid repeating completed research.\n\n" + prompt
+            )
+        try:
+            result = run_session(
+                self.workspace,
+                prompt,
+                timeout=self.framework_baseline_timeout,
+                agent_cli=self.agent_cli,
+                sandbox_hardware=self.sandbox_hardware,
+                sandbox_profile=self.sandbox_profile,
+                sandbox_url=self.sandbox_url,
+                sandbox_timeout=self.sandbox_timeout,
+                reasoning_effort="max",
+                extra_environment=self.agent_environment(),
+            )
+        except KeyboardInterrupt:
+            # Respect an intentional user stop: preserve a mechanical snapshot, but do not
+            # immediately launch another Agent after Ctrl-C.
+            capture_framework_baseline_exit(
+                self.workspace,
+                agent_cli=self.agent_cli,
+                exit_status=130,
+                timed_out=False,
+                tokens=0,
+                session_id="",
+                stdout_tail="",
+                stderr_tail="",
+                error="KeyboardInterrupt",
+                supervisor_order=self._framework_baseline_supervisor_order(),
+            )
+            raise
+        except Exception as exc:
+            self._capture_framework_baseline_exit(
+                exit_status=1,
+                timed_out=False,
+                tokens=0,
+                session_id="",
+                stdout_tail="",
+                stderr_tail="",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        self._assert_generalized_inputs_are_private()
+        self._account(result, f"{label} v{n} ({self.agent_cli})")
+        if result.exit_status != 0 or result.timed_out:
+            self._capture_framework_baseline_exit(
+                exit_status=result.exit_status,
+                timed_out=result.timed_out,
+                tokens=result.tokens,
+                session_id=result.session_id,
+                stdout_tail=result.stdout_tail,
+                stderr_tail=result.stderr_tail,
+            )
+        return result
+
+    def _restore_framework_baseline_candidate(self, v0_blob: str) -> None:
+        """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
+        if git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+            return
+        try:
+            progress = load_framework_baseline_progress(self.workspace)
+        except RuntimeError as exc:
+            print(f"[orchestrator] WARNING: {exc}", file=sys.stderr, flush=True)
+            return
+        snapshot = progress.get("latest_snapshot")
+        if not isinstance(snapshot, dict):
+            return
+        restored = restore_latest_framework_baseline_candidate(self.workspace)
+        if restored and git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+            print(
+                "[orchestrator] restored interrupted V1 candidate from local checkpoint: "
+                + ", ".join(restored),
+                flush=True,
+            )
+
+    def _framework_baseline_smoke_shape_ids(self, *, limit: int = 3) -> list[str]:
+        """Pick fast/median/slow V0 latency ids for bounded native V1 smoke coverage."""
+        memory = read_memory(self.workspace, 0) or {}
+        performance = memory.get("performance")
+        performance = performance if isinstance(performance, dict) else {}
+        by_shape = performance.get("latency_us_by_shape", {})
+        if not isinstance(by_shape, dict):
+            return []
+        measured: list[tuple[str, float]] = []
+        for shape_id, raw_latency in by_shape.items():
+            if isinstance(raw_latency, bool) or not isinstance(raw_latency, (int, float)):
+                continue
+            latency = float(raw_latency)
+            if latency > 0.0 and math.isfinite(latency):
+                measured.append((str(shape_id), latency))
+        if not measured or limit <= 0:
+            return []
+        measured.sort(key=lambda item: item[1])
+        if len(measured) <= limit:
+            return [shape_id for shape_id, _latency in measured]
+        if limit == 1:
+            return [measured[len(measured) // 2][0]]
+        indexes = [round(index * (len(measured) - 1) / (limit - 1)) for index in range(limit)]
+        return [measured[index][0] for index in dict.fromkeys(indexes)]
+
+    def _ensure_framework_baseline_solution_manifest(self) -> None:
+        """Preseed a native V1 manifest so the implementation Agent need not infer its schema."""
+        path = self.workspace / "solution.json"
+        if path.is_file() or not self.atrex_bench_root:
+            return
+        framework = self.framework.strip().lower()
+        language = {
+            "cutedsl": "cutedsl",
+            "cuda": "cuda",
+            "flydsl": "flydsl",
+            "gluon": "gluon",
+            "triton": "triton",
+        }.get(framework, framework)
+        dependencies = {
+            "cuda": ["torch", "cuda-python"],
+            "triton": ["torch", "triton"],
+            "gluon": ["torch", "triton", "gluon"],
+            "cutedsl": ["torch", "nvidia-cutlass-dsl"],
+            "flydsl": ["torch", "flydsl"],
+        }.get(framework, ["torch"])
+        reference = self.workspace / "reference.py"
+        reference_source = (
+            reference.read_text(encoding="utf-8", errors="replace")
+            if reference.is_file()
+            else ""
+        )
+        entry_symbol = "Model" if "class Model" in reference_source else "run"
+        manifest = {
+            "name": f"{self.campaign_name}_v1_{language}",
+            "spec": {
+                "languages": ["python", language],
+                "dependencies": dependencies,
+                "entry_point": f"kernel.py::{entry_symbol}",
+            },
+            "sources": [
+                {
+                    "path": "kernel.py",
+                    "role": (
+                        "Single self-contained candidate file. Update this description and "
+                        "dependency roles to match the implemented framework loader exactly."
+                    ),
+                }
+            ],
+            "dependency_roles": {
+                dependency: (
+                    "candidate framework/runtime plumbing; update with the exact non-compute "
+                    "role used by kernel.py"
+                )
+                for dependency in dependencies
+            },
+        }
+        path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
+        """Return the only ordinary evaluator command the V1 implementation Agent should run."""
+        command = ["python", "tools/sandbox.py", "--kind", "run"]
+        if self.sandbox_hardware:
+            command += ["--hardware", self.sandbox_hardware]
+        if self.sandbox_url:
+            command += ["--url", self.sandbox_url]
+        elif self.sandbox_profile:
+            command += ["--gateway-profile", self.sandbox_profile]
+        command += [
+            "--no-sync",
+            "--",
+            "python",
+            "test_kernel.py",
+            "--version",
+            f"v{n}",
+        ]
+        shape_ids = (
+            self._framework_baseline_smoke_shape_ids()
+            if self.atrex_bench_root
+            else []
+        )
+        for shape_id in shape_ids:
+            command += ["--shape-id", shape_id]
+        if self.atrex_bench_root:
+            command += ["--timed-runs", "1"]
+        command.append("--no-memory")
+        if shape_ids:
+            scope = (
+                f"The supervisor selected {len(shape_ids)} opaque V0 ids spanning the baseline "
+                "latency distribution. This is smoke coverage only; do not infer their private inputs."
+            )
+        else:
+            scope = (
+                "This evaluator route has no safe targeted-case selector, so run this base-seed "
+                "smoke at most once after the final implementation edit."
+            )
+        return shlex.join(command), scope
+
+    def _framework_baseline_sandbox_directive(self) -> str:
+        """Concise V1-specific boundary without generic repeated full-evaluator examples."""
+        endpoint = self.sandbox_url or self.sandbox_profile or "agate configuration"
+        hardware = self.sandbox_hardware or "the configured remote GPU"
+        return (
+            "## V1 GPU sandbox boundary\n\n"
+            f"- Target `{hardware}` through `{endpoint}`. Every GPU import, compile, smoke, "
+            "correctness check, and timer must cross `tools/sandbox.py`; never execute "
+            "`kernel.py`, `test_kernel.py`, a profiler, or a JIT-capable GPU import on the host.\n"
+            "- Use only the bounded smoke command below during the ordinary V1 turn. Do not "
+            "run a full-workload evaluator, `--multi-seed`, a separate benchmark, or profiling.\n"
+            "- Keep `--no-memory`: the supervisor parses evaluator output and owns canonical "
+            "memory. Sandbox uploads are allowlist-only; declare inputs for any custom smoke "
+            "helper, and never upload optimizer memory or private evaluator inputs.\n"
+            "- The gateway is shared supervisor-owned infrastructure. Do not start, stop, "
+            "restart, signal, reconfigure, or cancel its jobs. Report an infrastructure "
+            "failure and exit.\n"
+        )
+
     def _framework_baseline_prompt(self, n: int) -> str:
+        smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
         return _render(
             PROMPTS_DIR / "framework_baseline.md",
             WORKSPACE=str(self.workspace),
@@ -1051,8 +2402,11 @@ class Campaign:
             NOTES=self.notes,
             AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._sandbox_directive(),
+            SANDBOX=self._framework_baseline_sandbox_directive(),
             EVALUATOR=self._evaluator_directive(),
+            CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
+            SMOKE_COMMAND=smoke_command,
+            SMOKE_SCOPE=smoke_scope,
             MODE_POLICY=self._mode_directive(),
         )
 
@@ -1079,7 +2433,13 @@ class Campaign:
                 restored.append(path)
         return restored
 
-    def _framework_baseline_problem(self, v0_blob: str, baseline_commit: str) -> str:
+    def _framework_baseline_problem(
+        self,
+        v0_blob: str,
+        baseline_commit: str,
+        *,
+        include_policy_review: bool = True,
+    ) -> str:
         """Static acceptance checks on the candidate about to be validated and committed.
 
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
@@ -1088,7 +2448,11 @@ class Campaign:
         candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = self._production_kernel_violations()
+        violations = (
+            self._production_kernel_violations()
+            if include_policy_review
+            else production_structure_violations(self.workspace, self.framework)
+        )
         if violations:
             return (
                 f"the candidate is not a self-contained {self.framework} implementation: "
@@ -1110,79 +2474,81 @@ class Campaign:
             return "the session modified immutable ground truth: " + ", ".join(mutated)
         return ""
 
+    def _framework_baseline_external_gates(
+        self, n: int
+    ) -> tuple[Optional[dict], str]:
+        """Run policy review and the sole authoritative V1 evaluator concurrently."""
+        print(
+            "[orchestrator] framework baseline: running policy review and combined "
+            "correctness/performance validation in parallel",
+            flush=True,
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            policy_future = executor.submit(self._production_kernel_violations)
+            validation_future = executor.submit(self._validate_framework_baseline, n)
+            try:
+                violations = policy_future.result()
+            except Exception as exc:
+                violations = [
+                    "independent production policy review failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ]
+            try:
+                result, validation_problem = validation_future.result()
+            except Exception as exc:
+                result, validation_problem = (
+                    None,
+                    "combined validation failed: "
+                    f"{type(exc).__name__}: {exc}",
+                )
+        if violations:
+            return None, (
+                f"the candidate is not a self-contained {self.framework} implementation: "
+                + "; ".join(violations)
+            )
+        return result, validation_problem
+
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
-        """Re-validate the candidate through the gateway: single seed, then five seeds."""
+        """Validate V1 once: base-seed performance plus five extra correctness cases."""
         # V1 is a correctness/framework bring-up gate, not a performance gate. Keep a
         # small timing sample so a slow but valid first implementation can enter the
         # optimization loop without exhausting the evaluator's benchmark budget.
-        timing_args = ["--timed-runs", "5"]
-        stages = (
-            (
-                "single-seed",
-                [
-                    "python",
-                    "test_kernel.py",
-                    "--version",
-                    f"v{n}",
-                    *timing_args,
-                    "--no-memory",
-                ],
-            ),
-            (
-                "multi-seed",
-                [
-                    "python",
-                    "test_kernel.py",
-                    "--version",
-                    f"v{n}",
-                    "--multi-seed",
-                    "5",
-                    *timing_args,
-                    "--no-memory",
-                ],
-            ),
-        )
-        result: Optional[dict] = None
-        for stage_name, command in stages:
-            try:
-                test = _sandbox_command(
-                    self.workspace,
-                    self.sandbox_hardware,
-                    self.sandbox_profile,
-                    self.sandbox_url,
-                    self.sandbox_timeout,
-                    command,
-                    gateway_kind="run",
-                    private_reference_dir=self.private_reference_dir,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                return None, f"{stage_name} validation failed to run: {exc}"
-            if test.stdout:
-                print(
-                    test.stdout,
-                    end="" if test.stdout.endswith("\n") else "\n",
-                    flush=True,
-                )
-            if test.stderr:
-                print(
-                    test.stderr,
-                    end="" if test.stderr.endswith("\n") else "\n",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            if test.returncode != 0:
-                return (
-                    None,
-                    f"{stage_name} validation command failed (exit={test.returncode})",
-                )
-            try:
-                result = _test_result_from_stdout(test.stdout)
-            except (RuntimeError, json.JSONDecodeError) as exc:
-                return None, f"{stage_name} validation produced no usable result: {exc}"
-            if not result.get("all_pass"):
-                return None, f"{stage_name} correctness validation failed"
+        command = [
+            "python",
+            "test_kernel.py",
+            "--version",
+            f"v{n}",
+            "--multi-seed",
+            "5",
+        ]
+        # --timed-runs belongs to the native Atrex-Bench adapter. SOL and
+        # derived legacy harnesses retain their own pinned benchmark settings.
+        if self.atrex_bench_root:
+            command += ["--timed-runs", "5"]
+        command.append("--no-memory")
+        try:
+            test = _sandbox_command(
+                self.workspace,
+                self.sandbox_hardware,
+                self.sandbox_profile,
+                self.sandbox_url,
+                self.sandbox_timeout,
+                command,
+                gateway_kind="run",
+                private_reference_dir=self.private_reference_dir,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, f"combined validation failed to run: {exc}"
+        self._print_v0_evaluator_output(test)
+        if test.returncode != 0:
+            return None, f"combined validation command failed (exit={test.returncode})"
+        try:
+            result = _test_result_from_stdout(test.stdout)
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            return None, f"combined validation produced no usable result: {exc}"
+        if not result.get("all_pass"):
+            return None, "combined multi-seed correctness validation failed"
 
-        assert result is not None
         latency = result.get("latency_us_geomean")
         if not isinstance(latency, (int, float)) or latency <= 0:
             return None, "validation reported no usable latency_us_geomean"
@@ -1214,56 +2580,30 @@ class Campaign:
     def _recover_framework_baseline(
         self, problem: str, v0_blob: str, baseline_commit: str, pre_head: str
     ) -> None:
-        """Run one clean recovery session for a rejected candidate."""
+        """Run one recovery session; unexpected exits invoke the progress supervisor."""
         print(
             f"[orchestrator] WARNING: framework baseline rejected ({problem}); "
-            "starting one clean recovery session",
+            "starting one recovery session",
             file=sys.stderr,
             flush=True,
         )
         if pre_head and git_head(self.workspace) != pre_head:
             # Undo the session's commits, keep its files: the recovery session needs to read them.
             subprocess.run(
-                ["git", "reset", "--soft", pre_head],
+                ["git", "reset", "--mixed", pre_head],
                 cwd=str(self.workspace),
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        recovery_prompt = (
-            self._mode_directive()
-            + "\n\n# Recover a rejected framework baseline\n\n"
-            + f"Workspace: `{self.workspace}`\n\n"
-            + "A previous non-interactive session tried to replace the V0 PyTorch wrapper with a "
-            + f"self-contained **{self.framework}** kernel and was rejected: "
-            + f"**{problem}**\n\n"
-            + "Continue from the files already present and finish the job autonomously. Do not ask "
-            + "for confirmation. Keep the algorithm you already have where it is sound, fix the "
-            + "stated problem, validate correctness through the sandbox with `--multi-seed 5`, "
-            + f"write `memory/v{FRAMEWORK_BASELINE_VERSION}.json`, and commit `kernel.py`. Never "
-            + "modify `test_kernel.py`, `reference.py`, `input.py`, `agent_problem.json`, "
-            + "`shapes.json`, or `memory/v0.json`, "
-            + f"or create `{FRAMEWORK_BASELINE_FILE}`. Do not enter optimization iterations.\n\n"
-            + self._evaluator_directive()
-            + "\n\n"
-            + self._sandbox_directive()
-        )
-        recovery = run_session(
-            self.workspace,
-            recovery_prompt,
-            timeout=self.framework_baseline_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_timeout=self.sandbox_timeout,
-            reasoning_effort="high",
-            extra_environment=self.agent_environment(),
-        )
-        self._assert_generalized_inputs_are_private()
-        self._account(
-            recovery, f"framework baseline recovery v{FRAMEWORK_BASELINE_VERSION}"
-        )
+        try:
+            self._run_framework_baseline_agent(
+                n=FRAMEWORK_BASELINE_VERSION,
+                label="framework baseline recovery",
+                rejection=problem,
+            )
+        finally:
+            self._warn_restored_baseline_paths(baseline_commit)
 
     def _record_framework_baseline_failure(self, problem: str) -> None:
         """Persist why the framework baseline was rejected, uncommitted so a reset cannot lose it."""
@@ -1374,7 +2714,7 @@ class Campaign:
         memory["git_commit_hash"] = kernel_commit
         memory[FRAMEWORK_BASELINE_CATEGORY] = {
             "framework": self.framework,
-            "validated_stages": ["single-seed", "multi-seed-5"],
+            "validated_stages": ["combined-base-performance+multi-seed-5"],
         }
         memory_path.write_text(
             json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -1441,7 +2781,6 @@ class Campaign:
         from long_horizon.verifier import GatewayABBAValidator
 
         CampaignStore.ensure_excluded(self.workspace)
-        self.ensure_plan_reviewer_availability()
 
         verifier = GatewayABBAValidator(
             hardware=self.sandbox_hardware,
@@ -1456,6 +2795,8 @@ class Campaign:
         engine = LongHorizonCampaign(
             base_campaign=self,
             max_version=self.max_iters,
+            fast_episodes=self.fast_episodes,
+            fast_trials=self.fast_trials,
             token_budget=self.token_budget,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,
@@ -1482,7 +2823,9 @@ class Campaign:
         # Production output is fail-closed: do not package a PyTorch baseline,
         # alternate DSL, or independently rejected dependency as a production candidate.
         if self.optimization_mode == "production":
-            violations = self._production_kernel_violations()
+            violations = self._production_kernel_violations(
+                require_gluon=kernel_is_gluon(self.workspace)
+            )
             if violations:
                 raise RuntimeError(
                     "no production-compliant final kernel: " + "; ".join(violations)

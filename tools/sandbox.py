@@ -518,6 +518,20 @@ def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
     return default
 
 
+def _option_values(parts: list[str], name: str) -> list[str]:
+    """Read every repeated ``--flag value``/``--flag=value`` option."""
+    command = _command_parts(parts)
+    values: list[str] = []
+    for index, token in enumerate(command):
+        if token == name:
+            if index + 1 >= len(command):
+                raise ValueError(f"{name} requires a value")
+            values.append(command[index + 1])
+        elif token.startswith(name + "="):
+            values.append(token.split("=", 1)[1])
+    return values
+
+
 def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
@@ -694,7 +708,7 @@ def _typed_workspace_limitation(
         if _option_value(command, option) is not None:
             return f"{option} is not supported by the typed API"
     warmup = _option_value(command, "--warmup")
-    if warmup is not None and str(warmup) != "10":
+    if warmup is not None and str(warmup) != "5":
         return "non-default --warmup is not supported by the typed API"
     for option, default in (("--atol", 1e-2), ("--rtol", 0.05)):
         value = _option_value(command, option)
@@ -777,9 +791,23 @@ def _typed_request(
         _evaluator_input_path(workspace, "shapes.json", required=True), required=True
     )
     assert shapes is not None
+    requested_shape_ids = _option_values(command, "--shape-id")
+    if requested_shape_ids:
+        unknown_shape_ids = [
+            shape_id for shape_id in requested_shape_ids if shape_id not in shapes
+        ]
+        if unknown_shape_ids:
+            raise ValueError(
+                "unknown --shape-id values: " + ", ".join(unknown_shape_ids)
+            )
+        # Preserve command order while dropping accidental duplicates. The typed
+        # gateway must honor the adapter's targeted-smoke contract instead of
+        # silently expanding a one-shape request back to the complete workload.
+        requested_shape_ids = list(dict.fromkeys(requested_shape_ids))
+        shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
     try:
         multi_seed = int(_option_value(command, "--multi-seed", 0))
-        bench_iters = int(_option_value(command, "--timed-runs", 100))
+        bench_iters = int(_option_value(command, "--timed-runs", 20))
         atol = float(_option_value(command, "--atol", 1e-2))
         rtol = float(_option_value(command, "--rtol", 0.05))
     except (TypeError, ValueError) as exc:
@@ -805,6 +833,15 @@ def _typed_request(
     ):
         value = _json_object(_evaluator_input_path(workspace, filename, required=False))
         if value is not None:
+            if requested_shape_ids and isinstance(value.get("shapes"), dict):
+                value = dict(value)
+                value["shapes"] = {
+                    shape_id: value["shapes"][shape_id]
+                    for shape_id in requested_shape_ids
+                    if shape_id in value["shapes"]
+                }
+                if filename == "metadata.json" and "num_shapes" in value:
+                    value["num_shapes"] = len(requested_shape_ids)
             reference[field] = value
 
     request: dict[str, Any] = {
@@ -1664,6 +1701,8 @@ def _typed_agate_command(
         str(options["num_correctness_cases"]),
         "--bench-iters",
         str(options["bench_iters"]),
+        "--set",
+        "warmup_iters=5",
         "--http-timeout",
         str(MAX_HTTP_REQUEST_TIMEOUT),
         "--wait-timeout",
@@ -1698,11 +1737,8 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _expected_shape_ids(workspace: Path) -> list[str]:
-    shapes = _json_object(
-        _evaluator_input_path(workspace, "shapes.json", required=True), required=True
-    )
-    assert shapes is not None
+def _request_shape_ids(request: dict[str, Any]) -> list[str]:
+    shapes = request["reference"]["shapes"]
 
     def sort_key(shape_id: str) -> tuple[int, object]:
         return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
@@ -1797,6 +1833,116 @@ def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]
     return failures
 
 
+def _bounded_actionable_diagnostic(value: object, *, limit: int = 6000) -> str:
+    """Keep useful compiler/exception context without emitting unbounded tracebacks."""
+    text = str(value or "").replace("\x00", "").strip()
+    if len(text) <= limit:
+        return text
+    head = min(1000, limit // 3)
+    tail = limit - head - len("\n... diagnostic truncated ...\n")
+    return text[:head] + "\n... diagnostic truncated ...\n" + text[-tail:]
+
+
+def _looks_like_candidate_exception(value: object) -> bool:
+    """Recognize build/import/driver failures without exposing arbitrary case errors."""
+    text = str(value or "")
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "compilation error",
+            "compileerror",
+            "cuda_error_",
+            "cudaerror",
+            "culaunchkernel",
+            "cumodule",
+            "invalid context",
+            "kernelparams",
+            "modulenotfounderror:",
+            "importerror:",
+            "nvrtc",
+            "syntaxerror:",
+            "undefined symbol",
+        )
+    )
+
+
+def _compile_diagnostics(
+    compile_result: object, shape_ids: list[str]
+) -> list[dict[str, str]]:
+    """Extract compile/import failures that are safe and useful in generalized mode."""
+    if not isinstance(compile_result, dict):
+        return []
+    if "status" in compile_result:
+        if compile_result.get("status") == "passed":
+            return []
+        message = _bounded_actionable_diagnostic(
+            compile_result.get("reason") or compile_result.get("status")
+        )
+        return (
+            [{"stage": "compile_import", "shape_id": "", "message": message}]
+            if message
+            else []
+        )
+
+    diagnostics: list[dict[str, str]] = []
+    seen_messages: set[str] = set()
+    for shape_id in shape_ids:
+        status = compile_result.get(shape_id)
+        status = status if isinstance(status, dict) else {}
+        if status.get("status") == "passed":
+            continue
+        message = _bounded_actionable_diagnostic(
+            status.get("reason") or status.get("status") or "missing"
+        )
+        if message in seen_messages:
+            continue
+        seen_messages.add(message)
+        diagnostics.append(
+            {
+                "stage": "compile_import",
+                "shape_id": shape_id,
+                "message": message,
+            }
+        )
+    return diagnostics
+
+
+def _candidate_exception_diagnostics(
+    correctness_status: dict[str, Any],
+    correctness_shapes: dict[str, Any],
+    shape_ids: list[str],
+) -> list[dict[str, str]]:
+    """Surface traceback-backed candidate failures without exposing numeric case data."""
+    diagnostics: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for shape_id in shape_ids:
+        status = correctness_status.get(shape_id)
+        status = status if isinstance(status, dict) else {}
+        reasons: list[object] = [status.get("reason")]
+        shape_result = correctness_shapes.get(shape_id)
+        shape_result = shape_result if isinstance(shape_result, dict) else {}
+        cases = shape_result.get("cases")
+        for case in cases if isinstance(cases, list) else []:
+            if isinstance(case, dict):
+                reasons.append(case.get("error"))
+        for reason in reasons:
+            if not _looks_like_candidate_exception(reason):
+                continue
+            message = _bounded_actionable_diagnostic(reason)
+            if not message or message in seen:
+                continue
+            seen.add(message)
+            diagnostics.append(
+                {
+                    "stage": "candidate_runtime",
+                    "shape_id": shape_id,
+                    "message": message,
+                }
+            )
+    return diagnostics
+
+
 def _optimizer_result_from_eval(
     payload: dict[str, Any], shape_ids: list[str]
 ) -> dict[str, Any]:
@@ -1806,7 +1952,9 @@ def _optimizer_result_from_eval(
         failures.append("evaluation: " + str(payload["error"]))
     passed = payload.get("passed")
     passed = passed if isinstance(passed, dict) else {}
-    failures.extend(_compile_failures(passed.get("compile"), shape_ids))
+    compile_result = passed.get("compile")
+    failures.extend(_compile_failures(compile_result, shape_ids))
+    actionable_diagnostics = _compile_diagnostics(compile_result, shape_ids)
 
     correctness_status = passed.get("correctness")
     correctness_status = (
@@ -1817,6 +1965,11 @@ def _optimizer_result_from_eval(
     correctness_shapes = correctness.get("shapes")
     correctness_shapes = (
         correctness_shapes if isinstance(correctness_shapes, dict) else {}
+    )
+    actionable_diagnostics.extend(
+        _candidate_exception_diagnostics(
+            correctness_status, correctness_shapes, shape_ids
+        )
     )
     max_abs = 0.0
     max_rel = 0.0
@@ -1894,6 +2047,7 @@ def _optimizer_result_from_eval(
         "max_rel_err": max_rel,
         "evaluator": "atrex-gpu-gateway/run",
         "eval_id": payload.get("eval_id"),
+        "actionable_diagnostics": actionable_diagnostics[:8],
     }
 
 
@@ -1911,6 +2065,30 @@ def _merge_optimizer_results(
         if shape_id in latency_by_shape
     ]
     complete = len(latencies) == len(shape_ids)
+    actionable_diagnostics: list[dict[str, str]] = []
+    seen_diagnostics: set[tuple[str, str]] = set()
+    for result in results:
+        if len(actionable_diagnostics) >= 8:
+            break
+        for diagnostic in result.get("actionable_diagnostics") or []:
+            if not isinstance(diagnostic, dict):
+                continue
+            normalized = {
+                "stage": str(diagnostic.get("stage") or "candidate_runtime"),
+                "shape_id": str(diagnostic.get("shape_id") or ""),
+                "message": str(diagnostic.get("message") or ""),
+            }
+            key = (
+                normalized["stage"],
+                normalized["message"],
+            )
+            if not normalized["message"] or key in seen_diagnostics:
+                continue
+            seen_diagnostics.add(key)
+            actionable_diagnostics.append(normalized)
+            if len(actionable_diagnostics) >= 8:
+                break
+
     return {
         "all_pass": complete and all(result.get("all_pass") for result in results),
         "failures": [
@@ -1937,6 +2115,7 @@ def _merge_optimizer_results(
         "evaluator": "atrex-gpu-gateway/run/batched",
         "eval_id": results[-1].get("eval_id"),
         "shape_batch_count": len(results),
+        "actionable_diagnostics": actionable_diagnostics,
     }
 
 
@@ -1949,9 +2128,14 @@ def _mask_generalized_result(
         return result
     masked = dict(result)
     if result.get("failures"):
-        masked["failures"] = [
-            "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
-        ]
+        if result.get("actionable_diagnostics"):
+            masked["failures"] = [
+                "candidate compile/import/runtime failure; see actionable_diagnostics"
+            ]
+        else:
+            masked["failures"] = [
+                "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
+            ]
     masked["hidden_case_details"] = "shape inputs and failure details withheld"
     return masked
 
@@ -2131,7 +2315,7 @@ def _run_typed_gateway(
         )
         return None
 
-    expected_shape_ids = _expected_shape_ids(workspace)
+    expected_shape_ids = _request_shape_ids(request)
     shape_batches = (
         _shape_batches(
             expected_shape_ids,
@@ -2190,7 +2374,10 @@ def _run_typed_gateway(
                 if agate_executable is None:
                     raise FileNotFoundError("agate")
                 reference_dir = None
-                if batched:
+                if kind == "run":
+                    # Even a single targeted batch needs its filtered reference
+                    # directory. Otherwise the agate CLI would reload the original
+                    # full shapes.json and defeat --shape-id smoke selection.
                     reference_dir = batch_root / f"batch-{batch_index:04d}"
                     _shape_batch_reference(batch_request["reference"], reference_dir)
                 agate = _typed_agate_command(
