@@ -64,7 +64,7 @@ optimization invisible (the tool has to be written into `condition.toolchain`)
 why**
 > "Triton GEMM is 48-122% slower than cuBLASLt", "cuDNN FP16 is much slower than
 > CUTLASS"
-> Demoted across the board under standard A. Facts like these have value but lack
+> Under this rule, all such records are demoted. These facts have value but lack
 > a mechanism, so they return to staging until that is supplied.
 
 **Ⓒ Inside the noise band** — the conclusion lands within measurement noise, which
@@ -95,7 +95,7 @@ is no conclusion
 | The mechanism is in `attempted` rather than `root_cause` | **backfill** | Historical records commonly have an empty `root_cause`, with the mechanism scattered through `attempted` |
 | The condition is "it failed on every shape" | **backfill**, writing the measured range into `shape_regime` | Checkable — but the mechanism still has to hold on its own |
 | A measurement-tool property used as the condition | **backfill**, written into `condition.toolchain` | Metric semantics are versioned and checkable |
-| `rediscovered` is high but there is no mechanism | **demote** | A reproduction count is no substitute for a mechanism (standard A) |
+| `rediscovered` is high but there is no mechanism | **demote** | A reproduction count is no substitute for a mechanism |
 
 ## Backfill discipline
 

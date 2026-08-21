@@ -240,8 +240,8 @@ def cmd_report() -> int:
 
     print("main-store anti-strategy records: %d\n" % len(files))
     for name, blurb in (
-            ("keep", "all three criteria hold, stays in the main store"),
-            ("needs-review", "the rules cannot decide, goes to the model"),
+            ("keep", "all three criteria hold, remains in the main store"),
+            ("needs-review", "the rules cannot decide, is sent for model review"),
             ("demote", "the rules alone find it unfit, returns to staging")):
         print("%-14s %4d   %s" % (name, buckets[name], blurb))
     print()
@@ -291,12 +291,12 @@ def cmd_emit_review(dest: str) -> int:
     print('  {"id": ..., "decision": "backfill",')
     print('   "established_fact": {"condition": {"sm_arch": null, "shape_regime": "large-N",')
     print('                                      "dtype": null, "toolchain": null},')
-    print('                        "mechanism": "at least 40 chars, why it '
-          'necessarily fails under that condition"}}')
+    print('                        "mechanism": "at least 40 characters explaining '
+          'why it necessarily fails under that condition"}}')
     print()
     print("Use backfill only when the mechanism really is written in this "
           "record's own prose -- never invent one.")
-    print("then: --apply <decisions.json> [--dry-run]")
+    print("Then run: --apply <decisions.json> [--dry-run]")
     return 0
 
 
@@ -382,7 +382,7 @@ def cmd_apply(decisions_path: str, dry_run: bool) -> int:
             print("  ... and %d more" % (len(moved) - 12))
 
     if not dry_run and moved:
-        print("\nnow rebuild the index: python3 tools/build_kernel_wiki.py --all")
+        print("\nNow rebuild the index: python3 tools/build_kernel_wiki.py --all")
     if dry_run:
         print("\ndry run: nothing was written")
     return 0

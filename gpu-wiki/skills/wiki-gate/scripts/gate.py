@@ -374,7 +374,7 @@ def flag_conflict(incoming: dict, target_id: str) -> str:
             "possible_explanations": [
                 "the shape sets differ",
                 "the preconditions / builds_on differ",
-                "a hardware batch or driver version difference",
+                "a hardware revision or driver-version difference",
                 "one side's measurement is wrong",
             ],
         },

@@ -116,7 +116,7 @@ def main():
     a("| Operators (taken from cwd) | %s |" % meta["operators"])
     a("")
     a("Declared defaults: %s. Detection wins over declaration; `arch_basis` "
-      "records which of the two each candidate actually relied on."
+      "records which source each candidate actually relied on."
       % meta["declared"])
     a("")
     if meta.get("note"):
@@ -160,7 +160,7 @@ def main():
           "measured A/B**. Among them, `*-variant` is a comparison the transcript "
           "already contains (both sides printed by the same output), while "
           "`before-after` is the same benchmark command run once before and once "
-          "after a change. The latter barely exists in the codex corpus: every "
+          "after a change. The latter barely exists in this corpus: every "
           "run uses a freshly written inline script, and one transcript was "
           "measured to hold 61 distinct benchmark identities and 0 repeats.")
         a("")

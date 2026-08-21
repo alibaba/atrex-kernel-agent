@@ -17,7 +17,7 @@ different kind of problem**:
 | Feedback loop | Required; it drives the ranking | Meaningless; only errata and generational replacement apply |
 
 So this store's `tools/query_hardware.py` is a **lookup**, not a ranked search: no
-ranking, no fallback, and an address it does not recognize fails loud.
+ranking, no fallback, and an unrecognized address fails with an error.
 
 ## The boundary: what belongs here, what stays in the experience store
 

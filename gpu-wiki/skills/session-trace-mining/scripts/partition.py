@@ -536,8 +536,8 @@ def write_report(set_name, segments, milestones, deadends, rejected, meta, rows)
                                             MARKER_REFK))
     a("| **Total** | **%d** | |" % len(segments))
     a("")
-    a("ids take the form `nvidia.<product>.<dsl>.<slug|family.anti>.<technique>-<marker><NN>`, "
-      "numbered from above the highest value already in the committed record "
+    a("IDs take the form `nvidia.<product>.<dsl>.<slug|family.anti>.<technique>-<marker><NN>`, "
+      "numbered starting above the highest value already in the committed record "
       "store so that merging stores later needs no renumbering. The markers are "
       "`%s`/`%s`/`%s` rather than the main chain's `s`: this set is a sibling run, "
       "and `gain.comparable` is false." % (MARKER_STRATEGY, MARKER_ANTI, MARKER_REFK))
