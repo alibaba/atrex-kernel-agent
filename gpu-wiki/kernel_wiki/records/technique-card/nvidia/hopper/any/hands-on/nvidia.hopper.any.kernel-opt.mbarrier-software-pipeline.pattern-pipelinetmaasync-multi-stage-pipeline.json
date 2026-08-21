@@ -53,7 +53,7 @@
   "success_rate_pct": null,
   "typical_gain_pct": null,
   "implementation": {
-   "snippet": "```python\nfrom cutlass.cute.nvgpu import PipelineTmaAsync\n\n# createpipeline( 3-4 )\npipeline = PipelineTmaAsync(num_stages=4)\n\n# Producer（TMA warp）：\nfor k_tile in range(num_k_tiles):\n pipeline.producer_acquire(stage) # wait buffer\n    cute.copy(tma_a, src_a[k_tile], smem_a[stage])\n    cute.copy(tma_b, src_b[k_tile], smem_b[stage])\n pipeline.producer_commit(stage) # data\n    stage = (stage + 1) % num_stages\n\n# Consumer（MMA warp）：\nfor k_tile in range(num_k_tiles):\n pipeline.consumer_wait(stage) # waitdata\n    acc = cute.gemm(tiled_mma, smem_a[stage], smem_b[stage], acc)\n pipeline.consumer_release(stage) # buffer\n    stage = (stage + 1) % num_stages\n```",
+   "snippet": "```python\nfrom cutlass.cute.nvgpu import PipelineTmaAsync\n\n# createpipeline( 3-4 )\npipeline = PipelineTmaAsync(num_stages=4)\n\n# Producer (TMA warp):\nfor k_tile in range(num_k_tiles):\n pipeline.producer_acquire(stage) # wait buffer\n    cute.copy(tma_a, src_a[k_tile], smem_a[stage])\n    cute.copy(tma_b, src_b[k_tile], smem_b[stage])\n pipeline.producer_commit(stage) # data\n    stage = (stage + 1) % num_stages\n\n# Consumer (MMA warp):\nfor k_tile in range(num_k_tiles):\n pipeline.consumer_wait(stage) # waitdata\n    acc = cute.gemm(tiled_mma, smem_a[stage], smem_b[stage], acc)\n pipeline.consumer_release(stage) # buffer\n    stage = (stage + 1) % num_stages\n```",
    "format": "source (verbatim)"
   }
  },

@@ -359,9 +359,9 @@ def flag_conflict(incoming: dict, target_id: str) -> str:
         "existing_record_id": target_id,
         "incoming_record": incoming,
         "conflict_reason": (
-            f"方向矛盾:原记录 type={existing.get('type')} "
+            f"direction conflict: existing record type={existing.get('type')} "
             f"gain={existing_worth.get('gain', {}).get('pct', '?')}%, "
-            f"新记录 type={incoming.get('type')} "
+            f"incoming record type={incoming.get('type')} "
             f"gain={incoming_worth.get('gain', {}).get('pct', '?')}%"
         ),
         "context": {
@@ -372,10 +372,10 @@ def flag_conflict(incoming: dict, target_id: str) -> str:
             "existing_observed_symptom": existing_payload.get("problem", {}).get("observed_symptom"),
             "incoming_observed_symptom": incoming_payload.get("problem", {}).get("observed_symptom"),
             "possible_explanations": [
-                "shape 集合不同",
-                "前置条件 / builds_on 不同",
-                "硬件批次或驱动版本差异",
-                "其中一方的实测有误",
+                "the shape sets differ",
+                "the preconditions / builds_on differ",
+                "a hardware revision or driver-version difference",
+                "one side's measurement is wrong",
             ],
         },
         "resolution": None,

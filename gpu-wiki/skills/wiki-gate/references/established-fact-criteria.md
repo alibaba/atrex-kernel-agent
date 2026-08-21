@@ -1,81 +1,117 @@
-# anti-strategy 既定事实判定说明书
+# anti-strategy established-fact adjudication guide
 
-对 404 条历史 anti-strategy 记录做审查时使用的判定规则。规则来自前 38 条逐条精读后归纳,写下来是为了让后续批量判定与前 38 条**同标准**,并留下可审计依据。
+The adjudication rules used when auditing the 404 historical anti-strategy
+records. They were generalized from a close reading of the first 38, one by one;
+writing them down keeps later bulk adjudication to **the same standard** as those
+first 38 and leaves an auditable basis.
 
-## 三条硬判据(全满足才留库)
+## The three hard criteria (all must hold to stay in the store)
 
-| # | 判据 | schema 落点 |
+| # | Criterion | Where it lands in the schema |
 |---|---|---|
-| 1 | 可检验条件 C:架构 / shape 区间 / dtype / 工具链之一 | `established_fact.condition` 至少一个非空 |
-| 2 | 因果机制:为何在该条件下**必然**失败 | `established_fact.mechanism` ≥ 40 字 |
-| 3 | verdict 有结论 | 不能是 `unknown` / `unstable`(已从 schema 枚举移除) |
+| 1 | A checkable condition C: arch, shape regime, dtype or toolchain | at least one non-empty field in `established_fact.condition` |
+| 2 | A causal mechanism: why it **necessarily** fails under that condition | `established_fact.mechanism` ≥ 40 characters |
+| 3 | A verdict that concludes | may not be `unknown` / `unstable` (both removed from the schema enum) |
 
-判据 1 的关键约束:**「这个算子」不算条件**。一个手法在某个算子上失败是观察,不是定律。
+The key constraint on criterion 1: **"this operator" is not a condition**. A
+technique failing on one operator is an observation, not a law.
 
-## 算「机制」的表述(→ backfill)
+## Statements that count as a mechanism (→ backfill)
 
-前 38 条里所有被回填的记录都属于以下五型之一:
+Every record backfilled among the first 38 falls into one of these five kinds:
 
-**① 定量对冲** —— 明确指出「省下的 < 付出的」,两边都有数字
-> 「padding M 901→960 需要拷贝 A 矩阵,拷贝 8.22us > kernel 节省 2.1us」
-> 「torch.bmm 的 Python dispatch 开销超过它省掉的 transpose(+0.5us@N=256,+5us@N=1024)」
+**① Quantified trade-off** — states outright that "what it saves < what it costs",
+with numbers on both sides
+> "padding M 901→960 requires copying the A matrix, and that copy costs 8.22us >
+> the 2.1us the kernel saves"
+> "torch.bmm's Python dispatch overhead exceeds the transpose it removes
+> (+0.5us@N=256, +5us@N=1024)"
 
-**② 资源/容量硬限** —— 引用具体容量或规格得出必然结果
-> 「N=8192 时 128MB 缓冲 > B200 的 50MB L2,transpose 必须读 HBM,23us vs 暖态 8us」
-> 「2-CTA cluster 的 tile 需要 m≥256,M=128/256 时部分 cluster 空转」
+**② A hard resource or capacity limit** — cites a concrete capacity or spec and
+derives the necessary outcome
+> "at N=8192 a 128MB buffer > the B200's 50MB L2, so the transpose has to read
+> HBM: 23us against 8us warm"
+> "a 2-CTA cluster's tile needs m≥256, so at M=128/256 some clusters sit idle"
 
-**③ API / 语义限制** —— 工具或库在语义上不支持,不是调优不足
-> 「cuDNN-FE 在 SM100 只接受 NHWC/RowMajor epilogue,channels_last 转换无法省略」
-> 「batched-strided GEMM 无法表达跨完整 2048 维的归约,batch 化会算错(error=288)」
-> 「torch.compile 把 weight data pointer 烘进图里,基于指针的缓存不可能成立」
+**③ An API or semantic limitation** — the tool or library does not support it
+semantically; this is not under-tuning
+> "cuDNN-FE only accepts an NHWC/RowMajor epilogue on SM100, so the
+> channels_last conversion cannot be skipped"
+> "batched-strided GEMM cannot express a reduction across the full 2048
+> dimension, so batching computes the wrong result (error=288)"
+> "torch.compile bakes the weight data pointer into the graph, so a
+> pointer-based cache cannot possibly hold"
 
-**④ 微架构因果链** —— 从硬件行为推到性能结果
-> 「PADDED_M=8 → 活跃 warp 更少 → ILP 下降 → load latency stall 超出 cp.async 流水深度」
+**④ A microarchitectural causal chain** — reasons from hardware behaviour through
+to the performance outcome
+> "PADDED_M=8 → fewer active warps → lower ILP → load-latency stall exceeds the
+> cp.async pipeline depth"
 
-**⑤ 度量模型限制** —— 指标本身决定了该类优化不可见(工具需写进 condition.toolchain)
-> 「GPU 流水已把 CPU launch 开销与 kernel 执行重叠,CUPTI kernel-span 无法体现主机侧优化」
-> 「kernel 是 dispatch-bound,主机 ctypes 开销 ~38us ≈ GPU 时间,GEMM 级 2-7% 改善被完全掩盖」
+**⑤ A measurement-model limitation** — the metric itself makes this class of
+optimization invisible (the tool has to be written into `condition.toolchain`)
+> "the GPU pipeline already overlaps CPU launch overhead with kernel execution,
+> so a CUPTI kernel-span cannot show a host-side optimization"
+> "the kernel is dispatch-bound and host ctypes overhead ~38us ≈ the GPU time, so
+> a GEMM-level 2-7% improvement is masked completely"
 
-## 不算机制的表述(→ demote)
+## Statements that do not count as a mechanism (→ demote)
 
-**Ⓐ 穷尽记账** —— 「找过了,没有新的」
-> 「179th consecutive dead-end」「所有查询 New?=No」「STALL_COUNT=49」「ORCHESTRATOR QUIESCE RECOMMENDED」
+**Ⓐ Exhaustion bookkeeping** — "we looked, there is nothing new"
+> "179th consecutive dead-end", "all queries New?=No", "STALL_COUNT=49",
+> "ORCHESTRATOR QUIESCE RECOMMENDED"
 
-**Ⓑ 纯对比数字** —— 有条件、可复现,但**没说为什么**
-> 「Triton GEMM 比 cuBLASLt 慢 48-122%」「cuDNN FP16 比 CUTLASS 慢很多」
-> 按标准 A 一律降级。这类事实有价值但缺机制,退暂存区等补齐。
+**Ⓑ Bare comparison numbers** — conditioned and reproducible, but **it never says
+why**
+> "Triton GEMM is 48-122% slower than cuBLASLt", "cuDNN FP16 is much slower than
+> CUTLASS"
+> Under this rule, all such records are demoted. These facts have value but lack
+> a mechanism, so they return to staging until that is supplied.
 
-**Ⓒ 噪声区间** —— 结论落在测量噪声内,即无结论
-> 「1.2% 改善但多 seed 区间与 HEAD 重叠」「flat-within-noise」「+0.6% within noise」
+**Ⓒ Inside the noise band** — the conclusion lands within measurement noise, which
+is no conclusion
+> "1.2% improvement but the multi-seed interval overlaps HEAD",
+> "flat-within-noise", "+0.6% within noise"
 
-**Ⓓ 方法学笔记** —— 与具体算子无关的工作方法
-> 「sub-5% geomean delta 需 ≥2 次同 session 运行」「md5 未变时可复用 profile」
-> 例外:若同一条记录另有真机制(如「瓶颈在闭源 nvjet 二进制内,主机层不可达」),按该机制回填。
+**Ⓓ A methodology note** — a way of working, unrelated to any particular operator
+> "a sub-5% geomean delta needs ≥2 runs in the same session", "the profile can be
+> reused while the md5 is unchanged"
+> Exception: if the same record also holds a real mechanism (for example "the
+> bottleneck is inside the closed-source nvjet binary and unreachable from the
+> host layer"), backfill from that mechanism.
 
-**Ⓔ 断言式天花板** —— 只宣布到顶,不解释
-> 「confirmed mma_v2 Ampere ceiling」「kernel at hardware floor」「at strong local optimum」
+**Ⓔ An asserted ceiling** — declares the ceiling reached without explaining it
+> "confirmed mma_v2 Ampere ceiling", "kernel at hardware floor", "at strong local
+> optimum"
 
-**Ⓕ 推测措辞** —— 机制带 may / might / possibly
-> 「the 3-element inner loop may be less efficient than the grid-stride loop」
+**Ⓕ Speculative wording** — the mechanism carries may / might / possibly
+> "the 3-element inner loop may be less efficient than the grid-stride loop"
 
-## 边界判例(前 38 条中实际遇到的)
+## Borderline cases (the ones actually met in the first 38)
 
-| 情形 | 判定 | 依据 |
+| Situation | Adjudication | Basis |
 |---|---|---|
-一条记录试了 8 个方案,只有 1 个有机制 | **backfill**,`established_fact` 只描述那 1 个 | 门要求的是「这条记录确立了什么」,不是「它试过的一切」 |
-lesson 是方法学,但 attempted 里有真机制 | **backfill**,按 attempted 的机制填 | 机制存在即可,位置不影响其为事实 |
-机制在 `attempted` 而非 `root_cause` | **backfill** | 历史记录普遍 `root_cause` 为空,机制散落在 attempted |
-条件是「所有 shape 都失败」 | **backfill**,`shape_regime` 写实测范围 | 可检验;但机制必须另外成立 |
-度量工具属性当条件 | **backfill**,写 `condition.toolchain` | 指标语义是版本化、可检验的 |
-`rediscovered` 高但无机制 | **demote** | 复现次数不能替代机制(标准 A) |
+| A record tried 8 approaches and only 1 has a mechanism | **backfill**, with `established_fact` describing only that one | The gate asks "what did this record establish", not "everything it tried" |
+| The lesson is methodology, but `attempted` holds a real mechanism | **backfill**, filling in the mechanism from `attempted` | It is enough that the mechanism exists; where it sits does not change that it is a fact |
+| The mechanism is in `attempted` rather than `root_cause` | **backfill** | Historical records commonly have an empty `root_cause`, with the mechanism scattered through `attempted` |
+| The condition is "it failed on every shape" | **backfill**, writing the measured range into `shape_regime` | Checkable — but the mechanism still has to hold on its own |
+| A measurement-tool property used as the condition | **backfill**, written into `condition.toolchain` | Metric semantics are versioned and checkable |
+| `rediscovered` is high but there is no mechanism | **demote** | A reproduction count is no substitute for a mechanism |
 
-## 回填纪律
+## Backfill discipline
 
-- 机制**只能取自该记录自身的散文**,不得跨记录借用数字或结论
-- 不得凭空补充记录里没有的因果解释
-- 回填内容须过 `validate_fact()`:condition 至少一个非空且键合法、mechanism ≥40 字且不匹配空洞措辞黑名单
-- 回填被 `validate_fact` 拒绝时,自动改为降级(见 `audit_anti_strategy.py` 的 `rejected_backfill` 分支)
+- The mechanism **may only be taken from that record's own prose**; never borrow a
+  number or a conclusion from another record
+- Never supply a causal explanation the record does not contain
+- Backfilled content must pass `validate_fact()`: at least one non-empty condition
+  field under a legal key, and a mechanism of ≥40 characters that does not match
+  the hollow-wording blacklist
+- When `validate_fact` rejects a backfill it automatically becomes a demotion
+  instead (see the `rejected_backfill` branch in `audit_anti_strategy.py`)
 
-## 降级处置
+## Demotion procedure
 
-不合格记录**不删除**,移回挖掘 skill 的暂存区,置 `status: active` 并加 `demoted_from_main` / `demoted_reason` / `demoted_at`。将来补上机制或被多次独立复现后,可重新过 wiki-gate 入库。
+A record that fails is **not deleted**. It moves back to the mining skill's staging
+area, with `status: active` and the added fields `demoted_from_main` /
+`demoted_reason` / `demoted_at`. Once a mechanism is supplied later, or the record
+has been independently reproduced several times, it can be admitted again through
+wiki-gate.
