@@ -101,36 +101,47 @@ SESSION_PROVENANCE = {
 
 PATCHES = [
     # ---- identity enums ----
-    # 基线的 scope.dsl / generality.language 词表已经覆盖了这些语料里出现的 DSL
-    # （triton / cuda / cutedsl / gluon / …），所以这里没有补丁。新语料要加一个
-    # DSL 时，**两处必须一起加**：只改一边会让同一条记录的两层自相矛盾，算子级
-    # 经验会被错误提升到 generic 层而跨架构误召回。
+    # The base scope.dsl / generality.language vocabularies already cover the DSLs
+    # that show up in these corpora (triton / cuda / cutedsl / gluon / ...), so
+    # there is no patch here. When a new corpus needs another DSL, **both places
+    # must gain it together**: changing only one side makes a record's two layers
+    # contradict each other, and operator-level experience then gets promoted to
+    # the generic layer by mistake and mis-recalled across architectures.
 
-    # ---- 收益的来源类别 ----
-    {"why": "这批知识来自 agent 会话，不是我们自己跑的 harness，也不是公开仓库。"
-            "服务层要能硬过滤掉「只有 agent 自己说」的证据，所以 source_kind 必填。",
+    # ---- provenance class of the gain ----
+    {"why": "This knowledge comes from agent sessions, not from a harness we ran "
+            "ourselves and not from a public repository. The serving layer has to "
+            "be able to hard-filter evidence that is only the agent's own word, so "
+            "source_kind is required.",
      "path": GAIN + ["source_kind"], "op": "set",
      "value": {"enum": ["agent-session"],
                "description": "Provenance class of the number. Fixed for this "
                               "store: every record here comes from a coding "
                               "session transcript."}},
-    {"why": "把 source_kind 加进 required，否则它会像 payload.config 一样长期为空。",
+    {"why": "Add source_kind to required, or it ends up permanently empty the "
+            "way payload.config did.",
      "path": ["$defs", "gain", "required"], "op": "set",
      "value": ["basis", "source_kind"]},
 
-    # ---- 置信度：会话里大量数字是 agent 回读自己的笔记 ----
-    {"why": "基线的 confidence 枚举是给文档派生记录用的（measured/inferred/"
-            "documented）。会话语料需要 reported（agent 回读自己的笔记）与 "
-            "qualitative：存在只有机制描述、没有任何数字的候选（reverted 版本的"
-            "根因分析），它们既不是 measured 也不是 documented，硬塞任一档都是谎报。",
+    # ---- confidence: many session numbers are the agent reading its own notes --
+    {"why": "The base confidence enum is written for document-derived records "
+            "(measured/inferred/documented). A session corpus needs reported (the "
+            "agent reading back notes it wrote itself) and qualitative: some "
+            "candidates carry a mechanism description and no number at all (the "
+            "root-cause analysis of a reverted version), and they are neither "
+            "measured nor documented, so forcing them into either level would be "
+            "a false report.",
      "path": SUMMARY + ["confidence", "enum"], "op": "set",
      "value": ["measured", "reported", "qualitative"]},
 
-    # ---- 溯源：没有仓库可查，转录本身就是语料 ----
-    {"why": "十六道门里的 provenance 门要靠它重新解析回转录：set 名 + 相对路径 + "
-            "行号 + 行摘要。用绝对路径记溯源（基线 evidence.raw.detail_file 那种）"
-            "在语料搬家或归档换机器之后就是死路径，这里不重犯：路径一律相对 set 根，"
-            "set 只用名字引用。",
+    # ---- provenance: no repository to check, the transcript is the corpus -----
+    {"why": "The provenance gate, one of the sixteen, relies on this to resolve "
+            "back to the transcript: set name + relative path + line numbers + "
+            "line digests. Recording provenance by absolute path (the way the base "
+            "evidence.raw.detail_file does) leaves a dead path as soon as the "
+            "corpus moves or the archive changes machine, and that mistake is not "
+            "repeated here: every path is relative to the set root, and a set is "
+            "only ever referenced by name.",
      "path": RAW + ["session"], "op": "set", "value": SESSION_PROVENANCE},
 ]
 

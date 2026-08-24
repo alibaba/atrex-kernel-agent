@@ -16,7 +16,7 @@
 """
 Kernel latency measurement tool
 
-Measure the execution latency of a single Gluon kernel（p50 median），for compute-utilization calculation and before/after optimization comparison.
+Measure the execution latency of a single Gluon kernel (p50 median), for compute-utilization calculation and before/after optimization comparison.
 
 Usage:
     python tools/measure_kernel_time.py <kernel.py> \
