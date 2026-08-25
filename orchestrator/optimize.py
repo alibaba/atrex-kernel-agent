@@ -104,7 +104,6 @@ try:
     )
     from .workspace_state import (
         latest_version,
-        preserve_interrupted_tracked_changes,
         read_memory,
     )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
@@ -145,7 +144,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
-        preserve_interrupted_tracked_changes,
         read_memory,
     )
 
@@ -707,7 +705,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        preserve_interrupted_tracked_changes(campaign.workspace, "resume workspace")
         campaign._link_runtime()
     baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
         read_memory(campaign.workspace, 0)

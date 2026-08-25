@@ -81,7 +81,8 @@ Each canonical version is explored in an isolated Git branch and worktree. A fre
 Codex, or Pi session owns one Long Horizon episode and may execute multiple engineering cycles before
 publishing a structured terminal handoff. The supervisor validates the journal and candidate, runs
 incumbent/candidate ABBA verification in one gateway allocation, and squash-promotes only a strict
-correctness-passing improvement.
+correctness-passing improvement. If the supervisor restarts mid-episode, it reopens the same
+registered worktree so the next session can continue from its existing edits and intermediate files.
 
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
 experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.

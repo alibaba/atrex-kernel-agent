@@ -9,7 +9,6 @@ import json
 import math
 import re
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -242,52 +241,6 @@ def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
     if match is None:
         raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has an unusable version {version_text!r}")
     return commit, int(match.group(1))
-
-
-def preserve_interrupted_tracked_changes(workspace: Path, context: str) -> str:
-    """Stash tracked edits left by an interrupted optimizer session.
-
-    Bucket aggregation is defined in terms of committed Git HEADs.  A killed
-    coding session can nevertheless leave a newer, half-written ``kernel.py``
-    in the worktree.  Aggregating while that file is present would silently
-    mix an unvalidated candidate into the full kernel.  Preserve the tracked
-    edits in a recoverable stash and resume from the committed state; untracked
-    plans/profiles remain available as research artifacts for the next round.
-
-    Return the created stash commit, or an empty string when the worktree had
-    no tracked changes.
-    """
-    if not git_head(workspace):
-        return ""
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    if not status.stdout.strip():
-        return ""
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    message = f"orchestrator interrupted-worktree recovery ({context}) {timestamp}"
-    subprocess.run(
-        ["git", "stash", "push", "--quiet", "--message", message],
-        cwd=str(workspace),
-        check=True,
-    )
-    stash = subprocess.run(
-        ["git", "rev-parse", "refs/stash"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    print(
-        f"[orchestrator] preserved interrupted tracked edits in "
-        f"{workspace} as stash {stash[:8]} ({context})",
-        flush=True,
-    )
-    return stash
 
 
 def _normalize_commit_hash(ref: object) -> str:

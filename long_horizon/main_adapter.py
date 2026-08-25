@@ -41,7 +41,6 @@ from orchestrator.workspace_state import (
     git_head,
     head_kernel_is_initial_baseline,
     latest_version,
-    preserve_interrupted_tracked_changes,
     read_stall,
     reconstruct_stall,
     write_stall,
@@ -58,9 +57,6 @@ def prepare_campaign(campaign: Campaign) -> None:
         print(
             f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",
             flush=True,
-        )
-        preserve_interrupted_tracked_changes(
-            campaign.workspace, f"resume {campaign.campaign_name}"
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()

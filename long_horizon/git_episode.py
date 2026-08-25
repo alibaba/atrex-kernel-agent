@@ -187,10 +187,20 @@ class EpisodeWorktree:
         if ancestor.returncode:
             return "candidate_commit is not descended from incumbent", []
         dirty = working_changes(self.path)
-        if dirty:
-            return "candidate_ready requires a clean worktree: " + ", ".join(
-                dirty[:8]
-            ), []
+        violation = protected_violation(dirty)
+        if violation:
+            return violation, []
+        kernel_matches = _git(
+            self.path,
+            "diff",
+            "--quiet",
+            resolved,
+            "--",
+            "kernel.py",
+            check=False,
+        )
+        if kernel_matches.returncode:
+            return "worktree kernel.py must match candidate_commit", []
         paths = changed_paths(self.path, self.base_commit, resolved)
         if not paths:
             return "candidate has no changes relative to incumbent", []
@@ -295,8 +305,13 @@ def promote_candidate(
                 "-c",
                 "user.email=atrex-long-horizon@local",
                 "commit",
+                "--only",
                 "-m",
                 f"episode {episode}: promote verified long-horizon candidate",
+                "--",
+                "kernel.py",
+                f"memory/long_horizon_e{episode:04d}.json",
+                f"memory/v{memory_version}.json",
             ],
             cwd=str(incumbent_workspace),
             check=True,
@@ -343,8 +358,11 @@ def record_episode_outcome(
             "-c",
             "user.email=atrex-long-horizon@local",
             "commit",
+            "--only",
             "-m",
             f"v{version}: long-horizon episode {episode} {status}",
+            "--",
+            str(memory_path.relative_to(incumbent_workspace)),
         ],
         cwd=str(incumbent_workspace),
         check=True,
