@@ -92,7 +92,14 @@ def _merge_batch_results(
         for result in results
         for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
     }
-    latencies = [latency_by_shape[shape_id] for shape_id in shape_ids]
+    missing_shape_ids = [
+        shape_id for shape_id in shape_ids if shape_id not in latency_by_shape
+    ]
+    latencies = [
+        latency_by_shape[shape_id]
+        for shape_id in shape_ids
+        if shape_id in latency_by_shape
+    ]
     weighted_scores: list[tuple[float, int]] = []
     for result in results:
         raw_score = result.get(
@@ -114,17 +121,26 @@ def _merge_batch_results(
         else None
     )
     merged = dict(results[-1])
+    failures = [
+        str(failure)
+        for result in results
+        for failure in (result.get("failures") or [])
+    ]
+    if missing_shape_ids:
+        failures.append(
+            "shape batches did not return latency for: "
+            + ", ".join(missing_shape_ids)
+        )
     merged.update(
         {
-            "all_pass": performance_score is not None
+            "all_pass": not missing_shape_ids
+            and performance_score is not None
             and all(result.get("all_pass") for result in results),
-            "failures": [
-                str(failure)
-                for result in results
-                for failure in (result.get("failures") or [])
-            ],
+            "failures": failures,
             "latency_us_geomean": _geomean(latencies),
-            "latency_us_arith_mean": sum(latencies) / len(latencies),
+            "latency_us_arith_mean": (
+                sum(latencies) / len(latencies) if latencies else 0.0
+            ),
             "latency_us_by_shape": latency_by_shape,
             "speedup_vs_ref_mean": performance_score,
             "speedup_vs_ref_geomean": None,
@@ -503,7 +519,9 @@ class GatewayABBAValidator:
                 )
                 output = process.stdout + "\n" + process.stderr
                 if process.returncode == 0:
-                    return _payload_from_stdout(process.stdout)
+                    payload = _payload_from_stdout(process.stdout)
+                    atomic_write_json(workspace / result_relative, payload)
+                    return payload
                 if attempt == 0 and any(
                     marker in output
                     for marker in (

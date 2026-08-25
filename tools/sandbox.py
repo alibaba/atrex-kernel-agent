@@ -957,6 +957,9 @@ def _make_atrex_bench_runtime_bundle(
             # that predate sdk.py.
             if sdk_module.is_file():
                 evaluator_files.append(sdk_module)
+            shape_contracts = package / "shape_contracts.py"
+            if shape_contracts.is_file():
+                evaluator_files.append(shape_contracts)
             evaluator_files.extend(_walk_files(package / "eval"))
             tf.add(run_eval, arcname="atrex-bench/scripts/run_eval.py", recursive=False)
             for path in evaluator_files:
