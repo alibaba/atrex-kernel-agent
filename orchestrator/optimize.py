@@ -5,10 +5,11 @@ Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
 Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
-The coding agent may profile, research, edit, validate, benchmark, repair, and checkpoint as many
-times as needed before publishing one terminal handoff. The supervisor independently verifies a
-candidate against the incumbent with a same-allocation ABBA schedule and squash-promotes only a
-strict, correctness-passing improvement.
+By default the first two post-baseline episodes use five reviewed fast plan/implement/evaluator
+trials per episode;
+later episodes use the full profile/research/repair loop. The supervisor squash-promotes only a
+strict, correctness-passing improvement, using canonical-memory comparison in fast mode and a
+same-allocation ABBA schedule in full mode.
 
 Termination policy
 ------------------
@@ -77,6 +78,8 @@ try:
     from .constants import (
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
+        DEFAULT_FAST_EPISODES,
+        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
@@ -112,6 +115,8 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.constants import (  # type: ignore[no-redef]
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
+        DEFAULT_FAST_EPISODES,
+        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
@@ -445,9 +450,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
         default="leaderboard",
-        help="leaderboard preserves the permissive current CLAUDE.md flow; production mechanically "
-        "enforces each campaign's framework and delegates ambiguous third-party dependency "
-        "provenance to an independent fail-closed Agent review.",
+        help="leaderboard preserves the permissive current CLAUDE.md flow; production keeps "
+        "deterministic structure/state gates and requires an independent fail-closed full-candidate "
+        "framework, compute-provenance, dependency, loader, and manifest review.",
     )
     ap.add_argument(
         "--framework",
@@ -465,6 +470,24 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=int,
         default=20,
         help="Hard cap on canonical optimization versions/episodes.",
+    )
+    ap.add_argument(
+        "--fast-episodes",
+        type=int,
+        default=DEFAULT_FAST_EPISODES,
+        help=(
+            "Use the lightweight fast path for the first N optimization episodes after "
+            "baseline (default: 2; 0 disables)."
+        ),
+    )
+    ap.add_argument(
+        "--fast-trials",
+        type=int,
+        default=DEFAULT_FAST_TRIALS,
+        help=(
+            "Number of reviewed plan->implement->evaluator trials in each fast episode "
+            "(default: 5)."
+        ),
     )
     ap.add_argument(
         "--token-budget",
@@ -567,6 +590,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
+    if args.fast_episodes < 0:
+        ap.error("--fast-episodes must be non-negative")
+    if args.fast_trials <= 0:
+        ap.error("--fast-trials must be positive")
     if args.handoff_resumes < 0:
         ap.error("--handoff-resumes must be non-negative")
     if args.verify_repeats <= 0:
@@ -685,6 +712,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters,
+        fast_episodes=args.fast_episodes,
+        fast_trials=args.fast_trials,
         token_budget=args.token_budget,
         target_util=args.target_util,
         setup_timeout=args.setup_timeout,

@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
-REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
+REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def terminal_usage_from_stream(stdout: str) -> TokenUsage:

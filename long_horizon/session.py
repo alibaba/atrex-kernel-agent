@@ -33,6 +33,18 @@ CommandExecutor = Callable[
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
 
 
+def _claude_retryable_api_error(message: str) -> bool:
+    """Return whether a bounded same-session retry can preserve useful work."""
+    normalized = message.strip().casefold()
+    if normalized in _CLAUDE_TRANSIENT_API_ERRORS:
+        return True
+    return (
+        "request rejected (429)" in normalized
+        and "throttling" in normalized
+        and "exceeded your current quota" in normalized
+    )
+
+
 def _codex_invocation_usage(
     session_usage: TokenUsage, previous_session_usage: TokenUsage | None
 ) -> TokenUsage:
@@ -78,8 +90,7 @@ def _claude_transient_api_error(stdout: str) -> str:
             value = block.get("text")
             if not isinstance(value, str):
                 continue
-            normalized = value.strip().casefold()
-            if normalized in _CLAUDE_TRANSIENT_API_ERRORS:
+            if _claude_retryable_api_error(value):
                 return value.strip()
     return ""
 

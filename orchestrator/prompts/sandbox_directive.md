@@ -2,11 +2,18 @@
 
 - Target gateway hardware: **{{HARDWARE}}**{{ENDPOINT}}. All GPU execution must cross this gateway boundary, including when the endpoint is localhost; source edits, optimizer state, and Git operations remain in the workspace.
 - Run every correctness or performance test through the gateway sandbox's `run` interface. Always pass `--kind run --no-memory`; read the emitted `[test_kernel] RESULT_JSON=...` line, then update `memory/v<N>.json` locally.
+  For the V0 baseline, run exactly one full-workload base-seed measurement:
+  ```bash
+  python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v0 --no-memory
+  ```
+  Use that run's performance result and accompanying correctness status to create `memory/v0.json`. Do not pass `--multi-seed` and do not launch a separate robustness run for V0.
+  For every optimized version after V0, run the base-seed measurement and the five-seed correctness gate:
   ```bash
   python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v<N> --no-memory
   python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v<N> --multi-seed 5 --no-memory
   ```
-  The harness must benchmark only the base seed. Additional `--multi-seed` runs are correctness-only (no warmup/timing/reference benchmark repetition). Native Atrex-Bench run requests with large shape sets are tested automatically in concurrent four-shape batches and merged into one result. Follow the declared evaluator route: an orchestrator-installed Atrex-Bench adapter must never be edited; only a derived legacy boundary may create its harness before V0. After V0 every route's harness remains immutable.
+  The harness must benchmark only the base seed. The additional `--multi-seed` run is correctness-only (no warmup/timing/reference benchmark repetition).
+  Native Atrex-Bench run requests with large shape sets are tested automatically in concurrent four-shape batches and merged into one result. Follow the declared evaluator route: an orchestrator-installed Atrex-Bench adapter must never be edited; only a derived legacy boundary may create its harness before V0. After V0 every route's harness remains immutable.
 - Sandbox uploads are allowlist-only. `test_kernel.py`, dispatch-signature collection, standard profile wrappers, and direct `import kernel` checks select their required inputs automatically. For any nonstandard command or dynamically opened local file, declare each dependency before `--` with repeatable `--input <relative-file-or-directory>`. Never use a generic `python -c print(...)` job to infer evaluator health; it does not exercise the evaluator payload or code path.
 - Run NVIDIA/AMD profiling through the typed `profile` interface. The structured response is saved as `profiles/v<N>/gateway_profile.json`; the wrapper command after `--` is used only as a dev fallback when the endpoint cannot represent the workload:
   ```bash

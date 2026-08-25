@@ -6,15 +6,17 @@ recorded as **v{{N}}**, and then stop. The optimization campaign inherits your k
 framework bring-up happens once, before optimization begins.
 
 This is an authorized, non-interactive job. **Never ask the user whether to continue and never stop for
-confirmation.** Work autonomously until `memory/v{{N}}.json` and the kernel commit both exist, or report a
-concrete technical blocker after exhausting the available in-scope fixes.
+confirmation.** Work autonomously until the candidate passes the bounded smoke command below, or report a
+concrete technical blocker after exhausting the available in-scope fixes. The supervisor owns full validation,
+canonical memory, Git commits, and the framework-baseline marker.
 
 Hard rules for this session:
 
 - **There is no performance gate at v{{N}}.** A correct, self-contained `{{FRAMEWORK}}` kernel IS the
   deliverable, even if it is slower than the PyTorch wrapper. Do not chase latency, do not micro-optimize,
   do not enter optimization iterations — the orchestrator spawns those as separate sessions afterwards.
-- **Do NOT loop.** One pass: research → implement → validate → bench → record → commit, then exit.
+- **Do NOT optimize or run campaign bookkeeping.** One pass: bounded research → implement → targeted smoke,
+  then exit. Do not write `memory/v{{N}}.json`, do not commit, and do not benchmark separately.
 - The whole point of a clean session is a fresh context: you inherit state from disk, not from a prior conversation.
 - **The host GPU boundary is non-negotiable.** Never run `python test_kernel.py`, `python kernel.py`, or
   `python -c "import kernel"` directly in the workspace, even as a quick smoke/import check. Always route
@@ -33,10 +35,11 @@ Hard rules for this session:
   `solution.json` entry such as `kernel.cu::run` cannot be versioned by the campaign. Embed the self-authored CUDA
   source in `kernel.py` and use an in-process loader supported by the sandbox; prefer
   `cuda.bindings`/NVRTC because SOL GPU workers block `torch.utils.cpp_extension.load_inline`.
-- **Do not delegate computation to a third-party kernel/operator library.** An independent policy agent
-  reviews non-standard imports, declared dependencies, and library references by inspecting their actual
-  use. Compiler/header/ABI/launch plumbing for the self-authored kernel may be accepted; prebuilt compute,
-  alternate frameworks, hidden dispatch, and external implementation loading are rejected.
+- **Do not delegate computation to a third-party kernel/operator library.** The supervisor sends every
+  complete candidate to an independent policy agent, which reviews the full implementation and manifest
+  by actual use rather than package-name rules. Compiler/header/ABI/launch plumbing for the self-authored
+  kernel may be accepted; prebuilt compute, alternate frameworks, hidden dispatch, PyTorch compute
+  fallback, and external implementation loading are rejected.
 - **Do NOT profile.** Do not run a profile wrapper and do not write `profiles/`. There is no bottleneck
   evidence to gather yet: the only "bottleneck" is that the kernel is not a `{{FRAMEWORK}}` kernel.
 - **Do NOT generate a plan.** Do not invoke a plan skill, planning subagent, or slash command.
@@ -52,6 +55,10 @@ Hard rules for this session:
 {{HARDWARE}}
 {{SANDBOX}}
 {{EVALUATOR}}
+{{CORRECTNESS_GUIDANCE}}
+
+Do not run a full-workload evaluator, `--multi-seed`, or a separate benchmark in the ordinary implementation
+turn. The supervisor performs one authoritative combined full-workload gate.
 
 The campaign dependency environment is immutable. Never run `pip`, `python -m pip`, `uv pip`, `conda`,
 `setup.py`, or any other package installation/build command on the host or through the gateway. Use only
@@ -62,18 +69,16 @@ as `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, or `vllm` can invoke `ni
 Static source inspection is allowed. Route any import/API probe/benchmark that may initialize GPU code
 through `tools/sandbox.py`.
 
-## Definition of done (the orchestrator mechanically re-checks all of it)
+## Definition of done (the supervisor independently re-checks all of it)
 
 1. `kernel.py` differs from the V0 wrapper and implements the GPU computation directly in `{{FRAMEWORK}}`.
-2. No forbidden dependency or PyTorch compute call remains; `solution.json` declares only PyTorch/evaluator
-   plumbing plus `{{FRAMEWORK}}`.
+2. The complete candidate passes the supervisor's read-only production-policy review: dependencies are
+   used only for accepted framework/runtime/toolchain/support roles, compute provenance is self-authored,
+   and `solution.json` accurately declares the implementation.
 3. For a Triton campaign: **plain Triton only.** Gluon is a later orchestrator-owned escalation.
 4. No immutable ground-truth file was modified.
-5. Single-seed correctness passes over the full workload set.
-6. `--multi-seed 5` correctness passes over the full workload set.
-7. `memory/v{{N}}.json` records a positive `performance.latency_us` geomean and a complete
-   `performance.latency_us_by_shape` map covering exactly the `memory/v0.json` opaque workload ids.
-   Generalized private-case tasks reveal these ids and measured latencies, but not their input values.
+5. The bounded smoke command passes after the final edit. The supervisor independently checks the complete
+   workload with base-seed performance plus five additional correctness cases.
 
 ## Step A — Read the baseline
 
@@ -81,46 +86,41 @@ Read, in this order: workspace `README.md` (goal, platform `{{PLATFORM}}`, frame
 arch `{{ARCH}}`), `memory/v0.json` (the PyTorch per-workload latencies), `baseline_report.md`, the current
 wrapper `kernel.py`, immutable `reference.py` / `input.py`, and either public `agent_problem.json` or
 legacy `shapes.json` for the actual math, dtypes, layouts, and domain you must cover. Never locate or
-infer hidden evaluator cases for a generalized problem.
+infer hidden evaluator cases for a generalized problem. For native Atrex-Bench, the supervisor has already
+created the minimal `solution.json` schema; update its dependency roles to match the implementation, but do
+not spend time searching for a different manifest format. Then reconcile the supervisor-provided Codex and
+Qoder correctness reviews above before the first edit to `kernel.py`; the immutable reference remains the
+source of truth when reviewer advice conflicts.
 
-## Step B — Research the implementation approach
+## Step B — Bounded implementation research
 
-1. **Mandatory reads**: workspace `README.md`, `gpu-wiki/README.md`, `memory/v0.json`.
-2. **L1 retrieval — describe the problem, do not compose flags.** Use the natural-language front door;
-   `query_bridge_agent` extracts only typed intent, while deterministic code performs normalization,
-   retrieval, widening, projection, and context limiting:
-   ```bash
-   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
-   python3 gpu-wiki/tools/query_nl.py --file plans/research_request.txt
-   ```
-   State the true product exactly as `{{PLATFORM}}` and the authoritative runtime architecture exactly
-   as `{{ARCH}}`. Explicitly request the full `{{PLATFORM}}` specification and relevant architecture/ISA
-   facts so the same response contains isolated `hardware_wiki` and `kernel_wiki` records. Also include
-   the operator, `{{FRAMEWORK}}`, shapes, dtypes, current measurements, intended implementation, and
-   uncertainties. Do not translate the product into another identity or compress the request into keywords.
+V1 is correctness-first bring-up, not an optimization plan. First read only the exact files in
+**Supervisor-selected implementation references** above (at most two). Do not open sibling files, follow their
+imports or links recursively, or scan `reference-projects/`. If no selected reference is available or resolves
+the required framework/toolchain syntax, run at most one architecture-scoped `gpu-wiki` query through the
+new natural-language front door:
 
-   The response has only `records` and `notes`. Records are keyed by stable id; inspect each record's
-   `store`, independent `payload`, `source`, `type`, and `match.arch`. Internal ids use the
-   `internal_gpu_wiki::` namespace. Use `--max-bytes` for a hard context limit. The
-   structured `query_wiki.py` and `query_hardware.py` interfaces remain available for an exact address
-   already known; never drop architecture scope to manufacture a match.
-3. **Three-layer progressive search (strict order)** for a reference implementation of this operator class in
-   `{{FRAMEWORK}}` on this architecture:
-   - **L1 (gpu-wiki)**: use the front door above and exhaust relevant returned records first.
-   - **L2 (reference-projects)**: Only if L1 yields no new actionable path. Search relevant modules in
-     `reference-projects/` for implementation patterns.
-   - **L3 (public web)**: Only if L1+L2 yield nothing new. Use web search for papers, docs, or community posts.
-4. **Stop early**: once you have **one** viable implementation approach with a concrete reference, start
-   implementing. Do not exhaustively search all layers.
-5. **Write `plans/v{{N}}_framework_baseline.md`** — a short record (not a generated plan) of the chosen
-   approach, the sources you are following, and the known toolchain constraints for `{{ARCH}}`.
+```bash
+python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
+```
+
+Describe the true product exactly as `{{PLATFORM}}`, the authoritative runtime architecture exactly as
+`{{ARCH}}`, the operator, `{{FRAMEWORK}}`, shapes, dtypes, and the missing implementation/toolchain fact.
+Do not translate the product into another identity or compress the request into keywords. Inspect only the
+first directly applicable returned record; do not scan all wiki results or widen into sibling records,
+`reference-projects/`, or the public web. Static source is design evidence only: never execute/import it,
+delegate computation to it, or copy
+an incompatible/prebuilt implementation. Stop searching as soon as you know how to express and launch one
+self-authored `{{FRAMEWORK}}` kernel for the public operator contract. Do not create a plan file.
 
 ## Step C — Implement and validate
 
 Write one self-contained `{{FRAMEWORK}}` implementation of the whole operator in `kernel.py`, keeping the
 evaluator-facing entry point (`Model` / `run`) exactly as the harness expects. Purity checklist:
 
-- Only these imports: stdlib, `torch` (plumbing/allocation only), and the selected framework's own modules.
+- Every import must have a clear, inspectable role. `torch` is plumbing/allocation only; third-party
+  compiler/header/ABI/launch or non-compute support dependencies are allowed only when they do not supply
+  the operator computation.
 - No `torch` compute calls (`matmul`, `mm`, `bmm`, `softmax`, `exp`, `sum`, `mean`, `layer_norm`,
   `scaled_dot_product_attention`, the `@` operator, …), no `torch.nn.functional`, no `torch.ops`,
   no `torch.linalg`, no `_scaled_mm`.
@@ -129,28 +129,22 @@ evaluator-facing entry point (`Model` / `run`) exactly as the harness expects. P
   toolchain/plumbing dependencies must have a clear, inspectable purpose for the independent reviewer.
 - For CUDA, `kernel.py` itself must contain both the self-authored `__global__` source and its in-process
   loader. Do not redirect the evaluated entry point to a separately compiled `kernel.cu` source.
-- Update `solution.json` so its languages and dependencies list only PyTorch/evaluator plumbing plus
-  `{{FRAMEWORK}}`.
+- Update `solution.json` so its languages, dependencies, sources, and entry point accurately describe
+  the reviewed implementation.
 
-**Correctness validation** — immediately after editing:
+**Bounded smoke validation** — after the final implementation edit, run only:
 ```bash
-python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v{{N}} --no-memory
+{{SMOKE_COMMAND}}
 ```
-Parse the emitted `RESULT_JSON`, then update local `memory/v{{N}}.json`. If validation fails, iteratively fix
-until it passes.
+{{SMOKE_SCOPE}}
 
-**Multi-seed robustness (MANDATORY before commit)**: A single-seed PASS is NOT sufficient. The production
-evaluator uses **freshly randomized inputs every call**, and a kernel that passes only on one seed can fail on
-another (numerical edge-cases, magnitude-dependent accumulation error, etc.):
-
-```bash
-# Run 5 additional seeds (1..5). Reports PASS only if ALL seeds pass.
-python tools/sandbox.py --kind run --no-sync -- \
-  python test_kernel.py --version v{{N}} --multi-seed 5 --no-memory
-```
-
-**ALL seeds must PASS.** If ANY seed fails correctness, the kernel is BROKEN — fix it; do not commit a kernel
-that passes only on specific seeds.
+If smoke exposes a compile or correctness defect, inspect `actionable_diagnostics` in its `RESULT_JSON`
+first: import, compiler, NVRTC, loader, and CUDA-driver failures retain a bounded traceback there even when
+exact evaluator cases are private. Use that evidence before creating a custom diagnostic helper, then fix the
+defect and rerun this same bounded command. Numeric hidden-case details remain masked. Once smoke passes, do
+not edit `kernel.py` again and do not launch another evaluator. Leave the passing candidate in the worktree;
+the supervisor will run policy review and one combined full-workload base-performance + multi-seed gate in
+parallel, then write memory and commit mechanically.
 
 Never rely on:
 - Input data values being stable across calls (no memoization / precomputation of outputs)
@@ -160,43 +154,10 @@ Never rely on:
 
 Only shape/dtype/layout-based dispatch is safe.
 
-## Step D — Bench
-
-Run the immutable harness once more for the recorded measurement:
-```bash
-python tools/sandbox.py --kind run --no-sync -- python test_kernel.py --version v{{N}} --no-memory
-```
-Record locally from `RESULT_JSON`: `performance.latency_us` (geomean), the complete
-`performance.latency_us_by_shape` map, `performance.speedup_vs_ref_geomean` when the evaluator provides
-it, and `correctness.status` / `quality_gate.result` (PASS iff ALL workloads pass). Never fabricate
-shape inputs or failure details for a generalized private-case task.
-
-Report the geomean honestly — **being slower than the PyTorch V0 is an acceptable outcome for v{{N}}** and
-must not be hidden or "fixed" by tuning. The orchestrator re-runs this validation itself and owns acceptance.
-
-## Step E — Record and commit
-
-```bash
-python tools/memory_manager.py create --workspace . --version v{{N}}
-python tools/memory_manager.py update --workspace . --version v{{N}} \
-    --set 'optimization.action_category=framework_baseline' \
-    --set 'optimization.action_description=<the implementation you landed>'
-```
-
-Fill in `performance`, `correctness`, `search_log` (sources consulted and what each yielded),
-`pitfalls_and_fixes` (every compile error, numerical trap, and toolchain limitation you hit and how you got
-past it — this is the highest-value field for the whole campaign), `open_directions` (≤3 optimization leads
-for the next session, most promising first), and `git_commit_hash`.
-
-Then commit only your own outputs:
-```bash
-git add kernel.py solution.json memory/v{{N}}.json plans/v{{N}}_framework_baseline.md && \
-  git commit -m "v{{N}}: framework baseline ({{FRAMEWORK}})"
-```
-
 ## Finish
 
-Print one line: `v{{N}}: framework baseline committed ({{FRAMEWORK}}, <geomean> us)`, then **STOP**.
+Print one line: `v{{N}}: framework candidate smoke-passed ({{FRAMEWORK}})`, then **STOP**. Do not write
+canonical memory or commit; the supervisor does both after its independent gates.
 
 ## Parameters
 

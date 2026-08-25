@@ -13,23 +13,24 @@ policy, rollback, aggregation, and final packaging.
 
 Each canonical optimization version is one multi-experiment episode in a private Git worktree.
 The internal `long_horizon/` engine supplies worktree isolation, journals, handoff recovery,
-same-allocation ABBA verification, and squash promotion; it is not a second CLI.
+fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
+promotion; it is not a second CLI.
 
 ## Design Goals
 
 - **Mechanical control**: termination and acceptance are decided by code rather than Agent
   self-assessment.
-- **Profile-driven optimization**: kernel changes must be supported by official profiler
-  evidence.
+- **Tiered optimization**: early fast episodes run five reviewed plan/implement/evaluator trials
+  without profiling or ABBA; later full episodes are supported by official profiler evidence.
 - **Reproducible state**: Git HEAD is the incumbent kernel; structured memory and artifacts
   preserve the reasoning and measurements behind each attempt.
 - **Execution isolation**: GPU work crosses `tools/sandbox.py`; campaign memory, plans, edits,
   and Git state remain local.
 - **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
   edits or partial-shape wins from becoming accepted results.
-- **Production provenance**: production mode mechanically enforces the selected framework and
-  PyTorch compute rules, while an isolated policy Agent reviews ambiguous third-party dependency
-  use from a read-only candidate snapshot.
+- **Production provenance**: production mode keeps deterministic structure and campaign-state
+  invariants, while the supervisor sends every candidate to an isolated policy Agent for complete
+  framework, compute-provenance, dependency, loader, and manifest review.
 - **Backend portability**: one Agent Runtime interface normalizes commands, events, usage, and
   process policy across supported coding CLIs.
 
@@ -112,12 +113,15 @@ runtime-detected GPU vendor.
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
-3. Create one private branch/worktree and launch one multi-cycle episode per canonical version.
+3. Create one private branch/worktree per canonical version. The first 20 optimization episodes use
+   five reviewed fast `plan -> implement -> evaluator` trials per episode by default; later episodes
+   use the full evidence loop.
 4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
    bounded same-thread recovery for Claude and Codex.
-5. Check protected paths, exact committed `kernel.py`, and production policy while allowing
+5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
    uncommitted intermediate artifacts to remain in the episode worktree.
-6. Independently compare a valid candidate with the incumbent in one ABBA allocation.
+6. Select the fastest passing hash-matched result from each fast episode's five trials and compare it
+   with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
 7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
    failure/pivot/block evidence.
 8. Stop on version budget, token budget, optional stall budget, target utilization, or a terminal
@@ -149,10 +153,12 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
 - `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
-- The repository-native `gen-plan` skill is linked into every backend's local discovery tree and
-  independently obtains read-only, non-persistent Codex and Qoder reviews before evidence-based
-  cross-review synthesis. A matching primary backend reviews in its current session to avoid
-  recursion. Before the first episode, the campaign probes each external reviewer once, caches the
+- The repository-native `gen-plan` skill is linked into every backend's local discovery tree. It
+  freezes a concrete candidate proposal and independently obtains read-only Codex and Qoder reviews
+  against that proposal and the same bounded evidence before cross-review synthesis. A matching
+  primary backend reviews in its current session to avoid
+  recursion. Before the first optimization episode, the campaign probes each external reviewer once,
+  caches the
   result in private runtime state, and disables later calls to reviewers that were unavailable.
 
 ### Sandbox and gateway
@@ -193,12 +199,14 @@ the source operator also contains a public problem contract.
 third-party libraries. `optimization_mode=production` is fail-closed:
 
 - the selected framework is a hard constraint;
-- non-standard imports, declared dependencies, and library references are reviewed by an
-  independent Agent according to their actual use; toolchain/launch plumbing may be accepted,
-  while prebuilt compute, alternate frameworks, hidden dispatch, and external code are rejected;
-- PyTorch compute fallbacks and dynamic external-code loading are rejected;
-- `kernel.py` and `solution.json` are first checked mechanically,
-  then copied into a bounded temporary workspace for dependency review when needed;
+- every candidate is reviewed by an independent Agent according to actual use, without import
+  allowlists or package-name rejection; toolchain/launch plumbing may be accepted, while prebuilt
+  compute, alternate frameworks, PyTorch compute fallbacks, hidden dispatch, and external code are
+  rejected;
+- deterministic checks retain only syntax, self-containment, single-file versioning, immutable
+  campaign state, and the Triton-to-Gluon phase latch;
+- `kernel.py` and `solution.json` are copied into a bounded temporary workspace for every complete
+  production-candidate review;
 - a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
 - violating episode candidates are rejected before promotion and recorded as failed memory.
 
@@ -214,13 +222,14 @@ an isolated branch and Git worktree from the incumbent for each episode. The Age
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
 
-A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths,
-satisfy production policy, and pass an exact same-allocation ABBA schedule. Other uncommitted
-intermediate artifacts may remain in the worktree. Accepted candidates are
-squash-promoted to the incumbent with canonical memory. Rejected and non-candidate episodes
-advance memory history without changing the incumbent kernel. Active episode state supports
-crash recovery. The internal engine has no public parser or module entry point; all settings are
-provided by `orchestrator/optimize.py`.
+A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
+satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
+Fast candidates must have one complete passing evaluator record whose `kernel.py` hash matches the
+final candidate and whose latency strictly improves on canonical incumbent memory. Full candidates
+must pass the exact same-allocation ABBA schedule. Accepted candidates are squash-promoted with
+canonical memory; rejected and non-candidate episodes advance memory without changing the incumbent.
+Every round's numbered memory is checked against committed `HEAD` before state advances. Active
+episode state supports crash recovery.
 
 ## End-to-End Flow
 
@@ -233,20 +242,53 @@ the current directory.
 
 ### 2. Establish V0
 
-SOL operators receive a mechanically seeded PyTorch wrapper and immutable evaluator inputs.
-Native Atrex-Bench and derived inputs use a bounded setup session. V0 must have a passing complete
-workload result, `memory/v0.json`, and a Git root commit.
+SOL and native Atrex-Bench operators receive a mechanically seeded PyTorch reference wrapper and
+immutable evaluator inputs. The supervisor writes the README, commits the source baseline, runs one
+official full-workload base-seed evaluator, writes `memory/v0.json` plus a concise report, and commits
+that measurement separately. Memory points to the stable source commit, so no commit-hash amend loop
+is possible. Only the non-canonical derived legacy boundary retains a bounded setup Agent fallback.
+V0 profiling, multi-seed validation, and ABBA are intentionally deferred.
 
 ### 3. Establish the framework baseline
 
 Production mode runs a dedicated framework-baseline session by default
-(`--framework-baseline=auto`). The orchestrator restores immutable inputs, checks framework
-purity, validates the base seed plus five additional seeds, commits the result as V1, and pins its
-commit for optimization. `always` enables this stage in leaderboard mode; `never` starts from V0.
+(`--framework-baseline=auto`). For a supervisor-seeded reference V0 it skips the redundant pre-V1
+policy review and pre-creates a minimal native `solution.json`. Before the implementation Agent starts,
+the supervisor gives the bounded public contract, immutable reference, input builder, and V0 evidence to
+isolated Codex and Qoder reviewers in parallel. Their correctness-only reviews are cached under
+`.atrex_long_horizon/framework_baseline/`, reconciled in the V1 prompt, and never receive private shapes or
+permission to edit the candidate. Each reviewer may nominate at most two paths from a mechanically bounded
+local reference catalog. The supervisor prefers reviewer consensus, publishes no more than two exact paths,
+and prevents V1 from recursively browsing sibling references. The coding Agent then implements one
+correctness-first framework candidate and iterates only on three native smoke ids chosen across the V0 latency
+distribution. It does not run the full workload, multi-seed, benchmark, memory writer, or Git commit.
+After the Agent exits, the supervisor runs the complete policy review concurrently with one combined
+evaluator call that measures base-seed performance and checks five additional correctness cases. It writes
+canonical memory, commits V1, and pins that commit for optimization. `always` enables this stage in
+leaderboard mode; `never` starts from V0.
+
+V1 uses exit-triggered recovery rather than continuous journaling. A non-zero Agent exit, timeout,
+or runtime exception causes one local snapshot of the candidate, debug artifacts, Git state, and
+terminal tails under `.atrex_long_horizon/framework_baseline/`. A separate read-only progress
+supervisor summarizes them into `resume.json`; only that supervisor falls back through the configured
+Agent CLI, Codex, then Qoder. The outer V1 implementation stays on `--agent-cli`. Process restart
+preserves the interrupted worktree and restores the latest candidate snapshot when necessary.
 
 ### 4. Explore one episode per version
 
-Each version repeats a coherent evidence loop as many times as needed within its episode:
+By default, optimization episodes 1 through 20 use the fast loop:
+
+```text
+plan -> implement -> one full-workload base-seed evaluator -> handoff
+```
+
+Fast mode uses the normal `gen-plan` external Codex/Qoder review synthesis inside its planning phase,
+but does not run a separate research phase, profile, run multi-seed correctness, or run ABBA. The
+sandbox records the evaluator result with the final `kernel.py` hash. The supervisor uses that result
+for correctness and compares it with the latest complete passing canonical incumbent measurement.
+`--fast-episodes 0` disables this path; another non-negative value changes its window.
+
+Episode 21 and later use the full evidence loop as many times as needed:
 
 ```text
 profile -> research -> plan -> edit/compile/repair
@@ -255,15 +297,15 @@ profile -> research -> plan -> edit/compile/repair
 
 GPU commands run remotely while plans, source edits, journals, and Git remain local. A
 `candidate_ready` handoff is not authoritative: the supervisor validates protected paths, policy,
-the worktree's exact committed `kernel.py`, and the candidate commit, then runs
-incumbent/candidate ABBA in one gateway allocation. A rejected candidate, `pivot`, or `blocked`
-outcome advances canonical memory without changing the incumbent. Active episode state is
-restart-safe.
+the worktree's exact committed `kernel.py`, and the candidate commit, then applies the current mode's
+fast comparison or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
+advances canonical memory without changing the incumbent. Active episode state is restart-safe and
+reuses the registered worktree with its intermediate files after a supervisor restart.
 
 For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
 journal command refreshes it after every decisive experiment. This live view is explicitly
-non-canonical; a numbered `memory/v<N>.json` is written only after terminal handoff processing and
-independent verification.
+non-canonical; a numbered `memory/v<N>.json` is written after terminal handoff processing and
+mode-appropriate verification, then checked for valid committed contents before state advances.
 
 ### 5. Finalize
 
@@ -303,7 +345,8 @@ from main-workspace commits; their recoverable local state remains on disk.
 ## Critical Constraints
 
 - Hardware specifications must come from `gpu-wiki` with auditable source references.
-- Official profiler evidence is required before optimization code changes.
+- Official profiler evidence is required before full-mode optimization changes; fast mode explicitly
+  substitutes five reviewed plans plus hash-matched evaluator results and best-candidate selection.
 - Ground-truth evaluator inputs are immutable.
 - Correctness must pass before performance conclusions or promotion.
 - Every accepted candidate must be represented by Git and structured memory.
