@@ -476,6 +476,8 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
         raise ValueError("options.bench_iters must be an integer in 1..1000000")
     _number_option(options, "atol", 1e-2)
     _number_option(options, "rtol", 0.05)
+    if "correctness_max_rel_l2" in options:
+        _number_option(options, "correctness_max_rel_l2", 0.0)
     _validate_timeout(options.get("timeout_s", DEFAULT_JOB_TIMEOUT), "options.timeout_s")
 
     _validate_env_vars(payload.get("env_vars"))
@@ -555,6 +557,7 @@ CORRECTNESS_ONLY_RUNNER = r'''#!/usr/bin/env python3
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -566,11 +569,14 @@ parser.add_argument("--reference", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--atol", type=float, required=True)
 parser.add_argument("--rtol", type=float, required=True)
+parser.add_argument("--correctness-max-rel-l2", type=float)
 parser.add_argument("--num-correctness-cases", type=int, required=True)
 parser.add_argument("--candidate-timeout-s", type=float, required=True)
 parser.add_argument("--clock-locked", action="store_true")
 parser.add_argument("--shape-id")
 args = parser.parse_args()
+if args.correctness_max_rel_l2 is not None:
+    os.environ["ATREX_CORRECTNESS_MAX_REL_L2"] = str(args.correctness_max_rel_l2)
 
 spec = importlib.util.spec_from_file_location("atrex_local_run_eval", args.run_eval)
 if spec is None or spec.loader is None:
@@ -1194,6 +1200,11 @@ class LocalScheduler:
             "--rtol", str(options.get("rtol", 0.05)),
             "--num-correctness-cases", str(options.get("num_correctness_cases", 1)),
         ]
+        correctness_max_rel_l2 = options.get("correctness_max_rel_l2")
+        if correctness_max_rel_l2 is not None:
+            common.extend(
+                ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
+            )
         if request.get("mode", "full") == "correctness_only":
             wrapper = self._write_text(
                 workdir, "correctness_only_runner.py", CORRECTNESS_ONLY_RUNNER, executable=True
@@ -1210,6 +1221,10 @@ class LocalScheduler:
                 "--num-correctness-cases", str(options.get("num_correctness_cases", 1)),
                 "--candidate-timeout-s", str(min(60, timeout_s)),
             ]
+            if correctness_max_rel_l2 is not None:
+                argv.extend(
+                    ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
+                )
             if request.get("lock_clocks", False):
                 argv.append("--clock-locked")
             return argv

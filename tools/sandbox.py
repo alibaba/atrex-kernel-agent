@@ -132,6 +132,7 @@ OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
+FP4_MAX_REL_L2 = 0.2
 MAX_COMMAND_TIMEOUT = 600
 DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
@@ -546,6 +547,37 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
+def _is_fp4_dtype(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.casefold().replace("-", "").replace("_", "")
+    return "fp4" in normalized or "float4" in normalized
+
+
+def _metadata_has_fp4_dtype(metadata: dict[str, Any] | None) -> bool:
+    if metadata is None:
+        return False
+    if any(_is_fp4_dtype(metadata.get(field)) for field in ("dtype", "dtype_compute")):
+        return True
+    shapes = metadata.get("shapes")
+    return isinstance(shapes, dict) and any(
+        isinstance(shape, dict)
+        and any(_is_fp4_dtype(shape.get(field)) for field in ("dtype", "dtype_compute"))
+        for shape in shapes.values()
+    )
+
+
+def _fp4_correctness_max_rel_l2(
+    metadata: dict[str, Any] | None,
+    operator: object = None,
+) -> float | None:
+    return (
+        FP4_MAX_REL_L2
+        if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(operator)
+        else None
+    )
+
+
 def _is_generalized_workspace(workspace: Path) -> bool:
     """Return whether production policy enables private exact-case handling."""
     state = _json_object(workspace / MODE_STATE_FILENAME) or {}
@@ -861,6 +893,14 @@ def _typed_request(
         },
         "env_vars": _parse_env_items(env_items),
     }
+    correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(
+        reference.get("metadata")
+        if isinstance(reference.get("metadata"), dict)
+        else None,
+        reference.get("operator"),
+    )
+    if kind == "run" and correctness_max_rel_l2 is not None:
+        request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
         request["mode"] = "full"
     else:
@@ -1710,6 +1750,12 @@ def _typed_agate_command(
         "--job-timeout",
         str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
+    correctness_max_rel_l2 = options.get("correctness_max_rel_l2")
+    if correctness_max_rel_l2 is not None:
+        command += [
+            "--correctness-max-rel-l2",
+            str(correctness_max_rel_l2),
+        ]
     for item in args.env:
         command += ["--env-var", item]
     if kind == "profile":

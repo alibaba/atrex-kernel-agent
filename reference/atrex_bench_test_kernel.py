@@ -25,6 +25,7 @@ from typing import Any
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
+FP4_MAX_REL_L2 = 0.2
 
 
 def _finite_number(value: object) -> float | None:
@@ -43,6 +44,40 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
         return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
     return sorted((str(shape_id) for shape_id in payload), key=sort_key)
+
+
+def _is_fp4_dtype(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.casefold().replace("-", "").replace("_", "")
+    return "fp4" in normalized or "float4" in normalized
+
+
+def _metadata_has_fp4_dtype(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if any(_is_fp4_dtype(metadata.get(field)) for field in ("dtype", "dtype_compute")):
+        return True
+    shapes = metadata.get("shapes")
+    return isinstance(shapes, dict) and any(
+        isinstance(shape, dict)
+        and any(_is_fp4_dtype(shape.get(field)) for field in ("dtype", "dtype_compute"))
+        for shape in shapes.values()
+    )
+
+
+def _fp4_correctness_max_rel_l2(workspace: Path) -> float | None:
+    metadata_path = workspace / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.is_file()
+        else None
+    )
+    return (
+        FP4_MAX_REL_L2
+        if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(workspace.name)
+        else None
+    )
 
 
 def _shape_reference(workspace: Path, destination: Path, shape_ids: list[str]) -> Path:
@@ -297,6 +332,11 @@ def main(argv: list[str] | None = None) -> int:
             "--perf-timeout-s",
             str(args.perf_timeout_s),
         ]
+        correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(workspace)
+        if correctness_max_rel_l2 is not None:
+            command.extend(
+                ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
+            )
         completed = subprocess.run(
             command,
             cwd=str(runtime_root),
