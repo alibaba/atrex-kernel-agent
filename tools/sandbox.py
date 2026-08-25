@@ -1989,8 +1989,58 @@ def _candidate_exception_diagnostics(
     return diagnostics
 
 
+PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+
+
+def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
+    """Read one authoritative production latency from Atrex-Bench metadata."""
+    if not isinstance(metadata, dict):
+        return None
+    shapes = metadata.get("shapes")
+    shape = shapes.get(shape_id) if isinstance(shapes, dict) else None
+    if not isinstance(shape, dict):
+        return None
+    production = shape.get("production_performance")
+    if not isinstance(production, dict):
+        return None
+    direct = _finite_number(production.get("performance_us"))
+    if direct is not None and direct > 0.0:
+        return direct
+    nested = [
+        value
+        for entry in production.values()
+        if isinstance(entry, dict)
+        if (value := _finite_number(entry.get("performance_us"))) is not None
+        and value > 0.0
+    ]
+    return nested[0] if len(nested) == 1 else None
+
+
+def _metadata_speedup_mean(
+    metadata: object,
+    shape_ids: list[str],
+    latency_by_shape: dict[str, float],
+) -> tuple[float | None, list[str]]:
+    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
+        return None, []
+    speedups: list[float] = []
+    failures: list[str] = []
+    for shape_id in shape_ids:
+        reference_us = _metadata_shape_latency_us(metadata, shape_id)
+        if reference_us is None:
+            failures.append(
+                f"sid={shape_id}: metadata has no unambiguous positive "
+                "production_performance.performance_us"
+            )
+            continue
+        speedups.append(reference_us / latency_by_shape[shape_id])
+    if failures or len(speedups) != len(shape_ids) or not speedups:
+        return None, failures
+    return sum(speedups) / len(speedups), []
+
+
 def _optimizer_result_from_eval(
-    payload: dict[str, Any], shape_ids: list[str]
+    payload: dict[str, Any], shape_ids: list[str], metadata: object
 ) -> dict[str, Any]:
     """Convert the typed gateway's Atrex-Bench result to optimizer RESULT_JSON."""
     failures: list[str] = []
@@ -2082,13 +2132,20 @@ def _optimizer_result_from_eval(
         else 0.0
     )
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
+    speedup_mean, metadata_failures = _metadata_speedup_mean(
+        metadata, shape_ids, latency_by_shape
+    )
+    failures.extend(metadata_failures)
     return {
         "all_pass": not failures,
         "failures": failures,
         "latency_us_geomean": geomean,
         "latency_us_arith_mean": arithmetic,
         "latency_us_by_shape": latency_by_shape,
+        "speedup_vs_ref_mean": speedup_mean,
         "speedup_vs_ref_geomean": None,
+        "performance_score": speedup_mean,
+        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-gpu-gateway/run",
@@ -2098,7 +2155,7 @@ def _optimizer_result_from_eval(
 
 
 def _merge_optimizer_results(
-    results: list[dict[str, Any]], shape_ids: list[str]
+    results: list[dict[str, Any]], shape_ids: list[str], metadata: object
 ) -> dict[str, Any]:
     latency_by_shape = {
         str(shape_id): float(latency)
@@ -2135,13 +2192,23 @@ def _merge_optimizer_results(
             if len(actionable_diagnostics) >= 8:
                 break
 
+    speedup_mean, metadata_failures = _metadata_speedup_mean(
+        metadata, shape_ids, latency_by_shape
+    )
+    failures = [
+        str(failure)
+        for result in results
+        for failure in (result.get("failures") or [])
+    ]
+    for failure in metadata_failures:
+        if failure not in failures:
+            failures.append(failure)
+
     return {
-        "all_pass": complete and all(result.get("all_pass") for result in results),
-        "failures": [
-            str(failure)
-            for result in results
-            for failure in (result.get("failures") or [])
-        ],
+        "all_pass": complete
+        and speedup_mean is not None
+        and all(result.get("all_pass") for result in results),
+        "failures": failures,
         "latency_us_geomean": (
             math.exp(sum(math.log(value) for value in latencies) / len(latencies))
             if complete and latencies
@@ -2151,7 +2218,10 @@ def _merge_optimizer_results(
             sum(latencies) / len(latencies) if complete and latencies else 0.0
         ),
         "latency_us_by_shape": latency_by_shape,
+        "speedup_vs_ref_mean": speedup_mean,
         "speedup_vs_ref_geomean": None,
+        "performance_score": speedup_mean,
+        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max(
             float(result.get("max_abs_err") or 0.0) for result in results
         ),
@@ -2169,7 +2239,7 @@ def _mask_generalized_result(
     workspace: Path, result: dict[str, Any]
 ) -> dict[str, Any]:
     """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
-    result = _with_workspace_reference_speedup(workspace, result)
+    result = _with_workspace_performance_score(workspace, result)
     if not _is_generalized_workspace(workspace):
         return result
     masked = dict(result)
@@ -2237,7 +2307,6 @@ def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> 
         except json.JSONDecodeError:
             return
         if isinstance(result, dict):
-            result = _with_workspace_reference_speedup(workspace, result)
             _record_episode_evaluation(
                 workspace, result, gateway_kind=gateway_kind
             )
@@ -2251,27 +2320,69 @@ def _positive_number(value: object) -> float | None:
     return number if number > 0.0 and math.isfinite(number) else None
 
 
-def _with_workspace_reference_speedup(
+def _with_workspace_performance_score(
     workspace: Path, result: dict[str, Any]
 ) -> dict[str, Any]:
-    """Fill candidate-only gateway results from the canonical V0 latency."""
-    if _positive_number(result.get("speedup_vs_ref_geomean")) is not None:
+    """Normalize legacy per-shape results to the shared arithmetic-mean score."""
+    if result.get("performance_objective") == PERFORMANCE_OBJECTIVE:
         return result
-    candidate = _positive_number(result.get("latency_us_geomean"))
+    candidate_by_shape = result.get("latency_us_by_shape")
+    if not isinstance(candidate_by_shape, dict) or not candidate_by_shape:
+        return result
     try:
         baseline = _json_object(workspace / "memory" / "v0.json") or {}
     except ValueError:
         return result
     performance = baseline.get("performance")
     performance = performance if isinstance(performance, dict) else {}
-    reference = _positive_number(
-        performance.get("latency_us_geomean", performance.get("latency_us"))
-    )
-    if candidate is None or reference is None:
+    baseline_by_shape = performance.get("latency_us_by_shape")
+    if (
+        not isinstance(baseline_by_shape, dict)
+        or set(candidate_by_shape) != set(baseline_by_shape)
+    ):
         return result
+    speedups: list[float] = []
+    for shape_id, raw_candidate in candidate_by_shape.items():
+        candidate = _positive_number(raw_candidate)
+        reference = _positive_number(baseline_by_shape.get(shape_id))
+        if candidate is None or reference is None:
+            return result
+        speedups.append(reference / candidate)
+    if not speedups:
+        return result
+    score = sum(speedups) / len(speedups)
     hydrated = dict(result)
-    hydrated["speedup_vs_ref_geomean"] = reference / candidate
+    hydrated["speedup_vs_ref_mean"] = score
+    hydrated["speedup_vs_ref_geomean"] = None
+    hydrated["performance_score"] = score
+    hydrated["performance_objective"] = PERFORMANCE_OBJECTIVE
     return hydrated
+
+
+def _hydrate_result_lines(workspace: Path, stdout: str) -> str:
+    """Return ordinary dev evaluator output with the shared score contract."""
+    normalized: list[str] = []
+    for line in stdout.splitlines():
+        if not line.startswith(TEST_RESULT_PREFIX):
+            normalized.append(line)
+            continue
+        try:
+            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
+        except json.JSONDecodeError:
+            normalized.append(line)
+            continue
+        if not isinstance(result, dict):
+            normalized.append(line)
+            continue
+        normalized.append(
+            TEST_RESULT_PREFIX
+            + json.dumps(
+                _with_workspace_performance_score(workspace, result),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        )
+    return "\n".join(normalized)
 
 
 def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
@@ -2295,7 +2406,7 @@ def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
             if not isinstance(row, dict) or not isinstance(row.get("result"), dict):
                 runs.append(row)
                 continue
-            result = _with_workspace_reference_speedup(workspace, row["result"])
+            result = _with_workspace_performance_score(workspace, row["result"])
             if result is row["result"]:
                 runs.append(row)
                 continue
@@ -2523,13 +2634,14 @@ def _run_typed_gateway(
         file=sys.stderr,
     )
     if kind == "run":
+        metadata = request["reference"].get("metadata")
         batch_results = [
-            _optimizer_result_from_eval(job["result"], shape_ids)
+            _optimizer_result_from_eval(job["result"], shape_ids, metadata)
             for job, shape_ids in zip(jobs, shape_batches)
         ]
         result = _mask_generalized_result(
             workspace,
-            _merge_optimizer_results(batch_results, expected_shape_ids)
+            _merge_optimizer_results(batch_results, expected_shape_ids, metadata)
             if batched
             else batch_results[0],
         )
@@ -2947,6 +3059,7 @@ def _main(argv: list[str] | None = None) -> int:
         return int(result.get("exit_code") or proc.returncode or 2)
     if evaluator_command:
         command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
+        command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
         command_stdout = "\n".join(

@@ -255,8 +255,8 @@ def _pick_sides(labels):
     baseline, printed order is the convention and is recorded as such so a reader
     can see the comparison rested on it.
     """
-    named = [l for l in labels if BASELINE_LABEL_RE.search(l or "")]
-    others = [l for l in labels if l not in named]
+    named = [label for label in labels if BASELINE_LABEL_RE.search(label or "")]
+    others = [label for label in labels if label not in named]
     if named and others:
         return named[0], others[0], "named-baseline"
     if len(labels) >= 2:
@@ -582,7 +582,10 @@ def summarise_version_doc(doc):
         "by_shape": perf.get("latency_us_by_shape")
                     or perf.get("latency_us_by_bucket") or {},
         "arith_mean_us": perf.get("latency_us_arith_mean"),
-        "speedup_vs_ref": perf.get("speedup_vs_ref_geomean"),
+        "speedup_vs_ref": perf.get(
+            "performance_score",
+            perf.get("speedup_vs_ref_mean", perf.get("speedup_vs_ref_geomean")),
+        ),
         "tflops": perf.get("tflops"),
         "bandwidth_gbps": perf.get("bandwidth_gbps"),
         "latency_delta_text": cmp_prev.get("latency_delta"),

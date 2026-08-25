@@ -68,6 +68,8 @@ class VerificationResult:
     runs: list[VerificationRun] = field(default_factory=list)
     error: str = ""
     artifact: str = ""
+    candidate_performance_score: float | None = None
+    incumbent_performance_score: float | None = None
 
     @property
     def passed(self) -> bool:
@@ -79,6 +81,8 @@ class VerificationResult:
             "candidate_latency_us": self.candidate_latency_us,
             "incumbent_latency_us": self.incumbent_latency_us,
             "improvement_pct": self.improvement_pct,
+            "candidate_performance_score": self.candidate_performance_score,
+            "incumbent_performance_score": self.incumbent_performance_score,
             "runs": [run.as_dict() for run in self.runs],
             "error": self.error or None,
             "artifact": self.artifact or None,

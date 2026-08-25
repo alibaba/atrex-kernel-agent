@@ -154,6 +154,7 @@ def _latest_complete_canonical_performance(
     *,
     before_version: int,
     expected_shape_ids: set[str] | None,
+    required_performance_objective: str | None = None,
 ) -> tuple[dict[str, Any], int] | None:
     """Find the newest complete real-shape incumbent measurement before a round.
 
@@ -170,6 +171,12 @@ def _latest_complete_canonical_performance(
             continue
         performance = memory.get("performance")
         if not isinstance(performance, dict):
+            continue
+        if (
+            required_performance_objective is not None
+            and performance.get("performance_objective")
+            != required_performance_objective
+        ):
             continue
         by_shape = performance.get("latency_us_by_shape")
         if not isinstance(by_shape, dict) or not by_shape:
@@ -188,7 +195,12 @@ def _latest_complete_canonical_performance(
         latency = _positive_finite(
             performance.get("latency_us_geomean", performance.get("latency_us"))
         )
-        if latency is None:
+        performance_score = _positive_finite(
+            performance.get(
+                "performance_score", performance.get("speedup_vs_ref_geomean")
+            )
+        )
+        if latency is None or performance_score is None:
             continue
         carried = dict(performance)
         carried["latency_us"] = latency
@@ -197,6 +209,7 @@ def _latest_complete_canonical_performance(
             performance.get("latency_us_arith_mean")
         ) or (sum(normalized.values()) / len(normalized))
         carried["latency_us_by_shape"] = normalized
+        carried["performance_score"] = performance_score
         return carried, version
     return None
 
@@ -205,6 +218,7 @@ def _latest_complete_episode_performance(
     episode_workspace: Path | None,
     *,
     expected_shape_ids: set[str] | None,
+    required_performance_objective: str | None = None,
 ) -> dict[str, Any] | None:
     """Read the latest complete supervisor-independent measurement from an episode."""
     if episode_workspace is None:
@@ -225,6 +239,12 @@ def _latest_complete_episode_performance(
             continue
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict) or not result.get("all_pass"):
+            continue
+        if (
+            required_performance_objective is not None
+            and result.get("performance_objective")
+            != required_performance_objective
+        ):
             continue
         schema_version = payload.get("schema_version")
         recorded_kernel_sha256 = payload.get("kernel_sha256")
@@ -257,7 +277,10 @@ def _latest_complete_episode_performance(
         latency = _positive_finite(
             result.get("latency_us_geomean", result.get("latency_us"))
         )
-        if latency is None:
+        performance_score = _positive_finite(
+            result.get("performance_score", result.get("speedup_vs_ref_geomean"))
+        )
+        if latency is None or performance_score is None:
             continue
         return {
             "all_pass": True,
@@ -267,7 +290,10 @@ def _latest_complete_episode_performance(
             )
             or (sum(normalized.values()) / len(normalized)),
             "latency_us_by_shape": normalized,
+            "speedup_vs_ref_mean": result.get("speedup_vs_ref_mean"),
             "speedup_vs_ref_geomean": result.get("speedup_vs_ref_geomean"),
+            "performance_score": performance_score,
+            "performance_objective": result.get("performance_objective"),
             "max_abs_err": result.get("max_abs_err"),
             "max_rel_err": result.get("max_rel_err"),
             "eval_id": result.get("eval_id"),
@@ -596,6 +622,7 @@ class LongHorizonCampaign:
         candidate_result = _latest_complete_episode_performance(
             episode_workspace,
             expected_shape_ids=expected_shape_ids,
+            required_performance_objective="shape_speedup_arithmetic_mean",
         )
         if candidate_result is None:
             return VerificationResult(
@@ -610,6 +637,7 @@ class LongHorizonCampaign:
                 artifact=artifact,
             )
         candidate_latency = float(candidate_result["latency_us_geomean"])
+        candidate_score = float(candidate_result["performance_score"])
         run = VerificationRun(
             revision="candidate",
             repeat=0,
@@ -620,6 +648,7 @@ class LongHorizonCampaign:
             self.workspace,
             before_version=memory_version,
             expected_shape_ids=expected_shape_ids,
+            required_performance_objective="shape_speedup_arithmetic_mean",
         )
         if incumbent is None:
             return VerificationResult(
@@ -633,9 +662,8 @@ class LongHorizonCampaign:
             )
         incumbent_performance, _incumbent_version = incumbent
         incumbent_latency = float(incumbent_performance["latency_us_geomean"])
-        improvement = (
-            (incumbent_latency - candidate_latency) / incumbent_latency * 100.0
-        )
+        incumbent_score = float(incumbent_performance["performance_score"])
+        improvement = (candidate_score / incumbent_score - 1.0) * 100.0
         threshold = float(self.base_campaign.min_improvement_pct)
         if improvement <= threshold:
             return VerificationResult(
@@ -645,10 +673,12 @@ class LongHorizonCampaign:
                 improvement,
                 runs=[run],
                 error=(
-                    f"fast evaluator improvement {improvement:.6f}% did not exceed "
-                    f"{threshold:.3f}%"
+                    "fast evaluator performance-score improvement "
+                    f"{improvement:.6f}% did not exceed {threshold:.3f}%"
                 ),
                 artifact=artifact,
+                candidate_performance_score=candidate_score,
+                incumbent_performance_score=incumbent_score,
             )
         return VerificationResult(
             "PASS",
@@ -657,6 +687,8 @@ class LongHorizonCampaign:
             improvement,
             runs=[run],
             artifact=artifact,
+            candidate_performance_score=candidate_score,
+            incumbent_performance_score=incumbent_score,
         )
 
     def _require_canonical_memory(self, version: int) -> None:
@@ -816,10 +848,21 @@ class LongHorizonCampaign:
                     else "same_allocation_abba"
                 ),
                 "carried_from_version": None,
-                "speedup_vs_ref_geomean": main_adapter.speedup_vs_reference(
-                    self.workspace,
-                    verification.candidate_latency_us,
-                    representative.get("speedup_vs_ref_geomean"),
+                "performance_objective": representative.get(
+                    "performance_objective"
+                ),
+                "performance_score": verification.candidate_performance_score,
+                "speedup_vs_ref_mean": (
+                    verification.candidate_performance_score
+                    if representative.get("performance_objective")
+                    == "shape_speedup_arithmetic_mean"
+                    else representative.get("speedup_vs_ref_mean")
+                ),
+                "speedup_vs_ref_geomean": (
+                    None
+                    if representative.get("performance_objective")
+                    == "shape_speedup_arithmetic_mean"
+                    else representative.get("speedup_vs_ref_geomean")
                 ),
                 "tflops_peak_utilization_pct": representative.get(
                     "tflops_peak_utilization_pct"
@@ -953,6 +996,7 @@ class LongHorizonCampaign:
                 _latest_complete_episode_performance(
                     episode_workspace,
                     expected_shape_ids=expected_shape_ids,
+                    required_performance_objective="shape_speedup_arithmetic_mean",
                 )
                 if _episode_head_matches_incumbent(
                     self.workspace, episode_workspace
@@ -972,6 +1016,7 @@ class LongHorizonCampaign:
                     self.workspace,
                     before_version=version,
                     expected_shape_ids=expected_shape_ids,
+                    required_performance_objective="shape_speedup_arithmetic_mean",
                 )
             if not measurement_complete and carried is not None:
                 incumbent_performance, carried_from_version = carried
@@ -982,6 +1027,15 @@ class LongHorizonCampaign:
                     ),
                     "latency_us_arith_mean": incumbent_performance.get(
                         "latency_us_arith_mean"
+                    ),
+                    "performance_objective": incumbent_performance.get(
+                        "performance_objective"
+                    ),
+                    "performance_score": incumbent_performance.get(
+                        "performance_score"
+                    ),
+                    "speedup_vs_ref_mean": incumbent_performance.get(
+                        "speedup_vs_ref_mean"
                     ),
                     "speedup_vs_ref_geomean": incumbent_performance.get(
                         "speedup_vs_ref_geomean"
@@ -1020,10 +1074,20 @@ class LongHorizonCampaign:
                     if carried_from_version is not None
                     else None
                 ),
-                "speedup_vs_ref_geomean": main_adapter.speedup_vs_reference(
-                    self.workspace,
-                    representative.get("latency_us_geomean"),
-                    representative.get("speedup_vs_ref_geomean"),
+                "performance_objective": representative.get(
+                    "performance_objective"
+                ),
+                "performance_score": representative.get("performance_score"),
+                "speedup_vs_ref_mean": representative.get("speedup_vs_ref_mean"),
+                "speedup_vs_ref_geomean": (
+                    None
+                    if representative.get("performance_objective")
+                    == "shape_speedup_arithmetic_mean"
+                    else main_adapter.speedup_vs_reference(
+                        self.workspace,
+                        representative.get("latency_us_geomean"),
+                        representative.get("speedup_vs_ref_geomean"),
+                    )
                 ),
             },
             "optimization": {
@@ -1148,6 +1212,12 @@ class LongHorizonCampaign:
                     verification.improvement_pct,
                     runs=verification.runs,
                     artifact=verification.artifact,
+                    candidate_performance_score=(
+                        verification.candidate_performance_score
+                    ),
+                    incumbent_performance_score=(
+                        verification.incumbent_performance_score
+                    ),
                 )
             accepted = verification.passed
         return violation, paths, verification, accepted

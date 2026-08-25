@@ -662,7 +662,10 @@ class Campaign:
                     "`test_kernel.py` adapter and sandbox inject those cases only into the remote "
                     "official evaluator. Optimize for the complete declared `shape_domain`, using "
                     "aggregate `distribution_profile` shares only for prioritization. Correctness "
-                    "must pass every hidden case. After evaluation, use the real "
+                    "must pass every hidden case. The optimization score is the arithmetic mean "
+                    "of each opaque shape's measured speedup against its authoritative Atrex-Bench "
+                    "metadata production latency; maximize `performance_score`. After "
+                    "evaluation, use the real "
                     "`latency_us_by_shape` map keyed by opaque ids without attempting to infer their "
                     "private inputs. For profiling, choose a real opaque id from canonical "
                     "`memory/vN.json.performance.latency_us_by_shape` with PROFILE_SHAPE_ID; the "
@@ -675,6 +678,9 @@ class Campaign:
                 "It invokes the canonical `atrex-bench/scripts/run_eval.py` against `kernel.py` and "
                 "the workspace `reference.py`/`input.py`/`shapes.json`/`metadata.json`, then emits "
                 "the optimizer's `RESULT_JSON` transport line from the official `eval_result.json`. "
+                "The optimization score is `performance_score`: for each shape, divide "
+                "metadata `production_performance.performance_us` by measured latency, then take "
+                "the arithmetic mean across shapes. Maximize this score. "
                 "Do not edit or replace this adapter and do not implement a custom correctness or "
                 "timing harness. `--multi-seed N` maps to N additional Atrex-Bench correctness "
                 "cases while performance remains one official run per shape."
@@ -684,7 +690,9 @@ class Campaign:
             return (
                 "## Evaluation route: SOL-ExecBench\n\n"
                 "Keep using the immutable SOL `test_kernel.py`, which invokes `sol-execbench` over "
-                "the complete `workload.jsonl`. Do not substitute the Atrex-Bench native evaluator."
+                "the complete `workload.jsonl`. Each workload's SOL reference is its performance "
+                "baseline; maximize `performance_score`, the arithmetic mean of per-workload "
+                "speedups. Do not substitute the Atrex-Bench native evaluator."
             )
         return (
             "## Evaluation route: derived legacy boundary\n\n"
@@ -898,7 +906,8 @@ class Campaign:
             f"# kernel_opt_{self.campaign_name}\n\n"
             "Profile-driven optimization of one native Atrex-Bench operator.\n\n"
             "## Goal\n\n"
-            "Minimize the full-workload geomean latency while every evaluator case remains "
+            "Maximize the arithmetic mean of per-shape speedups against Atrex-Bench metadata "
+            "production performance while every evaluator case remains "
             "correct. V0 is the verbatim PyTorch reference wrapper; optimized versions must "
             f"migrate the computation to `{self.framework}`.\n\n"
             "## Campaign\n\n"
@@ -1031,6 +1040,8 @@ class Campaign:
             f"- Measured shapes: `{len(by_shape)}`\n"
             f"- Geomean latency: `{metric('latency_us_geomean')} us`\n"
             f"- Arithmetic mean latency: `{metric('latency_us_arith_mean')} us`\n"
+            f"- Mean speedup vs metadata: `{metric('speedup_vs_ref_mean')}x`\n"
+            f"- Performance score: `{metric('performance_score')}`\n"
             f"- Maximum absolute error: `{metric('max_abs_err')}`\n"
             f"- Maximum relative error: `{metric('max_rel_err')}`\n\n"
             f"{shape_note} Per-shape values are stored once in `memory/v0.json`; they are "
@@ -2552,6 +2563,14 @@ class Campaign:
         latency = result.get("latency_us_geomean")
         if not isinstance(latency, (int, float)) or latency <= 0:
             return None, "validation reported no usable latency_us_geomean"
+        performance_score = result.get("performance_score")
+        if (
+            isinstance(performance_score, bool)
+            or not isinstance(performance_score, (int, float))
+            or performance_score <= 0
+            or not math.isfinite(float(performance_score))
+        ):
+            return None, "validation reported no usable performance_score"
         # Require the framework baseline to preserve full-workload measurement coverage.
         baseline_shapes = set(
             ((read_memory(self.workspace, 0) or {}).get("performance") or {}).get(

@@ -26,6 +26,7 @@ from typing import Any
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
+PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 
 def _finite_number(value: object) -> float | None:
@@ -137,7 +138,56 @@ def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]
     return failures
 
 
-def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str, Any]:
+def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
+    """Read one authoritative production latency from Atrex-Bench metadata."""
+    if not isinstance(metadata, dict):
+        return None
+    shapes = metadata.get("shapes")
+    shape = shapes.get(shape_id) if isinstance(shapes, dict) else None
+    if not isinstance(shape, dict):
+        return None
+    production = shape.get("production_performance")
+    if not isinstance(production, dict):
+        return None
+    direct = _finite_number(production.get("performance_us"))
+    if direct is not None and direct > 0.0:
+        return direct
+    nested = [
+        value
+        for entry in production.values()
+        if isinstance(entry, dict)
+        if (value := _finite_number(entry.get("performance_us"))) is not None
+        and value > 0.0
+    ]
+    return nested[0] if len(nested) == 1 else None
+
+
+def _metadata_speedup_mean(
+    metadata: object,
+    shape_ids: list[str],
+    latency_by_shape: dict[str, float],
+) -> tuple[float | None, list[str]]:
+    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
+        return None, []
+    speedups: list[float] = []
+    failures: list[str] = []
+    for shape_id in shape_ids:
+        reference_us = _metadata_shape_latency_us(metadata, shape_id)
+        if reference_us is None:
+            failures.append(
+                f"sid={shape_id}: metadata has no unambiguous positive "
+                "production_performance.performance_us"
+            )
+            continue
+        speedups.append(reference_us / latency_by_shape[shape_id])
+    if failures or len(speedups) != len(shape_ids) or not speedups:
+        return None, failures
+    return sum(speedups) / len(speedups), []
+
+
+def result_from_eval(
+    payload: dict[str, Any], shape_ids: list[str], metadata: object
+) -> dict[str, Any]:
     """Convert one official Atrex-Bench result into optimizer metrics."""
     failures: list[str] = []
     evaluation_error = payload.get("error")
@@ -222,6 +272,10 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
     latency_arith_mean = (
         sum(latencies) / len(latencies) if complete_performance and latencies else 0.0
     )
+    speedup_mean, metadata_failures = _metadata_speedup_mean(
+        metadata, shape_ids, latency_by_shape
+    )
+    failures.extend(metadata_failures)
 
     return {
         "all_pass": not failures,
@@ -229,8 +283,10 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,
         "latency_us_by_shape": latency_by_shape,
-        # Atrex-Bench run_eval intentionally records candidate-only timing.
+        "speedup_vs_ref_mean": speedup_mean,
         "speedup_vs_ref_geomean": None,
+        "performance_score": speedup_mean,
+        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-bench/run_eval",
@@ -371,7 +427,10 @@ def main(argv: list[str] | None = None) -> int:
                 "latency_us_geomean": 0.0,
                 "latency_us_arith_mean": 0.0,
                 "latency_us_by_shape": {},
+                "speedup_vs_ref_mean": None,
                 "speedup_vs_ref_geomean": None,
+                "performance_score": None,
+                "performance_objective": PERFORMANCE_OBJECTIVE,
                 "max_abs_err": 0.0,
                 "max_rel_err": 0.0,
                 "evaluator": "atrex-bench/run_eval",
@@ -379,7 +438,13 @@ def main(argv: list[str] | None = None) -> int:
             }
         else:
             payload = json.loads(result_paths[-1].read_text(encoding="utf-8"))
-            result = result_from_eval(payload, shape_ids)
+            metadata_path = reference_dir / "metadata.json"
+            metadata = (
+                json.loads(metadata_path.read_text(encoding="utf-8"))
+                if metadata_path.is_file()
+                else None
+            )
+            result = result_from_eval(payload, shape_ids, metadata)
             if completed.returncode != 0 and result["all_pass"]:
                 result["all_pass"] = False
                 result["failures"].append(

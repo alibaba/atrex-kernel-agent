@@ -93,10 +93,31 @@ def _merge_batch_results(
         for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
     }
     latencies = [latency_by_shape[shape_id] for shape_id in shape_ids]
+    weighted_scores: list[tuple[float, int]] = []
+    for result in results:
+        raw_score = result.get(
+            "performance_score", result.get("speedup_vs_ref_geomean")
+        )
+        by_shape = result.get("latency_us_by_shape")
+        if (
+            isinstance(raw_score, (int, float))
+            and not isinstance(raw_score, bool)
+            and raw_score > 0.0
+            and math.isfinite(float(raw_score))
+            and isinstance(by_shape, dict)
+        ):
+            weighted_scores.append((float(raw_score), len(by_shape)))
+    measured_score_shapes = sum(count for _score, count in weighted_scores)
+    performance_score = (
+        sum(score * count for score, count in weighted_scores) / measured_score_shapes
+        if measured_score_shapes == len(shape_ids) and measured_score_shapes > 0
+        else None
+    )
     merged = dict(results[-1])
     merged.update(
         {
-            "all_pass": all(result.get("all_pass") for result in results),
+            "all_pass": performance_score is not None
+            and all(result.get("all_pass") for result in results),
             "failures": [
                 str(failure)
                 for result in results
@@ -105,7 +126,9 @@ def _merge_batch_results(
             "latency_us_geomean": _geomean(latencies),
             "latency_us_arith_mean": sum(latencies) / len(latencies),
             "latency_us_by_shape": latency_by_shape,
+            "speedup_vs_ref_mean": performance_score,
             "speedup_vs_ref_geomean": None,
+            "performance_score": performance_score,
             "max_abs_err": max(
                 float(result.get("max_abs_err") or 0.0) for result in results
             ),
@@ -190,6 +213,20 @@ def _result_latency(result: object) -> float | None:
     return float(value)
 
 
+def _result_performance_score(result: object) -> float | None:
+    if not isinstance(result, dict) or not result.get("all_pass"):
+        return None
+    value = result.get("performance_score", result.get("speedup_vs_ref_geomean"))
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or value <= 0
+        or not math.isfinite(float(value))
+    ):
+        return None
+    return float(value)
+
+
 def score_verification_payload(
     payload: object,
     *,
@@ -239,50 +276,91 @@ def score_verification_payload(
             error="remote verifier did not execute the exact ABBA schedule",
             artifact=artifact,
         )
-    candidate_values = [
+    candidate_latency_values = [
         value
         for run in runs
         if run.revision == "candidate" and run.exit_code == 0
         if (value := _result_latency(run.result)) is not None
     ]
-    incumbent_values = [
+    incumbent_latency_values = [
         value
         for run in runs
         if run.revision == "incumbent" and run.exit_code == 0
         if (value := _result_latency(run.result)) is not None
     ]
-    candidate = _geomean(candidate_values)
-    incumbent = _geomean(incumbent_values)
-    if len(candidate_values) != repeats or len(incumbent_values) != repeats:
+    candidate_score_values = [
+        value
+        for run in runs
+        if run.revision == "candidate" and run.exit_code == 0
+        if (value := _result_performance_score(run.result)) is not None
+    ]
+    incumbent_score_values = [
+        value
+        for run in runs
+        if run.revision == "incumbent" and run.exit_code == 0
+        if (value := _result_performance_score(run.result)) is not None
+    ]
+    candidate_latency = _geomean(candidate_latency_values)
+    incumbent_latency = _geomean(incumbent_latency_values)
+    candidate_score = (
+        sum(candidate_score_values) / len(candidate_score_values)
+        if candidate_score_values
+        else None
+    )
+    incumbent_score = (
+        sum(incumbent_score_values) / len(incumbent_score_values)
+        if incumbent_score_values
+        else None
+    )
+    if (
+        len(candidate_latency_values) != repeats
+        or len(incumbent_latency_values) != repeats
+        or len(candidate_score_values) != repeats
+        or len(incumbent_score_values) != repeats
+    ):
         return VerificationResult(
             "FAIL",
-            candidate,
-            incumbent,
+            candidate_latency,
+            incumbent_latency,
             None,
             runs=runs,
-            error="not every authoritative ABBA run passed",
+            error=(
+                "not every authoritative ABBA run passed with a valid "
+                "performance score"
+            ),
             artifact=artifact,
+            candidate_performance_score=candidate_score,
+            incumbent_performance_score=incumbent_score,
         )
     improvement = (
-        ((incumbent - candidate) / incumbent * 100.0)
-        if candidate and incumbent
+        ((candidate_score / incumbent_score) - 1.0) * 100.0
+        if candidate_score and incumbent_score
         else None
     )
     if improvement is None or improvement <= min_improvement_pct:
         return VerificationResult(
             "FAIL",
-            candidate,
-            incumbent,
+            candidate_latency,
+            incumbent_latency,
             improvement,
             runs=runs,
             error=(
                 f"candidate improvement {improvement if improvement is not None else 'unknown'} "
-                f"did not exceed {min_improvement_pct:.3f}%"
+                f"in performance score did not exceed {min_improvement_pct:.3f}%"
             ),
             artifact=artifact,
+            candidate_performance_score=candidate_score,
+            incumbent_performance_score=incumbent_score,
         )
     return VerificationResult(
-        "PASS", candidate, incumbent, improvement, runs=runs, artifact=artifact
+        "PASS",
+        candidate_latency,
+        incumbent_latency,
+        improvement,
+        runs=runs,
+        artifact=artifact,
+        candidate_performance_score=candidate_score,
+        incumbent_performance_score=incumbent_score,
     )
 
 

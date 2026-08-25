@@ -62,10 +62,11 @@ python3 tools/iteration_trace.py phase-start <planning|implementation|benchmark>
 python3 tools/iteration_trace.py phase-end <planning|implementation|benchmark>
 ```
 
-At episode start, record the incumbent `HEAD`, its canonical latency, and its kernel as the initial
-`best_commit`, `best_latency`, and `best_kernel`. Each trial starts from the best passing kernel found
-so far, not automatically from the immediately preceding trial. A failed or slower trial must not
-contaminate the next trial.
+At episode start, record the incumbent `HEAD`, its canonical `performance_score`, latency, and
+kernel as the initial `best_commit`, `best_score`, `best_latency`, and `best_kernel`. The score is the
+optimization objective and higher is better; latency remains diagnostic evidence. Each trial starts
+from the best passing kernel found so far, not automatically from the immediately preceding trial. A
+failed or lower-scoring trial must not contaminate the next trial.
 
 ### 1. Plan — repeat for trials 1 through {{FAST_TRIALS}}
 
@@ -125,21 +126,22 @@ plan -> implement -> evaluator trial. The sandbox records every result with the 
 hash.
 
 Immediately after each evaluator, append one structured journal experiment for that trial. Record
-the reviewed plan, implementation, correctness, latency when available, comparison with
-`best_latency`, and the decision to keep or reject the trial:
+the reviewed plan, implementation, correctness, `performance_score` and latency when available,
+comparison with `best_score`, and the decision to keep or reject the trial:
 
 ```bash
 {{JOURNAL_COMMAND}} append --path {{JOURNAL_PATH_SHELL}} \
   --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","decision":"keep_as_best | reject_and_continue | blocked"}'
 ```
 
-If the result passes and is faster than `best_latency`, update `best_commit`, `best_latency`, and
-`best_kernel`. Otherwise keep the prior best and restore it before planning the next trial. Continue
+If the result passes and its `performance_score` exceeds `best_score`, update `best_commit`,
+`best_score`, `best_latency`, and `best_kernel`. Otherwise keep the prior best and restore it before
+planning the next trial. Continue
 until {{FAST_TRIALS}} evaluator results and {{FAST_TRIALS}} journal experiments exist. Only
 infrastructure failure or missing authority may end early as `blocked`; a bad candidate is evidence
 for the next trial, not an early terminal `pivot`.
 
-After trial {{FAST_TRIALS}}, select the fastest passing strict improvement over the canonical
+After trial {{FAST_TRIALS}}, select the highest-scoring passing strict improvement over the canonical
 incumbent. If that best kernel is not the current `HEAD`, restore its exact previously evaluated bytes,
 commit only `kernel.py` as `v{{VERSION}}: select best fast candidate`, and atomically publish that
 selection commit to the same policy-review request path. Do not run an additional evaluator: the supervisor

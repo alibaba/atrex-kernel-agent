@@ -484,10 +484,20 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
         "complete" if result.get("all_pass") and by_shape else "incomplete"
     )
     perf["measured_shape_count"] = len(by_shape)
-    perf["speedup_vs_ref_geomean"] = speedup_vs_reference(
-        workspace,
-        result.get("latency_us_geomean"),
-        result.get("speedup_vs_ref_geomean"),
+    performance_objective = result.get("performance_objective")
+    perf["performance_objective"] = performance_objective
+    perf["performance_score"] = result.get(
+        "performance_score", result.get("speedup_vs_ref_geomean")
+    )
+    perf["speedup_vs_ref_mean"] = result.get("speedup_vs_ref_mean")
+    perf["speedup_vs_ref_geomean"] = (
+        None
+        if performance_objective == "shape_speedup_arithmetic_mean"
+        else speedup_vs_reference(
+            workspace,
+            result.get("latency_us_geomean"),
+            result.get("speedup_vs_ref_geomean"),
+        )
     )
     all_pass = bool(result.get("all_pass"))
     corr = data.setdefault("correctness", {})
