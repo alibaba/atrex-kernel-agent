@@ -902,7 +902,12 @@ def _typed_request(
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
-        request["mode"] = "full"
+        version = str(_option_value(command, "--version", "v0"))
+        request["mode"] = (
+            "correctness_only"
+            if multi_seed > 0 and version not in {"v0", "v1"}
+            else "full"
+        )
     else:
         if profiler:
             request["profiler"] = profiler
@@ -1737,6 +1742,8 @@ def _typed_agate_command(
         str(reference_dir),
         "--operator",
         str(request["reference"]["operator"]),
+        "--mode",
+        str(request.get("mode") or "full"),
         "--num-correctness-cases",
         str(options["num_correctness_cases"]),
         "--bench-iters",
@@ -2058,7 +2065,11 @@ def _metadata_speedup_mean(
 
 
 def _optimizer_result_from_eval(
-    payload: dict[str, Any], shape_ids: list[str], metadata: object
+    payload: dict[str, Any],
+    shape_ids: list[str],
+    metadata: object,
+    *,
+    require_performance: bool = True,
 ) -> dict[str, Any]:
     """Convert the typed gateway's Atrex-Bench result to optimizer RESULT_JSON."""
     failures: list[str] = []
@@ -2112,31 +2123,32 @@ def _optimizer_result_from_eval(
                 if rel_diff is not None:
                     max_rel = max(max_rel, rel_diff)
 
-    performance = payload.get("performance")
-    performance = performance if isinstance(performance, dict) else {}
-    performance_shapes = performance.get("shapes")
-    performance_shapes = (
-        performance_shapes if isinstance(performance_shapes, dict) else {}
-    )
     latency_by_shape: dict[str, float] = {}
-    for shape_id in shape_ids:
-        shape_result = performance_shapes.get(shape_id)
-        shape_result = shape_result if isinstance(shape_result, dict) else {}
-        sample_ms: list[float] = []
-        samples = shape_result.get("samples")
-        for sample in samples if isinstance(samples, list) else []:
-            if not isinstance(sample, dict):
+    if require_performance:
+        performance = payload.get("performance")
+        performance = performance if isinstance(performance, dict) else {}
+        performance_shapes = performance.get("shapes")
+        performance_shapes = (
+            performance_shapes if isinstance(performance_shapes, dict) else {}
+        )
+        for shape_id in shape_ids:
+            shape_result = performance_shapes.get(shape_id)
+            shape_result = shape_result if isinstance(shape_result, dict) else {}
+            sample_ms: list[float] = []
+            samples = shape_result.get("samples")
+            for sample in samples if isinstance(samples, list) else []:
+                if not isinstance(sample, dict):
+                    continue
+                value = _finite_number(sample.get("end_to_end_time_ms"))
+                if value is not None and value > 0.0:
+                    sample_ms.append(value)
+            if shape_result.get("error") is not None or not sample_ms:
+                failures.append(
+                    f"sid={shape_id}: performance "
+                    + str(shape_result.get("error") or "has no valid samples")
+                )
                 continue
-            value = _finite_number(sample.get("end_to_end_time_ms"))
-            if value is not None and value > 0.0:
-                sample_ms.append(value)
-        if shape_result.get("error") is not None or not sample_ms:
-            failures.append(
-                f"sid={shape_id}: performance "
-                + str(shape_result.get("error") or "has no valid samples")
-            )
-            continue
-        latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
+            latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
 
     latencies = [
         latency_by_shape[shape_id]
@@ -2150,8 +2162,10 @@ def _optimizer_result_from_eval(
         else 0.0
     )
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
-    speedup_mean, metadata_failures = _metadata_speedup_mean(
-        metadata, shape_ids, latency_by_shape
+    speedup_mean, metadata_failures = (
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        if require_performance
+        else (None, [])
     )
     failures.extend(metadata_failures)
     return {
@@ -2173,7 +2187,11 @@ def _optimizer_result_from_eval(
 
 
 def _merge_optimizer_results(
-    results: list[dict[str, Any]], shape_ids: list[str], metadata: object
+    results: list[dict[str, Any]],
+    shape_ids: list[str],
+    metadata: object,
+    *,
+    require_performance: bool = True,
 ) -> dict[str, Any]:
     latency_by_shape = {
         str(shape_id): float(latency)
@@ -2185,7 +2203,7 @@ def _merge_optimizer_results(
         for shape_id in shape_ids
         if shape_id in latency_by_shape
     ]
-    complete = len(latencies) == len(shape_ids)
+    complete = not require_performance or len(latencies) == len(shape_ids)
     actionable_diagnostics: list[dict[str, str]] = []
     seen_diagnostics: set[tuple[str, str]] = set()
     for result in results:
@@ -2210,8 +2228,10 @@ def _merge_optimizer_results(
             if len(actionable_diagnostics) >= 8:
                 break
 
-    speedup_mean, metadata_failures = _metadata_speedup_mean(
-        metadata, shape_ids, latency_by_shape
+    speedup_mean, metadata_failures = (
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        if require_performance
+        else (None, [])
     )
     failures = [
         str(failure)
@@ -2224,7 +2244,7 @@ def _merge_optimizer_results(
 
     return {
         "all_pass": complete
-        and speedup_mean is not None
+        and (not require_performance or speedup_mean is not None)
         and all(result.get("all_pass") for result in results),
         "failures": failures,
         "latency_us_geomean": (
@@ -2518,6 +2538,7 @@ def _run_typed_gateway(
                         else len(request["reference"]["shapes"])
                     ),
                     "shape_batch_count": len(shape_batches),
+                    "mode": request.get("mode"),
                     "options": request["options"],
                     "sync": sync_paths,
                 },
@@ -2690,13 +2711,24 @@ def _run_typed_gateway(
     )
     if kind == "run":
         metadata = request["reference"].get("metadata")
+        require_performance = request.get("mode") != "correctness_only"
         batch_results = [
-            _optimizer_result_from_eval(job["result"], shape_ids, metadata)
+            _optimizer_result_from_eval(
+                job["result"],
+                shape_ids,
+                metadata,
+                require_performance=require_performance,
+            )
             for job, shape_ids in zip(jobs, shape_batches)
         ]
         result = _mask_generalized_result(
             workspace,
-            _merge_optimizer_results(batch_results, expected_shape_ids, metadata)
+            _merge_optimizer_results(
+                batch_results,
+                expected_shape_ids,
+                metadata,
+                require_performance=require_performance,
+            )
             if batched
             else batch_results[0],
         )
