@@ -347,12 +347,12 @@ def main():
         if "diff" in files:
             (c.PACKETS / ("%s.diff" % seg["seg_id"])).write_text(files["diff"])
             packet["agent_facing"]["diff_file"] = "%s.diff" % seg["seg_id"]
-            packet["code_bytes"] = len(files["diff"])
+            packet["code_bytes"] = len(files["diff"].encode("utf-8"))
             n_diff += 1
         if "kernel" in files:
             (c.PACKETS / ("%s.py" % seg["seg_id"])).write_text(files["kernel"])
             packet["agent_facing"]["kernel_file"] = "%s.py" % seg["seg_id"]
-            packet["code_bytes"] = len(files["kernel"])
+            packet["code_bytes"] = len(files["kernel"].encode("utf-8"))
             n_kernel += 1
         packet.setdefault("code_bytes", 0)
         (c.PACKETS / ("%s.json" % seg["seg_id"])).write_text(

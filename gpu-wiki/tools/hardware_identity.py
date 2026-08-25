@@ -68,6 +68,27 @@ _PREFIXES = ("advancedmicrodevices", "nvidia", "amd", "geforce", "instinct")
 _SUFFIXES = ("accelerator", "gpu")
 
 
+def extract_product_names(text: str) -> list[str]:
+    """Return explicit public GPU product identities in textual order.
+
+    Product spellings may vary in case and may insert spaces, underscores, or
+    hyphens at letter/number boundaries (for example ``B-200`` or
+    ``MI_300_X``). This performs identity normalization only; it never maps an
+    internal resource alias to a public product name.
+    """
+    matches = []
+    for product in HARDWARE_IDENTITIES:
+        chunks = re.findall(r"[a-z]+|[0-9]+", product.casefold())
+        pattern = r"(?<![a-z0-9])" + r"[\s_-]*".join(
+            re.escape(chunk) for chunk in chunks
+        ) + r"(?![a-z0-9])"
+        found = re.search(pattern, text, flags=re.IGNORECASE)
+        if found:
+            matches.append((found.start(), product))
+    matches.sort()
+    return [product for _, product in matches]
+
+
 def normalize_product_name(value: str) -> str:
     """Normalize formatting without translating one hardware identity to another."""
     token = _compact(value)
@@ -85,3 +106,42 @@ def normalize_product_name(value: str) -> str:
                 changed = True
                 break
     return _CANONICAL.get(token, token)
+
+
+def target_table_errors(target_table: dict) -> list[str]:
+    """Validate a trace-target map against canonical public identities.
+
+    The mining skill may intentionally map a product alias such as ``rtx5090``
+    to the architecture-level recorded address ``sm120``. Both the input
+    identity and output address must nevertheless agree on vendor and
+    architecture, preventing the two code-owned tables from drifting silently.
+    """
+    errors = []
+    for token, triple in sorted(target_table.items()):
+        if not isinstance(triple, (tuple, list)) or len(triple) != 3:
+            errors.append("%s: expected (vendor, arch, product)" % token)
+            continue
+        vendor, arch, product = map(str, triple)
+        source = normalize_product_name(str(token))
+        target = normalize_product_name(product)
+        source_row = HARDWARE_IDENTITIES.get(source)
+        target_row = HARDWARE_IDENTITIES.get(target)
+        if source_row is None:
+            errors.append("%s: unknown public input identity" % token)
+            continue
+        if target_row is None:
+            errors.append("%s: unknown output product %s" % (token, product))
+            continue
+        expected = (vendor, arch)
+        if (source_row["vendor"], source_row["arch"]) != expected:
+            errors.append(
+                "%s: input identity is %s/%s, table says %s/%s"
+                % (token, source_row["vendor"], source_row["arch"], vendor, arch)
+            )
+        if (target_row["vendor"], target_row["arch"]) != expected:
+            errors.append(
+                "%s: output identity %s is %s/%s, table says %s/%s"
+                % (token, target, target_row["vendor"], target_row["arch"],
+                   vendor, arch)
+            )
+    return errors

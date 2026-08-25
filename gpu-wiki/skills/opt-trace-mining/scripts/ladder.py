@@ -48,6 +48,13 @@ def declares_no_change(v):
     return bool(NO_CHANGE_RE.search(text_of(v)))
 
 
+def owns_kernel_change(v):
+    """Whether this version can own a code delta, with legacy compatibility."""
+    if "kernel_changed" in v:
+        return bool(v.get("kernel_changed"))
+    return not declares_no_change(v)
+
+
 def noise_reason(v, outcome_matters=True):
     """Why this version cannot be reasoned about, or None.
 
@@ -59,7 +66,20 @@ def noise_reason(v, outcome_matters=True):
     """
     if RERUN_RE.search(v["version"]):
         return "remeasurement"
-    if INFRA_RE.search(text_of(v)):
+    long_horizon_status = v.get("long_horizon_status")
+    if long_horizon_status in {"interrupted", "blocked", "invalid_handoff"}:
+        return "infrastructure"
+    authoritative = (
+        v.get("measurement_source") == "authoritative_verification"
+        and v.get("measurement_subject") == "candidate"
+        and v.get("gate_result") == "PASS"
+    )
+    passed = (
+        v.get("gate_result") == "PASS"
+        and v.get("correctness_status") == "PASS"
+    )
+    if (long_horizon_status is None and not authoritative and not passed
+            and INFRA_RE.search(text_of(v))):
         return "infrastructure"
     if not outcome_matters:
         return None
@@ -68,6 +88,20 @@ def noise_reason(v, outcome_matters=True):
         return "incorrect"
     if v.get("gate_result") == "FAIL":
         return "gate-fail"
+    return None
+
+
+def authoritative_gain(v):
+    """Same-allocation supervisor gain, when its origin is explicit."""
+    value = v.get("authoritative_improvement_pct")
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and v.get("measurement_source") == "authoritative_verification"
+        and v.get("measurement_subject") == "candidate"
+        and v.get("gate_result") == "PASS"
+    ):
+        return float(value)
     return None
 
 
@@ -115,9 +149,32 @@ def select(versions):
             rejected.append((v["version"], "no commit, code not reachable"))
             continue
 
+        authoritative = authoritative_gain(v)
+        if authoritative is not None:
+            if best is None or geo < best:
+                best = geo
+            if owns_kernel_change(v) and authoritative >= MILESTONE_PCT:
+                milestones.append(dict(
+                    v,
+                    kind="mega" if authoritative >= MEGA_PCT else "milestone",
+                    improve_pct=round(authoritative, 2),
+                ))
+            elif not owns_kernel_change(v):
+                rejected.append((v["version"], "commit does not change kernel.py"))
+            else:
+                rejected.append((
+                    v["version"],
+                    "under %.1f%% authoritative verification (%.2f%%)"
+                    % (MILESTONE_PCT, authoritative),
+                ))
+            continue
+
         if best is None:
-            milestones.append(dict(v, kind="baseline", improve_pct=None))
             best = geo
+            if owns_kernel_change(v):
+                milestones.append(dict(v, kind="baseline", improve_pct=None))
+            else:
+                rejected.append((v["version"], "commit does not change kernel.py"))
             continue
 
         if geo > best * REBASELINE_FACTOR:
@@ -133,7 +190,7 @@ def select(versions):
             continue
 
         improve = (best - geo) / best * 100.0
-        if improve >= MILESTONE_PCT and not declares_no_change(v):
+        if improve >= MILESTONE_PCT and owns_kernel_change(v):
             milestones.append(dict(
                 v, kind="mega" if improve >= MEGA_PCT else "milestone",
                 improve_pct=round(improve, 2)))
@@ -141,15 +198,26 @@ def select(versions):
         else:
             if improve > 0:
                 best = geo
-            rejected.append((v["version"], "under %.1f%% (%.2f%%)"
-                             % (MILESTONE_PCT, improve)))
+            if "kernel_changed" in v and not owns_kernel_change(v):
+                rejected.append((v["version"], "commit does not change kernel.py"))
+            else:
+                rejected.append((v["version"], "under %.1f%% (%.2f%%)"
+                                 % (MILESTONE_PCT, improve)))
 
     if milestones and best is not None:
         # Only a version that actually holds the floor may be called the end
         # state. The last version by number is often a measurement excursion, and
         # labelling that "final" would present it as the run's outcome.
-        candidates = [v for v in versions
-                      if v.get("geomean_us") and v["geomean_us"] <= best * 1.0001]
+        candidates = [
+            v for v in versions
+            if v.get("geomean_us")
+            and v["geomean_us"] <= best * 1.0001
+            and noise_reason(v) is None
+            and v.get("sha")
+            and owns_kernel_change(v)
+            and (authoritative_gain(v) is None
+                 or authoritative_gain(v) >= MILESTONE_PCT)
+        ]
         if candidates:
             last = max(candidates, key=lambda v: v["n"])
             if last["version"] not in {m["version"] for m in milestones}:

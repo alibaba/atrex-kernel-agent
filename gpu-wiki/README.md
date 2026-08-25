@@ -49,7 +49,7 @@ The Skills Workshop in the diagram represents three distinct responsibilities:
 
 | Skill | Input | Output |
 |---|---|---|
-| [`opt-trace-mining`](skills/opt-trace-mining/) | Git history of successive kernel versions | Candidate optimization experience |
+| [`opt-trace-mining`](skills/opt-trace-mining/) | Legacy version ladders or long-horizon Git/journal traces | Candidate optimization experience with commit-resolved provenance |
 | [`session-trace-mining`](skills/session-trace-mining/) | AI coding-agent session transcripts | Candidate agent-discovered knowledge |
 | [`wiki-gate`](skills/wiki-gate/) | One candidate record | Insert, confirm, conflict, or reject decision |
 
@@ -126,15 +126,17 @@ cannot query either Wiki store, read records, rank results, or write files.
 After the bridge returns plain JSON, deterministic code owns the rest:
 
 1. strictly validate the intent;
-2. normalize product, architecture, DSL, operator, and symptom vocabulary;
-3. construct isolated kernel and hardware lookups;
+2. normalize product, architecture, DSL, operator aliases, components, and symptoms;
+3. construct isolated operator/component lanes plus hardware lookups;
 4. widen safely without dropping the architecture boundary;
 5. execute the store-specific query tools;
 6. deduplicate, project, budget, and return the records.
 
-The Claude success path uses one tool-free bridge call. Invalid bridge JSON gets
-at most one fresh repair attempt. `claude` is the default agent CLI; `codex` and
-`qodercli` are also supported.
+AKA's standard optimizer request format is parsed deterministically and launches
+no bridge model. Other prose uses one low-effort, tool-free JSON call, with at
+most one fresh repair attempt after strict local validation. `claude` is the
+default agent CLI and `qodercli` is also supported; a CLI without a verified
+no-tools protocol is rejected.
 
 The consuming agent receives only two top-level fields:
 

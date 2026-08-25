@@ -31,9 +31,12 @@ import families
 
 # ---------------------------------------------------------------- git subjects
 
-# Versions are the unit of work and every commit that belongs to one announces it
-# in the subject. A commit without this prefix is bookkeeping (`chore(007):`).
+# Legacy versions announce themselves in the subject. Current long-horizon
+# campaigns instead add ``memory/v<N>.json`` in the accepted promotion commit,
+# so the path addition is the canonical version event and the subject is only a
+# fallback for older traces.
 VER_PREFIX = re.compile(r"^(v\d+)\s*:", re.I)
+MEMORY_VERSION_PATH_RE = re.compile(r"^memory/(v\d+)\.json$", re.I)
 
 # The verdict. `reverted` is the standard word; `dead-end` appears in subjects
 # that predate it.
@@ -120,16 +123,18 @@ def _first_sentence(text):
 
 
 def read_commits():
-    """One commit per version, newest kept when a version was committed twice.
+    """Resolve one canonical Git commit per version.
 
-    A re-commit of the same version is an amend in spirit: the later subject is
-    the one whose verdict stuck.
+    The commit that first adds ``memory/vN.json`` wins. When no such event
+    exists, prefer a version-labelled commit that changed ``kernel.py`` over a
+    later metadata-only backfill. This preserves legacy subject-only traces.
     """
     sep = "\x1e"
     # The separator leads each record rather than trailing it, so splitting can
     # never strand a field of the final record.
     raw = c.git("log", "--reverse", "--format=%s%%H|%%P|%%aI|%%s%%n%%b" % sep)
-    commits, skipped = {}, []
+    paths_by_sha = read_changed_paths()
+    rows = []
     for blob in raw.split(sep):
         blob = blob.strip()
         if not blob:
@@ -139,21 +144,73 @@ def read_commits():
             sha, parents, date, subject = head.split("|", 3)
         except ValueError:
             continue
+        paths = paths_by_sha.get(sha, [])
+        added_versions = []
+        for status, path in paths:
+            mpath = MEMORY_VERSION_PATH_RE.fullmatch(path)
+            if mpath and status.startswith("A"):
+                added_versions.append(mpath.group(1).lower())
         m = VER_PREFIX.match(subject)
-        if not m:
-            skipped.append(subject[:90])
-            continue
-        ver = m.group(1).lower()
-        commits[ver] = {
-            "version": ver,
+        rows.append({
+            "subject_version": m.group(1).lower() if m else None,
+            "added_memory_versions": added_versions,
             "sha": sha,
             "parent": parents.split()[0] if parents.strip() else None,
             "date": date,
             "subject": subject,
             "body": body.strip(),
+            "kernel_changed": any(path == "kernel.py" for _status, path in paths),
             **parse_subject(subject + "\n" + body),
+        })
+
+    versions = {
+        ver for row in rows
+        for ver in ([row["subject_version"]] + row["added_memory_versions"])
+        if ver
+    }
+    commits, selected = {}, set()
+    for ver in sorted(versions, key=lambda value: int(re.sub(r"\D", "", value) or 0)):
+        additions = [row for row in rows if ver in row["added_memory_versions"]]
+        labelled = [row for row in rows if row["subject_version"] == ver]
+        if additions:
+            chosen = additions[0]
+            source = "memory-add"
+        else:
+            code_commits = [row for row in labelled if row["kernel_changed"]]
+            chosen = (code_commits or labelled)[-1]
+            source = "subject-kernel" if code_commits else "subject"
+        selected.add(chosen["sha"])
+        commits[ver] = {
+            "version": ver,
+            "commit_mapping": source,
+            **{key: value for key, value in chosen.items()
+               if key not in ("subject_version", "added_memory_versions")},
         }
+
+    skipped = [row["subject"][:90] for row in rows if row["sha"] not in selected]
     return commits, skipped
+
+
+def read_changed_paths():
+    """Return relevant changed paths for every commit using one Git process."""
+    sep = "\x1e"
+    raw = c.git(
+        "log", "--reverse", "--format=%s%%H" % sep, "--name-status",
+        "--", "kernel.py", "memory",
+    )
+    result = {}
+    for blob in raw.split(sep):
+        lines = blob.strip().splitlines()
+        if not lines:
+            continue
+        sha = lines[0].strip()
+        paths = []
+        for line in lines[1:]:
+            fields = line.split("\t")
+            if len(fields) >= 2 and re.fullmatch(r"[A-Z][0-9]*", fields[0]):
+                paths.append((fields[0], fields[-1]))
+        result[sha] = paths
+    return result
 
 
 # ------------------------------------------------------------------- memory/
@@ -208,6 +265,9 @@ def summarise_memory(data, filename):
             "performance_score",
             perf.get("speedup_vs_ref_mean", perf.get("speedup_vs_ref_geomean")),
         ),
+        "authoritative_improvement_pct": perf.get("authoritative_improvement_pct"),
+        "measurement_subject": perf.get("measurement_subject"),
+        "measurement_source": perf.get("measurement_source"),
         "correctness_status": corr.get("status"),
         "max_abs_err": corr.get("max_abs_err"),
         "max_rel_err": corr.get("max_rel_err"),
@@ -221,6 +281,7 @@ def summarise_memory(data, filename):
         "pitfalls": data.get("pitfalls_and_fixes") or [],
         "search_log": data.get("search_log") or [],
         "profile_evidence": data.get("profile_evidence") or {},
+        "long_horizon_status": (data.get("long_horizon") or {}).get("status"),
     }
 
 
@@ -371,6 +432,8 @@ def detect_dsl(text):
         return "gluon"
     if re.search(r"cutlass\.cute|import cutlass|cute\.jit|cutedsl", text, re.I):
         return "cutedsl"
+    if re.search(r"\bflydsl\b|@flyc\.kernel|from\s+flydsl", text, re.I):
+        return "flydsl"
     if re.search(r"load_inline|__global__|cpp_extension|hipcc", text):
         return "cuda"
     if "triton" in text:
