@@ -1,7 +1,8 @@
 # Quick Start
 
 AKA exposes one supported execution path: the unattended, budget-bounded orchestrator in
-`orchestrator/optimize.py`.
+`orchestrator/optimize.py`. For interactive use, the recommended launch method is to ask a coding
+agent in this repository to translate the task into that command and start the campaign.
 
 ## Prerequisites
 
@@ -9,8 +10,7 @@ AKA exposes one supported execution path: the unattended, budget-bounded orchest
 - `git`
 - Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
-- `agate` (`atrex-gateway-client`) configured with gateway URL and credentials
-- The selected gateway environment must provide the workload's framework and GPU stack
+- A sandbox execution environment containing the workload's framework and GPU stack
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
@@ -62,7 +62,21 @@ the verbatim reference wrapper, runs exactly one official full-workload base-see
 README/memory/report programmatically, and records measurement metadata in a second commit whose
 memory points to the stable source SHA. A setup Agent is retained only for derived legacy inputs.
 
-## 2. Run the Orchestrated Loop
+## 2. Launch the Orchestrated Loop
+
+### Start with a coding agent (recommended)
+
+Open Claude Code, Codex, or Qoder in the repository and provide a concrete task prompt. For example:
+
+```text
+Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+```
+
+The coding agent should resolve the requested values into `orchestrator/optimize.py` arguments,
+verify the local prerequisites, and launch that command. This prompt-driven path is a convenience
+layer over the same orchestrator, not a separate optimization workflow.
+
+### Run directly
 
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
@@ -74,17 +88,36 @@ python orchestrator/optimize.py \
     --max-iters 20 --token-budget 8000000 --target-util 90
 ```
 
-The orchestrator initializes its required submodules on first run, creates a flat
-leaderboard workspace named `kernel_opt_<name>_<framework>_<platform>/` under `--workspace` or
-the current directory, and runs each canonical version as an isolated Long Horizon episode. One
-episode owns one candidate direction. By default, the first 20 optimization episodes after baseline
-use fast mode: five reviewed `plan -> implement -> evaluator` trials, with no profiling, multi-seed
-run, or ABBA. The fastest passing hash-matched trial is compared with canonical incumbent memory.
-Episode 21 and later use the full profile/research/edit loop and independent same-allocation ABBA
-verification.
+### What happens after launch
+
+1. **Resolve and isolate the campaign.** The orchestrator validates the operator, initializes
+   required submodules, probes the runtime GPU architecture, and creates or resumes
+   `kernel_opt_<name>_<framework>_<platform>/` below `--workspace` or the current directory.
+2. **Prepare production inputs.** Native production campaigns validate a supplied
+   `agent_problem.json` or derive one in a clean preprocessing session, then keep detailed evaluator
+   shapes private.
+3. **Establish V0.** The supervisor commits the evaluator-owned reference wrapper, runs one official
+   full-workload base-seed evaluation, and records canonical `memory/v0.json` without launching a
+   coding Agent.
+4. **Establish V1 when enabled.** `--framework-baseline=auto` creates a self-contained
+   framework-native V1 in production mode. Read-only reviewers provide bounded correctness guidance;
+   the coding Agent implements and smoke-tests, while the supervisor owns full evaluation, policy
+   review, memory, and the final commit.
+5. **Run isolated optimization episodes.** Each episode owns one candidate direction in a private
+   Git branch and worktree. By default, the first two episodes run five reviewed
+   `plan -> implement -> evaluator` trials without profiling, multi-seed validation, or ABBA. Later
+   episodes use the full profile/research/plan/edit/repair loop.
+6. **Verify and promote.** Fast mode compares the fastest passing hash-matched trial with canonical
+   incumbent memory. Full mode runs an independent incumbent/candidate ABBA comparison in one
+   isolated GPU allocation. Production also applies its fail-closed policy review. Only a strict
+   passing improvement is squash-promoted.
+7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
+   intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
+   canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
+
 GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
-`memory/`, episode journals, worktrees, and Git stay local. It finalizes a directly submittable
-SOL-ExecBench output after a passing run. `--platform` is required and names the logical target.
+`memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
+logical target.
 
 ### Agent backends
 
@@ -202,9 +235,9 @@ full evaluation, memory writing, or commits. The supervisor then runs policy rev
 combined full-workload evaluator that measures the base seed and checks five additional seeds, writes memory,
 and pins V1. Use
 `--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed
-optimization directly from V0. A production Triton campaign escalates to Gluon after three
-consecutive stalls; once triggered, conversion retries until correctness and performance parity pass,
-and later episodes remain in Gluon.
+optimization directly from V0. A Triton campaign escalates to Gluon after three consecutive stalls
+by default; once triggered, conversion retries until correctness and performance parity pass, and
+later episodes remain in Gluon. This applies independently of leaderboard or production mode.
 
 If the V1 coding Agent exits unexpectedly, the orchestrator takes a one-time local snapshot and starts
 a read-only progress supervisor to write
@@ -216,7 +249,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 
 ```text
 --max-iters N                    Hard cap on canonical versions/episodes
---fast-episodes N                Fast post-baseline episodes (default: 20; 0 disables)
+--fast-episodes N                Fast post-baseline episodes (default: 2; 0 disables)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex implemented)
@@ -226,9 +259,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
---sandbox-hardware GPU           Gateway selector or alias
---sandbox-profile PROFILE        Optional pre/prod endpoint profile
---sandbox-url URL                Explicit endpoint URL
+--sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-timeout S              Remote command timeout, at most 600 seconds
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
@@ -250,59 +281,18 @@ episode, while canonical `memory/vN.json` is written only after the episode reac
 The supervisor validates that this numbered record is both parseable and committed at `HEAD` before
 it advances campaign state, including failed, pivoted, blocked, and interrupted rounds.
 
-### Local gateway
-
-To use the same gateway interface on a local GPU, start the bundled community scheduler. It has no
-third-party Python dependencies:
-
-```bash
-python tools/local_gateway.py serve \
-  --host 127.0.0.1 --port 8000 \
-  --state-dir .atrex-local-gateway
-```
-
-The default single worker executes jobs FIFO, so concurrent optimizer requests queue instead of contending
-for the GPU. `agate dev`, `agate get/jobs/cancel`, long polling, environment discovery, and
-`tools/sandbox.py` use the same HTTP shapes as atrex-gateway. See [local_gateway.md](local_gateway.md) for
-the exact compatibility surface.
-
-This is interface compatibility, not process isolation: submitted code runs directly as the server user.
-Bind it to localhost and submit trusted code only. The worker inherits the server process's Python/toolchain
-environment, so install `torch`, Triton, and any kernel DSL needed by the workload into that environment.
-
-Then select the localhost endpoint and the server's `local` GPU alias:
-
-```bash
-python orchestrator/optimize.py \
-    --op-dir /path/to/sol-execbench/op \
-    --platform H20 --framework Triton \
-    --sandbox-hardware local \
-    --sandbox-url http://127.0.0.1:8000 \
-    --max-iters 20
-```
-
-`--sandbox-url` and `--sandbox-profile` are mutually exclusive. The localhost mode changes only where
-agate executes jobs; evaluations and profiles still go through `tools/sandbox.py`, while `memory/`, plans, edits,
-and Git remain workspace-local. `--platform` and the gateway's hardware selector are not name-validated:
-inventory data may be aliased or desensitized, so runtime architecture probing drives automatic framework
-selection.
-
 ### Direct sandbox and profiling
 
-The gateway transport can also be used directly for validation and profiling:
+The sandbox boundary can also be used directly for validation and profiling:
 
 ```bash
 python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
-
-# Same interface through the bundled local gateway
-python tools/sandbox.py --hardware local --url http://127.0.0.1:8000 \
-  --no-sync -- python test_kernel.py --no-memory
 ```
 
-The gateway receives code and evaluator/profile inputs only. Optimization memory, plans, edits, and
-Git state remain on the coordinator.
+Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,
+edits, and Git state remain on the coordinator.
 
 ## 3. Inspect Outputs
 

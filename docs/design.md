@@ -5,7 +5,8 @@
 Atrex Kernel Agent is an orchestrated system for GPU kernel implementation, profiling, and
 iterative optimization. The repository has one supported entry point: `orchestrator/optimize.py`.
 It owns the optimization lifecycle and launches isolated Long Horizon episodes through Claude,
-Qoder, Codex, or Pi.
+Qoder, Codex, or Pi. A user may invoke that entry point directly or ask a coding agent in the
+repository to translate a natural-language task into its CLI arguments and launch it.
 
 Agent sessions propose and implement changes. The orchestrator remains authoritative for
 budgets, state transitions, sandbox execution, correctness and performance gates, production
@@ -15,6 +16,8 @@ Each canonical optimization version is one multi-experiment episode in a private
 The internal `long_horizon/` engine supplies worktree isolation, journals, handoff recovery,
 fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
 promotion; it is not a second CLI.
+
+![Atrex Kernel Agent architecture and workflow](../assets/atrex-architecture-current.png)
 
 ## Design Goals
 
@@ -50,18 +53,16 @@ promotion; it is not a second CLI.
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
 │   ├── telemetry/                     # Phase timing and token telemetry
 │   ├── optimization_policy.py         # leaderboard/production policy gates
-│   ├── templates/                     # Generated-code templates embedded into candidates
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
 ├── skills/                            # Backend-local workflow and plan-generation skills
 ├── tools/
-│   ├── sandbox.py                     # Gateway packaging and execution boundary
-│   ├── local_gateway.py               # Trusted localhost FIFO scheduler
+│   ├── sandbox.py                     # Remote packaging and execution boundary
 │   ├── memory_manager.py              # Structured iteration memory manager
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
-├── gpu-wiki/                          # Hardware and optimization knowledge base
+├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
 ├── reference-projects/                # Optional source-search repositories
 └── 3rdparty/                          # Profiler-analysis dependencies
 ```
@@ -76,7 +77,7 @@ points.
 | --- | --- | --- |
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
-| GPU execution | `tools/sandbox.py` plus gateway | Structured evaluator result and requested profile artifacts |
+| GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
@@ -86,6 +87,18 @@ exact committed sources.
 
 ## Supported Entry Point
 
+For interactive use, the recommended surface is a repository-scoped coding-agent prompt:
+
+```text
+Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+```
+
+The coding agent resolves the request, checks prerequisites, and invokes the same supported entry
+point. It does not own campaign state transitions, acceptance, or termination, and this launch
+surface does not create a second optimization workflow.
+
+For automation and direct operation, invoke the entry point explicitly:
+
 ```bash
 python orchestrator/optimize.py \
   --op-dir /path/to/operator \
@@ -94,8 +107,9 @@ python orchestrator/optimize.py \
   --framework Triton
 ```
 
-The public path creates an isolated Git-worktree episode for each optimization version. A fresh
-Agent thread may perform several related profile/research/edit/validate cycles. Claude and Codex
+Both launch surfaces converge before campaign initialization. The orchestrator creates an isolated
+Git-worktree episode for each optimization version. A fresh Agent thread may perform several related
+profile/research/edit/validate cycles. Claude and Codex
 support bounded same-thread recovery when the terminal handoff is incomplete; canonical state
 crosses episode boundaries through Git, structured memory, journals, plans, and profiles.
 
@@ -113,7 +127,7 @@ runtime-detected GPU vendor.
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
-3. Create one private branch/worktree per canonical version. The first 20 optimization episodes use
+3. Create one private branch/worktree per canonical version. The first two optimization episodes use
    five reviewed fast `plan -> implement -> evaluator` trials per episode by default; later episodes
    use the full evidence loop.
 4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
@@ -124,8 +138,7 @@ runtime-detected GPU vendor.
    with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
 7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
    failure/pivot/block evidence.
-8. Stop on version budget, token budget, optional stall budget, target utilization, or a terminal
-   repeated blocker.
+8. Stop on version budget, token budget, optional stall budget, or target utilization.
 9. Recheck production policy and package the final candidate.
 
 `HEAD` is always the incumbent. A failed, regressing, or policy-violating candidate is not
@@ -143,8 +156,7 @@ control. Adapters expose a common request/result model containing:
 - backend capability and observation-error metadata.
 
 The process supervisor also protects the host execution boundary by rejecting dependency builds,
-direct host GPU execution, profiler use outside the sandbox, and mutations of a shared localhost
-gateway.
+direct host GPU execution, and profiler use outside the sandbox.
 
 ### Workspace runtime assets
 
@@ -161,16 +173,13 @@ inside each campaign workspace. It also prepares backend-specific project-local 
   caches the
   result in private runtime state, and disables later calls to reviewers that were unavailable.
 
-### Sandbox and gateway
+### Sandbox execution
 
 All correctness, benchmark, and profiling work crosses
 `tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
-submits a typed `run`/`profile` job when representable, and falls back to a self-contained `dev`
-job for SOL or custom commands.
-
-Execution may target an external atrex-gpu-gateway or `tools/local_gateway.py`. The localhost
-gateway persists jobs in SQLite and consumes them FIFO with one worker by default. It is a
-transport-compatible trusted-code executor, not a security boundary.
+submits evaluator or profiler work to the configured remote executor, and synchronizes only the
+requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
+the coordinator.
 
 ### Full-workload optimization
 
@@ -210,10 +219,10 @@ third-party libraries. `optimization_mode=production` is fail-closed:
 - a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
 - violating episode candidates are rejected before promotion and recorded as failed memory.
 
-Production Triton campaigns enter a mandatory Triton-to-Gluon episode after the configured stall
-threshold. The episode receives an explicit conversion directive and TTGIR/conversion-sheet
-workflow. Conversion remains latched until a committed Gluon candidate passes correctness and
-performance-parity gates.
+Independently of optimization mode, Triton campaigns enter a mandatory Triton-to-Gluon episode after
+the configured stall threshold. The episode receives an explicit conversion directive and
+TTGIR/conversion-sheet workflow. Conversion remains latched until a committed Gluon candidate passes
+correctness and performance-parity gates.
 
 ### Long Horizon episode engine
 
@@ -276,10 +285,12 @@ preserves the interrupted worktree and restores the latest candidate snapshot wh
 
 ### 4. Explore one episode per version
 
-By default, optimization episodes 1 through 20 use the fast loop:
+By default, optimization episodes 1 and 2 use the fast loop:
 
 ```text
-plan -> implement -> one full-workload base-seed evaluator -> handoff
+repeat five times:
+  reviewed plan -> implement -> one full-workload base-seed evaluator
+select fastest passing hash-matched trial -> handoff
 ```
 
 Fast mode uses the normal `gen-plan` external Codex/Qoder review synthesis inside its planning phase,
@@ -288,7 +299,7 @@ sandbox records the evaluator result with the final `kernel.py` hash. The superv
 for correctness and compares it with the latest complete passing canonical incumbent measurement.
 `--fast-episodes 0` disables this path; another non-negative value changes its window.
 
-Episode 21 and later use the full evidence loop as many times as needed:
+Episode 3 and later use the full evidence loop as many times as needed:
 
 ```text
 profile -> research -> plan -> edit/compile/repair
@@ -352,4 +363,3 @@ from main-workspace commits; their recoverable local state remains on disk.
 - Every accepted candidate must be represented by Git and structured memory.
 - `masked: true` memory is excluded from active planning.
 - Production candidates must be self-contained in their selected framework.
-- Local gateway mode accepts trusted code only and should remain bound to loopback.
