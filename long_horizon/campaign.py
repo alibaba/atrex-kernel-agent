@@ -559,8 +559,11 @@ class LongHorizonCampaign:
         live_memory_path: Path,
         conversion_pending: bool,
         fast_mode: bool,
+        fast_trials: int | None = None,
+        resumed: bool = False,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign, version)
+        fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
             f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
             f"--live-path {json.dumps(str(live_memory_path))}"
@@ -568,7 +571,7 @@ class LongHorizonCampaign:
         fast_trial_plan_paths = "\n".join(
             f"- Trial {trial}: `plans/v{version}_trial{trial}_draft.md` -> "
             f"`plans/v{version}_trial{trial}_plan.md`"
-            for trial in range(1, self.fast_trials + 1)
+            for trial in range(1, fast_trial_count + 1)
         )
         return _render(
             (FAST_PROMPT_PATH if fast_mode else PROMPT_PATH).read_text(
@@ -593,9 +596,18 @@ class LongHorizonCampaign:
                 "AGENT_RUNTIME": directives["agent_runtime"],
                 "PLAN_GENERATOR": directives["plan_generator"],
                 "JOURNAL_COMMAND": journal_command,
-                "FAST_TRIALS": self.fast_trials,
+                "FAST_TRIALS": fast_trial_count,
                 "FAST_TRIAL_PLAN_PATHS": fast_trial_plan_paths,
                 "FAST_EVALUATOR_COMMAND": self._fast_evaluator_command(version),
+                "RESUME_DIRECTIVE": (
+                    "This episode is resuming after a supervisor restart. Keep and reuse the "
+                    "existing worktree, checkpoints, journal, plans, profiles, generated files, "
+                    "and source edits. Inspect them before acting; do not reset, clean, or stash "
+                    "them. If the journal is already finalized and consistent, republish its "
+                    "matching handoff. Otherwise continue the in-progress engineering work."
+                    if resumed
+                    else "This is a new episode worktree with no interrupted work to recover."
+                ),
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
                     "submit another Triton kernel. A candidate must be a committed Gluon kernel, "
@@ -1516,10 +1528,10 @@ class LongHorizonCampaign:
         state: SupervisorState,
         *,
         verifier: GatewayABBAValidator,
-    ) -> None:
+    ) -> tuple[EpisodeWorktree, dict[str, Any]] | None:
         active = store.load_active()
         if active is None:
-            return
+            return None
         episode = int(active.get("episode", 0))
         base_commit = str(active.get("base_commit", ""))
         branch = str(active.get("episode_branch", ""))
@@ -1538,6 +1550,80 @@ class LongHorizonCampaign:
             and attempt.get("episode_branch") == branch
             for attempt in state.attempts
         )
+        registered = {
+            Path(line.split(" ", 1)[1]).resolve()
+            for line in git_text(
+                self.workspace, "worktree", "list", "--porcelain"
+            ).splitlines()
+            if line.startswith("worktree ")
+        }
+        resumable_worktree = bool(
+            git_head(self.workspace) == base_commit
+            and phase in {
+                "preparing",
+                "exploring",
+                "verifying",
+                "promoting",
+                "recording",
+            }
+            and episode > 0
+            and memory_version > 0
+            and worktree_path is not None
+            and worktree_path != self.workspace.resolve()
+            and worktree_path.is_dir()
+            and worktree_path in registered
+            and branch
+            and git_text(
+                worktree_path,
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "HEAD",
+                check=False,
+            )
+            == branch
+            and subprocess.run(
+                ["git", "merge-base", "--is-ancestor", base_commit, "HEAD"],
+                cwd=str(worktree_path),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode
+            == 0
+        )
+        if resumable_worktree:
+            assert worktree_path is not None
+            if phase == "promoting" and working_changes(self.workspace):
+                # The candidate remains authoritative in the episode worktree. Roll back
+                # only an incomplete supervisor squash before retrying promotion.
+                subprocess.run(
+                    ["git", "reset", "--hard", base_commit],
+                    cwd=str(self.workspace),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path)
+            CampaignStore.ensure_excluded(worktree.path)
+            if self._recover_completed_handoff(
+                store,
+                state,
+                active,
+                worktree,
+                verifier=verifier,
+            ):
+                return None
+            active["resumed_from_phase"] = phase
+            active["phase"] = "exploring"
+            active["restart_count"] = int(active.get("restart_count", 0) or 0) + 1
+            store.save_active(active)
+            print(
+                f"[long-horizon] resuming interrupted episode={episode} in existing "
+                f"worktree {worktree.path} with {len(working_changes(worktree.path))} "
+                "visible intermediate path(s)",
+                flush=True,
+            )
+            return worktree, active
         if git_head(self.workspace) != base_commit:
             message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
             parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
@@ -1613,7 +1699,7 @@ class LongHorizonCampaign:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these
             # are supervisor-owned partial changes, so roll them back before continuing.
-            if working_changes(self.workspace):
+            if phase == "promoting" and working_changes(self.workspace):
                 subprocess.run(
                     ["git", "reset", "--hard", base_commit],
                     cwd=str(self.workspace),
@@ -1621,13 +1707,6 @@ class LongHorizonCampaign:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            registered = {
-                Path(line.split(" ", 1)[1]).resolve()
-                for line in git_text(
-                    self.workspace, "worktree", "list", "--porcelain"
-                ).splitlines()
-                if line.startswith("worktree ")
-            }
             if (
                 worktree_path is not None
                 and worktree_path != self.workspace.resolve()
@@ -1724,13 +1803,6 @@ class LongHorizonCampaign:
             except OSError:
                 pass
         if worktree_path is not None and worktree_path != self.workspace.resolve():
-            registered = {
-                Path(line.split(" ", 1)[1]).resolve()
-                for line in git_text(
-                    self.workspace, "worktree", "list", "--porcelain"
-                ).splitlines()
-                if line.startswith("worktree ")
-            }
             if worktree_path in registered:
                 EpisodeWorktree(
                     episode, base_commit, branch or "atrex/recovery", worktree_path
@@ -1738,6 +1810,7 @@ class LongHorizonCampaign:
         main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
         store.save_state(state)
         store.clear_active()
+        return None
 
     def run(self) -> str:
         main_adapter.prepare_campaign(self.base_campaign)
@@ -1754,7 +1827,9 @@ class LongHorizonCampaign:
             timeout=self.base_campaign.sandbox_timeout,
             private_reference_dir=self.base_campaign.private_reference_dir,
         )
-        self._recover_interrupted(store, state, verifier=verifier)
+        recovered_episode = self._recover_interrupted(
+            store, state, verifier=verifier
+        )
         runner = self.session_runner or LongSessionRunner(
             agent_cli=getattr(self.base_campaign, "agent_cli", "claude")
         )
@@ -1795,54 +1870,80 @@ class LongHorizonCampaign:
                     )
                 reason = "budget: token-budget"
                 break
-            episode = state.episodes + 1
-            fast_mode = self._is_fast_episode(episode)
+            resumed = recovered_episode is not None
             # Planning uses the same external-review synthesis in fast and full modes.
             # The probe is cached, so this is effectively once per campaign.
             self.base_campaign.ensure_plan_reviewer_availability()
-            memory_version = main_adapter.latest_version(self.workspace) + 1
-            base_commit = git_head(self.workspace)
-            worktree = EpisodeWorktree.plan(
-                self.workspace, episode, base_commit, root=self.worktree_root
-            )
-            active = {
-                "episode": episode,
-                "memory_version": memory_version,
-                "base_commit": base_commit,
-                "episode_branch": worktree.branch,
-                "worktree": str(worktree.path),
-                "mode": "fast" if fast_mode else "full",
-                "fast_trials": self.fast_trials if fast_mode else None,
-                "phase": "preparing",
-            }
-            store.save_active(active)
-            worktree.materialize(self.workspace)
-            active.update(
-                {
+            if recovered_episode is not None:
+                worktree, active = recovered_episode
+                recovered_episode = None
+                episode = worktree.episode
+                memory_version = int(active["memory_version"])
+                base_commit = worktree.base_commit
+                mode = active.get("mode")
+                fast_mode = (
+                    mode == "fast"
+                    if mode in {"fast", "full"}
+                    else self._is_fast_episode(episode)
+                )
+                active.setdefault("mode", "fast" if fast_mode else "full")
+                active.setdefault(
+                    "fast_trials", self.fast_trials if fast_mode else None
+                )
+                if active.get("resumed_from_phase") == "preparing":
+                    main_adapter.link_episode_runtime(
+                        self.base_campaign, worktree.path
+                    )
+            else:
+                episode = state.episodes + 1
+                fast_mode = self._is_fast_episode(episode)
+                memory_version = main_adapter.latest_version(self.workspace) + 1
+                base_commit = git_head(self.workspace)
+                worktree = EpisodeWorktree.plan(
+                    self.workspace, episode, base_commit, root=self.worktree_root
+                )
+                active = {
+                    "episode": episode,
+                    "memory_version": memory_version,
+                    "base_commit": base_commit,
                     "episode_branch": worktree.branch,
                     "worktree": str(worktree.path),
-                    "phase": "exploring",
+                    "mode": "fast" if fast_mode else "full",
+                    "fast_trials": self.fast_trials if fast_mode else None,
+                    "phase": "preparing",
                 }
-            )
-            store.save_active(active)
-            main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
-            unexpected = working_changes(worktree.path)
-            if unexpected:
-                raise RuntimeError(
-                    "runtime linking dirtied the episode boundary: "
-                    + ", ".join(unexpected)
+                store.save_active(active)
+                worktree.materialize(self.workspace)
+                active.update(
+                    {
+                        "episode_branch": worktree.branch,
+                        "worktree": str(worktree.path),
+                        "phase": "exploring",
+                    }
                 )
+                store.save_active(active)
+                main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
+                unexpected = working_changes(worktree.path)
+                if unexpected:
+                    raise RuntimeError(
+                        "runtime linking dirtied the episode boundary: "
+                        + ", ".join(unexpected)
+                    )
+            fast_trial_count = self._active_fast_trials(
+                active, fast_mode=fast_mode
+            )
             runtime = worktree.path / RUNTIME_DIR
             journal_path = runtime / "journal.json"
             handoff_path = runtime / "handoff.json"
-            initialize_journal(
-                journal_path,
-                episode=episode,
-                memory_version=memory_version,
-                base_commit=base_commit,
-                branch=worktree.branch,
-                live_path=store.live_memory_path,
-            )
+            if not resumed or not journal_path.is_file():
+                initialize_journal(
+                    journal_path,
+                    episode=episode,
+                    memory_version=memory_version,
+                    base_commit=base_commit,
+                    branch=worktree.branch,
+                    live_path=store.live_memory_path,
+                )
             prompt = self._prompt(
                 episode=episode,
                 version=memory_version,
@@ -1852,6 +1953,8 @@ class LongHorizonCampaign:
                 live_memory_path=store.live_memory_path,
                 conversion_pending=conversion_pending,
                 fast_mode=fast_mode,
+                fast_trials=fast_trial_count,
+                resumed=resumed,
             )
             store.write_brief(episode, prompt)
             telemetry_environment = {
@@ -1896,6 +1999,7 @@ class LongHorizonCampaign:
                         journal_path,
                         handoff,
                         fast_mode=fast_mode,
+                        fast_trials=fast_trial_count,
                     ),
                     reasoning_effort=self._episode_reasoning_effort(
                         fast_mode=fast_mode

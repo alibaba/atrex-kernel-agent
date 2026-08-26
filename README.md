@@ -87,7 +87,8 @@ Codex, or Pi session owns one Long Horizon episode and publishes a structured te
 episodes skip profiling and ABBA, run five hash-matched evaluator-backed trials, and select their
 fastest passing candidate against canonical incumbent memory; later full episodes use
 incumbent/candidate ABBA in one gateway allocation. The supervisor squash-promotes only a strict
-correctness-passing improvement.
+correctness-passing improvement. If the supervisor restarts mid-episode, it reopens the same
+registered worktree so the next session can continue from its existing edits and intermediate files.
 
 The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
 experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.

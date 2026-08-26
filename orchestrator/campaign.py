@@ -1481,52 +1481,6 @@ class Campaign:
             raise RuntimeError("framework baseline requires a committed V0 kernel.py")
         return commit
 
-    def _framework_baseline_restart_pending(self) -> bool:
-        """Whether resume must preserve an in-flight V1 worktree instead of stashing it."""
-        if self.framework_baseline == "never":
-            return False
-        if self.framework_baseline == "auto" and self.optimization_mode != "production":
-            return False
-        pinned_commit, _pinned_version = resolve_framework_baseline_commit(
-            self.workspace
-        )
-        if pinned_commit or not v0_baseline_commit(self.workspace):
-            return False
-        restart_journal = framework_baseline_progress_path(self.workspace).is_file()
-        if (
-            latest_version(self.workspace) > FRAMEWORK_BASELINE_VERSION
-            and not restart_journal
-        ):
-            return False
-        dirty_kernel = git_worktree_blob(self.workspace, "kernel.py") != git_path_blob(
-            self.workspace, "HEAD", "kernel.py"
-        )
-        return bool(
-            restart_journal
-            or dirty_kernel
-            or (
-                not head_kernel_is_initial_baseline(self.workspace)
-                and latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION
-            )
-        )
-
-    def preserve_interrupted_changes_for_resume(self, context: str) -> str:
-        """Keep V1 candidate files in place; use the normal stash policy after V1."""
-        if self._framework_baseline_restart_pending():
-            from long_horizon.store import CampaignStore
-
-            CampaignStore.ensure_excluded(self.workspace)
-            print(
-                "[orchestrator] preserving interrupted V1 worktree in place "
-                f"({context}); restart journal: "
-                f"{framework_baseline_progress_path(self.workspace)}",
-                flush=True,
-            )
-            return ""
-        from .workspace_state import preserve_interrupted_tracked_changes
-
-        return preserve_interrupted_tracked_changes(self.workspace, context)
-
     def _framework_baseline_supervisor_order(self) -> tuple[str, ...]:
         """Runtime order for the post-exit progress-saving supervisor only."""
         ordered: list[str] = []

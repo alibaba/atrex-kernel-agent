@@ -58,9 +58,6 @@ def prepare_campaign(campaign: Campaign) -> None:
             f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        campaign.preserve_interrupted_changes_for_resume(
-            f"resume {campaign.campaign_name}"
-        )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
     campaign.ensure_framework_baseline()
     if (

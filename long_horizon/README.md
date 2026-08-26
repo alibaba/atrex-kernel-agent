@@ -25,10 +25,11 @@ atomically refreshed after every journal append, but it never participates in ve
 promotion; `memory/vN.json` remains the canonical supervisor-owned record.
 
 Every canonical record carries a compact copy of all structured experiments already persisted in
-the episode journal. If the supervisor is terminated, the next startup archives the worktree and
-records an `interrupted` `memory/vN.json` before continuing. Recovery is idempotent across a second
-termination; performance is explicitly marked incomplete when no authoritative shape evaluation
-finished, rather than being fabricated.
+the episode journal. If the supervisor is terminated while an episode is active, the next startup
+resumes the registered episode worktree in place, including its source edits, checkpoints, journal,
+plans, profiles, and generated intermediate files. If that worktree is missing or no longer matches
+the recorded branch and baseline, recovery falls back to archiving it and recording an
+`interrupted` `memory/vN.json`. Recovery remains idempotent across repeated termination.
 
 Claude and Codex can resume the same session to repair an incomplete handoff; Qoder and Pi use a
 single long invocation. Codex token deltas and marker ordering are read incrementally from the

@@ -24,6 +24,8 @@ own only this episode branch, its final `kernel.py`, journal, and terminal hando
 - `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are linked into the worktree.
 {{AGENT_RUNTIME}}
 
+{{RESUME_DIRECTIVE}}
+
 Never switch branches, push, merge, rebase, or alter refs. Every commit must contain only
 `kernel.py`. Plans, journals, and handoffs are ignored episode evidence and must never be added to
 Git. Never edit evaluator or ground-truth files, including `test_kernel.py`, `profile_driver.py`,
@@ -166,7 +168,8 @@ Reach exactly one state:
 
 1. `candidate_ready`: all {{FAST_TRIALS}} trials are recorded, the selected best evaluator
    result passes and matches the final kernel bytes, the selected candidate is committed, and the
-   worktree is clean.
+   worktree `kernel.py` matches that commit. Protected files must be unchanged; other uncommitted
+   intermediate artifacts may remain in the worktree.
 2. `pivot`: all {{FAST_TRIALS}} trials are recorded and none produced a passing strict
    improvement; keep the incumbent.
 3. `blocked`: infrastructure or missing authority prevents the required flow.

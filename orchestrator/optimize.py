@@ -734,7 +734,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        campaign.preserve_interrupted_changes_for_resume("resume workspace")
         campaign._link_runtime()
     baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
         read_memory(campaign.workspace, 0)

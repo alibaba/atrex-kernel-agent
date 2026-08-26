@@ -22,6 +22,8 @@ final squash promotion. You own only this episode branch and its structured evid
 - `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are linked into the worktree.
 {{AGENT_RUNTIME}}
 
+{{RESUME_DIRECTIVE}}
+
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
 branch are allowed, but every commit must contain only `kernel.py`. Plans, profiles, discussion
 transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add
@@ -114,8 +116,9 @@ secondary tweaks; those belong to a later episode and version.
 
 Reach exactly one evidence-backed terminal state:
 
-1. `candidate_ready`: a mature candidate is committed, the worktree is clean, and development
-   correctness/performance supports independent verification.
+1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` matches that exact
+   commit, protected files are unchanged, and development correctness/performance supports
+   independent verification. Uncommitted intermediate artifacts may remain in the worktree.
 2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 

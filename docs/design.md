@@ -118,7 +118,8 @@ runtime-detected GPU vendor.
    use the full evidence loop.
 4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
    bounded same-thread recovery for Claude and Codex.
-5. Check protected paths, clean worktree state, exact candidate commit, and production policy.
+5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
+   uncommitted intermediate artifacts to remain in the episode worktree.
 6. Select the fastest passing hash-matched result from each fast episode's five trials and compare it
    with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
 7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
@@ -221,13 +222,14 @@ an isolated branch and Git worktree from the incumbent for each episode. The Age
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
 
-A candidate must leave a clean worktree, change `kernel.py`, preserve protected paths, and satisfy
-production policy. Fast candidates must have one complete passing evaluator record whose
-`kernel.py` hash matches the final candidate and whose latency strictly improves on canonical
-incumbent memory. Full candidates must pass the exact same-allocation ABBA schedule. Accepted
-candidates are squash-promoted with canonical memory; rejected and non-candidate episodes advance
-memory without changing the incumbent. Every round's numbered memory is checked against committed
-`HEAD` before state advances. Active episode state supports crash recovery.
+A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
+satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
+Fast candidates must have one complete passing evaluator record whose `kernel.py` hash matches the
+final candidate and whose latency strictly improves on canonical incumbent memory. Full candidates
+must pass the exact same-allocation ABBA schedule. Accepted candidates are squash-promoted with
+canonical memory; rejected and non-candidate episodes advance memory without changing the incumbent.
+Every round's numbered memory is checked against committed `HEAD` before state advances. Active
+episode state supports crash recovery.
 
 ## End-to-End Flow
 
@@ -295,9 +297,10 @@ profile -> research -> plan -> edit/compile/repair
 
 GPU commands run remotely while plans, source edits, journals, and Git remain local. A
 `candidate_ready` handoff is not authoritative: the supervisor validates protected paths, policy,
-clean worktree state, and the exact candidate commit, then applies the current mode's fast comparison
-or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome advances
-canonical memory without changing the incumbent. Active episode state is restart-safe.
+the worktree's exact committed `kernel.py`, and the candidate commit, then applies the current mode's
+fast comparison or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
+advances canonical memory without changing the incumbent. Active episode state is restart-safe and
+reuses the registered worktree with its intermediate files after a supervisor restart.
 
 For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
 journal command refreshes it after every decisive experiment. This live view is explicitly
