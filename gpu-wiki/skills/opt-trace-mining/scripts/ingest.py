@@ -204,7 +204,10 @@ def summarise_memory(data, filename):
         "geomean_us": geo,
         "by_shape": perf.get("latency_us_by_shape") or {},
         "arith_mean_us": perf.get("latency_us_arith_mean"),
-        "speedup_vs_ref": perf.get("speedup_vs_ref_geomean"),
+        "speedup_vs_ref": perf.get(
+            "performance_score",
+            perf.get("speedup_vs_ref_mean", perf.get("speedup_vs_ref_geomean")),
+        ),
         "correctness_status": corr.get("status"),
         "max_abs_err": corr.get("max_abs_err"),
         "max_rel_err": corr.get("max_rel_err"),

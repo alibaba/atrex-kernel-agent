@@ -25,6 +25,8 @@ from typing import Any
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
+FP4_MAX_REL_L2 = 0.2
+PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 
 def _finite_number(value: object) -> float | None:
@@ -43,6 +45,40 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
         return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
     return sorted((str(shape_id) for shape_id in payload), key=sort_key)
+
+
+def _is_fp4_dtype(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.casefold().replace("-", "").replace("_", "")
+    return "fp4" in normalized or "float4" in normalized
+
+
+def _metadata_has_fp4_dtype(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    if any(_is_fp4_dtype(metadata.get(field)) for field in ("dtype", "dtype_compute")):
+        return True
+    shapes = metadata.get("shapes")
+    return isinstance(shapes, dict) and any(
+        isinstance(shape, dict)
+        and any(_is_fp4_dtype(shape.get(field)) for field in ("dtype", "dtype_compute"))
+        for shape in shapes.values()
+    )
+
+
+def _fp4_correctness_max_rel_l2(workspace: Path) -> float | None:
+    metadata_path = workspace / "metadata.json"
+    metadata = (
+        json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata_path.is_file()
+        else None
+    )
+    return (
+        FP4_MAX_REL_L2
+        if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(workspace.name)
+        else None
+    )
 
 
 def _shape_reference(workspace: Path, destination: Path, shape_ids: list[str]) -> Path:
@@ -102,7 +138,60 @@ def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]
     return failures
 
 
-def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str, Any]:
+def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
+    """Read one authoritative production latency from Atrex-Bench metadata."""
+    if not isinstance(metadata, dict):
+        return None
+    shapes = metadata.get("shapes")
+    shape = shapes.get(shape_id) if isinstance(shapes, dict) else None
+    if not isinstance(shape, dict):
+        return None
+    production = shape.get("production_performance")
+    if not isinstance(production, dict):
+        return None
+    direct = _finite_number(production.get("performance_us"))
+    if direct is not None and direct > 0.0:
+        return direct
+    nested = [
+        value
+        for entry in production.values()
+        if isinstance(entry, dict)
+        if (value := _finite_number(entry.get("performance_us"))) is not None
+        and value > 0.0
+    ]
+    return nested[0] if len(nested) == 1 else None
+
+
+def _metadata_speedup_mean(
+    metadata: object,
+    shape_ids: list[str],
+    latency_by_shape: dict[str, float],
+) -> tuple[float | None, list[str]]:
+    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
+        return None, []
+    speedups: list[float] = []
+    failures: list[str] = []
+    for shape_id in shape_ids:
+        reference_us = _metadata_shape_latency_us(metadata, shape_id)
+        if reference_us is None:
+            failures.append(
+                f"sid={shape_id}: metadata has no unambiguous positive "
+                "production_performance.performance_us"
+            )
+            continue
+        speedups.append(reference_us / latency_by_shape[shape_id])
+    if failures or len(speedups) != len(shape_ids) or not speedups:
+        return None, failures
+    return sum(speedups) / len(speedups), []
+
+
+def result_from_eval(
+    payload: dict[str, Any],
+    shape_ids: list[str],
+    metadata: object,
+    *,
+    require_performance: bool = True,
+) -> dict[str, Any]:
     """Convert one official Atrex-Bench result into optimizer metrics."""
     failures: list[str] = []
     evaluation_error = payload.get("error")
@@ -151,31 +240,33 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
                 if rel_diff is not None:
                     max_rel = max(max_rel, rel_diff)
 
-    performance = payload.get("performance")
-    performance = performance if isinstance(performance, dict) else {}
-    performance_shapes = performance.get("shapes")
-    performance_shapes = (
-        performance_shapes if isinstance(performance_shapes, dict) else {}
-    )
     latency_by_shape: dict[str, float] = {}
-    for shape_id in shape_ids:
-        shape_result = performance_shapes.get(shape_id)
-        shape_result = shape_result if isinstance(shape_result, dict) else {}
-        error = shape_result.get("error")
-        samples = shape_result.get("samples")
-        sample_ms: list[float] = []
-        for sample in samples if isinstance(samples, list) else []:
-            if not isinstance(sample, dict):
+    if require_performance:
+        performance = payload.get("performance")
+        performance = performance if isinstance(performance, dict) else {}
+        performance_shapes = performance.get("shapes")
+        performance_shapes = (
+            performance_shapes if isinstance(performance_shapes, dict) else {}
+        )
+        for shape_id in shape_ids:
+            shape_result = performance_shapes.get(shape_id)
+            shape_result = shape_result if isinstance(shape_result, dict) else {}
+            error = shape_result.get("error")
+            samples = shape_result.get("samples")
+            sample_ms: list[float] = []
+            for sample in samples if isinstance(samples, list) else []:
+                if not isinstance(sample, dict):
+                    continue
+                value = _finite_number(sample.get("end_to_end_time_ms"))
+                if value is not None and value > 0.0:
+                    sample_ms.append(value)
+            if error is not None or not sample_ms:
+                failures.append(
+                    f"sid={shape_id}: performance "
+                    + str(error or "has no valid samples")
+                )
                 continue
-            value = _finite_number(sample.get("end_to_end_time_ms"))
-            if value is not None and value > 0.0:
-                sample_ms.append(value)
-        if error is not None or not sample_ms:
-            failures.append(
-                f"sid={shape_id}: performance " + str(error or "has no valid samples")
-            )
-            continue
-        latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
+            latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
 
     latencies = [latency_by_shape[shape_id] for shape_id in shape_ids if shape_id in latency_by_shape]
     complete_performance = len(latencies) == len(shape_ids)
@@ -187,6 +278,12 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
     latency_arith_mean = (
         sum(latencies) / len(latencies) if complete_performance and latencies else 0.0
     )
+    speedup_mean, metadata_failures = (
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        if require_performance
+        else (None, [])
+    )
+    failures.extend(metadata_failures)
 
     return {
         "all_pass": not failures,
@@ -194,8 +291,10 @@ def result_from_eval(payload: dict[str, Any], shape_ids: list[str]) -> dict[str,
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,
         "latency_us_by_shape": latency_by_shape,
-        # Atrex-Bench run_eval intentionally records candidate-only timing.
+        "speedup_vs_ref_mean": speedup_mean,
         "speedup_vs_ref_geomean": None,
+        "performance_score": speedup_mean,
+        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-bench/run_eval",
@@ -226,7 +325,10 @@ def _parser() -> argparse.ArgumentParser:
         "--multi-seed",
         type=int,
         default=0,
-        help="Additional correctness cases; performance is still measured once per shape",
+        help=(
+            "Additional correctness cases; v2+ runs skip performance while the "
+            "combined v1 framework-baseline gate still measures it"
+        ),
     )
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--atol", type=float, default=1e-2)
@@ -243,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.multi_seed < 0:
         raise SystemExit("--multi-seed must be non-negative")
+    correctness_only = args.multi_seed > 0 and args.version not in {"v0", "v1"}
 
     workspace = Path(__file__).resolve().parent
     runtime_root = workspace / ATREX_BENCH_DIR
@@ -297,6 +400,13 @@ def main(argv: list[str] | None = None) -> int:
             "--perf-timeout-s",
             str(args.perf_timeout_s),
         ]
+        correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(workspace)
+        if correctness_max_rel_l2 is not None:
+            command.extend(
+                ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
+            )
+        if correctness_only:
+            command.append("--correctness-only")
         completed = subprocess.run(
             command,
             cwd=str(runtime_root),
@@ -331,7 +441,10 @@ def main(argv: list[str] | None = None) -> int:
                 "latency_us_geomean": 0.0,
                 "latency_us_arith_mean": 0.0,
                 "latency_us_by_shape": {},
+                "speedup_vs_ref_mean": None,
                 "speedup_vs_ref_geomean": None,
+                "performance_score": None,
+                "performance_objective": PERFORMANCE_OBJECTIVE,
                 "max_abs_err": 0.0,
                 "max_rel_err": 0.0,
                 "evaluator": "atrex-bench/run_eval",
@@ -339,7 +452,18 @@ def main(argv: list[str] | None = None) -> int:
             }
         else:
             payload = json.loads(result_paths[-1].read_text(encoding="utf-8"))
-            result = result_from_eval(payload, shape_ids)
+            metadata_path = reference_dir / "metadata.json"
+            metadata = (
+                json.loads(metadata_path.read_text(encoding="utf-8"))
+                if metadata_path.is_file()
+                else None
+            )
+            result = result_from_eval(
+                payload,
+                shape_ids,
+                metadata,
+                require_performance=not correctness_only,
+            )
             if completed.returncode != 0 and result["all_pass"]:
                 result["all_pass"] = False
                 result["failures"].append(
