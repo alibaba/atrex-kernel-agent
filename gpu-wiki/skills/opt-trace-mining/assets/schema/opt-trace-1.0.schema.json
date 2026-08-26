@@ -1710,7 +1710,7 @@
  "x-profile-of": {
   "base": "clean-1.3",
   "base_file": "schema/kernel/schema.json",
-  "base_sha256": "bcd12224eb00f56d72a31b1503e07f382e0f4d3868f1c40a509edbc3eb057786",
+  "base_sha256": "0d2bc66301a8ffd7b9dc1061cbad6f49c3e64bc6653f0995c940b910a481d972",
   "n_patches": 7,
   "generated_by": "skills/opt-trace-mining/scripts/make_schema.py"
  }

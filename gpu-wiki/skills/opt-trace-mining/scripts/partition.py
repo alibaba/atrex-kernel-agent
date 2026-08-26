@@ -59,6 +59,22 @@ NON_MECHANISM_RE = _facts.NON_MECHANISM_RE
 FLAGGED_DEADENDS = []
 
 
+def accepted_reference(v):
+    """Whether a version is safe to publish as the terminal implementation."""
+    geomean = v.get("geomean_us")
+    return bool(
+        v.get("sha")
+        and ladder.owns_kernel_change(v)
+        and not v.get("reverted")
+        and isinstance(geomean, (int, float))
+        and not isinstance(geomean, bool)
+        and geomean > 0
+        and v.get("correctness_status") == "PASS"
+        and v.get("gate_result") == "PASS"
+        and ladder.noise_reason(v) is None
+    )
+
+
 def fact_candidate(text):
     """Can this dead-end become an established fact? -> (bool, reason)."""
     if not text or len(text) < MIN_DEADEND_CHARS:
@@ -373,11 +389,13 @@ def main():
                 disc=discs.take(MARKER_ANTI),
             ))
 
-    # Reference kernels: the shipped kernel, plus a snapshot for each mega step
-    # that has one. `versions/` normally holds snapshots for kept versions only.
+    # Reference kernels: the latest accepted code-bearing version, plus a
+    # snapshot for each mega step that has one. Select the final reference from
+    # all versions so metadata-only outcome commits cannot displace real code.
     snap_dir = c.TRACE / "versions"
     megas = [m for m in milestones if m["kind"] == "mega"]
-    final = max(milestones, key=lambda m: m["n"], default=None)
+    reference_versions = [v for v in versions if accepted_reference(v)]
+    final = max(reference_versions, key=lambda v: v["n"], default=None)
     if final:
         segments.append(dict(
             common(final),

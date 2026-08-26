@@ -10,7 +10,7 @@ established-fact. Copying those checks here would let the copy drift out of step
 with the store they protect, and the drift would only surface as records that
 pass locally and are refused by `wiki-gate`.
 
-On top of that, seven gates only this pipeline can run, because only it has the
+On top of that, eight gates only this pipeline can run, because only it has the
 trace and the packets:
 
   profile          the record satisfies opt-trace-1.0, this corpus's narrowing of
@@ -24,6 +24,9 @@ trace and the packets:
   ncu-attribution  a profiler-backed bottleneck cites a capture that actually
                    measured the kernel under test
   store-overlap    the id is free in the live store, so wiki-gate can insert it
+  journal-provenance
+                   granular long-horizon records resolve their journal,
+                   experiment ids, and canonical or revalidation commit
 
 Never weaken a gate to make records pass. When a gate looks wrong, prove it fires:
 `--injection-tests` mutates a copy of a record and asserts that the named gate
@@ -39,6 +42,7 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import config as c
 import recon
@@ -59,6 +63,8 @@ AUDITED_PATHS = (
 )
 
 CODEISH_KEYS = {"snippet", "dispatch_snippet", "attempted_code"}
+MAX_JOURNAL_FILE_BYTES = 8 * 1024 * 1024
+MAX_JOURNAL_TOTAL_BYTES = 32 * 1024 * 1024
 
 
 def norm_ws(s):
@@ -360,6 +366,110 @@ def gate_store_overlap(ctx, fails):
     return note
 
 
+def gate_journal_provenance(ctx, fails):
+    """Resolve optional long-horizon provenance for granular records."""
+    checked = 0
+    commit_cache = {}
+    for filename, record in ctx["records"]:
+        raw = dig(record, ("evidence", "raw")) or {}
+        extra = raw.get("evidence_extra") or {}
+        journal_value = extra.get("journal_file")
+        additional = extra.get("additional_journal_files") or []
+        outcome_value = extra.get("outcome_file")
+        experiment_ids = extra.get("experiment_ids")
+        canonical = (extra.get("canonical_promotion_commit")
+                     or extra.get("canonical_commit")
+                     or extra.get("revalidation_commit"))
+        if not journal_value and not experiment_ids and not canonical:
+            continue
+        checked += 1
+        if not isinstance(journal_value, str) or not journal_value.strip():
+            fails.append("%s: journal-provenance: journal_file missing"
+                         % filename.name)
+            continue
+        source_values = [journal_value]
+        if isinstance(additional, list):
+            source_values.extend(value for value in additional
+                                 if isinstance(value, str))
+        if isinstance(outcome_value, str) and outcome_value:
+            source_values.append(outcome_value)
+        evidence_parts = []
+        evidence_bytes = 0
+        source_path = journal_value.split("#", 1)[0]
+        trace_root = c.TRACE.resolve()
+        for value in source_values:
+            source_path = value.split("#", 1)[0]
+            relative_path = Path(source_path)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                fails.append(
+                    "%s: journal-provenance: evidence path must be trace-relative: %s"
+                    % (filename.name, source_path)
+                )
+                continue
+            journal_path = (trace_root / relative_path).resolve()
+            try:
+                journal_path.relative_to(trace_root)
+            except ValueError:
+                fails.append(
+                    "%s: journal-provenance: evidence path escapes trace root: %s"
+                    % (filename.name, source_path)
+                )
+                continue
+            if not journal_path.is_file():
+                fails.append(
+                    "%s: journal-provenance: evidence file does not exist: %s"
+                    % (filename.name, source_path)
+                )
+                continue
+            try:
+                size = journal_path.stat().st_size
+                if size > MAX_JOURNAL_FILE_BYTES:
+                    fails.append(
+                        "%s: journal-provenance: evidence file exceeds %d bytes: %s"
+                        % (filename.name, MAX_JOURNAL_FILE_BYTES, source_path)
+                    )
+                    continue
+                if evidence_bytes + size > MAX_JOURNAL_TOTAL_BYTES:
+                    fails.append(
+                        "%s: journal-provenance: evidence files exceed %d total bytes"
+                        % (filename.name, MAX_JOURNAL_TOTAL_BYTES)
+                    )
+                    continue
+                evidence_parts.append(journal_path.read_text(errors="replace"))
+                evidence_bytes += size
+            except OSError as exc:
+                fails.append(
+                    "%s: journal-provenance: cannot read evidence file: %s"
+                    % (filename.name, exc)
+                )
+        evidence_text = "\n".join(evidence_parts)
+        if not isinstance(experiment_ids, list) or not experiment_ids:
+            fails.append("%s: journal-provenance: experiment_ids missing"
+                         % filename.name)
+        else:
+            for experiment_id in experiment_ids:
+                if (not isinstance(experiment_id, str)
+                        or experiment_id not in evidence_text):
+                    fails.append(
+                        "%s: journal-provenance: experiment id %r is absent from %s"
+                        % (filename.name, experiment_id, source_path)
+                    )
+        if not canonical:
+            fails.append("%s: journal-provenance: canonical commit missing"
+                         % filename.name)
+            continue
+        if canonical not in commit_cache:
+            commit_cache[canonical] = (
+                c.git("cat-file", "-t", canonical).strip() == "commit"
+            )
+        if not commit_cache[canonical]:
+            fails.append(
+                "%s: journal-provenance: canonical commit %s does not resolve"
+                % (filename.name, str(canonical)[:12])
+            )
+    return "%d journal-backed records resolved" % checked
+
+
 GATES = (
     ("profile", gate_profile),
     ("layout", gate_layout),
@@ -368,6 +478,7 @@ GATES = (
     ("provenance", gate_provenance),
     ("ncu-attribution", gate_ncu_attribution),
     ("store-overlap", gate_store_overlap),
+    ("journal-provenance", gate_journal_provenance),
 )
 
 
@@ -476,6 +587,13 @@ def injection_tests(records, packets):
         rec["level"] = "generic"
         return True
 
+    def unknown_experiment(rec, pkt):
+        extra = dig(rec, ("evidence", "raw", "evidence_extra")) or {}
+        if not extra.get("journal_file"):
+            return False
+        extra["experiment_ids"] = ["__missing_experiment__"]
+        return True
+
     ctx0 = build_context(records, packets)
     cases = [
         ("profile/generic-level", "profile", break_profile, None),
@@ -489,6 +607,10 @@ def injection_tests(records, packets):
          unbacked_profiler, None),
         ("store-overlap/known-id", "store-overlap",
          lambda rec, pkt: collide(rec, pkt, ctx0["store_ids"]), None),
+        ("journal-provenance/missing-experiment", "journal-provenance",
+         unknown_experiment,
+         lambda r: bool(dig(r, ("evidence", "raw", "evidence_extra",
+                                "journal_file")))),
     ]
 
     rc = 0

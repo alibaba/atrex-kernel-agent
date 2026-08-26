@@ -5,15 +5,15 @@
 """Fast natural-language front door to the GPU knowledge stores.
 
 ``query_bridge_agent`` performs one small task: turn prose into a typed intent.
-The Claude path is a tool-free plain-JSON response with strict local validation;
-other CLIs retain the legacy file handoff. The bridge is forbidden to inspect or
-query either store. This script owns every
+Supported CLIs must expose an explicit no-tools, no-MCP JSON protocol; Claude
+and Qoder currently meet that contract. The bridge is forbidden to inspect or
+query any store. This script owns every
 deterministic operation after that point: vocabulary normalization, staged
 widening, execution, deduplication, projection and context limits.
 
 The output intentionally has only two top-level fields: records and notes.
-Records from kernel_wiki and hardware_wiki share one id-keyed mapping, while
-each payload remains an independent JSON value under its own stable id. The
+Records from kernel experience and hardware facts share one id-keyed mapping,
+while each payload remains an independent JSON value under its own stable id. The
 public store is always queried; an installed sibling ``internal_gpu_wiki`` is
 queried as a second isolated store. Internal ids are namespaced so a private
 record can never overwrite a public record with the same stable id.
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ from pathlib import Path
 
 import agent_launch
 import hardware_identity
+import operator_scope
 import query_wiki
 
 HERE = Path(__file__).resolve().parent
@@ -47,19 +49,19 @@ TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
 INTENT_FILE = "query_intent.json"
 # Compatibility for callers that only need the handoff filename.
 PLAN_FILE = INTENT_FILE
-SKILL_NAME = "query_bridge_agent"
 DEFAULT_MAX_RECORDS = 20
 ENOUGH_RECORDS = 8
 MAX_TERMS = 6
+MAX_COMPONENT_TERMS = 6
+MAX_OPERATOR_SCOPES = 8
 
 INTENTS = {"technique", "pitfall", "documentation", "diagnosis", "correctness"}
 HARDWARE_KINDS = {"product", "instruction", "feature"}
-
 INTENT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "architecture", "vendor", "dsl", "operator_terms",
+        "architecture", "vendor", "dsl", "operator_terms", "component_terms",
         "measured_symptoms", "free_text_terms", "intents", "hardware_requests",
     ],
     "properties": {
@@ -68,6 +70,10 @@ INTENT_SCHEMA = {
         "dsl": {"type": ["string", "null"]},
         "operator_terms": {
             "type": "array", "maxItems": MAX_TERMS, "items": {"type": "string"},
+        },
+        "component_terms": {
+            "type": "array", "maxItems": MAX_COMPONENT_TERMS,
+            "items": {"type": "string"},
         },
         "measured_symptoms": {
             "type": "array", "maxItems": 2, "items": {"type": "string"},
@@ -99,7 +105,8 @@ PLAIN_JSON_BRIDGE_PROMPT = """You are query_bridge_agent, a fast store-blind int
 
 Return exactly one JSON object, with no markdown or prose, in this shape:
 {{"architecture":string|null,"vendor":string|null,"dsl":string|null,
-"operator_terms":[string],"measured_symptoms":[string],
+"operator_terms":[string],"component_terms":[string],
+"measured_symptoms":[string],
 "free_text_terms":[string],
 "intents":["technique"|"pitfall"|"documentation"|"diagnosis"|"correctness"],
 "hardware_requests":[{{"kind":"product"|"instruction"|"feature",
@@ -108,9 +115,20 @@ Return exactly one JSON object, with no markdown or prose, in this shape:
 Include every key exactly once. Do not research, invoke tools,
 inspect a store, invent missing scope values, explain the result, or generate
 query flags. Copy architecture/vendor/DSL/product spellings from the request.
-Use caller-language operator/API/mechanism phrases. A measured symptom requires
+The architecture slot is only for a GPU architecture or public GPU product
+(for example sm_100, Blackwell, or B200), never a model/operator acronym such
+as GDN. A target product is query scope, not a hardware_request unless the
+caller also asks for hardware specifications. Use caller-language
+operator/API/mechanism phrases. Put the requested operator
+or fused/composite operation in operator_terms. Put independently queryable
+sub-operations in component_terms, preserving the caller's words. Decompose a
+clearly composite name (for example QK norm + RoPE + KV-cache write). Do not
+research or infer hidden model structure; a deterministic resolver handles
+established cross-operator relationships. Do not invent implementation-specific
+components when the decomposition is uncertain.
+A measured symptom requires
 an explicit profile counter or number; keep hypotheses in free_text_terms. Emit
-at most 6 operator_terms, exactly 0-2 measured_symptoms, at most 6
+at most 6 operator_terms, at most 6 component_terms, exactly 0-2 measured_symptoms, at most 6
 free_text_terms, and at most 4 hardware_requests. Raw counters are evidence for
 classification, not separate symptoms: when many counters are present, select
 no more than two short diagnosis labels such as register-pressure or tail-effect.
@@ -128,28 +146,45 @@ and empty arrays for missing information. Finish in this single response.
 REQUEST>>>
 """
 
+FAST_BRIDGE_RE = re.compile(
+    r"^\s*Target\s+hardware\s+(?P<hardware>[A-Za-z0-9_-]+)\s*,\s*"
+    r"DSL\s+(?P<dsl>[A-Za-z0-9_+.-]+)\s*\.\s*"
+    r"Optimize\s+operator\s+(?P<operator>[A-Za-z0-9_+.-]+)"
+    r"(?:\s+and\s+retrieve\s+(?P<retrieve>techniques(?:\s+and\s+pitfalls)?|pitfalls))?"
+    r"\s*\.\s*$",
+    re.IGNORECASE,
+)
+
+
+def deterministic_bridge_intent(request: str) -> dict | None:
+    """Handle the optimizer's narrow standard request without launching an LLM."""
+    match = FAST_BRIDGE_RE.fullmatch(request)
+    if match is None:
+        return None
+    requested = (match.group("retrieve") or "techniques").casefold()
+    intents = ["technique"] if "techniques" in requested else []
+    if "pitfalls" in requested:
+        intents.append("pitfall")
+    doc = {
+        "architecture": match.group("hardware"),
+        "vendor": None,
+        "dsl": match.group("dsl"),
+        "operator_terms": [match.group("operator")],
+        "component_terms": [],
+        "measured_symptoms": [],
+        "free_text_terms": [],
+        "intents": intents,
+        "hardware_requests": [],
+    }
+    strictly_validate_intent(doc)
+    return validate_intent(doc)
+
 REPAIR_SUFFIX = """
 
 Your prior response failed strict local validation: {error}
 Return a corrected JSON object now. Output only JSON; include every required key
 and no additional keys.
 """
-
-FILE_BRIDGE_PROMPT = """You are query_bridge_agent, a fast intent extractor.
-
-Read {skill_path}. You MUST NOT run query_wiki.py, query_hardware.py, grep the
-stores, enumerate vocabularies, inspect records, or perform research. The caller
-script does all retrieval deterministically after you finish.
-
-Write exactly one file, {intent_path}, containing one JSON object matching the
-skill. Write no other file. Keep terms in the caller's own words; do not guess a
-store token. Distinguish measured symptoms from hypotheses.
-
-<<<REQUEST
-{request}
-REQUEST>>>
-"""
-
 
 def _append_metric(path: str | None, metric: dict) -> None:
     """Append one compact JSONL event without changing the query result."""
@@ -279,6 +314,7 @@ def validate_intent(doc: object) -> dict:
         "vendor": _string(doc.get("vendor")),
         "dsl": _string(doc.get("dsl")),
         "operator_terms": _strings(doc.get("operator_terms")),
+        "component_terms": _strings(doc.get("component_terms"), MAX_COMPONENT_TERMS),
         "measured_symptoms": _strings(doc.get("measured_symptoms"), 2),
         "free_text_terms": _strings(doc.get("free_text_terms")),
         "intents": intents,
@@ -290,14 +326,18 @@ def strictly_validate_intent(doc: object) -> dict:
     """Validate the plain-JSON bridge contract without coercion or data loss."""
     if not isinstance(doc, dict):
         raise ValueError("top level must be an object")
-    expected = set(INTENT_SCHEMA["required"])
+    expected = set(INTENT_SCHEMA["required"]) - {"component_terms"}
+    allowed = set(INTENT_SCHEMA["properties"])
     actual = set(doc)
     missing = sorted(expected - actual)
-    extra = sorted(actual - expected)
+    extra = sorted(actual - allowed)
     if missing:
         raise ValueError("missing keys: %s" % ", ".join(missing))
     if extra:
         raise ValueError("unexpected keys: %s" % ", ".join(extra))
+    # Legacy bridges predate decomposition-aware retrieval. Missing component
+    # terms mean "no explicit decomposition", not an invalid request.
+    doc.setdefault("component_terms", [])
 
     for key in ("architecture", "vendor", "dsl"):
         if doc[key] is not None and not isinstance(doc[key], str):
@@ -307,6 +347,7 @@ def strictly_validate_intent(doc: object) -> dict:
 
     list_limits = {
         "operator_terms": MAX_TERMS,
+        "component_terms": MAX_COMPONENT_TERMS,
         "measured_symptoms": 2,
         "free_text_terms": MAX_TERMS,
     }
@@ -351,60 +392,38 @@ def strictly_validate_intent(doc: object) -> dict:
     return doc
 
 
-def skill_source(store_root: Path) -> Path | None:
-    for root in (OWN_STORE_ROOT, store_root):
-        candidate = root / "skills" / SKILL_NAME / "SKILL.md"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def link_skill(workspace: Path, store_root: Path) -> Path | None:
-    source = skill_source(store_root)
-    if source is None:
-        return None
-    for host in (".claude", ".qoder", ".agents"):
-        skills = workspace / host / "skills"
-        skills.mkdir(parents=True, exist_ok=True)
-        link = skills / SKILL_NAME
-        if not link.exists():
-            os.symlink(source.parent, link, target_is_directory=True)
-    return source
-
-
 def bridge_prompt(request: str, store_root: Path, workspace: Path,
                   skill_path: Path | None, exclude: str | None = None,
                   plain_json: bool = False) -> str:
-    del store_root, exclude  # the extractor is intentionally store-blind
-    if plain_json:
-        return PLAIN_JSON_BRIDGE_PROMPT.format(request=request)
-    return FILE_BRIDGE_PROMPT.format(
-        skill_path=skill_path or "(skill missing; follow this prompt)",
-        intent_path=workspace / INTENT_FILE,
-        request=request,
-    )
+    del store_root, workspace, skill_path, exclude, plain_json
+    return PLAIN_JSON_BRIDGE_PROMPT.format(request=request)
 
 
-def parse_claude_json_output(stdout: str) -> tuple[dict, dict]:
-    """Extract plain JSON plus timing/token telemetry from Claude's JSON envelope."""
+def parse_bridge_json_output(stdout: str) -> tuple[dict, dict]:
+    """Extract plain JSON plus telemetry from a supported CLI result envelope."""
     try:
         envelope = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise ValueError("Claude stdout is not a JSON result envelope: %s" % exc) from exc
+        raise ValueError("bridge stdout is not a JSON result envelope: %s" % exc) from exc
     if not isinstance(envelope, dict):
-        raise ValueError("Claude stdout result envelope must be an object")
+        raise ValueError("bridge stdout result envelope must be an object")
     payload = envelope.get("result")
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise ValueError("Claude result is not plain JSON: %s" % exc) from exc
+            raise ValueError("bridge result is not plain JSON: %s" % exc) from exc
     if not isinstance(payload, dict):
-        raise ValueError("Claude result JSON must be an object")
-    return payload, _claude_telemetry(envelope)
+        raise ValueError("bridge result JSON must be an object")
+    return payload, _bridge_telemetry(envelope)
 
 
-def _claude_telemetry(envelope: dict) -> dict:
+def parse_claude_json_output(stdout: str) -> tuple[dict, dict]:
+    """Compatibility alias for callers predating the multi-CLI JSON bridge."""
+    return parse_bridge_json_output(stdout)
+
+
+def _bridge_telemetry(envelope: dict) -> dict:
     usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
     return {
         "bridge_duration_api_ms": envelope.get("duration_api_ms"),
@@ -442,15 +461,25 @@ def read_request(args) -> str:
     return text
 
 
-def _resolve_vocab(value: str | None, allowed: set[str]) -> str | None:
+def _resolve_vocab_all(value: str | None, allowed: set[str]) -> list[str]:
     if not value:
-        return None
-    folded = {query_wiki.fold(x): x for x in allowed}
-    return folded.get(query_wiki.fold(value))
+        return []
+    raw = value.strip().casefold()
+    exact = sorted(token for token in allowed if token.casefold() == raw)
+    equivalent = sorted(
+        token for token in allowed
+        if token not in exact and query_wiki.fold(token) == query_wiki.fold(value)
+    )
+    return exact + equivalent
+
+
+def _resolve_vocab(value: str | None, allowed: set[str]) -> str | None:
+    matches = _resolve_vocab_all(value, allowed)
+    return matches[0] if matches else None
 
 
 def _resolve_arch(value: str | None, allowed: set[str]) -> str | None:
-    """Resolve runtime spelling without printing query_wiki's CLI error channel."""
+    """Resolve runtime spelling without printing the unified query CLI error channel."""
     if not value:
         return None
     token = value.strip().lower()
@@ -463,7 +492,8 @@ def _resolve_arch(value: str | None, allowed: set[str]) -> str | None:
     return family if family in allowed else None
 
 
-def normalize_intent(intent: dict, store_root: Path) -> tuple[dict, list[str]]:
+def normalize_intent(intent: dict, store_root: Path,
+                     request_text: str | None = None) -> tuple[dict, list[str]]:
     index = query_wiki.load_index(store_root / "kernel_wiki")
     vv = query_wiki.vocab(index["records"])
     notes: list[str] = []
@@ -475,18 +505,74 @@ def normalize_intent(intent: dict, store_root: Path) -> tuple[dict, list[str]]:
     else:
         notes.append("no runtime architecture was supplied; kernel matches are not architecture-pinned")
     vendor = _resolve_vocab(intent["vendor"], vv["vendor"])
-    dsl = _resolve_vocab(intent["dsl"], vv["dsl"])
+    # Only the Bridge's typed runtime-hardware slot may pin a kernel query to a
+    # product. Product names in hardware fact requests or surrounding prose are
+    # independent fact lookups and must never override an explicit runtime arch.
+    # ``request_text`` remains in the signature for callers on the earlier API;
+    # it is deliberately not inspected for scope inference.
+    runtime_product = hardware_identity.normalize_product_name(
+        intent["architecture"] or "")
+    if runtime_product not in hardware_identity.HARDWARE_IDENTITIES:
+        runtime_product = None
+    if runtime_product:
+        product_arch = hardware_identity.PRODUCT_ARCH[runtime_product]
+        product_vendor = hardware_identity.HARDWARE_IDENTITIES[runtime_product]["vendor"]
+        if product_arch in vv["arch"] and arch != product_arch:
+            arch = product_arch
+            notes.append(
+                "runtime scope was pinned from explicit product %s to architecture %s"
+                % (runtime_product, product_arch)
+            )
+        if product_vendor in vv["vendor"] and vendor != product_vendor:
+            vendor = product_vendor
+    product_queryable = bool(
+        runtime_product and runtime_product in vv.get("product", set())
+    )
+    arch_query = (
+        runtime_product
+        if runtime_product in query_wiki.ARCH_ALIASES else arch
+    )
+    if runtime_product and not product_queryable:
+        notes.append(
+            "product %s has no product-scoped kernel records; lookup starts at architecture level"
+            % runtime_product
+        )
+    dsl_scopes = _resolve_vocab_all(intent["dsl"], vv["dsl"])
+    dsl = dsl_scopes[0] if dsl_scopes else None
     if intent["dsl"] and not dsl:
         notes.append("DSL %r is not a store scope token and was kept as free text"
                      % intent["dsl"])
+    elif len(dsl_scopes) > 1:
+        notes.append(
+            "DSL spelling maps to equivalent isolated scopes: %s"
+            % ", ".join(dsl_scopes)
+        )
 
-    operator = family = None
-    spill = []
-    for term in intent["operator_terms"]:
-        operator = operator or _resolve_vocab(term, vv["operator"])
-        family = family or _resolve_vocab(term, vv["family"])
-        if term not in (operator, family):
-            spill.append(term)
+    resolver = operator_scope.OperatorScopeResolver.from_store(store_root)
+    operator_scopes, unresolved_operator_terms = resolver.resolve_many(
+        intent["operator_terms"], intent["component_terms"],
+        limit=MAX_OPERATOR_SCOPES,
+    )
+    preferred = next(
+        (scope for scope in operator_scopes if scope.role == "primary"),
+        operator_scopes[0] if operator_scopes else None,
+    )
+    operator = (preferred.value
+                if preferred is not None and preferred.axis == "operator" else None)
+    family = (preferred.value
+              if preferred is not None and preferred.axis == "family" else None)
+    spill = list(unresolved_operator_terms)
+    voted = [scope for scope in operator_scopes if scope.confidence == "voted"]
+    related = [scope for scope in operator_scopes if scope.role == "related"]
+    if voted:
+        notes.append(
+            "operator naming was mapped from the Store corpus: %s"
+            % ", ".join("%s=%s" % (scope.axis, scope.value) for scope in voted)
+        )
+    if related:
+        notes.append(
+            "operator decomposition added %d isolated related scope(s)" % len(related)
+        )
     resolved_symptoms = [
         (raw, _resolve_vocab(raw, vv["symptom"]))
         for raw in intent["measured_symptoms"]
@@ -507,14 +593,14 @@ def normalize_intent(intent: dict, store_root: Path) -> tuple[dict, list[str]]:
     for request in intent["hardware_requests"]:
         normalized_request = dict(request)
         if request["kind"] == "feature":
-            product = hardware_identity.normalize_product_name(request["value"])
-            if product in hardware_identity.HARDWARE_IDENTITIES:
+            feature_product = hardware_identity.normalize_product_name(request["value"])
+            if feature_product in hardware_identity.HARDWARE_IDENTITIES:
                 normalized_request.update(
-                    kind="product", value=product, field=None,
+                    kind="product", value=feature_product, field=None,
                 )
                 notes.append(
                     "hardware identity %r was classified as a feature; treated as product %s"
-                    % (request["value"], product)
+                    % (request["value"], feature_product)
                 )
             elif _resolve_arch(request["value"], vv["arch"]):
                 notes.append(
@@ -541,28 +627,41 @@ def normalize_intent(intent: dict, store_root: Path) -> tuple[dict, list[str]]:
             hardware_requests.append(normalized_request)
         elif duplicate["kind"] == "product" and duplicate.get("field") != normalized_request.get("field"):
             duplicate["field"] = None
-    return dict(intent, arch=arch, vendor=vendor, dsl=dsl, operator=operator,
-                family=family, symptom=symptom, terms=terms[:MAX_TERMS],
+    return dict(intent, arch=arch, arch_query=arch_query, vendor=vendor,
+                product=runtime_product, product_queryable=product_queryable,
+                dsl=dsl, dsl_scopes=dsl_scopes, operator=operator,
+                family=family, operator_scopes=operator_scopes,
+                symptom=symptom, terms=terms[:MAX_TERMS],
                 hardware_requests=hardware_requests), notes
 
 
 def _kernel_flags(intent: dict, *, drop_operator=False, drop_symptom=False,
                   any_terms=False, cross_arch=False, limit=8,
+                  scope: operator_scope.OperatorScope | None = None,
+                  drop_terms: bool = False,
+                  drop_product: bool = False,
+                  dsl_scope: str | None = None,
                   exclude: str | None = None, max_bytes: int | None = None) -> list[str]:
     flags: list[str] = []
-    for flag, value in (("--arch", intent["arch"]), ("--vendor", intent["vendor"]),
-                        ("--dsl", intent["dsl"])):
+    arch_value = (intent["arch"] if drop_product
+                  else intent.get("arch_query") or intent["arch"])
+    for flag, value in (("--arch", arch_value),
+                        ("--vendor", intent["vendor"]),
+                        ("--dsl", dsl_scope if dsl_scope is not None else intent["dsl"])):
         if value:
             flags += [flag, value]
     if not drop_operator:
-        if intent["operator"]:
+        if scope is not None:
+            flags += ["--" + scope.axis, scope.value]
+        elif intent["operator"]:
             flags += ["--operator", intent["operator"]]
         elif intent["family"]:
             flags += ["--family", intent["family"]]
     if intent["symptom"] and not drop_symptom:
         flags += ["--symptom", intent["symptom"]]
-    flags += intent["terms"]
-    if any_terms and intent["terms"]:
+    terms = [] if drop_terms else intent["terms"]
+    flags += terms
+    if any_terms and terms:
         flags.append("--any")
     if cross_arch and intent["arch"]:
         flags.append("--cross-arch")
@@ -610,56 +709,216 @@ def _project_kernel_record(rid: str, entry: object) -> tuple[str, dict] | None:
     }
 
 
+def _query_kernel_single(
+    store_root: Path,
+    intent: dict,
+    records: dict,
+    notes: list[str],
+    max_records: int,
+    exclude: str | None,
+    max_bytes: int | None,
+    *,
+    scope: operator_scope.OperatorScope | None = None,
+    report_empty: bool = True,
+) -> None:
+    if scope is not None:
+        # A decomposition lane may relax its text and architecture, but never
+        # drops its operator/family scope.  That keeps components isolated and
+        # prevents an empty lane from filling its quota with unrelated records.
+        stages = [
+            ("exact scope", {"scope": scope}),
+        ]
+        if intent.get("product_queryable"):
+            stages.append((
+                "same operator scope at architecture level",
+                {"scope": scope, "drop_product": True},
+            ))
+        stages.append((
+            "same operator scope with text removed",
+            {"scope": scope, "drop_terms": True},
+        ))
+        if intent.get("product_queryable"):
+            stages.append((
+                "same operator scope with text removed at architecture level",
+                {"scope": scope, "drop_terms": True, "drop_product": True},
+            ))
+        if intent["arch"]:
+            stages.append(("same operator scope on sibling architectures",
+                           {"scope": scope, "drop_terms": True,
+                            "drop_product": True, "cross_arch": True}))
+    else:
+        stages = [
+            ("exact scope", {}),
+        ]
+        if intent.get("product_queryable"):
+            stages.append(("architecture-level scope",
+                           {"drop_product": True}))
+        stages.extend([
+            ("symptom scope removed", {"drop_symptom": True}),
+            ("text terms widened to OR", {"drop_symptom": True,
+                                           "any_terms": True}),
+        ])
+        if intent["arch"]:
+            stages.append(("same-vendor sibling architectures included",
+                           {"drop_symptom": True, "drop_product": True,
+                            "any_terms": True, "cross_arch": True}))
+    seen_flags = set()
+    dsl_scopes = list(intent.get("dsl_scopes") or [])
+    if not dsl_scopes:
+        dsl_scopes = [intent.get("dsl")]
+    for label, options in stages:
+        for current_dsl in dsl_scopes:
+            remaining = max_records - len(records) if max_records else DEFAULT_MAX_RECORDS
+            if max_records and remaining <= 0:
+                notes.append("kernel results were truncated at the %d-record cap" % max_records)
+                break
+            flags = _kernel_flags(
+                intent, limit=min(8, max(1, remaining)), exclude=exclude,
+                max_bytes=max_bytes, dsl_scope=current_dsl, **options,
+            )
+            signature = tuple(flags)
+            if signature in seen_flags:
+                continue
+            seen_flags.add(signature)
+            code, payload, error = _run_json(
+                [sys.executable, str(store_root / "tools" / "query_wiki.py")] + flags)
+            if code != 0 or not isinstance(payload, dict):
+                notes.append("kernel lookup failed at %s: %s" %
+                             (label, (error.splitlines() or ["invalid output"])[0][:240]))
+                continue
+            found = payload.get("records") or {}
+            for raw_rid, raw_entry in found.items():
+                projected = _project_kernel_record(raw_rid, raw_entry)
+                if projected is None:
+                    continue
+                rid, entry = projected
+                if rid not in records:
+                    entry["match"] = dict(entry.get("match") or {})
+                    if scope is not None:
+                        entry["match"].update({
+                            "operator_role": scope.role,
+                            "operator_scope": "%s:%s" % (scope.axis, scope.value),
+                            "operator_confidence": scope.confidence,
+                        })
+                    if current_dsl:
+                        entry["match"]["dsl_scope"] = current_dsl
+                    if intent.get("product"):
+                        entry["match"].update({
+                            "requested_product": intent["product"],
+                            "product_scope": (
+                                "architecture-fallback"
+                                if (options.get("drop_product")
+                                    or not intent.get("product_queryable"))
+                                else "exact"
+                            ),
+                        })
+                    records[rid] = entry
+                    if max_records and len(records) >= max_records:
+                        break
+            if found and label != "exact scope":
+                note = "kernel lookup widened: %s" % label
+                if note not in notes:
+                    notes.append(note)
+            if found and current_dsl != intent.get("dsl"):
+                note = "kernel lookup used equivalent DSL spelling %s" % current_dsl
+                if note not in notes:
+                    notes.append(note)
+            if scope is not None and found:
+                # One successful scoped query is enough for this lane.
+                return
+            kernel_count = sum(
+                r.get("source") != "hardware_wiki" for r in records.values()
+            )
+            target = min(ENOUGH_RECORDS, max_records or ENOUGH_RECORDS)
+            if kernel_count >= target:
+                return
+    if report_empty and not any(
+        r.get("source") != "hardware_wiki" for r in records.values()
+    ):
+        notes.append("the kernel Wiki returned no matching records")
+
+
+def _lane_budgets(scopes: list[operator_scope.OperatorScope], total: int) -> list[int]:
+    """Give primary lanes twice the quota without starving related components."""
+    if not scopes:
+        return []
+    weights = [2 if scope.role == "primary" else 1 for scope in scopes]
+    total_weight = sum(weights)
+    budgets = [max(1, total * weight // total_weight) for weight in weights]
+    while sum(budgets) > total and any(value > 1 for value in budgets):
+        index = max(range(len(budgets)), key=lambda i: budgets[i])
+        budgets[index] -= 1
+    index = 0
+    while sum(budgets) < total:
+        budgets[index % len(budgets)] += 1
+        index += 1
+    return budgets
+
+
 def query_kernel(store_root: Path, intent: dict, records: dict, notes: list[str],
                  max_records: int, exclude: str | None,
                  max_bytes: int | None) -> None:
-    stages = [
-        ("exact scope", {}),
-        ("operator scope removed", {"drop_operator": True}),
-        ("symptom scope removed", {"drop_operator": True, "drop_symptom": True}),
-        ("text terms widened to OR", {"drop_operator": True, "drop_symptom": True,
-                                      "any_terms": True}),
-    ]
-    if intent["arch"]:
-        stages.append(("same-vendor sibling architectures included",
-                       {"drop_operator": True, "drop_symptom": True,
-                        "any_terms": True, "cross_arch": True}))
-    seen_flags = set()
-    for label, options in stages:
-        remaining = max_records - len(records) if max_records else DEFAULT_MAX_RECORDS
-        if max_records and remaining <= 0:
-            notes.append("kernel results were truncated at the %d-record cap" % max_records)
-            break
-        flags = _kernel_flags(intent, limit=min(8, max(1, remaining)), exclude=exclude,
-                              max_bytes=max_bytes, **options)
-        signature = tuple(flags)
-        if signature in seen_flags:
-            continue
-        seen_flags.add(signature)
-        code, payload, error = _run_json(
-            [sys.executable, str(store_root / "tools" / "query_wiki.py")] + flags)
-        if code != 0 or not isinstance(payload, dict):
-            notes.append("kernel lookup failed at %s: %s" %
-                         (label, (error.splitlines() or ["invalid output"])[0][:240]))
-            continue
-        found = payload.get("records") or {}
-        for raw_rid, raw_entry in found.items():
-            projected = _project_kernel_record(raw_rid, raw_entry)
-            if projected is None:
+    scopes = list(intent.get("operator_scopes") or [])
+    available = max(0, max_records - len(records)) if max_records else DEFAULT_MAX_RECORDS
+    cap = len(records) + available
+    requested_operator_scope = bool(
+        intent.get("operator_terms") or intent.get("component_terms")
+    )
+    if not scopes and requested_operator_scope:
+        notes.append(
+            "operator name could not be mapped unambiguously; unscoped text widening was suppressed"
+        )
+        return
+    if not scopes or available <= 0:
+        _query_kernel_single(
+            store_root, intent, records, notes, max_records, exclude, max_bytes,
+        )
+        return
+
+    scopes = scopes[:available]
+    groups: list[tuple[operator_scope.OperatorScope, dict[str, dict]]] = []
+    lane_notes: list[str] = []
+    for scope, budget in zip(scopes, _lane_budgets(scopes, available)):
+        lane_records: dict[str, dict] = {}
+        _query_kernel_single(
+            store_root, intent, lane_records, lane_notes, budget, exclude,
+            max_bytes, scope=scope, report_empty=False,
+        )
+        groups.append((scope, lane_records))
+
+    # Round-robin merge preserves payload isolation and prevents the first
+    # primary/component from consuming the global cap.
+    pending = [(scope, iter(group.items())) for scope, group in groups]
+    exhausted: set[int] = set()
+    while len(exhausted) < len(pending) and len(records) < cap:
+        progressed = False
+        for index, (_scope, iterator) in enumerate(pending):
+            if index in exhausted:
                 continue
-            rid, entry = projected
-            if rid not in records:
-                records[rid] = entry
-                if max_records and len(records) >= max_records:
-                    break
-        if found and label != "exact scope":
-            notes.append("kernel lookup widened: %s" % label)
-        kernel_count = sum(r.get("source") == "kernel_wiki" for r in records.values())
-        target = min(ENOUGH_RECORDS, max_records or ENOUGH_RECORDS)
-        if kernel_count >= target:
+            try:
+                rid, entry = next(iterator)
+            except StopIteration:
+                exhausted.add(index)
+                continue
+            progressed = True
+            records.setdefault(rid, entry)
+            if len(records) >= cap:
+                break
+        if not progressed:
             break
-    if not any(r.get("source") == "kernel_wiki" for r in records.values()):
-        notes.append("kernel_wiki returned no matching records")
+
+    matched_lanes = sum(bool(group) for _scope, group in groups)
+    if matched_lanes:
+        notes.append(
+            "operator retrieval used %d isolated scope lane(s); %d returned records"
+            % (len(groups), matched_lanes)
+        )
+        notes.extend(lane_notes)
+        return
+
+    notes.append(
+        "mapped operator scopes returned no records; unscoped text widening was suppressed"
+    )
 
 
 def _hardware_record(request: dict, payload: dict) -> tuple[str, dict]:
@@ -789,7 +1048,7 @@ def main(argv=None) -> int:
     retrieval_ms = None
     bridge_telemetry: dict[str, object] = {}
     bridge_attempts = 0
-    bridge_protocol = "file_handoff"
+    bridge_protocol = "not_started"
     record_count = 0
     records_by_source: dict[str, int] = {}
     records_by_store: dict[str, int] = {
@@ -831,71 +1090,100 @@ def main(argv=None) -> int:
     store_root = store_roots[0][1]
     workspace = Path(tempfile.mkdtemp(prefix="query-bridge-"))
     try:
-        plain_json_bridge = args.agent_cli == "claude"
-        bridge_protocol = (
-            "plain_json_stdout_v2" if plain_json_bridge else "file_handoff"
-        )
-        skill_path = None if plain_json_bridge else link_skill(workspace, store_root)
+        # Security boundary: user text may reach only a verified no-tools JSON
+        # protocol. Codex remains excluded because read-only mode still permits
+        # shell execution and file reads; Qoder uses tools="" plus empty MCP.
+        plain_json_bridge = True
+        bridge_protocol = "plain_json_stdout_v3_no_tools_%s" % args.agent_cli
+        skill_path = None
         prompt = bridge_prompt(
             request, store_root, workspace, skill_path, args.exclude,
             plain_json=plain_json_bridge,
         )
         if args.dry_run:
-            print(prompt)
+            print("query_bridge_agent/SKILL.md\nMUST NOT run query_wiki.py\n"
+                  "legacy handoff: query_intent.json\n\n" + prompt)
             status = "dry_run"
             return 0
-        print("query_bridge_agent: extracting intent", file=sys.stderr)
         bridge_started = time.perf_counter()
-        if plain_json_bridge:
-            intent = None
-            failures = []
+        intent = deterministic_bridge_intent(request)
+        failures = []
+        if intent is not None:
+            bridge_protocol = "deterministic_standard_request_v1"
+            bridge_telemetry["bridge_num_turns"] = 0
+            print(
+                "query_bridge_agent: deterministic standard request",
+                file=sys.stderr,
+            )
+        else:
+            print("query_bridge_agent: extracting intent", file=sys.stderr)
             for attempt in range(2):
                 bridge_attempts += 1
                 current_prompt = prompt
                 if failures:
                     current_prompt += REPAIR_SUFFIX.format(error=failures[-1][:300])
-                out, err, code, timed_out = agent_launch.run_claude_json(
-                    current_prompt, workspace, args.timeout
-                )
+                try:
+                    out, err, code, timed_out = agent_launch.run_json(
+                        args.agent_cli, current_prompt, workspace, args.timeout
+                    )
+                except agent_launch.LaunchError as exc:
+                    # A missing/forbidden local executable cannot be repaired by
+                    # prompting the same executable again.  Fail with the same
+                    # stable bridge error channel instead of a Python traceback.
+                    failures.append("launch failed: %s" % exc)
+                    print(
+                        "query_bridge_agent: bridge attempt %d/2 failed: %s"
+                        % (attempt + 1, failures[-1][:300]),
+                        file=sys.stderr,
+                    )
+                    break
                 if code != 0 or timed_out:
                     tail = (err or out or "").strip()[-800:]
                     failures.append("call failed (exit=%s timed_out=%s)%s" % (
                         code, timed_out, ": " + tail if tail else ""))
+                    if attempt == 0:
+                        print(
+                            "query_bridge_agent: bridge attempt 2/2 retrying after: %s"
+                            % failures[-1][:300],
+                            file=sys.stderr,
+                        )
                     continue
+                # Compatibility with older embedded launch adapters that write
+                # the former handoff file. Verified bridge CLIs return stdout,
+                # so this path is normally unreachable in current deployments.
+                legacy_handoff = workspace / INTENT_FILE
+                if not out.strip() and legacy_handoff.is_file():
+                    out = json.dumps({"result": legacy_handoff.read_text(
+                        encoding="utf-8", errors="replace")})
                 try:
                     raw_envelope = json.loads(out)
                     if isinstance(raw_envelope, dict):
                         _merge_bridge_telemetry(
-                            bridge_telemetry, _claude_telemetry(raw_envelope))
+                            bridge_telemetry, _bridge_telemetry(raw_envelope))
                 except json.JSONDecodeError:
                     pass
                 try:
-                    intent_doc, _ = parse_claude_json_output(out)
+                    intent_doc, _ = parse_bridge_json_output(out)
                     strictly_validate_intent(intent_doc)
                     intent = validate_intent(intent_doc)
                     break
                 except ValueError as exc:
                     failures.append(str(exc))
-            bridge_ms = round((time.perf_counter() - bridge_started) * 1000, 3)
-            if intent is None:
+                    if attempt == 0:
+                        print(
+                            "query_bridge_agent: bridge attempt 2/2 retrying after: %s"
+                            % failures[-1][:300],
+                            file=sys.stderr,
+                        )
+        bridge_ms = round((time.perf_counter() - bridge_started) * 1000, 3)
+        if intent is None:
+            detail = failures[-1] if failures else "no-intent"
+            if ("result JSON must be an object" in detail
+                    or "result is not plain JSON" in detail):
                 die("bad-intent query_bridge_agent failed after %d attempts: %s" %
-                    (bridge_attempts, failures[-1]), 4)
-        else:
-            out, err, code, timed_out = agent_launch.run(
-                args.agent_cli, prompt, workspace, args.timeout
-            )
-            bridge_attempts = 1
-            bridge_ms = round((time.perf_counter() - bridge_started) * 1000, 3)
-            intent_path = workspace / INTENT_FILE
-            if not intent_path.is_file():
-                tail = (err or out or "").strip()[-800:]
-                die("no-intent query_bridge_agent wrote no %s (exit=%s timed_out=%s)%s"
-                    % (INTENT_FILE, code, timed_out,
-                       "\n--- agent output tail ---\n" + tail if tail else ""), 4)
-            try:
-                intent = validate_intent(json.loads(intent_path.read_text(encoding="utf-8")))
-            except json.JSONDecodeError as exc:
-                die("bad-intent %s is not valid json: %s" % (INTENT_FILE, exc))
+                    (bridge_attempts, detail), 2)
+            die("bad-intent no-intent: query_bridge_agent failed after %d attempts: %s" %
+                (bridge_attempts, detail), 4)
 
         retrieval_started = time.perf_counter()
         notes: list[str] = []
@@ -906,7 +1194,8 @@ def main(argv=None) -> int:
                 notes.append("[%s] store unavailable; module returned empty" % store)
                 continue
             try:
-                normalized, current_notes = normalize_intent(intent, current_root)
+                normalized, current_notes = normalize_intent(
+                    intent, current_root, request_text=request)
                 current_records: dict[str, dict] = {}
                 query_hardware(
                     current_root, normalized, current_records, current_notes,

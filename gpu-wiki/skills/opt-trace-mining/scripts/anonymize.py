@@ -79,7 +79,12 @@ VERSION_SUBS = (
 WIDTH_TOKEN_RE = re.compile(r"^[vV](?:2|4|8|16|32|64|100)$")
 WIDTH_CONTEXT_RE = re.compile(r"vec|\.f16|\.bf16|x2|float", re.I)
 
-HASH_RE = re.compile(r"\b(?=[0-9a-f]{8}\b)(?=[0-9a-f]*[a-f])[0-9a-f]{8}\b")
+# Git references appear as short or full object ids. Require either a seven
+# digit short hash or at least one a-f character so ordinary measurements are
+# not mistaken for hashes.
+HASH_RE = re.compile(
+    r"\b(?:\d{7}|(?=[0-9a-f]{7,40}\b)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40})\b"
+)
 MULTI_WS_RE = re.compile(r"\s{2,}")
 
 DENYLIST_REPLACEMENT = "a private identifier"
@@ -253,6 +258,9 @@ def self_test():
         ("the v4 kernel was slower", "the an earlier step", "an earlier step"),
         ("vec4 loads with v4 float lanes", "an earlier step", "v4"),
         ("shape 3f2a91bc regressed", "3f2a91bc", "shape-1"),
+        ("candidate 5f078e26f6bd1bc1d807918d7f8103423bd2e03a passed",
+         "5f078e26f6bd1bc1d807918d7f8103423bd2e03a", "shape-2"),
+        ("committed kernel source only (5962444)", "5962444", "shape-3"),
         ("check memory/v12.json for the numbers", "memory/", "the step record"),
         ("git log --oneline shows the revert", "git log", "the history"),
     ]

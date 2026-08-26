@@ -29,8 +29,8 @@ directory. Read the code from there.
 ## Hard rules — all mechanically checked; a record that breaks one is waste
 
 1. **No dangling reference.** Never write a version id (`v83`), a person, an
-   absolute path (`/root/...`, `/home/...`), an e-mail, a path into a trace
-   (`profiles/v83`, `memory/v83.json`), an 8-hex hash, or **any `*.md` path**.
+   absolute root/home path, an e-mail, a path into a trace (`profiles/v83`,
+   `memory/v83.json`), a short or full Git hash, or **any `*.md` path**.
    There is no markdown page in this store, so a page citation is a reference to
    a file that does not exist. Refer to an earlier version as "an earlier step",
    and to a benchmarked shape by the packet's `shape-N` label. **The text in

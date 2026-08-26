@@ -38,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -164,7 +165,8 @@ def trace_slug(trace: Path) -> str:
 SLUG = trace_slug(TRACE) if TRACE_SET else ""
 
 WORKSPACE = Path(os.environ.get("RTM_WORKSPACE")
-                 or Path("/tmp/opt-trace-mining") / (SLUG or "unset")).resolve()
+                 or Path(tempfile.gettempdir()) / "opt-trace-mining"
+                 / (SLUG or "unset")).resolve()
 WORK = WORKSPACE / "work"
 PACKETS = WORKSPACE / "packets"
 
@@ -231,9 +233,10 @@ def target_from_token(token):
     return None
 
 
-def git(*args, cwd=None, timeout=60):
+def git(*args, cwd=None, timeout=60, input_text=None):
     r = subprocess.run(["git", "-C", str(cwd or TRACE), *args],
-                       capture_output=True, text=True, timeout=timeout)
+                       input=input_text, capture_output=True, text=True,
+                       timeout=timeout)
     return r.stdout
 
 
@@ -263,6 +266,20 @@ def _load_tool(name):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def validate_target_table():
+    """Fail fast when trace target aliases drift from Wiki identities."""
+    identity = _load_tool("hardware_identity")
+    errors = identity.target_table_errors(TARGET_TABLE)
+    if errors:
+        raise SystemExit(
+            "config.TARGET_TABLE is inconsistent with hardware identities:\n- "
+            + "\n- ".join(errors)
+        )
+
+
+validate_target_table()
 
 
 def load_wiki_score():
