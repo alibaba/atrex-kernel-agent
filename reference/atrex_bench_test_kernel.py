@@ -186,7 +186,11 @@ def _metadata_speedup_mean(
 
 
 def result_from_eval(
-    payload: dict[str, Any], shape_ids: list[str], metadata: object
+    payload: dict[str, Any],
+    shape_ids: list[str],
+    metadata: object,
+    *,
+    require_performance: bool = True,
 ) -> dict[str, Any]:
     """Convert one official Atrex-Bench result into optimizer metrics."""
     failures: list[str] = []
@@ -236,31 +240,33 @@ def result_from_eval(
                 if rel_diff is not None:
                     max_rel = max(max_rel, rel_diff)
 
-    performance = payload.get("performance")
-    performance = performance if isinstance(performance, dict) else {}
-    performance_shapes = performance.get("shapes")
-    performance_shapes = (
-        performance_shapes if isinstance(performance_shapes, dict) else {}
-    )
     latency_by_shape: dict[str, float] = {}
-    for shape_id in shape_ids:
-        shape_result = performance_shapes.get(shape_id)
-        shape_result = shape_result if isinstance(shape_result, dict) else {}
-        error = shape_result.get("error")
-        samples = shape_result.get("samples")
-        sample_ms: list[float] = []
-        for sample in samples if isinstance(samples, list) else []:
-            if not isinstance(sample, dict):
+    if require_performance:
+        performance = payload.get("performance")
+        performance = performance if isinstance(performance, dict) else {}
+        performance_shapes = performance.get("shapes")
+        performance_shapes = (
+            performance_shapes if isinstance(performance_shapes, dict) else {}
+        )
+        for shape_id in shape_ids:
+            shape_result = performance_shapes.get(shape_id)
+            shape_result = shape_result if isinstance(shape_result, dict) else {}
+            error = shape_result.get("error")
+            samples = shape_result.get("samples")
+            sample_ms: list[float] = []
+            for sample in samples if isinstance(samples, list) else []:
+                if not isinstance(sample, dict):
+                    continue
+                value = _finite_number(sample.get("end_to_end_time_ms"))
+                if value is not None and value > 0.0:
+                    sample_ms.append(value)
+            if error is not None or not sample_ms:
+                failures.append(
+                    f"sid={shape_id}: performance "
+                    + str(error or "has no valid samples")
+                )
                 continue
-            value = _finite_number(sample.get("end_to_end_time_ms"))
-            if value is not None and value > 0.0:
-                sample_ms.append(value)
-        if error is not None or not sample_ms:
-            failures.append(
-                f"sid={shape_id}: performance " + str(error or "has no valid samples")
-            )
-            continue
-        latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
+            latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
 
     latencies = [latency_by_shape[shape_id] for shape_id in shape_ids if shape_id in latency_by_shape]
     complete_performance = len(latencies) == len(shape_ids)
@@ -272,8 +278,10 @@ def result_from_eval(
     latency_arith_mean = (
         sum(latencies) / len(latencies) if complete_performance and latencies else 0.0
     )
-    speedup_mean, metadata_failures = _metadata_speedup_mean(
-        metadata, shape_ids, latency_by_shape
+    speedup_mean, metadata_failures = (
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        if require_performance
+        else (None, [])
     )
     failures.extend(metadata_failures)
 
@@ -317,7 +325,10 @@ def _parser() -> argparse.ArgumentParser:
         "--multi-seed",
         type=int,
         default=0,
-        help="Additional correctness cases; performance is still measured once per shape",
+        help=(
+            "Additional correctness cases; v2+ runs skip performance while the "
+            "combined v1 framework-baseline gate still measures it"
+        ),
     )
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--atol", type=float, default=1e-2)
@@ -334,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.multi_seed < 0:
         raise SystemExit("--multi-seed must be non-negative")
+    correctness_only = args.multi_seed > 0 and args.version not in {"v0", "v1"}
 
     workspace = Path(__file__).resolve().parent
     runtime_root = workspace / ATREX_BENCH_DIR
@@ -393,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
             command.extend(
                 ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
             )
+        if correctness_only:
+            command.append("--correctness-only")
         completed = subprocess.run(
             command,
             cwd=str(runtime_root),
@@ -444,7 +458,12 @@ def main(argv: list[str] | None = None) -> int:
                 if metadata_path.is_file()
                 else None
             )
-            result = result_from_eval(payload, shape_ids, metadata)
+            result = result_from_eval(
+                payload,
+                shape_ids,
+                metadata,
+                require_performance=not correctness_only,
+            )
             if completed.returncode != 0 and result["all_pass"]:
                 result["all_pass"] = False
                 result["failures"].append(
