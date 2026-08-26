@@ -6,54 +6,45 @@
   <img alt="Atrex Kernel Agent (AKA)" src="assets/aka-logo-dark.png" width="55%">
 </picture>
 
-**Production-ready LLM agent for high-performance GPU kernel development**
+**An orchestrated agent system for production-grade GPU kernel development**
 
 </div>
 
 ---
 
-## About
+## Overview
 
-Atrex-Kernel-Agent (AKA) is an end-to-end Agent system for GPU kernel implementation, profiling,
-and iterative optimization. The current repository exposes one supported optimization entry point,
-`orchestrator/optimize.py`; the native `long_horizon/` package is its internal episode engine,
-not a second CLI.
+Atrex Kernel Agent (AKA) turns an evaluator-owned operator into a measured, optimized GPU kernel.
+It coordinates coding agents, GPU profiling, correctness checks, performance verification, Git
+isolation, recovery, and final packaging while keeping acceptance and termination under mechanical
+supervisor control.
 
-![Atrex architecture](assets/atrex-architecture.png)
+The repository has one supported entry point, `orchestrator/optimize.py`. The internal
+`long_horizon/` package supplies the episode engine; it is not a second CLI.
+
+![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
+
+AKA supports:
+
+- SOL-ExecBench and native Atrex-Bench operator layouts;
+- NVIDIA and AMD targets through isolated sandbox execution;
+- Triton, CuteDSL, CUDA, and FlyDSL campaigns;
+- Claude, Qoder, Codex, and Pi coding-agent backends;
+- leaderboard and fail-closed production modes;
+- resumable, Git-isolated optimization with canonical measurement history.
 
 ## News
 
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
-- [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**. [[Leaderboard](https://research.nvidia.com/benchmarks/sol-execbench/leaderboard/collection/4/B200)]
+- [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
 - [2026-07] We released **Atrex Kernel Agent v0.2.0** with an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
 - [2026-07] We released **the Atrex paper**: [Are LLM-Generated GPU Kernels Production-Ready? A Trace-Driven Benchmark and Optimization Agent](https://arxiv.org/abs/2607.14541).
 - [2026-06] We released **Atrex Kernel Agent v0.1.0** as the initial open-source version, with the GPU Wiki knowledge base, profile-driven optimization workflow, profiling tools, and reference templates. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.1.0)]
 
-## Current Design
-
-- Accepts SOL-ExecBench and native Atrex-Bench operators. Production native campaigns always expose
-  a generalized public problem: AKA uses a user-provided contract or derives one before optimization.
-- Creates one isolated Git workspace per framework and target, with separate campaign state for
-  leaderboard and production optimization.
-- Establishes native Atrex-Bench and SOL V0 mechanically with one official evaluator run, then, by
-  default in production mode, creates a self-contained framework-native V1. Before implementation,
-  isolated Codex and Qoder reviewers concurrently produce correctness guidance from bounded public
-  evidence and nominate from a bounded local reference catalog; the supervisor exposes at most two
-  exact references to V1. Unexpected V1 Agent exits trigger a one-time local candidate snapshot and
-  a separate progress-supervisor handoff for direct restart.
-- Runs one Long Horizon campaign over the complete workload set in both modes.
-- Runs the first 20 optimization episodes in fast mode with five consecutive
-  `externally reviewed plan -> implement -> evaluator` trials per episode by default, then uses the
-  full profile/research/plan/edit/repair loop. The supervisor owns budgets, terminal validation,
-  mode-appropriate verification, canonical memory, and squash promotion.
-- Preserves Git history, canonical `memory/v<N>.json`, plans, profiler evidence, episode journals,
-  verification artifacts, and aggregation provenance for recovery and audit.
-
-For the full architecture and workflow design, see [`docs/design.md`](docs/design.md).
-
 ## Quick Start
 
-See the [Quick Start guide](docs/quickstart.md) for prerequisites and complete runnable examples of the orchestrated optimization loop.
+See the [Quick Start guide](docs/quickstart.md) for prerequisites and complete runnable examples of
+the orchestrated optimization loop.
 
 Or start a coding agent such as Claude Code, Codex, or Qoder in this repository and ask it to
 launch an AKA optimization task. We recommend the following prompt:
@@ -62,111 +53,43 @@ launch an AKA optimization task. We recommend the following prompt:
 Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
-## Orchestrated Optimization
+## Documentation
 
-`orchestrator/optimize.py` is the repository's only supported optimization entry point. It owns
-mechanical termination, state recovery, Agent session isolation, sandbox execution, workload
-coordination, and final packaging.
+| Document | Contents |
+| --- | --- |
+| [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
+| [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
+| [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 
-![orchestrated optimization loop](assets/optimize_workflow.png)
-
-```text
-operator inputs
-  -> production public-problem derivation when needed
-  -> V0 correctness baseline
-  -> optional framework-native V1
-  -> Long Horizon episode worktree
-  -> live memory + journal + terminal handoff
-  -> policy/protected-path checks + fast comparison or full ABBA verification
-  -> squash promotion
-  -> finalization
-```
-
-Each canonical version is explored in an isolated Git branch and worktree. A fresh Claude, Qoder,
-Codex, or Pi session owns one Long Horizon episode and publishes a structured terminal handoff. Fast
-episodes skip profiling and ABBA, run five hash-matched evaluator-backed trials, and select their
-fastest passing candidate against canonical incumbent memory; later full episodes use
-incumbent/candidate ABBA in one gateway allocation. The supervisor squash-promotes only a strict
-correctness-passing improvement. If the supervisor restarts mid-episode, it reopens the same
-registered worktree so the next session can continue from its existing edits and intermediate files.
-
-The uncommitted `memory/live.json` appears when an episode starts and refreshes after every journaled
-experiment. It is an observability view, not promotion evidence; only `memory/v<N>.json` is canonical.
-
-SOL and native Atrex-Bench campaigns validate the complete workload set together. In production,
-native Atrex-Bench optimization always uses `agent_problem.json` while exact evaluator shapes remain
-hidden. A user-provided problem is used directly; when only detailed `shapes.json` exists, a separate
-clean AKA preprocessing session derives and validates the public problem before baseline or optimization
-sessions start. Canonical `memory/v<N>.json` records real evaluator latency for every opaque shape id,
-and profiling privately injects the selected real `PROFILE_SHAPE_ID` without exposing the full shape set.
-This private injection and result-masking path is production-only; leaderboard keeps detailed shapes
-inside its workspace and uses the ordinary public evaluator path.
-
-GPU validation and profiling execute through the configured gateway, while optimization memory,
-plans, edits, episode state, and Git history remain local. Repository-scoped skills are prepared
-inside each campaign workspace, and campaign termination remains mechanically controlled by explicit
-budgets and promotion gates.
-
-For prerequisites, runnable commands, backend configuration, operating modes, common options, local
-gateway setup, and direct sandbox usage, see the [Quick Start guide](docs/quickstart.md). For the full
-architecture and workflow design, see [docs/design.md](docs/design.md).
-
-## Main Files
-
-```text
-.
-├── orchestrator/                    # Public optimization entry and shared policy
-│   ├── optimize.py                  # Long Horizon campaign driver
-│   ├── agent_runtime/               # Claude/Qoder/Codex/Pi backend adapters
-│   ├── telemetry/                   # Phase token aggregation
-│   └── prompts/                     # Setup, inspection, baseline, and episode prompts
-├── long_horizon/                    # Internal episode/worktree/ABBA engine
-├── agents/                          # Workspace-local baseline Agent definition
-├── docs/                            # Detailed project design docs
-├── reference/                       # Workspace init, evaluator adapters, schemas, SOL packaging
-├── reference-projects/              # Optional source-search repositories used by episodes
-├── skills/                          # Workspace-local workflow and plan-generation skills
-├── tools/                           # Sandbox, local gateway, profiling, memory, and measurement tools
-├── gpu-wiki/                        # Architecture-scoped GPU knowledge base
-└── 3rdparty/                        # Profiler-analysis dependencies
-```
+Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 
 ## Acknowledgements
 
-This project builds on and references many excellent open-source works. We gratefully acknowledge the authors and communities behind them.
+AKA builds on and learns from many open-source projects, including:
 
-Reference kernel projects (`reference-projects/`):
-
-- [CUTLASS](https://github.com/NVIDIA/cutlass) — CUDA Templates for Linear Algebra Subroutines
-- [cutex](https://github.com/deciding/cutex) — CUDA Template Extensions
-- [cuLA](https://github.com/inclusionAI/cuLA) — inclusionAI CUDA Linear Algebra
-- [flash-attention](https://github.com/Dao-AILab/flash-attention) — Flash Attention
-- [FlashInfer](https://github.com/flashinfer-ai/flashinfer) — Kernel library for LLM serving
-- [FlyDSL](https://github.com/ROCm/FlyDSL) — ROCm FlyDSL
-- [Triton](https://github.com/triton-lang/triton) — Triton language and compiler
-- [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM) — DeepSeek DeepGEMM
-- [LeetCUDA](https://github.com/xlite-dev/LeetCUDA) — CUDA learning kernels
-- [FlashMLA](https://github.com/deepseek-ai/FlashMLA) — DeepSeek FlashMLA
-- [Composable Kernel](https://github.com/ROCm/composable_kernel) — ROCm Composable Kernel
-- [cute-gemm](https://github.com/reed-lau/cute-gemm) — CuTe GEMM examples
-- [hpc-ops](https://github.com/Tencent/hpc-ops) — Tencent HPC Ops
-- [aiter](https://github.com/ROCm/aiter) — ROCm AIter
-- [quack](https://github.com/Dao-AILab/quack) — Dao-AILab Quack
-- [tilelang](https://github.com/tile-ai/tilelang) — TileLang
-
-Knowledge base and tooling (`gpu-wiki/3rdparty/`, `3rdparty/`, and `skills/`):
-
-- [KernelWiki](https://github.com/mit-han-lab/KernelWiki) — GPU kernel knowledge base
-- [modern-gpu-programming-for-mlsys](https://github.com/mlc-ai/modern-gpu-programming-for-mlsys) — Modern GPU programming for MLSys
-- [ncu-report-skill](https://github.com/mit-han-lab/ncu-report-skill) — Nsight Compute report parsing skill
-- [humanize](https://github.com/PolyArch/humanize) — Original source of the repository-native
-  `gen-plan` workflow
-- [AKO4ALL](https://github.com/TongmingLAIC/AKO4ALL) — AKO4ALL
-- [KDA](https://github.com/mit-han-lab/kernel-design-agents) — Kernel Design Agents
+- GPU kernel projects: [CUTLASS](https://github.com/NVIDIA/cutlass),
+  [cutex](https://github.com/deciding/cutex), [cuLA](https://github.com/inclusionAI/cuLA),
+  [FlashAttention](https://github.com/Dao-AILab/flash-attention),
+  [FlashInfer](https://github.com/flashinfer-ai/flashinfer),
+  [FlyDSL](https://github.com/ROCm/FlyDSL), [Triton](https://github.com/triton-lang/triton),
+  [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM),
+  [LeetCUDA](https://github.com/xlite-dev/LeetCUDA),
+  [FlashMLA](https://github.com/deepseek-ai/FlashMLA),
+  [Composable Kernel](https://github.com/ROCm/composable_kernel),
+  [cute-gemm](https://github.com/reed-lau/cute-gemm),
+  [hpc-ops](https://github.com/Tencent/hpc-ops),
+  [AIter](https://github.com/ROCm/aiter), [quack](https://github.com/Dao-AILab/quack), and
+  [TileLang](https://github.com/tile-ai/tilelang).
+- Knowledge and agent tooling: [KernelWiki](https://github.com/mit-han-lab/KernelWiki),
+  [modern-gpu-programming-for-mlsys](https://github.com/mlc-ai/modern-gpu-programming-for-mlsys),
+  [ncu-report-skill](https://github.com/mit-han-lab/ncu-report-skill),
+  [humanize](https://github.com/PolyArch/humanize),
+  [AKO4ALL](https://github.com/TongmingLAIC/AKO4ALL), and
+  [KDA](https://github.com/mit-han-lab/kernel-design-agents).
 
 ## Citation
 
-Please cite our [paper](https://arxiv.org/abs/2607.14541) if it is helpful to your research.
+If AKA is useful in your work, please cite the [Atrex paper](https://arxiv.org/abs/2607.14541):
 
 ```bibtex
 @misc{atrex2026,

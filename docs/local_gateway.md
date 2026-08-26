@@ -1,8 +1,8 @@
-# Community Local Gateway
+# Community Local Sandbox
 
 `tools/local_gateway.py` is a small, standard-library-only scheduler for maintaining and testing the
-localhost optimization path without a deployed atrex-gateway server. It implements the public HTTP shapes
-used by `agate dev` and `tools/sandbox.py`, and queues local GPU commands FIFO.
+localhost optimization path. It accepts requests from `tools/sandbox.py` and queues local GPU commands
+FIFO.
 
 ## Start the Server
 
@@ -29,29 +29,10 @@ The state directory contains `jobs.db`, per-job uploaded files, stdout, and stde
 restart. A job that was running when the server stopped is marked failed on the next start rather than being
 silently executed twice.
 
-## Use the Existing Clients
-
-The regular `agate` client needs no special adapter:
-
-```bash
-agate health --url http://127.0.0.1:8000
-agate list hw --url http://127.0.0.1:8000
-
-agate dev "python -c 'import torch; print(torch.cuda.get_device_capability())'" \
-  --url http://127.0.0.1:8000 --gpu local
-```
-
-Submission, queue inspection, long polling, and cancellation use the normal commands:
-
-```bash
-agate dev "sleep 30" --url http://127.0.0.1:8000 --gpu local --no-wait
-agate jobs --url http://127.0.0.1:8000
-agate get <job_id> --url http://127.0.0.1:8000 --wait
-agate cancel <job_id> --url http://127.0.0.1:8000
-```
+## Use with the Optimizer
 
 The optimizer continues to use `tools/sandbox.py`, so correctness, performance, and profiler commands have
-the same packaging and artifact-return behavior as a remote gateway:
+the same packaging and artifact-return behavior as the remote execution path:
 
 ```bash
 python orchestrator/optimize.py \
@@ -66,8 +47,8 @@ parallel. Their sandbox requests still enter this scheduler's FIFO queue, and th
 uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`. Production
 campaigns use a separate path ending in `_production`.
 
-`--sandbox-hardware local` selects the gateway backend independently of the logical `--platform` value.
-The optimizer does not compare platform and inventory names because a gateway may expose an alias or a
+`--sandbox-hardware local` selects the local executor independently of the logical `--platform` value.
+The optimizer does not compare platform and inventory names because inventory may expose an alias or a
 desensitized GPU description. It uses the runtime architecture probe for automatic framework dispatch.
 
 ## Compatibility Surface
