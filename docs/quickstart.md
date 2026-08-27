@@ -252,7 +252,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --fast-episodes N                Fast post-baseline episodes (default: 2; 0 disables)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
---long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex implemented)
+--long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex, qoder)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never

@@ -101,6 +101,7 @@ from .workspace_state import (
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
+    "qoder": "ATREX_QODER_REVIEW_SESSION_FILE",
 }
 
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS = ("codex", "qodercli")

@@ -444,7 +444,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=("codex", "qoder", "claude"),
         default="",
         metavar="REVIEWER",
-        help="Reuse one reviewer session across episodes (currently implemented for codex).",
+        help="Reuse one reviewer session across episodes (implemented for codex and qoder).",
     )
     ap.add_argument(
         "--optimization-mode",
