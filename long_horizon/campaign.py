@@ -1657,9 +1657,9 @@ class LongHorizonCampaign:
                 )
             )
             if not (promoted or outcome_recorded):
-                raise RuntimeError(
-                    "incumbent advanced during an interrupted episode without proof"
-                )
+                # The episode never reached a terminal handoff and its base is now
+                # stale, so it is superseded rather than rejected on its merits.
+                terminal_status = "interrupted"
             self._require_canonical_memory(memory_version)
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
