@@ -200,7 +200,7 @@ def install_workspace_policy(
 
 
 _SUPPORTED_PRODUCTION_FRAMEWORKS = frozenset(
-    {"triton", "gluon", "cutedsl", "cuda", "flydsl"}
+    {"triton", "gluon", "cutedsl", "cuda", "flydsl", "tilelang"}
 )
 
 
