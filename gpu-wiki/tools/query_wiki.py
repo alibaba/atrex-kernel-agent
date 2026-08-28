@@ -134,6 +134,7 @@ ARCH_VENDOR = {
     "ampere": "nvidia", "ada": "nvidia", "hopper": "nvidia", "blackwell": "nvidia",
     "blackwell-ultra": "nvidia", "blackwell-geforce": "nvidia",
     "cdna3": "amd", "cdna4": "amd", "rdna4": "amd",
+    "zw890": "ppu",
 }
 NEUTRAL_ARCH = "generic"
 

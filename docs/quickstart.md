@@ -15,7 +15,10 @@ agent in this repository to translate the task into that command and start the c
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
 The orchestrator verifies required submodules before starting and initializes missing ones
-automatically; the large `reference-projects/` collection remains optional.
+automatically; the large `reference-projects/` collection remains optional. On PPU hardware the
+t-head projects in that collection are the only PPU-specific implementation references available, and
+they clone over SSH (`git@github.com:t-head/...`), so initialize them with an SSH key that can reach
+that org. `reference-projects/README.md` indexes every project by vendor, DSL, and operator.
 
 The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
 configured independent, read-only Codex and Qoder reviews against the same proposal and bounded

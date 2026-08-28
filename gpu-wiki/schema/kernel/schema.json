@@ -83,6 +83,7 @@
               "enum": [
                 "nvidia",
                 "amd",
+                "ppu",
                 "generic"
               ]
             },
@@ -96,6 +97,7 @@
                 "cdna3",
                 "cdna4",
                 "rdna4",
+                "zw890",
                 "generic"
               ]
             },
@@ -170,6 +172,7 @@
                 "cdna3",
                 "cdna4",
                 "rdna4",
+                "zw890",
                 "generic",
                 "any"
               ],

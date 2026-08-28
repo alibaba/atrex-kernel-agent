@@ -1,0 +1,124 @@
+{
+ "schema": "clean-1.3",
+ "id": "ppu.zw890.cuda.any.hggc-sailify",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "zw890|any|any|hggc-sailify|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "ppu",
+   "arch": "zw890",
+   "architectures": [
+    "zw890"
+   ],
+   "product": "any",
+   "dsl": "cuda",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "zw890",
+   "language": "cuda",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "hggc",
+   "porting",
+   "sailify",
+   "hgcc",
+   "toolchain"
+  ],
+  "triggers": [
+   "CUDA source or a CUDA-derived assumption must be ported to T-Head PPU / HGGC",
+   "a CUDA API or math-library symbol has no obvious PPU equivalent",
+   "an arch check reports sm_89 on PPU and a code path must be gated correctly"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for T-Head PPU ZW-M890P: CUDA to HGGC porting map (sailify + hggc-samples)",
+  "problem": {
+   "target": "T-Head PPU ZW-M890P (HGGC, reports borrowed sm_89)",
+   "statement": "CUDA to HGGC porting map (sailify + hggc-samples)"
+  },
+  "title": "CUDA to HGGC porting map (sailify + hggc-samples)",
+  "summary": "PPU programs are written in HGGC (HeteroGeneous General-purpose Computing) and built with `hgcc`. HGGC is close to CUDA but not identical, and the runtime reports a borrowed `sm_89`, so NVIDIA-derived assumptions must be checked rather than assumed. `sailify/sailify/cuda_to_ppu_mappings.py` is the authoritative symbol-level translation table, derived by scanning the PPU SDK headers: `cudaStream_t` -> `hggcStream_t`, `cudaError_t` -> `hggcError_t`, and the `cublas`/`cudnn` families -> `acblas`/`acdnn`. `hggc-samples` holds the official SAIL 2.1 samples, including `Samples/3_HGGC_Features/bf16_tensor_cell_gemm`. Sources: `reference-projects/sailify`, `reference-projects/hggc-samples`.",
+  "sections": [
+   {
+    "heading": "Symbol translation table",
+    "anchor": "symbol-translation-table",
+    "gist": "`sailify/sailify/cuda_to_ppu_mappings.py` maps CUDA types, APIs, and headers to their HGGC counterparts; check any CUDA symbol here before assuming it exists."
+   },
+   {
+    "heading": "Library renames",
+    "anchor": "library-renames",
+    "gist": "The math libraries are renamed, not merely wrapped: cublas/cudnn/curand/cufft/cusparse/cusolver -> acblas/acdnn/acrand/acfft/acsparse/acsolver, NCCL -> pccl, NVTX -> hgtx."
+   },
+   {
+    "heading": "Idiomatic samples",
+    "anchor": "idiomatic-samples",
+    "gist": "`hggc-samples/Samples/3_HGGC_Features/bf16_tensor_cell_gemm` shows the intended bf16 tensor-cell usage; `Common/helper_hggc.h` shows the expected error-checking idiom."
+   },
+   {
+    "heading": "Borrowed sm_89",
+    "anchor": "borrowed-sm89",
+    "gist": "The runtime reports sm_89, so arch-gated CUDA code paths may select an Ada branch that does not describe this part. Gate on PPU macros (`USE_PPU`, `__HGGC_ARCH__`) instead."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "reference-projects/sailify",
+   "seed": "vendored t-head reference-projects submodule, surveyed 2026-08-28"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-28T15:30:00",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

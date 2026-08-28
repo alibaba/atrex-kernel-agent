@@ -52,8 +52,10 @@ HARDWARE_IDENTITIES = {
     "mi355x": {"vendor": "amd", "arch": "cdna4", "recorded": True},
     # PPU. The part is CUDA-source-compatible and its runtime reports sm_89, but it is
     # not NVIDIA silicon: giving it a distinct vendor/arch stops an Ada spec sheet from
-    # ever being served as this product's numbers.
+    # ever being served as this product's numbers. ``zw890`` is the architecture-level
+    # address; ``zwm890p`` is the product name the gateway actually reports.
     "zw890": {"vendor": "ppu", "arch": "zw890", "recorded": False},
+    "zwm890p": {"vendor": "ppu", "arch": "zw890", "recorded": False},
 }
 
 PRODUCT_ARCH = {name: row["arch"] for name, row in HARDWARE_IDENTITIES.items()}
@@ -68,7 +70,7 @@ def _compact(value: str) -> str:
 
 _CANONICAL = {_compact(name): name for name in HARDWARE_IDENTITIES}
 
-_PREFIXES = ("advancedmicrodevices", "nvidia", "amd", "geforce", "instinct", "ppu")
+_PREFIXES = ("advancedmicrodevices", "nvidia", "amd", "geforce", "instinct", "ppu", "thead")
 _SUFFIXES = ("accelerator", "gpu")
 
 
