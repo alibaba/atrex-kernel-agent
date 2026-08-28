@@ -126,6 +126,12 @@ ARCH_ALIASES = {
 # Product spellings are owned by one shared table. Keeping this update here
 # makes kernel scoping and exact hardware lookup agree on every known SKU.
 ARCH_ALIASES.update(hardware_identity.PRODUCT_ARCH)
+# A superseded spelling resolves to whatever its canonical name addresses, so an
+# older campaign config keeps scoping correctly after a rename.
+ARCH_ALIASES.update({
+    old: hardware_identity.PRODUCT_ARCH[new]
+    for old, new in hardware_identity.LEGACY_SPELLINGS.items()
+})
 
 # Which vendor an architecture belongs to. Needed because "architecture-neutral"
 # is neutral WITHIN a vendor: a record written for any CDNA part is not advice
@@ -134,7 +140,7 @@ ARCH_VENDOR = {
     "ampere": "nvidia", "ada": "nvidia", "hopper": "nvidia", "blackwell": "nvidia",
     "blackwell-ultra": "nvidia", "blackwell-geforce": "nvidia",
     "cdna3": "amd", "cdna4": "amd", "rdna4": "amd",
-    "zw890": "ppu",
+    "zwm890p": "ppu",
 }
 NEUTRAL_ARCH = "generic"
 

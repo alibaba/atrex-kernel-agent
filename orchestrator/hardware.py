@@ -30,7 +30,7 @@ def hardware_vendor(platform: str, arch: str = "") -> str:
     signal that can. Its name check therefore runs before the arch match.
     """
     token = _hardware_token(platform)
-    if re.match(r"^(?:PPU|ZW\d)", token):
+    if re.match(r"^(?:PPU|ZW)", token):
         return "ppu"
 
     runtime_arch = arch.strip().lower()

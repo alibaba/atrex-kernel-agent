@@ -1,16 +1,16 @@
 {
  "schema": "clean-1.3",
- "id": "ppu.zw890.cuda.any.hggc-sailify",
+ "id": "ppu.zwm890p.cuda.any.hggc-sailify",
  "type": "doc",
  "level": "cross-operator",
  "status": "active",
- "episode_key": "zw890|any|any|hggc-sailify|cross-operator",
+ "episode_key": "zwm890p|any|any|hggc-sailify|cross-operator",
  "retrieval": {
   "scope": {
    "vendor": "ppu",
-   "arch": "zw890",
+   "arch": "zwm890p",
    "architectures": [
-    "zw890"
+    "zwm890p"
    ],
    "product": "any",
    "dsl": "cuda",
@@ -19,7 +19,7 @@
    "shape_signature": {}
   },
   "generality": {
-   "arch": "zw890",
+   "arch": "zwm890p",
    "language": "cuda",
    "workload_family": "any"
   },

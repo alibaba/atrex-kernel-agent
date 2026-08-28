@@ -27,13 +27,13 @@ intrinsics, so NVIDIA and AMD material describes strategy but not the instructio
 
 | Project | Vendor/Arch | DSL | Operators | When to use |
 |---|---|---|---|---|
-| flash-attention-for-sail | ppu / zw890 | cuda (hggc) | flash-attention, paged-attention | Vendor FA2/FA3 port. `flash_attn_with_kvcache` is a superset of the production operator contract; `hopper/paged_kv.h` and `hopper/pack_gqa.h` hold the AIU load and GQA packing strategy. |
-| actlize | ppu / zw890 | cuda (hggc) | gemm, conv | CUTLASS 3.6.0 / CuTe for PPU. `include/cute/arch/mma_ppu0015.hpp` and `copy_ppu0015_aiu.hpp` are the MMA and AIU/swizzle atoms; `examples/08_ppu_basic_tensor_op_gemm` is the way in. |
-| triton-for-sail | ppu / zw890 | triton, gluon | any | The PPU Triton compiler itself. `python/test/unit/ppu/aiu/` is the per-op AIU lowering contract; `perf/06-fused-attention-aiu.py` is fused attention on the AIU path. |
-| DeepGEMM-for-sail | ppu / zw890 | cuda (hggc) | gemm, mqa-logits | PPU GEMM tiling and heuristics; `deep_gemm/include/deep_gemm/ppu_paged_mqa_logits.cuh` for paged MQA. |
-| FlashMLA-for-sail | ppu / zw890 | cuda (hggc) | mla, paged-attention | MLA attention on PPU; `csrc/kerutils/include/kerutils/device/ppu/` has PPU softmax, mask, and dequant primitives. |
-| sailify | ppu / zw890 | cuda (hggc) | any | CUDA -> HGGC translator. `sailify/cuda_to_ppu_mappings.py` is the authoritative symbol map (`cudaStream_t` -> `hggcStream_t`, cublas -> acblas, NCCL -> pccl). |
-| hggc-samples | ppu / zw890 | cuda (hggc) | any | Official SAIL 2.1 samples. `Samples/3_HGGC_Features/bf16_tensor_cell_gemm` for tensor-cell usage; `Common/helper_hggc.h` for the error-checking idiom. |
+| flash-attention-for-sail | ppu / zwm890p | cuda (hggc) | flash-attention, paged-attention | Vendor FA2/FA3 port. `flash_attn_with_kvcache` is a superset of the production operator contract; `hopper/paged_kv.h` and `hopper/pack_gqa.h` hold the AIU load and GQA packing strategy. |
+| actlize | ppu / zwm890p | cuda (hggc) | gemm, conv | CUTLASS 3.6.0 / CuTe for PPU. `include/cute/arch/mma_ppu0015.hpp` and `copy_ppu0015_aiu.hpp` are the MMA and AIU/swizzle atoms; `examples/08_ppu_basic_tensor_op_gemm` is the way in. |
+| triton-for-sail | ppu / zwm890p | triton, gluon | any | The PPU Triton compiler itself. `python/test/unit/ppu/aiu/` is the per-op AIU lowering contract; `perf/06-fused-attention-aiu.py` is fused attention on the AIU path. |
+| DeepGEMM-for-sail | ppu / zwm890p | cuda (hggc) | gemm, mqa-logits | PPU GEMM tiling and heuristics; `deep_gemm/include/deep_gemm/ppu_paged_mqa_logits.cuh` for paged MQA. |
+| FlashMLA-for-sail | ppu / zwm890p | cuda (hggc) | mla, paged-attention | MLA attention on PPU; `csrc/kerutils/include/kerutils/device/ppu/` has PPU softmax, mask, and dequant primitives. |
+| sailify | ppu / zwm890p | cuda (hggc) | any | CUDA -> HGGC translator. `sailify/cuda_to_ppu_mappings.py` is the authoritative symbol map (`cudaStream_t` -> `hggcStream_t`, cublas -> acblas, NCCL -> pccl). |
+| hggc-samples | ppu / zwm890p | cuda (hggc) | any | Official SAIL 2.1 samples. `Samples/3_HGGC_Features/bf16_tensor_cell_gemm` for tensor-cell usage; `Common/helper_hggc.h` for the error-checking idiom. |
 
 ### NVIDIA
 

@@ -43189,19 +43189,19 @@
    "refk_status": null
   },
   {
-   "id": "ppu.zw890.any.attention.fa-sail",
+   "id": "ppu.zwm890p.any.attention.fa-sail",
    "type": "doc",
    "level": "cross-operator",
    "status": "active",
-   "episode_key": "zw890|any|flash-attention|fa-sail|cross-operator",
-   "path": "records/doc/ppu/zw890/any/any/ppu.zw890.any.attention.fa-sail.json",
+   "episode_key": "zwm890p|any|flash-attention|fa-sail|cross-operator",
+   "path": "records/doc/ppu/zwm890p/any/any/ppu.zwm890p.any.attention.fa-sail.json",
    "title": "Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)",
    "retrieval": {
     "scope": {
      "vendor": "ppu",
-     "arch": "zw890",
+     "arch": "zwm890p",
      "architectures": [
-      "zw890"
+      "zwm890p"
      ],
      "product": "any",
      "dsl": "any",
@@ -43213,7 +43213,7 @@
      "shape_signature": {}
     },
     "generality": {
-     "arch": "zw890",
+     "arch": "zwm890p",
      "language": "any",
      "workload_family": "attention"
     },
@@ -43243,25 +43243,25 @@
    "tier": "provisional",
    "gain_pct": null,
    "page_path": "reference-projects/flash-attention-for-sail",
-   "search_text": "ppu.zw890.any.attention.fa-sail vendor flashattention-2/3 ppu port (flash-attention-for-sail) reference for t-head ppu zw-m890p: vendor flashattention-2/3 ppu port (flash-attention-for-sail) the vendor's own ppu port of flashattention-2 and flashattention-3. its `flash_attn_with_kvcache` entry point is an exact superset of the captured 18-argument production operator contract (paged `page_table`, varlen `cu_seqlens_q`, `cache_seqlens`, causal, `num_splits`), so this is the implementation our candidates are trying to match rather than a loose analogue. measured on the four private production shapes it ran 2.01x faster in aggregate than the best tilelang candidate (42.02 ms -> 20.90 ms; per-shape 2.17x / 2.20x / 1.17x / 1.26x), with the gap concentrated on the large-q prefill shapes. source: `reference-projects/flash-attention-for-sail`. read for design only; do not import or call it from a candidate. vendor flashattention-2/3 ppu port (flash-attention-for-sail) aiu global->shared loads paged kv gather gqa packing guardrail paged or varlen flashattention is being written for t-head ppu / zw-m890p a ppu attention candidate needs the vendor's tiling, aiu load, or gqa packing strategy a ppu flashattention candidate is far off the achievable latency and needs a reference point flash-attention paged-kv varlen gqa aiu split-kv",
+   "search_text": "ppu.zwm890p.any.attention.fa-sail vendor flashattention-2/3 ppu port (flash-attention-for-sail) reference for t-head ppu zw-m890p: vendor flashattention-2/3 ppu port (flash-attention-for-sail) the vendor's own ppu port of flashattention-2 and flashattention-3. its `flash_attn_with_kvcache` entry point is an exact superset of the captured 18-argument production operator contract (paged `page_table`, varlen `cu_seqlens_q`, `cache_seqlens`, causal, `num_splits`), so this is the implementation our candidates are trying to match rather than a loose analogue. measured on the four private production shapes it ran 2.01x faster in aggregate than the best tilelang candidate (42.02 ms -> 20.90 ms; per-shape 2.17x / 2.20x / 1.17x / 1.26x), with the gap concentrated on the large-q prefill shapes. source: `reference-projects/flash-attention-for-sail`. read for design only; do not import or call it from a candidate. vendor flashattention-2/3 ppu port (flash-attention-for-sail) aiu global->shared loads paged kv gather gqa packing guardrail paged or varlen flashattention is being written for t-head ppu / zw-m890p a ppu attention candidate needs the vendor's tiling, aiu load, or gqa packing strategy a ppu flashattention candidate is far off the achievable latency and needs a reference point flash-attention paged-kv varlen gqa aiu split-kv",
    "tracks": null,
    "speedup_x": null,
    "refk_status": null
   },
   {
-   "id": "ppu.zw890.cuda.any.hggc-sailify",
+   "id": "ppu.zwm890p.cuda.any.hggc-sailify",
    "type": "doc",
    "level": "cross-operator",
    "status": "active",
-   "episode_key": "zw890|any|any|hggc-sailify|cross-operator",
-   "path": "records/doc/ppu/zw890/cuda/any/ppu.zw890.cuda.any.hggc-sailify.json",
+   "episode_key": "zwm890p|any|any|hggc-sailify|cross-operator",
+   "path": "records/doc/ppu/zwm890p/cuda/any/ppu.zwm890p.cuda.any.hggc-sailify.json",
    "title": "CUDA to HGGC porting map (sailify + hggc-samples)",
    "retrieval": {
     "scope": {
      "vendor": "ppu",
-     "arch": "zw890",
+     "arch": "zwm890p",
      "architectures": [
-      "zw890"
+      "zwm890p"
      ],
      "product": "any",
      "dsl": "cuda",
@@ -43270,7 +43270,7 @@
      "shape_signature": {}
     },
     "generality": {
-     "arch": "zw890",
+     "arch": "zwm890p",
      "language": "cuda",
      "workload_family": "any"
     },
@@ -43299,25 +43299,25 @@
    "tier": "provisional",
    "gain_pct": null,
    "page_path": "reference-projects/sailify",
-   "search_text": "ppu.zw890.cuda.any.hggc-sailify cuda to hggc porting map (sailify + hggc-samples) reference for t-head ppu zw-m890p: cuda to hggc porting map (sailify + hggc-samples) ppu programs are written in hggc (heterogeneous general-purpose computing) and built with `hgcc`. hggc is close to cuda but not identical, and the runtime reports a borrowed `sm_89`, so nvidia-derived assumptions must be checked rather than assumed. `sailify/sailify/cuda_to_ppu_mappings.py` is the authoritative symbol-level translation table, derived by scanning the ppu sdk headers: `cudastream_t` -> `hggcstream_t`, `cudaerror_t` -> `hggcerror_t`, and the `cublas`/`cudnn` families -> `acblas`/`acdnn`. `hggc-samples` holds the official sail 2.1 samples, including `samples/3_hggc_features/bf16_tensor_cell_gemm`. sources: `reference-projects/sailify`, `reference-projects/hggc-samples`. cuda to hggc porting map (sailify + hggc-samples) symbol translation table library renames idiomatic samples borrowed sm_89 cuda source or a cuda-derived assumption must be ported to t-head ppu / hggc a cuda api or math-library symbol has no obvious ppu equivalent an arch check reports sm_89 on ppu and a code path must be gated correctly hggc porting sailify hgcc toolchain",
+   "search_text": "ppu.zwm890p.cuda.any.hggc-sailify cuda to hggc porting map (sailify + hggc-samples) reference for t-head ppu zw-m890p: cuda to hggc porting map (sailify + hggc-samples) ppu programs are written in hggc (heterogeneous general-purpose computing) and built with `hgcc`. hggc is close to cuda but not identical, and the runtime reports a borrowed `sm_89`, so nvidia-derived assumptions must be checked rather than assumed. `sailify/sailify/cuda_to_ppu_mappings.py` is the authoritative symbol-level translation table, derived by scanning the ppu sdk headers: `cudastream_t` -> `hggcstream_t`, `cudaerror_t` -> `hggcerror_t`, and the `cublas`/`cudnn` families -> `acblas`/`acdnn`. `hggc-samples` holds the official sail 2.1 samples, including `samples/3_hggc_features/bf16_tensor_cell_gemm`. sources: `reference-projects/sailify`, `reference-projects/hggc-samples`. cuda to hggc porting map (sailify + hggc-samples) symbol translation table library renames idiomatic samples borrowed sm_89 cuda source or a cuda-derived assumption must be ported to t-head ppu / hggc a cuda api or math-library symbol has no obvious ppu equivalent an arch check reports sm_89 on ppu and a code path must be gated correctly hggc porting sailify hgcc toolchain",
    "tracks": null,
    "speedup_x": null,
    "refk_status": null
   },
   {
-   "id": "ppu.zw890.cuda.gemm.actlize",
+   "id": "ppu.zwm890p.cuda.gemm.actlize",
    "type": "doc",
    "level": "cross-operator",
    "status": "active",
-   "episode_key": "zw890|any|gemm|actlize|cross-operator",
-   "path": "records/doc/ppu/zw890/cuda/any/ppu.zw890.cuda.gemm.actlize.json",
+   "episode_key": "zwm890p|any|gemm|actlize|cross-operator",
+   "path": "records/doc/ppu/zwm890p/cuda/any/ppu.zwm890p.cuda.gemm.actlize.json",
    "title": "CUTLASS/CuTe re-engineered for PPU (actlize)",
    "retrieval": {
     "scope": {
      "vendor": "ppu",
-     "arch": "zw890",
+     "arch": "zwm890p",
      "architectures": [
-      "zw890"
+      "zwm890p"
      ],
      "product": "any",
      "dsl": "cuda",
@@ -43328,7 +43328,7 @@
      "shape_signature": {}
     },
     "generality": {
-     "arch": "zw890",
+     "arch": "zwm890p",
      "language": "cuda",
      "workload_family": "gemm-projection"
     },
@@ -43359,25 +43359,25 @@
    "tier": "provisional",
    "gain_pct": null,
    "page_path": "reference-projects/actlize",
-   "search_text": "ppu.zw890.cuda.gemm.actlize cutlass/cute re-engineered for ppu (actlize) reference for t-head ppu zw-m890p: cutlass/cute re-engineered for ppu (actlize) cutlass 3.6.0 re-engineered for ppu: the vendor's equivalent of cute plus the cutlass collective builders. `include/cute/arch/` carries `mma_ppu0015.hpp` and `copy_ppu0015_aiu.hpp` (plus ppu0010 variants) which are the ppu tensor-cell mma atoms and aiu/swizzled copy atoms that replace nvidia's `mma.sync` and tma atoms. ppu0015 is the m890 generation and carries the fp8/fp4 paths. use this to learn the correct atom, layout, and swizzle vocabulary for a ppu tiling before hand-rolling one. source: `reference-projects/actlize`. cutlass/cute re-engineered for ppu (actlize) mma atoms copy atoms and swizzle worked examples a ppu gemm or attention tiling needs the correct cute mma or copy atom shared-memory bank conflicts or swizzle layout must be reasoned about on zw-m890p fp8 or fp4 gemm is being targeted on ppu m890 gemm cute mma swizzle aiu fp8 fp4",
+   "search_text": "ppu.zwm890p.cuda.gemm.actlize cutlass/cute re-engineered for ppu (actlize) reference for t-head ppu zw-m890p: cutlass/cute re-engineered for ppu (actlize) cutlass 3.6.0 re-engineered for ppu: the vendor's equivalent of cute plus the cutlass collective builders. `include/cute/arch/` carries `mma_ppu0015.hpp` and `copy_ppu0015_aiu.hpp` (plus ppu0010 variants) which are the ppu tensor-cell mma atoms and aiu/swizzled copy atoms that replace nvidia's `mma.sync` and tma atoms. ppu0015 is the m890 generation and carries the fp8/fp4 paths. use this to learn the correct atom, layout, and swizzle vocabulary for a ppu tiling before hand-rolling one. source: `reference-projects/actlize`. cutlass/cute re-engineered for ppu (actlize) mma atoms copy atoms and swizzle worked examples a ppu gemm or attention tiling needs the correct cute mma or copy atom shared-memory bank conflicts or swizzle layout must be reasoned about on zw-m890p fp8 or fp4 gemm is being targeted on ppu m890 gemm cute mma swizzle aiu fp8 fp4",
    "tracks": null,
    "speedup_x": null,
    "refk_status": null
   },
   {
-   "id": "ppu.zw890.triton.any.triton-for-sail",
+   "id": "ppu.zwm890p.triton.any.triton-for-sail",
    "type": "doc",
    "level": "cross-operator",
    "status": "active",
-   "episode_key": "zw890|any|any|triton-for-sail|cross-operator",
-   "path": "records/doc/ppu/zw890/triton/any/ppu.zw890.triton.any.triton-for-sail.json",
+   "episode_key": "zwm890p|any|any|triton-for-sail|cross-operator",
+   "path": "records/doc/ppu/zwm890p/triton/any/ppu.zwm890p.triton.any.triton-for-sail.json",
    "title": "PPU Triton compiler and AIU lowering tests (triton-for-sail)",
    "retrieval": {
     "scope": {
      "vendor": "ppu",
-     "arch": "zw890",
+     "arch": "zwm890p",
      "architectures": [
-      "zw890"
+      "zwm890p"
      ],
      "product": "any",
      "dsl": "triton",
@@ -43386,7 +43386,7 @@
      "shape_signature": {}
     },
     "generality": {
-     "arch": "zw890",
+     "arch": "zwm890p",
      "language": "triton",
      "workload_family": "any"
     },
@@ -43414,7 +43414,7 @@
    "tier": "provisional",
    "gain_pct": null,
    "page_path": "reference-projects/triton-for-sail",
-   "search_text": "ppu.zw890.triton.any.triton-for-sail ppu triton compiler and aiu lowering tests (triton-for-sail) reference for t-head ppu zw-m890p: ppu triton compiler and aiu lowering tests (triton-for-sail) the vendor's triton fork for ppu: the compiler that actually lowers a triton or gluon kernel onto this part, so its passes and tests are ground truth for what lowers well versus what silently falls off the fast path. `python/test/unit/ppu/aiu/` exercises the aiu lowering op by op (`test_aiu_dot`, `test_aiu_addmm`, `test_aiu_binary`), and `python/test/unit/ppu/perf/06-fused-attention-aiu.py` is a fused attention written against the aiu path. `python/examples/gluon/01-attention-forward.py` shows the gluon-level formulation. source: `reference-projects/triton-for-sail`. ppu triton compiler and aiu lowering tests (triton-for-sail) aiu lowering coverage fused attention on the aiu path backend passes a triton or gluon kernel is being written for t-head ppu / zw-m890p a ppu triton kernel compiles but misses the aiu fast path it is unclear whether a triton op lowers onto the ppu aiu triton gluon aiu compiler-lowering",
+   "search_text": "ppu.zwm890p.triton.any.triton-for-sail ppu triton compiler and aiu lowering tests (triton-for-sail) reference for t-head ppu zw-m890p: ppu triton compiler and aiu lowering tests (triton-for-sail) the vendor's triton fork for ppu: the compiler that actually lowers a triton or gluon kernel onto this part, so its passes and tests are ground truth for what lowers well versus what silently falls off the fast path. `python/test/unit/ppu/aiu/` exercises the aiu lowering op by op (`test_aiu_dot`, `test_aiu_addmm`, `test_aiu_binary`), and `python/test/unit/ppu/perf/06-fused-attention-aiu.py` is a fused attention written against the aiu path. `python/examples/gluon/01-attention-forward.py` shows the gluon-level formulation. source: `reference-projects/triton-for-sail`. ppu triton compiler and aiu lowering tests (triton-for-sail) aiu lowering coverage fused attention on the aiu path backend passes a triton or gluon kernel is being written for t-head ppu / zw-m890p a ppu triton kernel compiles but misses the aiu fast path it is unclear whether a triton op lowers onto the ppu aiu triton gluon aiu compiler-lowering",
    "tracks": null,
    "speedup_x": null,
    "refk_status": null
