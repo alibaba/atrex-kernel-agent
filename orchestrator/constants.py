@@ -58,9 +58,11 @@ IMMUTABLE_BASELINE_PATHS = (
 )
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
-NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda")
-AMD_FRAMEWORKS = ("Triton", "FlyDSL")
-DEFAULT_FRAMEWORKS = ("Triton",)
+NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
+AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")
+# CuteDSL is omitted: that path has never been validated on PPU silicon.
+PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
+DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
 DEFAULT_SANDBOX_TIMEOUT = 600
 MAX_SANDBOX_TIMEOUT = 600
 

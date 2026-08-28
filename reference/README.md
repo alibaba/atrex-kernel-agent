@@ -56,6 +56,9 @@ workspace template.
 - Search `reference-projects/` only when the local knowledge base is insufficient.
 - Use `tools/profile_nvidia.sh` and `tools/classify_ncu.py` for NVIDIA evidence.
 - Use `tools/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.
+- Use `tools/profile_ppu.py` for T-Head PPU evidence; it is an `ncu`-compatible front end for
+  `acu` and must be reachable as `ncu` on PATH. See `reference/profile_guide.md` for activation
+  and the mandatory performance-counter release step.
 - Use `tools/compute_utilization.py` and the measurement/extraction helpers for supporting
   calculations; use `tools/memory_manager.py` only for workspace memory operations allowed by the
   current prompt.

@@ -646,6 +646,7 @@ payload = run_eval._run_eval_worker(
     checkpoint_dir=None,
     config_version="local-gateway-correctness-only-v1",
     clock_locked=args.clock_locked,
+    require_clock_locked=False,
     collect_kernel_events=False,
     candidate_timeout_s=args.candidate_timeout_s,
     perf_timeout_s=0,

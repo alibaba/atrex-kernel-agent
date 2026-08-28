@@ -27,8 +27,8 @@ The repository has one supported entry point, `orchestrator/optimize.py`. The in
 AKA supports:
 
 - SOL-ExecBench and native Atrex-Bench operator layouts;
-- NVIDIA and AMD targets through isolated sandbox execution;
-- Triton, CuteDSL, CUDA, and FlyDSL campaigns;
+- NVIDIA, AMD, and T-Head PPU (zw890) targets through isolated sandbox execution;
+- Triton, CuteDSL, CUDA, FlyDSL, and TileLang campaigns;
 - Claude, Qoder, Codex, and Pi coding-agent backends;
 - leaderboard and fail-closed production modes;
 - resumable, Git-isolated optimization with canonical measurement history.

@@ -34,9 +34,10 @@ Usage
         --max-iters 20 --token-budget 8000000 --target-util 90
 
     # omit --framework to launch one independent campaign per supported framework:
-    #   NVIDIA -> Triton, CuteDSL, Cuda
-    #   AMD    -> Triton, FlyDSL
-    #   other  -> Triton
+    #   NVIDIA -> Triton, CuteDSL, Cuda, TileLang
+    #   AMD    -> Triton, FlyDSL, TileLang
+    #   PPU    -> Triton, Cuda, TileLang
+    #   other  -> Triton, TileLang
     python orchestrator/optimize.py \
         --op-dir /path/to/op --platform H20 --workspace /path/to/runs
 
@@ -444,7 +445,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=("codex", "qoder", "claude"),
         default="",
         metavar="REVIEWER",
-        help="Reuse one reviewer session across episodes (currently implemented for codex).",
+        help="Reuse one reviewer session across episodes (implemented for codex and qoder).",
     )
     ap.add_argument(
         "--optimization-mode",
@@ -457,9 +458,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--framework",
         default="",
-        help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL. When omitted, launch all "
-        "frameworks supported by the detected hardware in parallel: NVIDIA uses "
-        "Triton/CuteDSL/Cuda, AMD uses Triton/FlyDSL, and unknown hardware uses Triton. "
+        help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL / TileLang. When omitted, "
+        "launch all frameworks supported by the detected hardware in parallel: NVIDIA uses "
+        "Triton/CuteDSL/Cuda/TileLang, AMD uses Triton/FlyDSL/TileLang, PPU uses "
+        "Triton/Cuda/TileLang, and unknown hardware uses Triton/TileLang. "
         "Each auto-dispatched production child is bound to its assigned framework.",
     )
     ap.add_argument(

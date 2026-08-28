@@ -12,6 +12,7 @@ proposal_file=""
 context_files=()
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 qoder_timeout="${ATREX_ASK_QODER_TIMEOUT:-600}"
+session_file="${ATREX_QODER_REVIEW_SESSION_FILE:-}"
 # Keep the independent review at maximum reasoning depth regardless of the active episode or
 # settings file. The explicit CLI flag below has precedence over configured defaults.
 reasoning_effort="max"
@@ -80,6 +81,23 @@ for ((index = 0; index < ${#context_files[@]}; index++)); do
     fi
 done
 
+# A campaign-persistent session runs from a dedicated directory, so caller-relative attachment
+# paths must be resolved while the original working directory is still in effect.
+to_absolute() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "$PWD/$1" ;;
+    esac
+}
+
+input_file="$(to_absolute "$input_file")"
+if [[ -n "$proposal_file" ]]; then
+    proposal_file="$(to_absolute "$proposal_file")"
+fi
+for ((index = 0; index < ${#context_files[@]}; index++)); do
+    context_files[index]="$(to_absolute "${context_files[$index]}")"
+done
+
 # A Qoder-owned episode already has Qoder's analysis available in the current session. Starting a
 # second Qoder process would add recursion without providing an independent backend perspective.
 if [[ "${ATREX_AGENT_CLI:-}" == "qodercli" ]]; then
@@ -113,6 +131,11 @@ if [[ "$qoder_bin" == */* ]]; then
 elif ! command -v "$qoder_bin" >/dev/null 2>&1; then
     echo "ask-qoder: qodercli is not installed or not on PATH" >&2
     exit 127
+fi
+
+if [[ -n "$session_file" && "$session_file" != /* ]]; then
+    echo "ask-qoder: ATREX_QODER_REVIEW_SESSION_FILE must be an absolute path" >&2
+    exit 2
 fi
 
 if [[ -n "$proposal_file" ]]; then
@@ -149,7 +172,6 @@ fi
 command=(
     "$qoder_bin"
     --print
-    --no-session-persistence
     --permission-mode dont_ask
     --model "$qoder_model"
     --reasoning-effort "$reasoning_effort"
@@ -169,19 +191,98 @@ done
 # Empty tools keeps the consultation read-only. Attachments provide all required context.
 command+=(--tools "" -- "$query")
 
-echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
-if qoder_response="$(python3 - "$qoder_timeout" "${command[@]}" <<'PY'
+if [[ -n "$session_file" ]]; then
+    echo "ask-qoder: running campaign-persistent read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
+else
+    echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
+fi
+if qoder_response="$(python3 - "$qoder_timeout" "$session_file" "${command[@]}" <<'PY'
+import json
 import os
+import pathlib
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 
 timeout = int(sys.argv[1])
-command = sys.argv[2:]
+session_file = pathlib.Path(sys.argv[2]) if sys.argv[2] else None
+command = sys.argv[3:]
 environment = os.environ.copy()
 environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+
+
+def load_session_id(path):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        session_id = value["session_id"]
+        uuid.UUID(session_id)
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        print(
+            f"ask-qoder: invalid persistent reviewer state: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    if value.get("schema_version") != 1:
+        print("ask-qoder: unsupported persistent reviewer state schema", file=sys.stderr)
+        raise SystemExit(2)
+    return session_id
+
+
+def write_session_id(path, session_id):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "session_id": session_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                stream,
+                indent=2,
+            )
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+review_cwd = None
+created_session_id = None
+if session_file is None:
+    command.insert(1, "--no-session-persistence")
+else:
+    # qodercli only looks for resumable sessions under the current working directory's project, so
+    # one stable directory is what keeps the reviewer resumable wherever the caller invoked this.
+    review_cwd = session_file.with_name(session_file.stem + "_cwd")
+    review_cwd.mkdir(parents=True, exist_ok=True)
+    if session_file.exists():
+        command[1:1] = ["--resume", load_session_id(session_file)]
+    else:
+        created_session_id = str(uuid.uuid4())
+        command[1:1] = ["--session-id", created_session_id]
+
 try:
     completed = subprocess.run(
-        command, check=False, timeout=timeout, env=environment
+        command,
+        check=False,
+        timeout=timeout,
+        env=environment,
+        cwd=None if review_cwd is None else str(review_cwd),
     )
 except subprocess.TimeoutExpired:
     print(f"ask-qoder: timed out after {timeout}s", file=sys.stderr)
@@ -189,6 +290,11 @@ except subprocess.TimeoutExpired:
 except OSError as exc:
     print(f"ask-qoder: failed to start qodercli: {exc}", file=sys.stderr)
     raise SystemExit(127)
+
+# The session already exists on disk here, so record it before the caller's marker validation can
+# reject the response: a retry must resume this session instead of orphaning it behind a new one.
+if created_session_id is not None and completed.returncode == 0:
+    write_session_id(session_file, created_session_id)
 
 return_code = completed.returncode
 if return_code < 0:

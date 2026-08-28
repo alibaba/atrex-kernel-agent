@@ -232,6 +232,91 @@ Key patterns to check:
 
 ---
 
+## PPU: Asight Compute (acu) (T-Head zw890)
+
+The PPU part is CUDA-source-compatible and its runtime reports `sm_89`, but it is not NVIDIA
+silicon and Nsight Compute does not exist for it. The ncu analog is `acu` from the asight suite:
+
+| Tool | Path | NVIDIA analog |
+|------|------|---------------|
+| `acu` | `/usr/local/PPU_SDK/asight/bin/acu` | `ncu` |
+| `asys` / `nsys` | `/usr/local/PPU_SDK/asight/bin/asys` | `nsys` |
+| `ppu-smi` | `/usr/local/PPU_SDK/ppu-smi/bin/ppu-smi` | `nvidia-smi` |
+
+### Quick Start
+
+`tools/profile_ppu.py` is an ncu-compatible front end for `acu`. Symlink it as `ncu` so the
+gateway's existing `--kind profile` path works unchanged:
+
+```bash
+ln -s $PWD/tools/profile_ppu.py /usr/local/cuda/bin/ncu
+```
+
+`/usr/local/cuda/bin` is already on the gateway PATH and is the path `_find_profile_tool`
+probes, so this needs no code change and no gateway restart. After that, profile through the
+normal route:
+
+```bash
+python tools/sandbox.py --kind profile --hardware local --url http://127.0.0.1:<port> \
+    --profiler ncu --profile-level sol -- python profile_driver.py
+```
+
+### Release the Performance Counters First (MANDATORY)
+
+A host-side `amperf-collector` holds the device PCM. Without releasing it `acu` starts
+normally and then aborts partway through:
+
+```
+[Asight]: Abort current profiling(PID:...): Device is not ready for profiling.
+```
+
+`dmesg --level=err` confirms the owner: `[alixpu] PPU0007 PCM is in use by app[amperf-collecto]!`
+
+The release is an **Enabled -> Disabled transition** of the GPM stream, not a state:
+
+```bash
+ppu-smi gpm -i <device> -s 1     # prime
+ppu-smi gpm -i <device> -s 0     # release
+```
+
+Issuing `-s 0` when the stream is already `Disabled` is a driver no-op and `acu` still aborts.
+`acu` re-enables the stream when it exits, so this must run before **every** profile.
+`tools/profile_ppu.py` does it automatically, scoped to `CUDA_VISIBLE_DEVICES` so it does not
+disturb GPUs owned by other campaigns. The `amperfd profmetric --pause` control lives on the
+host and is not reachable from inside the container, so this toggle is the in-container route.
+
+### acu vs ncu Command-Line Differences
+
+| ncu option | acu | Handling |
+|------------|-----|----------|
+| `--log-file PATH` | not supported | translated to `--csv-file PATH` |
+| `--target-processes all` | not supported | dropped |
+| `--csv`, `--profile-from-start`, `--kernel-name-base`, `--kernel-name`, `--set`, `--metrics` | supported | passed through |
+| `--set full` / `detailed` / `default` | supported | same set names as ncu |
+
+The emitted CSV has the same columns as ncu's (`Kernel Name`, `Metric Name`, `Metric Unit`,
+`Metric Value`, ...), so `_parse_ncu_csv` reads it directly.
+
+### Metric Name Mapping
+
+PPU uses `ppu__` and `cu__` where NVIDIA uses `gpu__`, `sm__`, and `dram__`. NVIDIA names are
+rejected outright (`[Asight]: Failed to find metric as following`). `tools/profile_ppu.py`
+translates on the way in and restores the NVIDIA names in the CSV so the gateway's SOL parsing
+works unchanged:
+
+| NVIDIA | PPU |
+|--------|-----|
+| `gpu__time_duration.sum` | `ppu__time_duration.sum` |
+| `sm__throughput.avg.pct_of_peak_sustained_elapsed` | `cu__throughput.avg.pct_of_peak_sustained_elapsed` |
+| `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` | `ppu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` |
+| `dram__throughput.avg.pct_of_peak_sustained_elapsed` | `ppu__dram_throughput.avg.pct_of_peak_sustained_elapsed` |
+| `sm__warps_active.avg.pct_of_peak_sustained_active` | `cu__warps_active.avg.pct_of_peak_sustained_active` |
+
+Discover other counters with `acu --query-metrics` (~1240 available) and section sets with
+`acu --list-sets`.
+
+---
+
 ## NVIDIA: Nsight Compute (ncu) (Hopper sm_90)
 
 ### Quick Start
@@ -480,3 +565,13 @@ Examples:
 | Profiled wrong kernel | `--launch-skip` incorrect | Re-run `ncu --print-summary per-kernel` to find correct index |
 | Sections show N/A | Used `--metrics` not `--set full` | Use `--set full` for complete data |
 | Very long profile time | Too many launches | Add `--launch-count 1` and `--kill yes` |
+
+### PPU
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `Device is not ready for profiling` (exit 101) | Host `amperf-collector` holds the device PCM | Force an Enabled -> Disabled GPM transition before every run (see above) |
+| GPM already `Disabled` but still aborts | `-s 0` on an already-disabled stream is a driver no-op | Prime with `-s 1` first, then `-s 0` |
+| `traced server does not exist` | asight env not sourced | `tools/profile_ppu.py` sets PATH/PYTHONPATH itself; otherwise `source /usr/local/PPU_SDK/asight/envsetup.sh` |
+| `ModuleNotFoundError: atrex_bench` | Gateway never puts `<bench>/src` on PYTHONPATH | Drop a `.pth` pointing at `<bench>/src` into site-packages |
+| Job killed at the timeout (exit `-15`) | `acu` replays every launch; a large reference means hundreds of kernels x 6 passes | Narrow with `--kernel-regex`, or use `--profile-level survey` |

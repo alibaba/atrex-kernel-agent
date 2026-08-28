@@ -5,7 +5,12 @@ import re
 import subprocess
 from pathlib import Path
 
-from .constants import AMD_FRAMEWORKS, DEFAULT_FRAMEWORKS, NVIDIA_FRAMEWORKS
+from .constants import (
+    AMD_FRAMEWORKS,
+    DEFAULT_FRAMEWORKS,
+    NVIDIA_FRAMEWORKS,
+    PPU_FRAMEWORKS,
+)
 from .optimization_policy import source_uses_gluon
 
 
@@ -14,19 +19,26 @@ def _hardware_token(value: object) -> str:
 
 
 def hardware_vendor(platform: str, arch: str = "") -> str:
-    """Return ``nvidia``, ``amd``, or ``unknown`` for framework dispatch.
+    """Return ``nvidia``, ``amd``, ``ppu``, or ``unknown`` for framework dispatch.
 
     Runtime architecture is authoritative because gateway device names can be
     desensitized. Platform-name matching is only a fallback for dry runs or an
     unavailable runtime probe.
+
+    PPU is the exception: it reports a borrowed ``sm_89``, so the runtime arch
+    cannot separate it from a genuine Ada part and the platform name is the only
+    signal that can. Its name check therefore runs before the arch match.
     """
+    token = _hardware_token(platform)
+    if re.match(r"^(?:PPU|ZW\d)", token):
+        return "ppu"
+
     runtime_arch = arch.strip().lower()
     if re.fullmatch(r"sm_?\d+", runtime_arch):
         return "nvidia"
     if re.fullmatch(r"gfx[0-9a-f]+", runtime_arch):
         return "amd"
 
-    token = _hardware_token(platform)
     if re.match(r"^(?:AMD|MI\d|RADEON|INSTINCT)", token):
         return "amd"
     if re.match(
@@ -44,6 +56,8 @@ def supported_frameworks(platform: str, arch: str = "") -> tuple[str, ...]:
         return NVIDIA_FRAMEWORKS
     if vendor == "amd":
         return AMD_FRAMEWORKS
+    if vendor == "ppu":
+        return PPU_FRAMEWORKS
     return DEFAULT_FRAMEWORKS
 
 

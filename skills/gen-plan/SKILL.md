@@ -25,9 +25,9 @@ implementation.
   automatically removed process scratch for isolation.
 - Do not edit source, run implementation tasks, create commits, or start another workflow.
 - The `ask_codex` and `ask_qoder` consultations are read-only. They are non-persistent by default;
-  an explicitly configured long Codex reviewer session remains read-only and campaign-private. Give
-  both reviewers the same candidate proposal and bounded evidence packet, isolate Codex from the
-  project, and disable Qoder tools.
+  an explicitly configured long Codex or Qoder reviewer session remains read-only and
+  campaign-private. Give both reviewers the same candidate proposal and bounded evidence packet,
+  isolate both from the project, and disable Qoder tools.
 - Preserve every requirement, constraint, measurement, search result, and rejected direction from
   the draft. The structured plan must be a superset of the draft.
 - Keep the original draft verbatim at the bottom of the plan between the template markers.
@@ -112,11 +112,14 @@ failure, the helper retries only the failed reviewer once; it does not rerun a s
 and does not retry quota, authentication, timeout, disabled, or missing-CLI failures.
 Both external reviewer processes always use maximum reasoning effort; episode/session settings,
 reviewer effort environment variables, and legacy `--reasoning-effort` arguments cannot lower it.
-By default each external review is ephemeral. `--long-reviewer-session codex` resumes one
-campaign-private, read-only Codex thread across episodes while continuing to send the complete
-current candidate proposal, draft, and bounded context on every call. Long Qoder and Claude reviewer
-sessions are not implemented and fail explicitly. Session state lives under `.atrex_long_horizon/`
-and must never enter a candidate commit.
+By default each external review is ephemeral. `--long-reviewer-session codex` or
+`--long-reviewer-session qoder` resumes one campaign-private, read-only reviewer thread across
+episodes while continuing to send the complete current candidate proposal, draft, and bounded
+context on every call. Long Claude reviewer sessions are not implemented and fail explicitly.
+Session state lives under `.atrex_long_horizon/` and must never enter a candidate commit. Because
+`qodercli` only resolves resumable sessions within the current working directory's project, a
+persistent Qoder reviewer runs from a dedicated directory alongside its state file, which also keeps
+it isolated from the candidate project.
 Each review returns its backend-specific summary marker followed by the same five assessment
 sections:
 
