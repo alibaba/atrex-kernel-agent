@@ -128,8 +128,8 @@ runtime-detected GPU vendor.
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
 3. Create one private branch/worktree per canonical version. The first two optimization episodes use
-   five reviewed fast `plan -> implement -> evaluator` trials per episode by default; later episodes
-   use the full evidence loop.
+   five fast `plan -> implement -> evaluator` trials per episode by default; later episodes use the
+   full evidence loop. The primary Agent uses maximum reasoning effort in both modes.
 4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
    bounded same-thread recovery for Claude and Codex.
 5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
@@ -166,12 +166,11 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
 - `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
 - The repository-native `gen-plan` skill is linked into every backend's local discovery tree. It
-  freezes a concrete candidate proposal and independently obtains read-only Codex and Qoder reviews
-  against that proposal and the same bounded evidence before cross-review synthesis. A matching
-  primary backend reviews in its current session to avoid
-  recursion. Before the first optimization episode, the campaign probes each external reviewer once,
-  caches the
-  result in private runtime state, and disables later calls to reviewers that were unavailable.
+  freezes a concrete candidate proposal and independently obtains the Codex and Qoder reviews enabled
+  for the current episode mode against that proposal and the same bounded evidence. A matching primary
+  backend reviews in its current session to avoid recursion. The campaign probes each reviewer when it
+  is first enabled, caches the result in private runtime state, and disables later calls to reviewers
+  that were unavailable.
 
 ### Sandbox execution
 
@@ -264,7 +263,8 @@ Production mode runs a dedicated framework-baseline session by default
 (`--framework-baseline=auto`). For a supervisor-seeded reference V0 it skips the redundant pre-V1
 policy review and pre-creates a minimal native `solution.json`. Before the implementation Agent starts,
 the supervisor gives the bounded public contract, immutable reference, input builder, and V0 evidence to
-isolated Codex and Qoder reviewers in parallel. Their correctness-only reviews are cached under
+the enabled isolated Codex and Qoder reviewers, in parallel when both are enabled. Their
+correctness-only reviews are cached under
 `.atrex_long_horizon/framework_baseline/`, reconciled in the V1 prompt, and never receive private shapes or
 permission to edit the candidate. Each reviewer may nominate at most two paths from a mechanically bounded
 local reference catalog. The supervisor prefers reviewer consensus, publishes no more than two exact paths,
@@ -293,8 +293,9 @@ repeat five times:
 select fastest passing hash-matched trial -> handoff
 ```
 
-Fast mode uses the normal `gen-plan` external Codex/Qoder review synthesis inside its planning phase,
-but does not run a separate research phase, profile, run multi-seed correctness, or run ABBA. The
+Fast mode uses the normal `gen-plan` synthesis with the reviewers enabled for fast episodes inside its
+planning phase. Those reviewers default off. Fast mode does not run a separate research phase,
+profile, run multi-seed correctness, or run ABBA. The
 sandbox records the evaluator result with the final `kernel.py` hash. The supervisor uses that result
 for correctness and compares it with the latest complete passing canonical incumbent measurement.
 `--fast-episodes 0` disables this path; another non-negative value changes its window.

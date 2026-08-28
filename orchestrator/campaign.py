@@ -58,7 +58,11 @@ from .optimization_policy import (
     production_kernel_violations,
     production_structure_violations,
 )
-from .plan_reviewers import discover_plan_reviewers, plan_reviewer_environment
+from .plan_reviewers import (
+    REVIEWER_ENVIRONMENT,
+    discover_plan_reviewers,
+    plan_reviewer_environment,
+)
 from .session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -104,7 +108,6 @@ _LONG_REVIEWER_SESSION_ENV = {
     "qoder": "ATREX_QODER_REVIEW_SESSION_FILE",
 }
 
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS = ("codex", "qodercli")
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
@@ -179,6 +182,12 @@ class Campaign:
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
     long_reviewer_session: str = ""
+    v1_ask_codex: bool = False
+    v1_ask_qoder: bool = False
+    fast_episode_ask_codex: bool = False
+    fast_episode_ask_qoder: bool = False
+    full_episode_ask_codex: bool = True
+    full_episode_ask_qoder: bool = True
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -324,9 +333,37 @@ class Campaign:
                 )
                 return
 
-    def agent_environment(self) -> dict[str, str]:
+    def _episode_plan_reviewers(self, episode_mode: str) -> tuple[str, ...]:
+        if episode_mode not in ("fast", "full"):
+            raise ValueError(f"unsupported episode mode: {episode_mode}")
+        return tuple(
+            reviewer
+            for reviewer in ("codex", "qoder")
+            if getattr(self, f"{episode_mode}_episode_ask_{reviewer}")
+        )
+
+    def _framework_baseline_correctness_reviewers(self) -> tuple[str, ...]:
+        return tuple(
+            reviewer
+            for reviewer, enabled in (
+                ("codex", self.v1_ask_codex),
+                ("qodercli", self.v1_ask_qoder),
+            )
+            if enabled
+        )
+
+    def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
+        if episode_mode:
+            enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
+            for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():
+                if reviewer in enabled_reviewers:
+                    continue
+                environment[enabled_name] = "0"
+                environment[reason_name] = (
+                    f"disabled by --no-{episode_mode}-episode-ask-{reviewer}"
+                )
         if self.long_reviewer_session:
             env_name = _LONG_REVIEWER_SESSION_ENV[self.long_reviewer_session]
             state_file = (
@@ -338,23 +375,31 @@ class Campaign:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         return environment
 
-    def ensure_plan_reviewer_availability(self) -> None:
-        """Probe optional plan reviewers once and reuse the campaign-local decision."""
-        if self._plan_reviewer_environment:
+    def ensure_plan_reviewer_availability(self, *, episode_mode: str) -> None:
+        """Probe the reviewers enabled for this episode mode at most once each."""
+        reviewers = self._episode_plan_reviewers(episode_mode)
+        if not reviewers:
+            return
+        if all(
+            REVIEWER_ENVIRONMENT[reviewer][0] in self._plan_reviewer_environment
+            for reviewer in reviewers
+        ):
             return
         value, reused = discover_plan_reviewers(
             self.workspace,
             agent_cli=self.agent_cli,
+            reviewers=reviewers,
         )
         self._plan_reviewer_environment = plan_reviewer_environment(value)
         statuses = []
-        for name in ("codex", "qoder"):
+        for name in reviewers:
             record = value["reviewers"][name]
             status = "available" if record["available"] else "disabled"
             statuses.append(f"{name}={status} ({record['reason']})")
         source = "cached" if reused else "startup probe"
         print(
-            f"[orchestrator] plan reviewers ({source}): " + "; ".join(statuses),
+            f"[orchestrator] {episode_mode} episode plan reviewers ({source}): "
+            + "; ".join(statuses),
             flush=True,
         )
 
@@ -989,6 +1034,8 @@ class Campaign:
         baseline_report.md. Review failure remains non-fatal here: the ordinary V1
         entry point validates the cache and retries synchronously when necessary.
         """
+        if not self._framework_baseline_correctness_reviewers():
+            return self._run_v0_evaluator()
         print(
             "[orchestrator] V0 evaluator: prefetching V1 correctness review in parallel",
             flush=True,
@@ -1756,7 +1803,7 @@ class Campaign:
         catalog = self._framework_baseline_reference_catalog()
         rank = {path: index for index, path in enumerate(catalog)}
         nominations: dict[str, dict[str, object]] = {}
-        for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS:
+        for reviewer in self._framework_baseline_correctness_reviewers():
             record = reviews.get(reviewer)
             if not isinstance(record, dict):
                 continue
@@ -1783,6 +1830,10 @@ class Campaign:
         digest.update(
             f"v1-correctness-review-v{_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION}"
             .encode()
+        )
+        digest.update(b"\0enabled-reviewers\0")
+        digest.update(
+            ",".join(self._framework_baseline_correctness_reviewers()).encode()
         )
         for value in (self.framework, self.platform, self.arch):
             digest.update(b"\0")
@@ -1818,12 +1869,15 @@ class Campaign:
         reviews = value.get("reviews")
         if not isinstance(reviews, dict):
             return None
+        enabled_reviewers = self._framework_baseline_correctness_reviewers()
+        if not enabled_reviewers:
+            return None
         if not any(
             isinstance(reviews.get(reviewer), dict)
             and reviews[reviewer].get("status") == "ok"
             and isinstance(reviews[reviewer].get("guidance"), str)
             and reviews[reviewer]["guidance"].strip()
-            for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS
+            for reviewer in enabled_reviewers
         ):
             return None
         selected_references = value.get("selected_references")
@@ -1973,26 +2027,39 @@ class Campaign:
             )
 
     def _ensure_framework_baseline_correctness_guidance(self) -> None:
-        """Ask Codex and Qoder concurrently for correctness-first V1 guidance."""
+        """Ask the configured V1 reviewers for correctness-first guidance."""
+        reviewers = self._framework_baseline_correctness_reviewers()
+        labels = [
+            "Qoder" if reviewer == "qodercli" else "Codex" for reviewer in reviewers
+        ]
+        if not reviewers:
+            print(
+                "[orchestrator] V1 pre-implementation correctness review: disabled by "
+                "configuration",
+                flush=True,
+            )
+            return
         if self._load_framework_baseline_correctness_guidance() is not None:
             print(
                 "[orchestrator] V1 pre-implementation correctness review: using cached "
-                "Codex/Qoder guidance",
+                + "/".join(labels)
+                + " guidance",
                 flush=True,
             )
             return
 
         print(
-            "[orchestrator] V1 pre-implementation correctness review: launching Codex "
-            "and Qoder in parallel",
+            "[orchestrator] V1 pre-implementation correctness review: launching "
+            + " and ".join(labels)
+            + (" in parallel" if len(reviewers) > 1 else ""),
             flush=True,
         )
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
             futures = {
                 reviewer: executor.submit(
                     self._run_framework_baseline_correctness_reviewer, reviewer
                 )
-                for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS
+                for reviewer in reviewers
             }
             completed = {
                 reviewer: future.result() for reviewer, future in futures.items()
@@ -2000,7 +2067,7 @@ class Campaign:
 
         reviews: dict[str, object] = {}
         statuses: list[str] = []
-        for reviewer in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEWERS:
+        for reviewer in reviewers:
             record, result = completed[reviewer]
             reviews[reviewer] = record
             if result is not None:
@@ -2032,8 +2099,8 @@ class Campaign:
         )
         if self._load_framework_baseline_correctness_guidance() is None:
             print(
-                "[orchestrator] WARNING: neither Codex nor Qoder produced valid V1 "
-                "correctness guidance; continuing with the public contract",
+                "[orchestrator] WARNING: no configured reviewer produced valid V1 correctness "
+                "guidance; continuing with the public contract",
                 file=sys.stderr,
                 flush=True,
             )
@@ -2057,28 +2124,44 @@ class Campaign:
         return "\n".join(lines).strip()
 
     def _framework_baseline_correctness_guidance_text(self) -> str:
+        reviewers = self._framework_baseline_correctness_reviewers()
+        if not reviewers:
+            return (
+                "## External pre-implementation correctness guidance\n\n"
+                "External V1 correctness review is disabled by configuration. Derive every "
+                "correctness requirement directly from the public contract and immutable "
+                "reference before editing.\n"
+            )
         value = self._load_framework_baseline_correctness_guidance()
         if value is None:
             return (
                 "## External pre-implementation correctness guidance\n\n"
-                "No valid external guidance is available. Derive every correctness requirement "
-                "directly from the public contract and immutable reference before editing.\n"
+                "No valid guidance from the configured reviewers is available. Derive every "
+                "correctness requirement directly from the public contract and immutable "
+                "reference before editing.\n"
             )
         reviews = value["reviews"]
         assert isinstance(reviews, dict)
+        reviewer_labels = [
+            "Qoder" if reviewer == "qodercli" else "Codex" for reviewer in reviewers
+        ]
         sections = [
             "## Mandatory external pre-implementation correctness guidance\n",
-            "Codex and Qoder independently reviewed the bounded public packet. Before editing "
-            "`kernel.py`, reconcile both reviews against the immutable reference. Shared "
-            "requirements are mandatory; reviewer suggestions never override the public contract.\n",
+            " and ".join(reviewer_labels)
+            + " reviewed the bounded public packet. Before editing `kernel.py`, reconcile the "
+            "available guidance against the immutable reference. Shared requirements are "
+            "mandatory; reviewer suggestions never override the public contract.\n",
         ]
-        for reviewer, label in (("codex", "Codex"), ("qodercli", "Qoder")):
+        for reviewer in reviewers:
+            label = "Qoder" if reviewer == "qodercli" else "Codex"
             record = reviews.get(reviewer)
             record = record if isinstance(record, dict) else {}
             sections.append(f"\n### {label}\n")
             if record.get("status") == "ok":
-                guidance = self._framework_baseline_guidance_without_reference_nominations(
-                    str(record.get("guidance", ""))
+                guidance = (
+                    self._framework_baseline_guidance_without_reference_nominations(
+                        str(record.get("guidance", ""))
+                    )
                 )
                 sections.append(guidance + "\n")
             else:
@@ -2094,7 +2177,7 @@ class Campaign:
                 assert isinstance(item, dict)
                 sections.append(
                     f"- `{item['path']}` — {item['purpose']} "
-                    f"(nominated by {item['votes']}/2 reviewers)\n"
+                    f"(nominated by {item['votes']}/{len(reviewers)} configured reviewers)\n"
                 )
             sections.append(
                 "Read only these exact files as static design evidence. Do not open sibling "

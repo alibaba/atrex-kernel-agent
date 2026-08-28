@@ -44,9 +44,9 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 - Do not profile. Never use `--kind profile`, `ncu`, `rocprofv3`, a profile wrapper, or create
   profile artifacts.
 - Do not start a separate research phase or the full `gpu-kernel-episode-loop` skill. Every trial's
-  planning phase must use its configured `gen-plan` flow and external Codex/Qoder reviews; keep
-  their evidence bounded to `kernel.py`, the public operator contract, prior trial journal evidence,
-  and canonical `memory/v*.json`.
+  planning phase must use its configured `gen-plan` flow and whichever Codex/Qoder reviews are
+  enabled for fast episodes; keep their evidence bounded to `kernel.py`, the public operator
+  contract, prior trial journal evidence, and canonical `memory/v*.json`.
 - Do not run multi-seed validation and do not run or simulate incumbent/candidate ABBA.
 - Never run GPU/JIT code on the host. Static source inspection is allowed; the official evaluator
   command below is the only GPU execution route and must run once per trial.
@@ -77,8 +77,8 @@ Read that kernel, recent canonical memory, and the structured results of earlier
 episode. Pick one small, coherent implementation change that is not a verbatim repeat of a failed
 trial. Write the trial's unique draft with its hypothesis, exact code change, expected effect, and
 rollback condition. Then run the matching backend-native generator below. Every invocation obtains
-the configured external Codex/Qoder reviews and writes a unique synthesized plan. Use these exact
-per-trial paths:
+the enabled external Codex/Qoder reviews, records disabled reviewer statuses, and writes a unique
+synthesized plan. Use these exact per-trial paths:
 
 {{FAST_TRIAL_PLAN_PATHS}}
 
@@ -89,9 +89,9 @@ paths with the corresponding unique paths above, while retaining direct/no-discu
 
 For trial `N`, use only the `Trial N` generator and the resulting
 `plans/v{{VERSION}}_trialN_plan.md`. Read it before editing and implement only its final bounded
-direction. An external reviewer that the campaign's availability probe explicitly disabled may be
-recorded as unavailable; do not replace it with an ad-hoc research phase. Do not collect profile
-data.
+direction. A reviewer disabled by episode configuration or by the campaign's availability probe
+must be recorded as disabled; do not replace it with an ad-hoc research phase. Do not collect
+profile data.
 
 ### 2. Implement — once per trial
 

@@ -21,17 +21,17 @@
 
 ### Codex Findings
 
-- Consultation status: <completed, current_codex_session, or unavailable with reason>
+- Consultation status: <completed, current_codex_session, disabled, or unavailable with reason>
 - Material findings: <concise Codex risks, gaps, direction, and validation advice>
 
 ### Qoder Findings
 
-- Consultation status: <completed, current_qoder_session, or unavailable with reason>
+- Consultation status: <completed, current_qoder_session, disabled, or unavailable with reason>
 - Material findings: <concise Qoder risks, gaps, direction, and validation advice>
 
 ### Cross-Reviewer Synthesis
 
-- Agreements: <where both reviews align and the supporting repository evidence>
+- Agreements: <where available reviews align and the supporting evidence, or not applicable>
 - Disagreements resolved: <conflict, selected disposition, and decisive evidence>
 - Candidate changes after review: <evidence-based corrections, or why no change was justified>
 - Adopted suggestions: <suggestion, source reviewer or both, and supporting evidence>

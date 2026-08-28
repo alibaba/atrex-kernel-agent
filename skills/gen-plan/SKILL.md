@@ -1,6 +1,6 @@
 ---
 name: gen-plan
-description: Generate a structured implementation plan from an evidence draft. Validate paths, obtain independent Codex and Qoder reviews, synthesize their advice against repository evidence, preserve the draft, and produce testable acceptance criteria and validation steps.
+description: Generate a structured implementation plan from an evidence draft. Validate paths, obtain configured independent Codex and Qoder reviews, synthesize available advice against repository evidence, preserve the draft, and produce testable acceptance criteria and validation steps.
 ---
 
 # Generate Plan
@@ -24,10 +24,10 @@ implementation.
 - During this workflow, persist only the requested plan file. Consultation helpers may use
   automatically removed process scratch for isolation.
 - Do not edit source, run implementation tasks, create commits, or start another workflow.
-- The `ask_codex` and `ask_qoder` consultations are read-only. They are non-persistent by default;
-  an explicitly configured long Codex or Qoder reviewer session remains read-only and
-  campaign-private. Give both reviewers the same candidate proposal and bounded evidence packet,
-  isolate both from the project, and disable Qoder tools.
+- Enabled `ask_codex` and `ask_qoder` consultations are read-only. They are non-persistent by
+  default; an explicitly configured long Codex or Qoder reviewer session remains read-only and
+  campaign-private. Give every enabled reviewer the same candidate proposal and bounded evidence
+  packet, isolate both from the project, and disable Qoder tools.
 - Preserve every requirement, constraint, measurement, search result, and rejected direction from
   the draft. The structured plan must be a superset of the draft.
 - Keep the original draft verbatim at the bottom of the plan between the template markers.
@@ -79,20 +79,20 @@ In `direct` mode, make conservative assumptions and record unresolved material c
 `Pending Decisions`; do not pause for questions. In `discussion` mode, ask only questions whose
 answers materially change scope, correctness, or acceptance.
 
-### 4. Obtain independent Codex and Qoder reviews
+### 4. Obtain configured independent reviews
 
-The campaign probes both optional reviewers once before the first optimization episode and caches
-the decision in its private runtime state. A reviewer disabled by that startup probe must not be
-retried by later plans in the same campaign; retain the helper's
-`disabled_after_startup_probe` status and recorded reason. Campaign restarts reuse the same cached
-decision.
+The campaign independently configures Codex and Qoder for fast and full episodes. It probes a
+reviewer only when that reviewer is first enabled for the current episode mode, then caches the
+availability decision in private runtime state. A reviewer disabled by configuration or by its
+availability probe must not be retried; retain the helper's `disabled` status and recorded reason.
+Campaign restarts reuse cached availability decisions.
 
-After completing the initial analysis, freeze one evidence packet and use the bundled dual-review
-helper before finalizing the plan direction. Give both reviewers the candidate proposal, original
-draft, and the same small set of directly relevant text files, normally `README.md`, `kernel.py`, the
-latest canonical memory entry, and source or profile summaries cited by the draft. The candidate is
-the primary review target; the draft and context are evidence for testing its claims. Never include
-credentials, raw secrets, unrelated files, or large binary profile artifacts.
+After completing the initial analysis, freeze one evidence packet and use the bundled review helper
+before finalizing the plan direction. Give every enabled reviewer the candidate proposal, original
+draft, and the same small set of directly relevant text files, normally `README.md`, `kernel.py`,
+the latest canonical memory entry, and source or profile summaries cited by the draft. The candidate
+is the primary review target; the draft and context are evidence for testing its claims. Never
+include credentials, raw secrets, unrelated files, or large binary profile artifacts.
 
 ```bash
 bash skills/gen-plan/scripts/ask-reviewers.sh \
@@ -104,13 +104,13 @@ bash skills/gen-plan/scripts/ask-reviewers.sh \
 
 `--proposal` is required and must name the non-empty frozen candidate proposal in process scratch.
 Add other `--context` arguments only when they materially affect the plan. The helper starts the
-applicable external reviewers concurrently so neither can see or anchor on the other's response.
+enabled external reviewers concurrently so neither can see or anchor on the other's response.
 When proposal, draft, and context would exceed Qoder's five-attachment limit, the helper folds all
-context files into one labeled temporary bundle and gives that identical bundle to both reviewers.
-Do not manually remove evidence or issue a second full dual-review call. For an eligible transient
-failure, the helper retries only the failed reviewer once; it does not rerun a successful reviewer
-and does not retry quota, authentication, timeout, disabled, or missing-CLI failures.
-Both external reviewer processes always use maximum reasoning effort; episode/session settings,
+context files into one labeled temporary bundle and gives that identical bundle to every enabled
+reviewer. Do not manually remove evidence or issue a second full review call. For an eligible
+transient failure, the helper retries only the failed reviewer once; it does not rerun a successful
+reviewer and does not retry quota, authentication, timeout, disabled, or missing-CLI failures.
+Enabled external reviewer processes always use maximum reasoning effort; episode/session settings,
 reviewer effort environment variables, and legacy `--reasoning-effort` arguments cannot lower it.
 By default each external review is ephemeral. `--long-reviewer-session codex` or
 `--long-reviewer-session qoder` resumes one campaign-private, read-only reviewer thread across
@@ -130,24 +130,29 @@ sections:
 - `VALIDATION_RECOMMENDATIONS`
 - `QUESTIONS_OR_ASSUMPTIONS`
 
-If the current episode backend is Codex or Qoder, first review the frozen candidate proposal and
-retain that backend's review in the current session using the same sections. Only then run the
-helper; it skips the matching nested process and obtains the other backend's independent review.
-Mark the retained review status
-`current_codex_session` or `current_qoder_session`. Do not revise it after seeing the external review;
-resolve new information only during synthesis. Claude and Pi backends use both external reviewers.
+If the current episode backend is Codex or Qoder and its matching
+`ATREX_PLAN_REVIEW_*_ENABLED` value is not `0`, first review the frozen candidate proposal and retain
+that backend's review in the current session using the same sections. Only then run the helper; it
+skips the matching nested process and obtains any other enabled backend's independent review. Mark
+the retained review status `current_codex_session` or `current_qoder_session`. Do not revise it after
+seeing the external review; resolve new information only during synthesis. If the matching reviewer
+is disabled, do not create an in-session substitute review; let the helper record `disabled`.
 
-After the helper's selective retry, if either reviewer is unavailable, times out, or fails, do not
-fabricate its advice or rerun the successful reviewer. In `direct` mode, continue with the available
-review and conservative analysis, recording each status and failure reason. If both fail, continue
-using only the primary analysis and label the result as unreviewed. In `discussion` mode, ask whether
-to retry only the failed reviewer or continue with partial or no independent review.
+After the helper's selective retry, if an enabled reviewer is unavailable, times out, or fails, do
+not fabricate its advice or rerun the successful reviewer. In `direct` mode, continue with the
+available review and conservative analysis, recording each status and failure reason. If every
+enabled reviewer fails, continue using only the primary analysis and label the result as unreviewed.
+In `discussion` mode, ask whether to retry only the failed reviewer or continue with partial or no
+independent review. A reviewer explicitly marked `disabled` is not a failure and must not trigger a
+retry question. If every reviewer is disabled, continue with primary analysis and label the plan as
+intentionally unreviewed.
 
-### 5. Synthesize both reviews and generate the plan
+### 5. Synthesize available reviews and generate the plan
 
-Compare the Codex and Qoder reviews only after both have completed. Treat agreement as a useful
-confidence signal, not proof, and resolve disagreement from the original draft and repository
-evidence rather than by majority vote. Evaluate every recommendation as follows:
+Compare all available reviews only after the helper has completed. When both are enabled, treat
+agreement as a useful confidence signal, not proof, and resolve disagreement from the original
+draft and repository evidence rather than by majority vote. Evaluate every recommendation as
+follows:
 
 1. Adopt a suggestion only when it strengthens the selected evidence-to-action chain, closes a
    correctness gap, or makes validation more deterministic.
@@ -163,15 +168,16 @@ Record how the frozen candidate changed after review. Every material correction 
 reviewer and supporting evidence; if the candidate remains unchanged, state why the reviews did not
 justify a change.
 
-Both reviewers are advisory, not authoritative. The final plan must remain a superset of the human
-draft and must still contain exactly one optimization category.
+Available reviewers are advisory, not authoritative. The final plan must remain a superset of the
+human draft and must still contain exactly one optimization category.
 
 Use `skills/gen-plan/templates/gen-plan-template.md` as the output schema. Replace every placeholder
 with concrete content. The plan must include:
 
 - the goal and the profile/research evidence that motivates it;
-- Codex and Qoder consultation status, their material findings, agreements, disagreements, and the
-  suggestions adopted, rejected, or deferred with reasons;
+- Codex and Qoder consultation status (including configured-disabled status), available material
+  findings, agreements, disagreements, and the suggestions adopted, rejected, or deferred with
+  reasons;
 - exactly one optimization category and its evidence-to-inference-to-action chain;
 - acceptance criteria in `AC-N` form, each with positive and negative tests;
 - upper and lower scope boundaries plus allowed and prohibited choices;
@@ -190,7 +196,8 @@ must not be prescribed as implementation naming.
 Before writing, verify that the plan:
 
 - does not omit or contradict the draft;
-- uses both reviews selectively and records the disposition of material suggestions and conflicts;
+- uses available reviews selectively and records the disposition of material suggestions and
+  conflicts;
 - records the frozen candidate and the evidence-based changes made after review;
 - proposes only one attributable optimization category;
 - names concrete files and validation commands;
