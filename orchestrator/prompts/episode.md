@@ -86,6 +86,21 @@ and do not repeat a rejected direction unless new evidence or a materially diffe
 changes the expected result. Detailed within-episode journals remain archived under
 `.atrex_long_horizon/episodes/` and are not part of the inherited prompt context.
 
+## Wiki attribution contract
+
+GPU Wiki query responses emit a stable `query_id` and canonical `store::record` ids. Whenever a returned record
+materially influences an experiment or is explicitly evaluated and rejected, add `wiki_usage` to
+that experiment's journal append. Each row must contain the emitted `query_id`, an actually returned
+`wiki_id`, a disposition of `applied`, `partially_applied`, `reference_only`, or `rejected`, plus a
+short `use` and observable `evidence`. Preserve repeated use in separate experiments; do not dedupe
+across the episode. Every experiment must set `wiki_usage_status` to `declared` with non-empty usage,
+`no_material_use` when Wiki was queried without attributable use, or `not_queried` when it was not
+queried. For `declared` and `no_material_use`, include `wiki_query_ids` with every Wiki query considered
+by the experiment; omit it for `not_queried`. Record `evaluation.correctness`, `evaluation.performance`, optional evaluator latency/hash,
+and an explicit decision so attribution can be joined to the experiment outcome.
+Malformed Wiki telemetry is diagnostic only: the journal drops bad rows into `wiki_usage_errors`
+without invalidating the optimization experiment or its terminal handoff.
+
 ## Engineering loop
 
 `skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
@@ -132,8 +147,11 @@ git commit -m "v{{VERSION}}: kernel candidate"
 candidate_commit=$(git rev-parse HEAD)
 {{JOURNAL_COMMAND}} finalize --path {{JOURNAL_PATH_SHELL}} --state candidate_ready \
   --candidate-commit "$candidate_commit" \
-  --outcome-json '{"summary":"...","next_directions":["..."]}'
+  --outcome-json '{"summary":"...","next_directions":["..."],"selected_experiment_index":N}'
 ```
+
+Use the one-based journal index of the experiment selected for handoff. Its structured evaluation
+must pass correctness and its decision must be `promote` or `keep_as_best`.
 
 For `pivot` or `blocked`, finalize with that state and omit `--candidate-commit`. The journal must
 contain at least one structured experiment and a non-empty outcome summary.

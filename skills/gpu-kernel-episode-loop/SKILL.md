@@ -154,6 +154,8 @@ Search in this order and stop when one actionable direction is supported:
    or store gaps. Pass `--exclude <ids-already-read>` on later queries and use `--max-bytes` for a hard
    context bound. The structured `query_wiki.py` and `query_hardware.py` tools remain available when the
    exact address is already known; never drop architecture scope to manufacture a match.
+   Preserve the response's `query_id` together with the canonical `store::record` ids you use or reject so the
+   decisive experiment can declare its Wiki attribution in the native journal.
 2. `reference-projects/` only when the local wiki is insufficient.
 3. Public primary sources only when local sources do not answer the question.
 
@@ -210,8 +212,13 @@ progress view in the incumbent workspace.
 
 ```bash
 <JOURNAL_CLI> append --path <JOURNAL_PATH> \
-  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","decision":"continue|revert|pivot"}'
+  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":""},"decision":"keep_as_best|promote|reject_and_continue|revert|pivot|blocked","wiki_usage_status":"declared","wiki_query_ids":["<query-id>"],"wiki_usage":[{"query_id":"<query-id>","wiki_id":"<returned-wiki-id>","disposition":"applied|partially_applied|reference_only|rejected","use":"...","evidence":"..."}]}'
 ```
+
+Use `declared` only with non-empty `wiki_usage`. Include `wiki_query_ids` for both `declared` and
+`no_material_use`; omit both arrays for `not_queried`.
+Do not invent ids and do not collapse repeated use across experiments. Invalid Wiki rows are omitted
+with `wiki_usage_errors`; this diagnostic field never blocks the experiment or handoff.
 
 ## Leaving the loop
 

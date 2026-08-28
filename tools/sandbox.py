@@ -190,6 +190,8 @@ TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
     "source validation failed",
+    "deps_install_failed",
+    "gateway_dependency_install_failed",
     "http 404",
     "http 413",
     "http 501",
