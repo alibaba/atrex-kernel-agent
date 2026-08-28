@@ -60,7 +60,7 @@ EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
 FAST_POLICY_REVIEW_REQUEST_PATH = Path(
     ".atrex_long_horizon/policy_review_request.json"
 )
-FAST_REASONING_EFFORT = "xhigh"
+FAST_REASONING_EFFORT = "max"
 FULL_REASONING_EFFORT = "max"
 
 
@@ -1871,9 +1871,6 @@ class LongHorizonCampaign:
                 reason = "budget: token-budget"
                 break
             resumed = recovered_episode is not None
-            # Planning uses the same external-review synthesis in fast and full modes.
-            # The probe is cached, so this is effectively once per campaign.
-            self.base_campaign.ensure_plan_reviewer_availability()
             if recovered_episode is not None:
                 worktree, active = recovered_episode
                 recovered_episode = None
@@ -1886,6 +1883,16 @@ class LongHorizonCampaign:
                     if mode in {"fast", "full"}
                     else self._is_fast_episode(episode)
                 )
+            else:
+                episode = state.episodes + 1
+                fast_mode = self._is_fast_episode(episode)
+
+            episode_mode = "fast" if fast_mode else "full"
+            self.base_campaign.ensure_plan_reviewer_availability(
+                episode_mode=episode_mode
+            )
+
+            if resumed:
                 active.setdefault("mode", "fast" if fast_mode else "full")
                 active.setdefault(
                     "fast_trials", self.fast_trials if fast_mode else None
@@ -1895,8 +1902,6 @@ class LongHorizonCampaign:
                         self.base_campaign, worktree.path
                     )
             else:
-                episode = state.episodes + 1
-                fast_mode = self._is_fast_episode(episode)
                 memory_version = main_adapter.latest_version(self.workspace) + 1
                 base_commit = git_head(self.workspace)
                 worktree = EpisodeWorktree.plan(
@@ -1965,7 +1970,9 @@ class LongHorizonCampaign:
                 "ATREX_TELEMETRY_ITERATION_ID": f"episode-{episode:04d}",
                 "ATREX_TELEMETRY_ATTEMPT_ID": "invocation",
             }
-            telemetry_environment.update(self.base_campaign.agent_environment())
+            telemetry_environment.update(
+                self.base_campaign.agent_environment(episode_mode=episode_mode)
+            )
             policy_stop: Event | None = None
             policy_executor: ThreadPoolExecutor | None = None
             policy_future: Future[None] | None = None

@@ -97,14 +97,6 @@ fi
 for ((index = 0; index < ${#context_files[@]}; index++)); do
     context_files[index]="$(to_absolute "${context_files[$index]}")"
 done
-
-# A Qoder-owned episode already has Qoder's analysis available in the current session. Starting a
-# second Qoder process would add recursion without providing an independent backend perspective.
-if [[ "${ATREX_AGENT_CLI:-}" == "qodercli" ]]; then
-    echo "ASK_QODER_SKIPPED: current agent backend is qodercli; use the current session's review"
-    exit 0
-fi
-
 reviewer_enabled="${ATREX_PLAN_REVIEW_QODER_ENABLED:-}"
 reviewer_reason="${ATREX_PLAN_REVIEW_QODER_REASON:-}"
 if [[ -z "$reviewer_enabled" ]]; then
@@ -117,8 +109,15 @@ if [[ -z "$reviewer_enabled" ]]; then
     fi
 fi
 if [[ "$reviewer_enabled" == "0" ]]; then
-    reason="${reviewer_reason:-disabled by the campaign startup probe}"
+    reason="${reviewer_reason:-disabled by campaign configuration or availability probe}"
     echo "ASK_QODER_DISABLED: $reason"
+    exit 0
+fi
+
+# A Qoder-owned episode already has Qoder's analysis available in the current session. Starting a
+# second Qoder process would add recursion without providing an independent backend perspective.
+if [[ "${ATREX_AGENT_CLI:-}" == "qodercli" ]]; then
+    echo "ASK_QODER_SKIPPED: current agent backend is qodercli; use the current session's review"
     exit 0
 fi
 

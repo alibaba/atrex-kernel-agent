@@ -1786,24 +1786,6 @@ def _typed_fallback_allowed(detail: object) -> bool:
     return any(reason in text for reason in TYPED_FALLBACK_REASONS)
 
 
-def _typed_source_validation_failure(detail: object) -> bool:
-    text = str(detail).lower()
-    return "source validation failed" in text or "invalid_source" in text
-
-
-def _typed_source_validation_diagnostic(detail: object) -> str:
-    lines = [line.strip() for line in str(detail).splitlines() if line.strip()]
-    relevant = [
-        line
-        for line in lines
-        if line.startswith("blocked imports:")
-        or line.startswith("-")
-        or "source validation failed" in line.lower()
-        or "invalid_source" in line.lower()
-    ]
-    return " | ".join((relevant or lines)[:12])[:2000]
-
-
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -2635,44 +2617,6 @@ def _run_typed_gateway(
     jobs: list[dict[str, Any]] = []
     for proc in processes:
         detail = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode and generalized and _typed_source_validation_failure(
-            detail
-        ):
-            diagnostic = _typed_source_validation_diagnostic(detail)
-            result = _mask_generalized_result(
-                workspace,
-                {
-                    "all_pass": False,
-                    "failures": [f"candidate source validation failed: {diagnostic}"],
-                    "latency_us_geomean": 0.0,
-                    "latency_us_arith_mean": 0.0,
-                    "latency_us_by_shape": {},
-                    "speedup_vs_ref_mean": None,
-                    "speedup_vs_ref_geomean": None,
-                    "performance_score": None,
-                    "performance_objective": PERFORMANCE_OBJECTIVE,
-                    "max_abs_err": 0.0,
-                    "max_rel_err": 0.0,
-                    "evaluator": "atrex-gpu-gateway/run/source-validation",
-                    "eval_id": None,
-                    "actionable_diagnostics": [
-                        {
-                            "stage": "candidate_source",
-                            "message": diagnostic,
-                        }
-                    ],
-                },
-            )
-            _record_episode_evaluation(workspace, result, gateway_kind=kind)
-            print(
-                "[sandbox] candidate source validation failed: " + diagnostic,
-                file=sys.stderr,
-            )
-            print(
-                TEST_RESULT_PREFIX
-                + json.dumps(result, ensure_ascii=False, allow_nan=False)
-            )
-            return proc.returncode
         if proc.returncode and _typed_fallback_allowed(detail):
             print(
                 f"[sandbox] gateway {kind} interface rejected this request; using dev",

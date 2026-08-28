@@ -17,17 +17,18 @@ agent in this repository to translate the task into that command and start the c
 The orchestrator verifies required submodules before starting and initializes missing ones
 automatically; the large `reference-projects/` collection remains optional.
 
-The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests
-independent, read-only reviews from Codex and Qoder against the same proposal and bounded repository
-evidence. It resolves their agreements and disagreements before producing the final plan. A
-Codex- or Qoder-owned episode performs its matching review in the current session to avoid recursion;
-external reviewers are probed once before the first optimization episode. Fast and full modes both
-use this reviewed planning path. Reviews are non-persistent
-by default; an optional campaign-private Codex reviewer thread may span episodes. The campaign
-caches that decision under `.atrex_long_horizon/`, reuses it after restarts, and never retries a
-reviewer that failed the startup probe. An unavailable reviewer is recorded explicitly and does not
-discard the other review. External `ask-codex` and `ask-qoder` consultations always run with maximum
-reasoning effort, independently of the primary episode's configured effort.
+The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
+configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
+repository evidence. V1, fast episodes, and full episodes each have independent Codex and Qoder
+switches. V1 and fast reviewers default off; full reviewers default on. A Codex- or Qoder-owned
+episode performs an enabled matching review in the current session to avoid recursion. The campaign
+probes a reviewer only when
+it is first enabled for an episode mode, caches that decision under `.atrex_long_horizon/`, reuses it
+after restarts, and never retries a reviewer that failed the probe. Reviews are non-persistent by
+default; an optional campaign-private Codex reviewer thread may span episodes. Disabled and
+unavailable reviewers are recorded explicitly without discarding available reviews. Enabled
+external consultations always run with maximum reasoning effort, independently of the primary
+episode's configured effort.
 
 ## 1. Clone the Repository
 
@@ -100,13 +101,14 @@ python orchestrator/optimize.py \
    full-workload base-seed evaluation, and records canonical `memory/v0.json` without launching a
    coding Agent.
 4. **Establish V1 when enabled.** `--framework-baseline=auto` creates a self-contained
-   framework-native V1 in production mode. Read-only reviewers provide bounded correctness guidance;
-   the coding Agent implements and smoke-tests, while the supervisor owns full evaluation, policy
-   review, memory, and the final commit.
+   framework-native V1 in production mode. When enabled, read-only reviewers provide bounded
+   correctness guidance; the coding Agent implements and smoke-tests, while the supervisor owns full
+   evaluation, policy review, memory, and the final commit.
 5. **Run isolated optimization episodes.** Each episode owns one candidate direction in a private
-   Git branch and worktree. By default, the first two episodes run five reviewed
-   `plan -> implement -> evaluator` trials without profiling, multi-seed validation, or ABBA. Later
-   episodes use the full profile/research/plan/edit/repair loop.
+   Git branch and worktree. By default, the first two episodes run five
+   `plan -> implement -> evaluator` trials at maximum primary-Agent reasoning effort without
+   profiling, multi-seed validation, or ABBA. Later episodes use the full
+   profile/research/plan/edit/repair loop.
 6. **Verify and promote.** Fast mode compares the fastest passing hash-matched trial with canonical
    incumbent memory. Full mode runs an independent incumbent/candidate ABBA comparison in one
    isolated GPU allocation. Production also applies its fail-closed policy review. Only a strict
@@ -114,7 +116,6 @@ python orchestrator/optimize.py \
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-
 GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
@@ -226,14 +227,14 @@ leaderboard campaign.
 
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
 session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
-supervisor first runs isolated Codex and Qoder correctness reviews concurrently over the bounded public
-contract and immutable reference. Reviewers nominate only from a bounded local path catalog; the supervisor
-reconciles their choices and injects at most two exact reference paths alongside both reviews. V1 reads only
-that shortlist without recursively browsing siblings. The reviews are cached for restart and never receive
-private shapes or write access to the candidate. The coding Agent implements and smoke-tests only, without
-full evaluation, memory writing, or commits. The supervisor then runs policy review in parallel with one
-combined full-workload evaluator that measures the base seed and checks five additional seeds, writes memory,
-and pins V1. Use
+supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
+contract and immutable reference, concurrently when both are enabled. Reviewers nominate only from a
+bounded local path catalog; the supervisor reconciles their choices and injects at most two exact reference
+paths alongside the available reviews. V1 reads only that shortlist without recursively browsing siblings.
+The reviews are cached for restart and never receive private shapes or write access to the candidate. The
+coding Agent implements and smoke-tests only, without full evaluation, memory writing, or commits. The
+supervisor then runs policy review in parallel with one combined full-workload evaluator that measures the
+base seed and checks five additional seeds, writes memory, and pins V1. Use
 `--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed
 optimization directly from V0. A Triton campaign escalates to Gluon after three consecutive stalls
 by default; once triggered, conversion retries until correctness and performance parity pass, and
@@ -253,6 +254,16 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex, qoder)
+--v1-ask-codex / --no-v1-ask-codex                 Configure ask-codex for V1 (default: off)
+--v1-ask-qoder / --no-v1-ask-qoder                 Configure ask-qoder for V1 (default: off)
+--fast-episode-ask-codex / --no-fast-episode-ask-codex
+                                                    Configure fast ask-codex (default: off)
+--fast-episode-ask-qoder / --no-fast-episode-ask-qoder
+                                                    Configure fast ask-qoder (default: off)
+--full-episode-ask-codex / --no-full-episode-ask-codex
+                                                    Configure full ask-codex (default: on)
+--full-episode-ask-qoder / --no-full-episode-ask-qoder
+                                                    Configure full ask-qoder (default: on)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never

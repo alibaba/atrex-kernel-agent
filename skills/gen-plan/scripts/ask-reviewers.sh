@@ -187,7 +187,7 @@ def run_reviewer(spec, reviewer_args):
     if completed.returncode == 0 and stdout.startswith(skip_marker):
         status = f"current_{name.lower()}_session"
     elif completed.returncode == 0 and stdout.startswith(disabled_marker):
-        status = "disabled_after_startup_probe"
+        status = "disabled"
     elif completed.returncode == 0:
         status = "completed"
     else:

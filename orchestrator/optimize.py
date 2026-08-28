@@ -5,7 +5,7 @@ Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
 Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
-By default the first two post-baseline episodes use five reviewed fast plan/implement/evaluator
+By default the first two post-baseline episodes use five fast plan/implement/evaluator
 trials per episode;
 later episodes use the full profile/research/repair loop. The supervisor squash-promotes only a
 strict, correctness-passing improvement, using canonical-memory comparison in fast mode and a
@@ -447,6 +447,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         metavar="REVIEWER",
         help="Reuse one reviewer session across episodes (implemented for codex and qoder).",
     )
+    for stage, stage_label in (
+        ("v1", "V1 framework-baseline"),
+        ("fast-episode", "fast episodes"),
+        ("full-episode", "full episodes"),
+    ):
+        default_enabled = stage == "full-episode"
+        for reviewer in ("codex", "qoder"):
+            ap.add_argument(
+                f"--{stage}-ask-{reviewer}",
+                action=argparse.BooleanOptionalAction,
+                default=default_enabled,
+                help=(
+                    f"Configure ask-{reviewer} for {stage_label} "
+                    f"(default: {'on' if default_enabled else 'off'})."
+                ),
+            )
     ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
@@ -676,6 +692,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"sandbox_hardware={sandbox_hardware} "
         f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
         f"frameworks={','.join(frameworks)} "
+        "reviewers="
+        f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
+        f"qoder={'on' if args.v1_ask_qoder else 'off'}],"
+        f"fast[codex={'on' if args.fast_episode_ask_codex else 'off'},"
+        f"qoder={'on' if args.fast_episode_ask_qoder else 'off'}],"
+        f"full[codex={'on' if args.full_episode_ask_codex else 'off'},"
+        f"qoder={'on' if args.full_episode_ask_qoder else 'off'}] "
         "runtime_arch="
         f"{arch or 'UNKNOWN (detect failed)'} "
         f"(device name / vendor-smi may be desensitized; trusting the runtime API)",
@@ -727,6 +750,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,
         long_reviewer_session=args.long_reviewer_session,
+        v1_ask_codex=args.v1_ask_codex,
+        v1_ask_qoder=args.v1_ask_qoder,
+        fast_episode_ask_codex=args.fast_episode_ask_codex,
+        fast_episode_ask_qoder=args.fast_episode_ask_qoder,
+        full_episode_ask_codex=args.full_episode_ask_codex,
+        full_episode_ask_qoder=args.full_episode_ask_qoder,
         convert_after=args.convert_after,
     )
     if latest_version(campaign.workspace) < 0:

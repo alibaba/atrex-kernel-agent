@@ -136,8 +136,9 @@ def _valid_cache(value: Any) -> bool:
     reviewers = value.get("reviewers")
     if not isinstance(reviewers, dict):
         return False
-    for name in _REVIEWER_SPECS:
-        record = reviewers.get(name)
+    if any(name not in _REVIEWER_SPECS for name in reviewers):
+        return False
+    for record in reviewers.values():
         if not isinstance(record, dict) or not isinstance(
             record.get("available"), bool
         ):
@@ -171,13 +172,35 @@ def discover_plan_reviewers(
     workspace: Path,
     *,
     agent_cli: str,
+    reviewers: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Load a campaign's reviewer decision or probe each reviewer exactly once."""
+    """Load cached decisions and probe only newly requested reviewers."""
+    requested_names = tuple(_REVIEWER_SPECS if reviewers is None else reviewers)
+    unknown = set(requested_names) - set(_REVIEWER_SPECS)
+    if unknown:
+        raise ValueError(f"unknown plan reviewers: {', '.join(sorted(unknown))}")
+    requested_names = tuple(
+        name for name in _REVIEWER_SPECS if name in set(requested_names)
+    )
     workspace = workspace.resolve()
     cache_path = workspace / PLAN_REVIEWER_CACHE
     cached = _load_cache(cache_path)
-    if cached is not None:
+    if cached is not None and cached.get("agent_cli") != agent_cli:
+        cached = None
+    cached_reviewers = dict(cached["reviewers"]) if cached is not None else {}
+    missing_names = tuple(
+        name for name in requested_names if name not in cached_reviewers
+    )
+    if cached is not None and not missing_names:
         return cached, True
+    if not missing_names:
+        return {
+            "schema_version": PLAN_REVIEWER_CACHE_SCHEMA_VERSION,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "agent_cli": agent_cli,
+            "probe_timeout_seconds": _probe_timeout(),
+            "reviewers": cached_reviewers,
+        }, False
 
     timeout_s = _probe_timeout()
     with tempfile.TemporaryDirectory(prefix="atrex-plan-reviewer-probe-") as directory:
@@ -198,7 +221,9 @@ def discover_plan_reviewers(
             "- Validation: every required response marker is present.\n",
             encoding="utf-8",
         )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(missing_names)
+        ) as executor:
             futures = {
                 name: executor.submit(
                     _probe_reviewer,
@@ -209,16 +234,20 @@ def discover_plan_reviewers(
                     agent_cli,
                     timeout_s,
                 )
-                for name in _REVIEWER_SPECS
+                for name in missing_names
             }
-            reviewers = {name: future.result() for name, future in futures.items()}
+            probed_reviewers = {
+                name: future.result() for name, future in futures.items()
+            }
+
+    cached_reviewers.update(probed_reviewers)
 
     value = {
         "schema_version": PLAN_REVIEWER_CACHE_SCHEMA_VERSION,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "agent_cli": agent_cli,
         "probe_timeout_seconds": timeout_s,
-        "reviewers": reviewers,
+        "reviewers": cached_reviewers,
     }
     _write_cache(cache_path, value)
     return value, False
@@ -229,6 +258,8 @@ def plan_reviewer_environment(value: dict[str, Any]) -> dict[str, str]:
     reviewers = value["reviewers"]
     environment: dict[str, str] = {}
     for name, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():
+        if name not in reviewers:
+            continue
         record = reviewers[name]
         environment[enabled_name] = "1" if record["available"] else "0"
         environment[reason_name] = _single_line(record["reason"])
