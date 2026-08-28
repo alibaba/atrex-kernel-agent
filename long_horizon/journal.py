@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +22,10 @@ WIKI_USAGE_DISPOSITIONS = {
 WIKI_USAGE_STATUSES = {"declared", "no_material_use", "not_queried"}
 EVALUATION_CORRECTNESS = {"pass", "fail", "unknown"}
 EVALUATION_PERFORMANCE = {"improved", "not_improved", "unknown"}
+QUERY_ID_RE = re.compile(r"wiki-query-[0-9a-f]{32}")
+WIKI_ID_RE = re.compile(
+    r"(?:gpu_wiki|internal_gpu_wiki)::[A-Za-z0-9][A-Za-z0-9._:-]*"
+)
 
 
 def utc_now() -> str:
@@ -178,11 +184,11 @@ def normalize_wiki_usage(raw: object) -> tuple[list[dict[str, str]], list[str]]:
         disposition = row.get("disposition")
         use = row.get("use", "")
         evidence = row.get("evidence", "")
-        if not isinstance(query_id, str) or not query_id.strip():
-            errors.append(f"{label}.query_id must be a non-empty string")
+        if not isinstance(query_id, str) or not QUERY_ID_RE.fullmatch(query_id.strip()):
+            errors.append(f"{label}.query_id must be an emitted Wiki query_id")
             continue
-        if not isinstance(wiki_id, str) or not wiki_id.strip():
-            errors.append(f"{label}.wiki_id must be a non-empty string")
+        if not isinstance(wiki_id, str) or not WIKI_ID_RE.fullmatch(wiki_id.strip()):
+            errors.append(f"{label}.wiki_id must be an emitted canonical store::record id")
             continue
         if disposition not in WIKI_USAGE_DISPOSITIONS:
             errors.append(
@@ -224,6 +230,7 @@ def normalize_experiment_evaluation(raw: object) -> tuple[dict[str, Any] | None,
     if latency_us is not None and (
         isinstance(latency_us, bool) or not isinstance(latency_us, (int, float))
         or latency_us < 0
+        or (isinstance(latency_us, float) and not math.isfinite(latency_us))
     ):
         errors.append("evaluation.latency_us must be a non-negative number or null")
     kernel_hash = raw.get("kernel_hash")
@@ -250,9 +257,10 @@ def normalize_wiki_attribution(entry: dict[str, Any]) -> None:
     query_ids: list[str] = []
     if raw_query_ids is not None:
         if not isinstance(raw_query_ids, list) or any(
-            not isinstance(item, str) or not item.strip() for item in raw_query_ids
+            not isinstance(item, str) or not QUERY_ID_RE.fullmatch(item.strip())
+            for item in raw_query_ids
         ):
-            errors.append("wiki_query_ids must be a list of non-empty strings")
+            errors.append("wiki_query_ids must contain only emitted Wiki query_ids")
         else:
             query_ids = list(dict.fromkeys(item.strip() for item in raw_query_ids))
             entry["wiki_query_ids"] = query_ids

@@ -138,13 +138,15 @@ most one fresh repair attempt after strict local validation. `claude` is the
 default agent CLI and `qodercli` is also supported; a CLI without a verified
 no-tools protocol is rejected.
 
-The consuming agent receives only two top-level fields:
+The consuming agent receives a per-invocation attribution id plus records and notes:
 
 ```json
 {
+  "query_id": "wiki-query-0123456789abcdef0123456789abcdef",
   "records": {
     "stable.record.id": {
       "store": "gpu_wiki",
+      "wiki_id": "gpu_wiki::stable.record.id",
       "source": "kernel_wiki",
       "type": "technique-card",
       "applies_to": {},
@@ -156,10 +158,12 @@ The consuming agent receives only two top-level fields:
 }
 ```
 
-Record IDs are stable mapping keys, and every payload remains an independent JSON
-value. Evidence, retrieval metadata, rank decomposition, bridge commentary, and
-other engine-side fields are deliberately not served, so they cannot anchor AKA's
-judgement.
+Record IDs remain stable, backward-compatible mapping keys, and every payload is
+an independent JSON value. For attribution, consumers copy the top-level
+`query_id` and a record's own canonical `wiki_id` exactly rather than reconstructing
+them from mapping keys. Evidence, retrieval metadata, rank decomposition, bridge
+commentary, and other engine-side fields are deliberately not served, so they
+cannot anchor AKA's judgement.
 
 ### Direct structured queries
 

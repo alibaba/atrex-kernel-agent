@@ -88,10 +88,13 @@ changes the expected result. Detailed within-episode journals remain archived un
 
 ## Wiki attribution contract
 
-GPU Wiki query responses emit a stable `query_id` and canonical `store::record` ids. Whenever a returned record
+GPU Wiki query responses emit a top-level `query_id`, and every returned record emits its own
+canonical `wiki_id` in `store::record` form. Copy those fields exactly; never reconstruct either
+value from a response mapping key or from prose. Whenever a returned record
 materially influences an experiment or is explicitly evaluated and rejected, add `wiki_usage` to
-that experiment's journal append. Each row must contain the emitted `query_id`, an actually returned
-`wiki_id`, a disposition of `applied`, `partially_applied`, `reference_only`, or `rejected`, plus a
+that experiment's journal append. Each row must contain the response's emitted `query_id`, an
+actually returned record's emitted `wiki_id`, a disposition of `applied`, `partially_applied`,
+`reference_only`, or `rejected`, plus a
 short `use` and observable `evidence`. Preserve repeated use in separate experiments; do not dedupe
 across the episode. Every experiment must set `wiki_usage_status` to `declared` with non-empty usage,
 `no_material_use` when Wiki was queried without attributable use, or `not_queried` when it was not

@@ -11,12 +11,12 @@ query any store. This script owns every
 deterministic operation after that point: vocabulary normalization, staged
 widening, execution, deduplication, projection and context limits.
 
-The output intentionally has only two top-level fields: records and notes.
-Records from kernel experience and hardware facts share one id-keyed mapping,
-while each payload remains an independent JSON value under its own stable id. The
-public store is always queried; an installed sibling ``internal_gpu_wiki`` is
-queried as a second isolated store. Internal ids are namespaced so a private
-record can never overwrite a public record with the same stable id.
+The output has a per-invocation ``query_id``, plus records and notes. Records
+from kernel experience and hardware facts share one backward-compatible id-keyed
+mapping, while every value emits its canonical ``store::record`` ``wiki_id``.
+The public store is always queried; an installed sibling ``internal_gpu_wiki``
+is queried as a second isolated store. Internal mapping keys are namespaced so a
+private record can never overwrite a public record with the same stable id.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1032,6 +1033,7 @@ def merge_store_records(
             served_id = rid if store == PUBLIC_STORE else "%s::%s" % (store, rid)
             entry = dict(raw_entry)
             entry["store"] = store
+            entry["wiki_id"] = "%s::%s" % (store, rid)
             merged[served_id] = entry
             if max_records and len(merged) >= max_records:
                 remaining = sum(1 for _, records in groups for _ in records) - len(merged)
@@ -1042,6 +1044,7 @@ def merge_store_records(
 
 
 def main(argv=None) -> int:
+    query_id = "wiki-query-%s" % uuid.uuid4().hex
     started_at = datetime.now(timezone.utc)
     started = time.perf_counter()
     bridge_ms = None
@@ -1228,7 +1231,11 @@ def main(argv=None) -> int:
             records_by_source[source] = records_by_source.get(source, 0) + 1
             store = str(entry.get("store") or "unknown")
             records_by_store[store] = records_by_store.get(store, 0) + 1
-        print(json.dumps({"records": records, "notes": notes}, ensure_ascii=False))
+        print(json.dumps({
+            "query_id": query_id,
+            "records": records,
+            "notes": notes,
+        }, ensure_ascii=False))
         status = "ok"
         return 0
     finally:
@@ -1239,6 +1246,7 @@ def main(argv=None) -> int:
             shutil.rmtree(workspace, ignore_errors=True)
         finished_at = datetime.now(timezone.utc)
         _append_metric(os.environ.get(METRICS_LOG_ENV), {
+            "query_id": query_id,
             "task_id": os.environ.get(TASK_ID_ENV),
             "pid": os.getpid(),
             "status": status,

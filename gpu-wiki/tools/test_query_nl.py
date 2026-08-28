@@ -351,9 +351,10 @@ class FrontDoorTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return json.loads(out)
 
-    def test_output_has_only_records_and_notes(self):
+    def test_output_emits_attribution_ids_with_records_and_notes(self):
         answer = self._answer(stub_intent())
-        self.assertEqual(set(answer), {"records", "notes"})
+        self.assertEqual(set(answer), {"query_id", "records", "notes"})
+        self.assertRegex(answer["query_id"], r"^wiki-query-[0-9a-f]{32}$")
 
     def test_records_are_id_keyed_lightweight_and_payload_is_exact(self):
         answer = self._answer(stub_intent(free_text_terms=[]), "--max-records", "3")
@@ -362,12 +363,15 @@ class FrontDoorTests(unittest.TestCase):
         paths = {e["id"]: e["path"] for e in index["records"]}
         for rid, entry in answer["records"].items():
             self.assertEqual(set(entry), {
-                "store", "source", "type", "applies_to", "match", "payload",
+                "store", "wiki_id", "source", "type", "applies_to", "match",
+                "payload",
             })
             self.assertIn(entry["store"], {
                 query_nl.PUBLIC_STORE, query_nl.INTERNAL_STORE,
             })
             self.assertNotIn("evidence", json.dumps(entry))
+            raw_id = rid.split("::", 1)[1] if "::" in rid else rid
+            self.assertEqual(entry["wiki_id"], f"{entry['store']}::{raw_id}")
             if (entry["source"] == "kernel_wiki"
                     and entry["store"] == query_nl.PUBLIC_STORE):
                 stored = json.loads((STORE / "kernel_wiki" / paths[rid]).read_text())
@@ -420,6 +424,9 @@ class FrontDoorTests(unittest.TestCase):
             row["store"] == query_nl.INTERNAL_STORE for row in records.values()))
         self.assertTrue(any(
             rid.startswith(query_nl.INTERNAL_STORE + "::") for rid in records))
+        for rid, row in records.items():
+            raw_id = rid.split("::", 1)[1] if "::" in rid else rid
+            self.assertEqual(row["wiki_id"], f"{row['store']}::{raw_id}")
         self.assertLessEqual(len(records), 6)
 
     def test_unknown_product_field_falls_back_to_complete_product_record(self):
@@ -475,7 +482,7 @@ class LauncherTests(unittest.TestCase):
             )
         self.assertEqual(code, 0, err)
         self.assertEqual(bridge.clis, ["claude"])
-        self.assertEqual(set(json.loads(out)), {"records", "notes"})
+        self.assertEqual(set(json.loads(out)), {"query_id", "records", "notes"})
         self.assertNotIn("query_bridge_agent/SKILL.md", bridge.prompts[0])
 
     def test_plain_json_result_exposes_bridge_telemetry(self):
@@ -544,8 +551,10 @@ class LauncherTests(unittest.TestCase):
                         "fused rmsnorm in triton on sm_100", "--store-root", str(STORE),
                         "--max-records", "1")
                 self.assertEqual(code, 0, err)
-                self.assertEqual(set(json.loads(out)), {"records", "notes"})
+                answer = json.loads(out)
+                self.assertEqual(set(answer), {"query_id", "records", "notes"})
                 metric = json.loads(log.read_text(encoding="utf-8"))
+                self.assertEqual(metric["query_id"], answer["query_id"])
                 self.assertEqual(metric["task_id"], "test-op")
                 self.assertEqual(metric["status"], "ok")
                 self.assertEqual(metric["record_count"], 1)
