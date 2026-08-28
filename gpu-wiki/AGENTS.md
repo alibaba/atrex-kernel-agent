@@ -32,6 +32,10 @@ Do not pre-compress into keywords.
 Read each record's `source`, `type`, `match.arch`, and isolated `payload`, plus
 deterministic `notes`. Evidence and bridge commentary are not served.
 
+For attribution, copy the response's top-level `query_id` and each materially
+used record's own canonical `wiki_id`; never reconstruct either value from prose
+or from the backward-compatible mapping key.
+
 When a returned record materially informs an optimization decision, preserve its
 stable mapping key in that iteration's `memory/vN.json` under
 `wiki_references.kernel_wiki` or `wiki_references.hardware_wiki`. Retrieval alone

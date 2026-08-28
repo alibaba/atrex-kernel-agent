@@ -129,11 +129,22 @@ hash.
 
 Immediately after each evaluator, append one structured journal experiment for that trial. Record
 the reviewed plan, implementation, correctness, `performance_score` and latency when available,
-comparison with `best_score`, and the decision to keep or reject the trial:
+comparison with `best_score`, and the decision to keep or reject the trial. If this trial queried GPU Wiki,
+copy the response's top-level `query_id` and each used record's own emitted canonical `wiki_id`
+exactly; never reconstruct them from response mapping keys or prose. Add one `wiki_usage` row for
+each returned Wiki record that was materially used or explicitly evaluated;
+classify it as `applied`, `partially_applied`, `reference_only`, or `rejected`. Every experiment must
+set `wiki_usage_status`: use `declared` with a non-empty `wiki_usage`, `no_material_use` when Wiki was
+queried but no returned knowledge materially influenced the trial, or `not_queried` when no Wiki query
+occurred. For `declared` and `no_material_use`, also set `wiki_query_ids` to every Wiki query considered
+by the trial. For `not_queried`, omit both `wiki_query_ids` and `wiki_usage`. Also record the evaluator
+outcome in structured `evaluation`; copy its kernel hash and latency
+when emitted. Wiki telemetry validation is fail-open: malformed rows
+are omitted and reported in `wiki_usage_errors`, while the experiment still records normally:
 
 ```bash
 {{JOURNAL_COMMAND}} append --path {{JOURNAL_PATH_SHELL}} \
-  --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","decision":"keep_as_best | reject_and_continue | blocked"}'
+  --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":"<evaluator-kernel-hash-or-empty>"},"decision":"keep_as_best | reject_and_continue | blocked","wiki_usage_status":"declared","wiki_query_ids":["<emitted-query-id>"],"wiki_usage":[{"query_id":"<emitted-query-id>","wiki_id":"<emitted-canonical-wiki-id>","disposition":"reference_only","use":"decision or code change influenced by the record","evidence":"observable evidence for this disposition"}]}'
 ```
 
 If the result passes and its `performance_score` exceeds `best_score`, update `best_commit`,
@@ -180,8 +191,11 @@ For `candidate_ready`, use the exact selected candidate commit and finalize the 
 candidate_commit=$(git rev-parse HEAD)
 {{JOURNAL_COMMAND}} finalize --path {{JOURNAL_PATH_SHELL}} --state candidate_ready \
   --candidate-commit "$candidate_commit" \
-  --outcome-json '{"summary":"...","next_directions":["..."]}'
+  --outcome-json '{"summary":"...","next_directions":["..."],"selected_experiment_index":N}'
 ```
+
+`selected_experiment_index` is the one-based journal experiment index whose evaluated kernel bytes
+were selected for handoff. It is required for `candidate_ready`; do not point it at a rejected trial.
 
 For `pivot`, finalize only after {{FAST_TRIALS}} trial experiments and
 {{FAST_TRIALS}} evaluator results. For `blocked`, finalize immediately with the completed trial

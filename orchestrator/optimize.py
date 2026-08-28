@@ -661,6 +661,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     sandbox_hardware = args.sandbox_hardware or args.platform
     if args.workspace:
+        # Campaign commands run from nested Git worktrees. Keeping a relative base here
+        # makes evaluator paths get resolved a second time against the campaign workspace.
+        args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
     op = _resolve_op(args.op_dir, args.optimization_mode)

@@ -44,8 +44,9 @@ referenced below as `<gpu-wiki>/`.
    request the complete product specification and relevant architecture/ISA facts, plus the framework,
    operator, shapes, dtypes, intended implementation, and uncertainties. Do not substitute another
    hardware identity or reduce the description to keywords.
-3. Results contain only `records` and `notes`. Read each id-keyed record's `store`, independent `payload`,
-   `source`, `type`, and `match.arch`; internal ids use the `internal_gpu_wiki::` namespace. Use
+3. Results contain a top-level `query_id`, `records`, and `notes`. Read each id-keyed record's own
+   canonical `wiki_id`, `store`, independent `payload`, `source`, `type`, and `match.arch`; internal
+   mapping keys use the `internal_gpu_wiki::` namespace. Copy emitted attribution ids exactly and use
    `--max-bytes` when a hard context limit is needed.
 4. Prefer records with the same framework and compute pattern. Record the stable ids and the constraints
    they established in `plans/v0_plan.md`.
