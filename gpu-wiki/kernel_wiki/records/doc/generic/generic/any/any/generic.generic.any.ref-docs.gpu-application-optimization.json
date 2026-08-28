@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gpu-application-optimization",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-application-optimization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): GPU Application-Level Optimization Strategies",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "GPU Application-Level Optimization Strategies"
+  },
+  "title": "GPU Application-Level Optimization Strategies",
+  "summary": "Maximum speedup S = 1 / ((1 - P) + P/N)",
+  "sections": [
+   {
+    "heading": "Parallelization Assessment",
+    "anchor": "parallelization-assessment",
+    "gist": "Maximum speedup S = 1 / ((1 - P) + P/N)"
+   },
+   {
+    "heading": "Data Transfer Optimization",
+    "anchor": "data-transfer-optimization",
+    "gist": "Host-device interconnect bandwidth is far lower than device memory bandwidth:"
+   },
+   {
+    "heading": "Memory Allocation Strategy",
+    "anchor": "memory-allocation-strategy",
+    "gist": "GPU memory allocation/deallocation is a heavyweight operation:"
+   },
+   {
+    "heading": "Leverage Existing Libraries",
+    "anchor": "leverage-existing-libraries",
+    "gist": "Before writing custom kernels, prioritize using vendor-optimized libraries."
+   },
+   {
+    "heading": "Kernel Design Patterns",
+    "anchor": "kernel-design-patterns",
+    "gist": "Decompose large problems into sub-problems that fit within shared memory:"
+   },
+   {
+    "heading": "Debugging and Validation",
+    "anchor": "debugging-and-validation",
+    "gist": "- GPU floating-point computations may produce slight differences from CPU results due to FMA, instruction reordering, etc."
+   },
+   {
+    "heading": "Deployment Recommendations",
+    "anchor": "deployment-recommendations",
+    "gist": "- Include intermediate representation (IR) at compile time to support future architectures - Also include native binaries for the target architecture charms to achieve optimal performance - Use multi-architecture binaries to support multip…"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Prerequisites**: GPU Execution Model + GPU Memory Hierarchy - **Content Overlap**: The host-device transfer section overlaps with ``, and this document is more…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n1. Each block is responsible for one tile of the output\n2. Load the input tile into shared memory\n3. Compute on shared memory\n4. Write results back to global memory\n```\n\n```\n1. Thread-level: Each thread accumulates multiple elements (reduces thread count)\n2. Warp-level: Use warp shuffle instructions (no shared memory needed)\n3. Block-level: Cross-warp reduction through shared memory\n4. Grid-level: Atomic operations or multi-pass reduction\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gpu-application-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

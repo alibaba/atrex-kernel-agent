@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.kernel-opt.online-softmax-flash-attention.pattern-online-softmax-avoids-two-pass-computation",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|flash-attention|online-softmax-flash-attention#pattern-online-softmax-avoids-two-pass-computation|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention",
+    "softmax"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "pattern-online-softmax-avoids-two-pass-computation",
+   "reduction",
+   "softmax"
+  ],
+  "triggers": [
+   "the 'Pattern: Online Softmax Avoids Two-Pass Computation' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: Online Softmax Avoids Two-Pass Computation",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Online Softmax and Flash Attention -- Pattern: Online Softmax Avoids Two-Pass Computation"
+  },
+  "technique": "Pattern: Online Softmax Avoids Two-Pass Computation",
+  "what": "**Source**: `triton-tutorials/06-fused-attention.py`, `flash-attention/flash_attn_triton_*.py`",
+  "when": "**Source**: `triton-tutorials/06-fused-attention.py`, `flash-attention/flash_attn_triton_*.py`",
+  "caveats": [
+   "Always use `float32` for accumulators to avoid precision loss"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# Traditional softmax: pass1 compute max, pass2 compute sum, pass3 normalize — 3 passes\n# Online softmax: Single pass, update while computing\n\nm_i = tl.full([BLOCK_M], float('-inf'), dtype=tl.float32)  # running max\nl_i = tl.full([BLOCK_M], 0.0, dtype=tl.float32)            # running sum\nacc = tl.zeros([BLOCK_M, BLOCK_N_V], dtype=tl.float32)      # running output\n\nfor j in range(0, num_kv_blocks):\n    # Load K block, compute QK^T\n    qk = tl.dot(q, tl.trans(k))\n\n    # Update running max\n    m_ij = tl.max(qk, axis=1)\n    m_new = tl.maximum(m_i, m_ij)\n\n    # Scale old accumulator\n    alpha = tl.math.exp2((m_i - m_new) * log2e)  # exp2 is faster than exp\n    acc *= alpha[:, None]\n    l_i *= alpha\n\n    # Compute softmax for current block\n    p = tl.math.exp2((qk - m_new[:, None]) * log2e)\n    l_i += tl.sum(p, axis=1)\n\n    # Accumulate PV\n    acc += tl.dot(p.to(v.dtype), v)\n    m_i = m_new\n\n# Final normalization\nacc /= l_i[:, None]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/kernel-opt/hands-on/online-softmax-flash-attention.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

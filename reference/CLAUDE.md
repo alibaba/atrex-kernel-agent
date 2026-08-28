@@ -1,0 +1,153 @@
+# GPU Kernel Optimizer — Agent Constraints
+
+This file defines hard behavioral constraints for the optimization workflow.
+The full multi-cycle workflow and terminal handoff are defined in `orchestrator/prompts/episode.md`.
+
+## Framework Guidance
+
+- **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet in any optimized DSL. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the *suggested* first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
+- The `--framework` value is a **recommended optimization direction**, not a hard constraint. Sessions MAY use a different DSL or mixed approaches if evidence shows a better performance path.
+- Preinstalled third-party helper libraries may be used, but the campaign environment is immutable: never
+  install or locally build a package. If a library is unavailable, use existing tooling or record a blocker.
+- `triton` and `gluon` belong to the same framework family (`triton/gluon`). When either is specified, both are acceptable implementation targets.
+- When Triton-level optimization plateaus, the orchestrator latches a mandatory Triton→Gluon episode directive. The episode derives layouts from TTGIR, repairs the lowering through correctness and performance parity, and later episodes remain in Gluon. Do not hand-trigger conversion before the directive is active.
+
+## Benchmark Harness Integrity
+
+- **No hacking the evaluation script for performance.** Do NOT modify, monkey-patch, subclass, shadow, or otherwise subvert `test_kernel.py` — nor any other file/module the evaluator loads (`sol-execbench`, `torch.cuda.Event`/`time` shims, RNG/seeding utilities, the timing loop, the comparison/tolerance check) — to make a slower kernel *look* faster or to make an incorrect result *pass*. Any speedup must come from a faster `run()` on **arbitrary** inputs — not from gaming the measurement.
+- **test_kernel.py is immutable for performance measurement**: DO NOT modify `test_kernel.py` to change the benchmark harness (e.g., warmup count, repetition count, `return_mode`, timing method, input shapes, or any other benchmark parameter) in order to obtain better performance numbers.
+- `test_kernel.py` defines the ground-truth benchmark methodology. Any change to it invalidates cross-version comparisons.
+- If a measurement methodology issue is discovered (e.g., outlier inflation, incorrect return mode), report it in `memory/v<N>.json` under `pitfalls_and_fixes` and propose the fix — but DO NOT apply the fix to `test_kernel.py` within an optimization iteration.
+- **Validate + bench ONLY via `python test_kernel.py`** — it runs the real `sol-execbench` evaluator over EVERY workload in `workload.jsonl` (the full ground-truth shape set) with each workload's own tolerance. Never hand-roll a correctness test, bench a single "representative" shape, or edit the harness. A PASS here == a directly submittable solution.
+- **The optimization objective is `performance.performance_score`.** Every route computes one speedup per shape and maximizes their arithmetic mean. Native Atrex-Bench uses each shape's authoritative metadata production latency as its baseline; SOL uses the evaluator's reference implementation as its baseline. Per-workload latency remains in `performance.latency_us_by_shape` for diagnosis. A version is committable only if all workloads pass and the score improves vs HEAD beyond noise.
+- **The SOL ground-truth files are immutable**: never edit `definition.json`, `reference.py`, or `workload.jsonl`. Edit `kernel.py` (DPS `run()`; args = definition.inputs then definition.outputs); update `solution.json` only when languages/dependencies/entry_point change.
+- **`profile_driver.py` is the immutable profiling entry point** — profilers run `python <file>`, and `kernel.py` is import-only, so profile `profile_driver.py`, never `kernel.py`. It is a protected path: choose what it drives with `PROFILE_ITERS` / `PROFILE_WARMUP` / `PROFILE_WORKLOAD_IDX` / `PROFILE_SHAPE_ID` instead of editing it, and do NOT add a `__main__` profiling block to `kernel.py` — an in-kernel entry is silently lost the next time `run()` is rewritten, leaving the profiler to capture nothing while still exiting 0. When it genuinely cannot express the case, add a fallback driver under `profiles/<dir>/harness/` and profile that file.
+
+### Generalized Atrex-Bench problems
+
+- When `agent_problem.json` exists, it is the authoritative public contract. Optimize across its
+  complete `shape_domain`; use aggregate distribution shares only to prioritize common paths.
+- Exact `shapes.json`, evaluator metadata, and per-case roofline inputs are private. Do not search
+  outside the workspace for the source operator directory or reconstruct hidden cases.
+- Profile a real evaluator case by selecting an opaque id from canonical
+  `memory/vN.json.performance.latency_us_by_shape` with `PROFILE_SHAPE_ID`. The sandbox injects only
+  that selected case into the ephemeral remote profile workspace; the driver removes its private JSON
+  before importing candidate code. Profile multiple ids when distinct performance regimes matter.
+- Hidden evaluation returns aggregate PASS/FAIL plus real latency keyed by opaque shape id. Canonical
+  memory must retain the complete `latency_us_by_shape` map on evaluated iterations, while shape input
+  parameters, failure details, and raw evaluator logs remain private.
+
+### Real-submission input model (don't overfit to the local bench)
+
+The local `test_kernel.py` run is a **proxy** for the real evaluator. In the real scenario,
+**every `run()` invocation receives freshly randomized inputs at freshly allocated addresses** —
+the shapes/dtypes come from `workload.jsonl`, but values, RNG seed, and tensor pointers are
+NOT fixed across calls. Concretely:
+
+- **Do NOT cache input data.** Never recognize "I've seen these inputs before" and return a
+  precomputed result, a recorded reference output, or any branch that depends on the *values*
+  of the inputs (checksums, hashes, sentinel detection, "if input == X return Y"). `run()` must
+  recompute from its arguments every call.
+- **Do NOT cache pointers / addresses.** Never key a code path, a precompiled plan, a
+  specialized kernel, or a cached workspace on `tensor.data_ptr()` / `tensor.storage().data_ptr()`
+  / raw CUDA addresses — they change every invocation. If you build a runtime plan (autotuned
+  tile config, cublasLt algo, JIT-compiled specialization), key it on **shape + dtype + layout
+  + device** (stable invariants), never on pointer identity.
+- **Do NOT cache outputs / scratch buffers tied to a specific address.** Reuse of a workspace
+  tensor across calls is fine *if* you re-allocate (or re-validate) it per call based on shape;
+  it is NOT fine to assume the buffer at address `0x...` from a previous call is still valid.
+- **Do NOT amortize work across iterations of the timed loop.** Any setup that is only correct
+  because the same inputs repeat (e.g., a one-time precompute on call #1 cached for calls #2..N)
+  is a correctness bug, not an optimization.
+
+If a shortcut only works because inputs/addresses are stable, it is invalid — drop it and
+optimize the per-call work directly.
+
+### Multi-seed robustness (mandatory from V1 onward)
+
+The V0 PyTorch baseline is an explicit exception: measure it exactly once with the base seed and
+record that run's performance plus accompanying correctness status. Do not run `--multi-seed` for V0.
+
+For every optimized candidate from V1 onward, a single-seed PASS is NOT sufficient before supervisor
+acceptance. The dedicated V1 framework-baseline prompt assigns the implementation Agent only a bounded
+smoke subset; the supervisor then runs one combined base-performance plus five-extra-seed full-workload
+gate and commits mechanically. Do not duplicate that full gate inside the V1 Agent. For later optimization
+episodes whose active prompt assigns multi-seed validation to the Agent, run through the mandatory sandbox:
+
+```bash
+python tools/sandbox.py --kind run --no-sync -- \
+  python test_kernel.py --version v<N> --multi-seed 5 --no-memory
+```
+
+This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds
+pass. If any seed fails correctness, the kernel is BROKEN — revert with `git reset --hard HEAD`
+and try a different lever. See `orchestrator/prompts/episode.md` and
+`skills/gpu-kernel-episode-loop/SKILL.md` for the full procedure.
+
+Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass;
+do not repeat warmup/timing/reference benchmarking for extra seeds. The public gateway caps
+one command at 600 seconds, and multi-seed robustness must stay within that limit without
+reducing seed or shape coverage.
+
+### Cache-hack ZERO-TOLERANCE policy
+
+The following patterns are cache hacks and any version that contains them MUST be reverted
+**immediately** (`git reset --hard HEAD`) and recorded as a dead-end in `pitfalls_and_fixes`:
+
+- **Output / answer caching.** Returning a stored reference output (memoized from a previous
+  run / from the harness, hardcoded constants, recorded `out_*` tensor) instead of recomputing
+  from the current inputs.
+- **Input-value caching.** Recognising "I've seen these inputs before" (checksum / hash /
+  sentinel detection / value-dependent branch / first-call precompute reused on calls #2..N)
+  and short-circuiting `run()`.
+- **Pointer / address caching.** Keying a code path, plan, autotune specialization, cublasLt
+  algo, or scratch workspace on `tensor.data_ptr()` / `tensor.storage().data_ptr()` / raw CUDA
+  pointers. Plans MAY be keyed on **shape + dtype + layout + device** only.
+- **Eval-harness shadowing.** Importing / monkey-patching `test_kernel.py` / `sol-execbench` /
+  `torch.cuda.Event` / time shims / RNG / the timing loop / the comparator from inside
+  `kernel.py`, or detecting "am I being benchmarked" to take a faster branch.
+- **CUDA-graph capture of fixed pointers.** Capturing a graph against the addresses seen at
+  capture time and replaying it without re-binding parameters per call. If you use CUDA graphs,
+  you MUST update the kernel node parameters from the *current* tensor `data_ptr`s on each `run()`.
+
+If you find ANY of the above in the inherited `HEAD` kernel at the start of an iteration,
+your **first action** is to revert it (`git reset --hard HEAD~` until HEAD is hack-free),
+then proceed with a clean optimization. A hack-ridden kernel that "looks fast" is a
+regression, not a starting point.
+
+### Precision margin requirement (don't surf the tolerance line)
+
+Per-workload tolerances are **safety margins, not optimization targets**. Because the real
+evaluator reseeds inputs every call, a kernel that passes "by a hair" on one local seed can
+easily fail on the next draw — that's a correctness bug, not a flake. **If any workload's
+measured error sits close to its tolerance line, STOP and re-review the whole `kernel.py`
+end-to-end before committing**, and verify the margin is stable across multiple fresh seeds
+(`test_kernel.py --multi-seed 5`). A speedup that only works by shrinking the precision
+margin is not real — revert and try a different lever.
+
+### No multi-stream timing tricks
+
+**Do NOT use multiple CUDA streams (concurrency) to reduce measured latency.** Launching
+work on several streams so that independent kernels/op calls overlap in time is forbidden —
+the evaluator times a single `run()` call, and multi-stream overlap hides work behind other
+work rather than making the kernel itself faster, producing a misleading (non-representative)
+latency. Keep all of `run()`'s work on the **default stream**; do not create/sync extra
+`torch.cuda.Stream`s or `cudaStream`s to parallelize the computation. Legitimate
+single-stream optimizations — kernel fusion, better tiling, vectorization, lower precision,
+library primitives — are unaffected.
+
+## Hardware Architecture Constraints
+
+- **blackwell-geforce is NOT blackwell**: `blackwell-geforce` (sm120) and `blackwell` (sm100) are completely different architectures. Do NOT conflate them or assume they share the same optimization strategies.
+- **sm103 ≈ sm100 ≠ sm120**: The sm103 hardware architecture is similar to sm100 (both belong to the Blackwell data-center family), but is completely different from sm120 (Blackwell GeForce / consumer). When searching for reference kernels or optimization knowledge for sm103, prefer sm100/blackwell sources — NEVER use sm120/blackwell-geforce sources as a substitute.
+
+## Workflow References
+
+- Optimization loop orchestrator: `orchestrator/optimize.py`
+- Multi-cycle episode prompt and handoff contract: `orchestrator/prompts/episode.md`
+- Episode evidence loop (profile/research/plan/implement/validate/record): `skills/gpu-kernel-episode-loop/SKILL.md`
+- Baseline setup session: `orchestrator/prompts/setup.md`
+- Triton→Gluon conversion: latched directive inside the episode prompt
+- NVIDIA profiling skill (Stage 1): `.claude/skills/ncu-report-skill/SKILL.md`
+- Plan generation (Stage 2): repository-native `skills/gen-plan/SKILL.md` with independent Codex
+  and Qoder review synthesis

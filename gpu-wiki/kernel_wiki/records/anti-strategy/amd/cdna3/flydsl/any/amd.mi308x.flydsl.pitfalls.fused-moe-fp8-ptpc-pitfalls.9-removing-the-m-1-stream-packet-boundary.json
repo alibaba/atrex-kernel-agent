@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.fused-moe-fp8-ptpc-pitfalls.9-removing-the-m-1-stream-packet-boundary",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|fused-moe-fp8-ptpc-pitfalls#9-removing-the-m-1-stream-packet-boundary|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '9. Removing The M=1 Stream Packet Boundary' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 9. Removing The M=1 Stream Packet Boundary",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL FP8 PTPC Fused MoE on MI308X -- 9. Removing The M=1 Stream Packet Boundary"
+  },
+  "attempted": "Delete the M=1 stream marker because it launches no CUDA kernel and appears to be overhead-free dead code.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Preserve the M=1 stream packet boundary unless a replacement is validated by trace guard, stage1/stage2 sums, and repeated e2e checks.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The stream packet boundary preserves the timing boundary that the old `.item()` host sync accidentally provided, without adding host sync or profiler-visible memcpy."
+  },
+  "observed": "M=1 stage1 and e2e timing become bimodal. The small-row profile can fail parity even when the classified kernels are otherwise aligned.",
+  "root_cause": "The stream packet boundary preserves the timing boundary that the old `.item()` host sync accidentally provided, without adding host sync or profiler-visible memcpy."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

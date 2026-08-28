@@ -1,0 +1,123 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.smem-swizzling-bank-conflicts",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|smem-swizzling-bank-conflicts|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Shared Memory Swizzling and Bank Conflict Elimination",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Shared Memory Swizzling and Bank Conflict Elimination"
+  },
+  "title": "Shared Memory Swizzling and Bank Conflict Elimination",
+  "summary": "NVIDIA GPU's Shared Memory (SMEM) achieves high bandwidth through **parallel bank access**, but when multiple threads access the same bank simultaneously, **bank conflicts** occur, leading to serialization. This article explains the SMEM banking model, common conflict scenarios, and the principles and practices of using XOR swizzle to eliminate conflicts.",
+  "sections": [
+   {
+    "heading": "Overview",
+    "anchor": "overview",
+    "gist": "NVIDIA GPU's Shared Memory (SMEM) achieves high bandwidth through **parallel bank access**, but when multiple threads access the same bank simultaneously, **bank conflicts** occur, leading to serialization."
+   },
+   {
+    "heading": "1. NVIDIA SMEM Banking Model",
+    "anchor": "1-nvidia-smem-banking-model",
+    "gist": "table columns: Parameter, Value, Description"
+   },
+   {
+    "heading": "2. Common Bank Conflict Scenarios",
+    "anchor": "2-common-bank-conflict-scenarios",
+    "gist": "This is the most classic source of bank conflicts."
+   },
+   {
+    "heading": "3. Solution 1: Padding",
+    "anchor": "3-solution-1-padding",
+    "gist": "The simplest method: add padding at the end of each row to break bank alignment."
+   },
+   {
+    "heading": "4. Solution 2: XOR Swizzle (Key Focus)",
+    "anchor": "4-solution-2-xor-swizzle-key-focus",
+    "gist": "Swizzle uses **bitwise operations (XOR)** to remap SMEM addresses, distributing originally conflicting access patterns across different banks while preserving data locality and vectorization capability."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nAddress (bytes)    Bank\n0x00 - 0x03    Bank 0\n0x04 - 0x07    Bank 1\n0x08 - 0x0B    Bank 2\n...\n0x7C - 0x7F    Bank 31\n0x80 - 0x83    Bank 0    ← Back to Bank 0 after 128B\n0x84 - 0x87    Bank 1\n...\n```\n\n```cuda\n// Assume TILE = 32, float = 4B\n__shared__ float smem[32][32];  // Row-major storage\n\n// No conflict: each thread reads different columns of same row\nfloat val = smem[row][threadIdx.x];  // stride-1 access, 32 threads → 32 different banks\n\n// 32-way conflict! Each thread reads different rows of same column\nfloat val = smem[threadIdx.x][col];  // stride-32 access\n// threadIdx.x=0 → bank (0*32+col)%32 = col%32\n// threadIdx.x=1 → bank (1*32+col)%32 = col%32  ← Same bank!\n// All 32 threads land on bank (col%32)\n```\n\n```cuda\n__shared__ float tile[32][32];\n\n// Write (row-wise): No conflict\ntile[threadIdx.y][threadIdx.x] = input[gy][gx];\n\n// Read (column-wise transpose): 32-way conflict!\noutput[gx][gy] = tile[threadIdx.x][threadIdx.y];\n```\n\n```cuda\n__shared__ float sdata[256];\n\n// stride = 1: No conflict\n// stride = 2: 2-way conflict (threads 0,16 both access bank 0)\n// stride = 16: 16-way conflict\n// stride = 32: 32-way conflict\nfor (int s = blockDim.x/2; s > 0; s >>= 1) {\n    if (threadIdx.x < s) {\n        sdata[threadIdx.x] += sdata[threadIdx.x + s];\n    }\n    __syncthreads();\n}\n```\n\n```cuda\n// Original: Each row 32 floats = 128 bytes → Row spacing = multiple of 32 banks\n__shared__ float smem[32][32];  // 32-way conflict on column access\n\n// Fixed: Each row 33 floats → Row spacing = 33 × 4B = 132B → No longer multiple of 128B\n__shared__ float smem[32][33];  // No conflict!\n```\n\n```\nswizzled_offset = offset ^ (extract_bits(offset, Y_pos, B) << Z_pos)\n```\n\n```\nSwizzle<BBits, MBase, SShift>\n\n- BBits: Number of swizzle bits (1, 2, or 3) → Affects 2^B rows as a group\n- MBase: Lowest bits that remain unchanged (skipped starting from bit 0)\n- SShift: Y bit field offset relative to Z bit field (|SShift| >= BBits)\n```\n\n```\nbit position:  ...  [Y: B bits]  ...  [Z: B bits]  [M bits]\n                ↑                       ↑              ↑\n High bits, row index Bank selection Invariant (intra-word offset)\n\nOperation: ZZZ ^= YYY (B bits from the Z bit field are XORed with B bits from the Y bit field)```\n\n```\nRow 0: [Bank 0..7 ][Bank 8..15 ][Bank 16..23][Bank 24..31]\nRow 1: [Bank 0..7 ][Bank 8..15 ][Bank 16..23][Bank 24..31]\nRow 2: [Bank 0..7 ][Bank 8..15 ][Bank 16..23][Bank 24..31]\n  ...    ↑ All rows same column in column access → Same bank → 8-way conflict\n```\n\n```\nRow 0: [Bank 0..7 ][Bank 8..15 ][Bank 16..23][Bank 24..31]  (row_idx=0, XOR=000)\nRow 1: [Bank 8..15 ][Bank 0..7 ][Bank 24..31][Bank 16..23]  (row_idx=1, XOR=001)\nRow 2: [Bank 16..23][Bank 24..31][Bank 0..7 ][Bank 8..15 ]  (row_idx=2, XOR=010)\nRow 3: [Bank 24..31][Bank 16..23][Bank 8..15 ][Bank 0..7 ]  (row_idx=3, XOR=011)\nRow 4: [Bank 0..7 ][Bank 8..15 ][Bank 16..23][Bank 24..31]  (row_idx=4, XOR=100→back to 000)\nRow 5: [Bank 8..15 ][Bank 0..7 ][Bank 24..31][Bank 16..23]  (row_idx=5, XOR=101)\nRow 6: [Bank 16..23][Bank 24..31][Bank 0..7 ][Bank 8..15 ]  (row_idx=6, XOR=110)\nRow 7: [Bank 24..31][Bank 16..23][Bank 8..15 ][Bank 0..7 ]  (row_idx=7, XOR=111)\n```\n\n```\nbytes = row * 128 + col * 2\n\nrow=0, col=0:  offset = 0x000 = 0b 000 0000 0000\nrow=1, col=0:  offset = 0x080 = 0b 000 1000 0000\nrow=2, col=0:  offset = 0x100 = 0b 001 0000 0000\nrow=3, col=0:  offset = 0x180 = 0b 001 1000 0000\n\nbit(Swizzle<3,4,3>):\nbit:   10 9 8 | 7 6 5 4 | 3 2 1 0\n       Y Y Y  | Z Z Z   | M M M M\n row bank offset\n\nSwizzle: Z' = Z ^ Y\nrow=0: Y=000, Z=000 → Z'=000 → Bank unchanged\nrow=1: Y=001, Z=000 → Z'=001 → Bank offset +1 group\nrow=2: Y=010, Z=000 → Z'=010 → Bank offset +2 groups\nrow=3: Y=011, Z=000 → Z'=011 → Bank offset +3 groups\n```\n\n```\nTMA Swizzle Mode corresponds to:\n  None  → No swizzle\n  32B   → Swizzle<1,4,3>  (B32)\n  64B   → Swizzle<2,4,3>  (B64)\n  128B  → Swizzle<3,4,3>  (B128)\n```\n\n```bash\nncu --metrics l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld,\\\n              l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st \\\n    ./my_kernel\n```\n\n```cuda\n// Generic B128 swizzle function\n// Applicable when each row is 128B (e.g., FP16 x 64 columns)\n__device__ int swizzle_offset(int row, int col, int elem_bytes) {\n    int row_bytes = col * elem_bytes;\n int base_offset = row * 128 + row_bytes; // row 128B\n\n // Swizzle<3,4,3>: bit[9:7] XOR bit[6:4]\n    int y_bits = (base_offset >> 7) & 0x7;  // 3 bits from row region\n    int swizzled = base_offset ^ (y_bits << 4);\n    return swizzled;\n}\n\n// useexample\n__shared__ char smem_raw[8 * 128]; // 8 row x 128B\n\n// write( GMEM load SMEM)\nint offset = swizzle_offset(row, col, sizeof(half));\n*reinterpret_cast<half*>(&smem_raw[offset]) = input_val;\n\n// read(same swizzle function)\nint offset = swizzle_offset(row, col, sizeof(half));\nhalf val = *reinterpret_cast<half*>(&smem_raw[offset]);\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/smem-swizzling-bank-conflicts.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

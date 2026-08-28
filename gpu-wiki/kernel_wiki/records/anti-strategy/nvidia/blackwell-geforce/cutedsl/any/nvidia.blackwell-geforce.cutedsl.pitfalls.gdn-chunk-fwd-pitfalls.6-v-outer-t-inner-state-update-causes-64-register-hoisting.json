@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.6-v-outer-t-inner-state-update-causes-64-register-hoisting",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#6-v-outer-t-inner-state-update-causes-64-register-hoisting|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '6. v-outer/t-inner state update causes 64-register hoisting' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 6. v-outer/t-inner state update causes 64-register hoisting",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 6. v-outer/t-inner state update causes 64-register hoisting"
+  },
+  "attempted": "You write the state update as v-outer, t-inner (natural for \"accumulate into state[v]\"):",
+  "verdict": "not-worth-it-here",
+  "lesson": "Swap to t-outer/v-inner:",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`sK[t, tidx]` and `sExpDecay[t]` don't depend on `v`. With v-outer, ptxas decides to preload all 32 t-indexed values before entering the v-loop, keeping them alive across all BV iterations. With t-outer, only 2 values (`kd`, current `sExpDecay`) are live per iteration."
+  },
+  "observed": "ptxas hoists all BT values of `sK[t, tidx]` (32 regs) and `sExpDecay[t]` (32 regs) out of the v-loop because they're v-independent. Total: 64 extra registers hoisted, pushing the kernel to 255 reg/thr with massive spill traffic.",
+  "root_cause": "`sK[t, tidx]` and `sExpDecay[t]` don't depend on `v`. With v-outer, ptxas decides to preload all 32 t-indexed values before entering the v-loop, keeping them alive across all BV iterations. With t-outer, only 2 values (`kd`, current `sExpDecay`) are live per iteration.",
+  "implementation": {
+   "snippet": "```python\nfor v in range(BV):           # outer\n    for t in range(BT):       # inner\n        state[v] += sK[t, tidx] * sExpDecay[t] * sV[t, v]\n```\n\n```python\nfor v in range(BV):\n    state[v] = phi * state[v]     # decay first\nfor t in range(BT):               # outer\n    kd = sK[t, tidx] * sExpDecay[t]  # 2 regs\n    for v in range(BV):           # inner — contiguous sV access\n        state[v] += kd * sV[t, v]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.pipeline-stalls.candidate-techniques",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|patterns|pipeline-stalls#candidate-techniques|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "patterns",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "candidate-techniques"
+  ],
+  "triggers": [
+   "the 'Candidate Techniques' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Candidate Techniques",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Pipeline Stalls -- Candidate Techniques"
+  },
+  "technique": "Candidate Techniques",
+  "what": "| Technique | Effect | |---|---| | Pipeline stages | Increase NUM_STAGES (3-5 typical on Blackwell) | | Warp specialization | Dedicated warps for TMA/MMA/epilogue eliminate role-switching stalls | | Double-buffering | TMEM buffer A while MMA runs on buffer B | | Ping-pong scheduling | Two query tiles alternate softmax/MMA (FA4 pattern) |",
+  "when": "| Technique | Effect | |---|---| | Pipeline stages | Increase NUM_STAGES (3-5 typical on Blackwell) | | Warp specialization | Dedicated warps for TMA/MMA/epilogue …",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/patterns/pipeline-stalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

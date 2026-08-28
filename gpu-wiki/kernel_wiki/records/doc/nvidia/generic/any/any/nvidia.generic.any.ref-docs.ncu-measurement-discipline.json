@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ncu-measurement-discipline",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ncu-measurement-discipline|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): NCU Measurement Discipline — Trusting Your Profile and Timing Numbers",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "NCU Measurement Discipline — Trusting Your Profile and Timing Numbers"
+  },
+  "title": "NCU Measurement Discipline — Trusting Your Profile and Timing Numbers",
+  "summary": "How to *trust* the numbers a profile-driven loop produces: what NCU's `Duration` means (and doesn't), how much a latency delta has to move before it is signal rather than noise, and the ways CUDA graph capture silently corrupts both profiling and correctness. This is the \"measurement-trust\" layer that sits underneath the rest of the NCU docs — it does not tell you *what* to optimize, it tells you *whether to believe* the evidence you are optimizing against.",
+  "sections": [
+   {
+    "heading": "TL;DR",
+    "anchor": "tl-dr",
+    "gist": "1."
+   },
+   {
+    "heading": "1. NCU `Duration` ≠ timing-harness latency",
+    "anchor": "1-ncu-duration-timing-harness-latency",
+    "gist": "NCU works by injecting a measurement library, serializing kernel launches, and **replaying the kernel across multiple passes** to collect every metric."
+   },
+   {
+    "heading": "2. Noise discipline — when a latency delta is signal",
+    "anchor": "2-noise-discipline-when-a-latency-delta-is-signal",
+    "gist": "Short kernels measured across separate process / container launches drift from cold cache, JIT warm-up, cuBLAS/CUTLASS lazy init, GPU thermal state, and (on shared infra) neighbour load."
+   },
+   {
+    "heading": "3. Profiling under CUDA graph capture",
+    "anchor": "3-profiling-under-cuda-graph-capture",
+    "gist": "When a kernel is launched from a captured CUDA graph (`torch.cuda.CUDAGraph`, `torch.cuda.graph(g)`, `g.replay()`), launches go through `cuGraphLaunch`, not `cuLaunchKernel`."
+   },
+   {
+    "heading": "4. Silent kernel skipping under graph capture (a correctness trap)",
+    "anchor": "4-silent-kernel-skipping-under-graph-capture-a-correctness-trap",
+    "gist": "If a kernel in a captured pipeline fails to enter the graph — it runs once during capture, then is skipped on every replay — its destination tensor keeps **coincidentally-correct stale bytes** from the capture-time run."
+   },
+   {
+    "heading": "5. Per-call overhead floor",
+    "anchor": "5-per-call-overhead-floor",
+    "gist": "There is a fixed cost between Python entering the launch function and the first GPU instruction executing (observed floor ~80 µs in one harness)."
+   },
+   {
+    "heading": "Practical checklist",
+    "anchor": "practical-checklist",
+    "gist": "Before acting on any profile-driven measurement:"
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- NCU CLI / metrics / sections reference: `` - Profile-driven optimization loop: `` - `Est."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nimport os\n_NO_GRAPH = bool(os.environ.get(\"NO_GRAPH\"))      # module scope\n...\nif not _NO_GRAPH:\n    with torch.cuda.graph(g):      # capture branch\n        ...\n    g.replay()\nelse:\n    run_eager()                    # same kernels, no capture\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ncu-measurement-discipline.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

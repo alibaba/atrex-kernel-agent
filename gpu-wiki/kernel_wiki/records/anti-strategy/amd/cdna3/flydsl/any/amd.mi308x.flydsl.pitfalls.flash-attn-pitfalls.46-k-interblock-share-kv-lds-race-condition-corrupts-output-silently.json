@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.46-k-interblock-share-kv-lds-race-condition-corrupts-output-silently",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#46-k-interblock-share-kv-lds-race-condition-corrupts-output-silently|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '46. K_INTERBLOCK + SHARE_KV_LDS race condition corrupts output silently' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 46. K_INTERBLOCK + SHARE_KV_LDS race condition corrupts output silently",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 46. K_INTERBLOCK + SHARE_KV_LDS race condition corrupts output silently"
+  },
+  "attempted": "After enabling SHARE_KV_LDS (K and V share the same LDS slot), everything looks correct in standalone tests. But when integrated into the production framework (atrex) where `FLYDSL_FLASH_ATTN_FUNC_K_INTERBLOCK` defaults to `1`, output error jumps from 1.4% to 5.3%.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "SHARE_KV_LDS requires `K_INTERBLOCK=0`. Before enabling LDS sharing, audit ALL asynchronous writes to the shared region. The `ENABLE_K_INTERBLOCK` flag does not appear in the `SHARE_KV_LDS` condition, so the conflict is not caught at build time.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "K interblock prefetch loads next iteration's K into LDS at the end of the current KV loop body. With SHARE_KV_LDS, K and V use the same LDS offset (base 0). The prefetched K_{n+1} overwrites V_n's LDS slot while V_n is still being read by GEMM2 (or by threads that haven't reached the barrier yet). The DMA-to-LDS write is asynchronous and races with the V ds_read instructions."
+  },
+  "observed": "rel_err = 0.054 (threshold 0.02). No NaN, no crash — just silently wrong results. The error is data-dependent and only shows up at larger batch sizes.",
+  "root_cause": "K interblock prefetch loads next iteration's K into LDS at the end of the current KV loop body. With SHARE_KV_LDS, K and V use the same LDS offset (base 0). The prefetched K_{n+1} overwrites V_n's LDS slot while V_n is still being read by GEMM2 (or by threads that haven't reached the barrier yet). The DMA-to-LDS write is asynchronous and races with the V ds_read instructions."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

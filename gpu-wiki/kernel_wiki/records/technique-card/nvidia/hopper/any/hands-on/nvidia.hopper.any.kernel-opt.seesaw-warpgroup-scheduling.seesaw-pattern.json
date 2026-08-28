@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.any.kernel-opt.seesaw-warpgroup-scheduling.seesaw-pattern",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|any|hands-on|seesaw-warpgroup-scheduling#seesaw-pattern|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "seesaw-pattern"
+  ],
+  "triggers": [
+   "the 'Seesaw Pattern' technique is being considered on NVIDIA Hopper (H20 / H100 / H200 / SM90)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Hopper (H20 / H100 / H200 / SM90): Seesaw Pattern",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Seesaw Warpgroup Scheduling -- Seesaw Pattern"
+  },
+  "technique": "Seesaw Pattern",
+  "what": "Two warp groups share the same output matrix (split into O_L and O_R by left/right halves) and alternate between using Tensor Cores and CUDA Cores:",
+  "when": "Two warp groups share the same output matrix (split into O_L and O_R by left/right halves) and alternate between using Tensor Cores and CUDA Cores:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nEnglish description\nWG0: [QK GEMM₀] [softmax₀] [QK GEMM₁] [softmax₁] ...\nWG1:            [PV GEMM₀]             [PV GEMM₁] ...\n      ↑ Tensor Core  ↑ CUDA Core  ↑ Tensor Core\n```\n\n```cpp\n// WG0 execute QK GEMM(Tensor Core )\n// WG1 execute softmax + scaling(CUDA Core )\n__syncwarp();\n\n// WG0 softmax(CUDA Core )\n// WG1 PV GEMM(Tensor Core )\n__syncwarp();\n```\n\n```\nOutput [num_heads × head_dim_v]:\n┌──────────────┬──────────────┐\n│    O_L       │    O_R       │\n│ (WG0 ) │ (WG1 ) │\n└──────────────┴──────────────┘\n     256 cols       256 cols\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/kernel-opt/hands-on/seesaw-warpgroup-scheduling.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

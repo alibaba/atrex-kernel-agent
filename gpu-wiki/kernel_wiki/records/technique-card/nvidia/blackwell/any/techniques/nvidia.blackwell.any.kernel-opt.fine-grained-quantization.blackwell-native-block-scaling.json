@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.blackwell-native-block-scaling",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#blackwell-native-block-scaling|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "blackwell-native-block-scaling",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'Blackwell: Native Block Scaling' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Blackwell: Native Block Scaling",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- Blackwell: Native Block Scaling"
+  },
+  "technique": "Blackwell: Native Block Scaling",
+  "what": "On Blackwell, tcgen05.mma supports native block scaling via the UE8M0 (unsigned 8-bit exponent, no mantissa) format. The hardware applies per-block scale factors directly during the MMA operation, eliminating the software promotion step:",
+  "when": "On Blackwell, tcgen05.mma supports native block scaling via the UE8M0 (unsigned 8-bit exponent, no mantissa) format.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Blackwell native block scaling with UE8M0\n// Scale format: UE8M0 = pure power-of-two scale (2^exponent)\n// Packed: 4 UE8M0 values per 32-bit integer\n\n// DeepGEMM SM100 kernel: scale_A and scale_B are UE8M0 packed\n// tcgen05.mma applies scales automatically during accumulation\n\nstruct BlockScaleDescriptor {\n    // 4 UE8M0 scale values packed into one uint32\n    // Each UE8M0 is an 8-bit unsigned exponent: value = 2^(e - 127)\n    uint32_t packed_scales;  // Contains 4 block scales\n\n    // Dequantization for block [i]:\n    //   scale_i = 2^(((packed >> (i*8)) & 0xFF) - 127)\n};\n\n// PTX for tcgen05.mma with block scaling:\n// The .scale modifier tells the hardware to apply UE8M0 scales\n// from a designated SMEM region alongside the MMA operands\n```\n\n```ptx\n// tcgen05.mma with native block scaling (Blackwell PTX)\n// This instruction applies UE8M0 scales from SMEM during MMA\ntcgen05.mma.cta_group::1.kind::f8f6f4\n    [%tmem_addr],           // TMEM accumulator destination\n    [%desc_a],              // SMEM descriptor for A operand\n    [%desc_b],              // SMEM descriptor for B operand\n    %scale_d,               // Scale descriptor for D (output)\n    %enable_mask,\n    [%scale_a_smem],        // UE8M0 scales for A in SMEM\n    [%scale_b_smem];        // UE8M0 scales for B in SMEM\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

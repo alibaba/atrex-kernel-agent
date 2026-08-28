@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.3-fully-masked-rows-produce-nan-in-fp32-reference-breaking-correctness-comparison",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#3-fully-masked-rows-produce-nan-in-fp32-reference-breaking-correctness-comparison|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '3. Fully-masked rows produce NaN in fp32 reference, breaking correctness comparison' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 3. Fully-masked rows produce NaN in fp32 reference, breaking correctness comparison",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 3. Fully-masked rows produce NaN in fp32 reference, breaking correctness comparison"
+  },
+  "attempted": "Sparse masks may have rows where ALL positions are masked (-1e6). When computing reference gradients via PyTorch autograd on these rows, `softmax([-1e6, -1e6, ..., -1e6])` produces uniform probabilities (≈ 1/S) rather than all-zeros, and the backward through softmax produces non-zero gradients. Meanwhile the kernel (correctly) skips fully-masked rows via loop bounds, producing zeros. Comparing kernel output vs reference on these rows shows large relative error.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "For correctness verification with sparse arbitrary masks: 1. Use **causal mask** for full-coverage verification (every row has valid positions). 2. For the actual sparse mask, only compare rows that have at least one attend position: `valid_rows = (mask >= -0.5).any(dim=-1)`. Report errors on valid rows only.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "In the forward pass, fully-masked rows contribute nothing to the final loss (their output is multiplied by zero in downstream computations). Their gradients are \"don't care\" values. But the fp32 reference computes them anyway because PyTorch softmax assigns uniform probability to -inf/-1e6 rows, which propagates non-zero gradients backward."
+  },
+  "observed": "dK/dV correctness check fails with relative error > 5% even though the kernel is correct for all rows that matter to the loss function.",
+  "root_cause": "In the forward pass, fully-masked rows contribute nothing to the final loss (their output is multiplied by zero in downstream computations). Their gradients are \"don't care\" values. But the fp32 reference computes them anyway because PyTorch softmax assigns uniform probability to -inf/-1e6 rows, which propagates non-zero gradients backward."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

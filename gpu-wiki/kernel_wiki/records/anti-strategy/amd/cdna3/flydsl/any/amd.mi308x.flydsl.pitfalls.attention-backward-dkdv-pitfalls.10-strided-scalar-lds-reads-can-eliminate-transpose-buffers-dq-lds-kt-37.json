@@ -1,0 +1,105 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.attention-backward-dkdv-pitfalls.10-strided-scalar-lds-reads-can-eliminate-transpose-buffers-dq-lds-kt-37",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|pitfalls|attention-backward-dkdv-pitfalls#10-strided-scalar-lds-reads-can-eliminate-transpose-buffers-dq-lds-kt-37|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '10. Strided Scalar LDS Reads Can Eliminate Transpose Buffers (dQ lds_kt: -37%)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 10. Strided Scalar LDS Reads Can Eliminate Transpose Buffers (dQ lds_kt: -37%)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Attention Backward dQ + dK+dV on MI308X (gfx942) -- 10. Strided Scalar LDS Reads Can Eliminate Transpose Buffers (dQ lds_kt: -37%)"
+  },
+  "attempted": "The K^T transpose buffer (lds_kt, 4,352 bytes) seems necessary to provide the transposed K data for the dQ MFMA B operand. K is stored row-major in lds_k, but the MFMA requires K^T with the k_row dimension packed into 4 consecutive bf16 elements per lane.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Before allocating a separate transpose buffer, check whether the source data is already present in another LDS buffer in a different layout. Strided scalar reads trade 3 extra LDS ops per MFMA for the entire transpose buffer's LDS footprint. The break-even point is when the saved LDS crosses an occupancy threshold.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "lds_k stores K[k_row, d_col] at lds_k[k_row * K_STRIDE + d_col]. K^T[d_col, k_row] = K[k_row, d_col] can be read by iterating over k_row at a fixed d_col — that is simply stride-K_STRIDE scalar reads from lds_k. Four ``vector.load_op(v1_type, lds_k, [k_row * K_STRIDE + d_pos])`` replace one ``vector.load_op(v4_type, lds_kt, [vector_idx])``. The 3 extra LDS instructions per MFMA are trivially hidden by the occupancy jump from 5 to 7 waves per SIMD. The same technique does NOT work for P^T/dS^T in dK+dV because P resides in registers (MFMA accumulator), not in LDS — there is no buffer to stride-read from."
+  },
+  "observed": "Eliminating lds_kt and reading K^T via 4 strided scalar loads from lds_k: LDS 13,056 → 8,704 bytes, occupancy 5 → 7, dQ 4.3 ms → 2.93 ms (-37%).",
+  "root_cause": "lds_k stores K[k_row, d_col] at lds_k[k_row * K_STRIDE + d_col]. K^T[d_col, k_row] = K[k_row, d_col] can be read by iterating over k_row at a fixed d_col — that is simply stride-K_STRIDE scalar reads from lds_k. Four ``vector.load_op(v1_type, lds_k, [k_row * K_STRIDE + d_pos])`` replace one ``vector.load_op(v4_type, lds_kt, [vector_idx])``. The 3 extra LDS instructions per MFMA are trivially hidden by the occupancy jump from 5 to 7 waves per SIMD. The same technique does NOT work for P^T/dS^T in dK+dV because P resides in registers (MFMA accumulator), not in LDS — there is no buffer to stride-read from."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/attention-backward-dkdv-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

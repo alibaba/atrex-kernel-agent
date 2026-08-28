@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.register-to-tmem.summary-what-changes-what-stays",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|register-to-tmem#summary-what-changes-what-stays|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "summary-what-changes-what-stays"
+  ],
+  "triggers": [
+   "the 'Summary: What Changes, What Stays' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Summary: What Changes, What Stays",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Register Accumulators to TMEM -- Summary: What Changes, What Stays"
+  },
+  "technique": "Summary: What Changes, What Stays",
+  "what": "| Aspect | Register (Hopper) | TMEM (Blackwell) | |---|---|---| | Accumulator declaration | `float acc[N]` in registers | `tmem_alloc(cols)` | | Zero-initialization | Loop over register array | `tcgen05.st` zero pattern | | MMA accumulation | Implicit (wgmma writes regs) | Implicit (tcgen05 writes TMEM) | | Reading results | Direct register access | `tcgen05.ld` to register | | Cleanup | Implicit (CTA exit) | Explicit `tcgen05.dealloc` | | Register pressure | ~128-256 regs for accumulator | ~0 regs for accumulator | | Epilogue headroom | Minimal (spill risk) | Ample (full register file) | | Double-buffering | Doubles register pressure (2x acc) | Uses 2 TMEM regions (no reg impact) | | Max practical tile | m64xn256 (limited by registers) | m128xn256 or m256xn256 (limited by TMEM cols) |",
+  "when": "| Aspect | Register (Hopper) | TMEM (Blackwell) | |---|---|---| | Accumulator declaration | `float acc[N]` in registers | `tmem_alloc(cols)` | | Zero-initialization | Loop over register array | `tcgen05.st` zero pattern | | MMA accumulatio…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/register-to-tmem.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

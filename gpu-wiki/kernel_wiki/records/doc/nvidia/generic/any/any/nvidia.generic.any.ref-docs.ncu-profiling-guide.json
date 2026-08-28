@@ -1,0 +1,178 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ncu-profiling-guide",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ncu-profiling-guide|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): NVIDIA Nsight Compute (NCU) Profiling Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "NVIDIA Nsight Compute (NCU) Profiling Guide"
+  },
+  "title": "NVIDIA Nsight Compute (NCU) Profiling Guide",
+  "summary": "NVIDIA Nsight Compute (ncu) is a non-interactive command-line profiler at the CUDA kernel level. It works by injecting a measurement library into the application process, intercepting CUDA driver communication, and collecting GPU performance metrics upon detecting a kernel launch.",
+  "sections": [
+   {
+    "heading": "Overview",
+    "anchor": "overview",
+    "gist": "NVIDIA Nsight Compute (ncu) is a non-interactive command-line profiler at the CUDA kernel level."
+   },
+   {
+    "heading": "Basic Usage",
+    "anchor": "basic-usage",
+    "gist": "table columns: Format, Command, Purpose"
+   },
+   {
+    "heading": "Kernel Filtering",
+    "anchor": "kernel-filtering",
+    "gist": "Format: `context-id:stream-id:[name-operator:]kernel-name:invocation-nr`"
+   },
+   {
+    "heading": "Section and Metric System",
+    "anchor": "section-and-metric-system",
+    "gist": "table columns: Set, Description"
+   },
+   {
+    "heading": "Replay Modes",
+    "anchor": "replay-modes",
+    "gist": "Since not all metrics can be collected in a single pass, the kernel may need to be replayed across multiple passes."
+   },
+   {
+    "heading": "Key Performance Metric Interpretation",
+    "anchor": "key-performance-metric-interpretation",
+    "gist": "The SpeedOfLight section reports the percentage of theoretical peak achieved for compute and memory."
+   },
+   {
+    "heading": "Clock and Cache Control",
+    "anchor": "clock-and-cache-control",
+    "gist": "- NCU serializes kernel launches by default (except for Range replay) - NCU and Nsight Systems measure duration differently; NCU typically reports longer times - It is recommended to enable GPU persistence mode to avoid initialization over…"
+   },
+   {
+    "heading": "Multi-Process / MPI Profiling",
+    "anchor": "multi-process-mpi-profiling",
+    "gist": "Cross-process tree (TCP):"
+   },
+   {
+    "heading": "CUDA Graph Profiling",
+    "anchor": "cuda-graph-profiling",
+    "gist": "Primary use cases for Graph mode: profiling graphs with mandatory concurrent kernel nodes, and more accurate cross-node caching behavior."
+   },
+   {
+    "heading": "PM Sampling and Warp Sampling",
+    "anchor": "pm-sampling-and-warp-sampling",
+    "gist": "Periodically samples performance counters, providing a timeline view of behavioral changes during kernel execution."
+   },
+   {
+    "heading": "Common CLI Options Quick Reference",
+    "anchor": "common-cli-options-quick-reference",
+    "gist": "table columns: Option, Purpose, Default"
+   },
+   {
+    "heading": "Quick Reference for Useful Commands",
+    "anchor": "quick-reference-for-useful-commands",
+    "gist": ""
+   },
+   {
+    "heading": "Metric Accuracy Notes",
+    "anchor": "metric-accuracy-notes",
+    "gist": "Reasons why results may contain out-of-range values: - **Asynchronous GPU activity**: Other engines (display, copy, video) accessing shared resources (L2, DRAM, PCIe) - **Multi-pass collection**: Workload distribution varies across passes,…"
+   },
+   {
+    "heading": "Remote Profiling",
+    "anchor": "remote-profiling",
+    "gist": "Default port 49152, up to 64 connections."
+   },
+   {
+    "heading": "Configuration File",
+    "anchor": "configuration-file",
+    "gist": "Default configuration file `config.ncu-cfg` search order: CWD → `$HOME/.config/NVIDIA Corporation` (Linux)."
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- **Prerequisites**: GPU Instruction-Level Optimization — Roofline analysis principles - **Hopper Specialization**: Hopper ncu Profiling Details"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\n# Basic profiling, output to terminal\nncu ./app\n\n# Save report file (.ncu-rep)\nncu -o profile ./app\n\n# Collect complete metrics\nncu --set full -o full_profile ./app\n```\n\n```bash\nncu --page source --print-source cuda,sass ./app\nncu --page raw --csv -i report.ncu-rep\n```\n\n```bash\nncu -k foo ./app                     # Exact match \"foo\"\nncu -k regex:foo ./app               # Contains \"foo\"\nncu -k regex:\"foo|bar\" ./app         # Match \"foo\" or \"bar\"\n```\n\n```bash\nncu -s 5 -c 10 ./app                 # Skip first 5, profile next 10\nncu --launch-skip-before-match 100 -c 1 ./app  # Skip first 100 total launches\nncu -k myKernel -c 1 --kill yes ./app          # Collect target then terminate program\n```\n\n```bash\nncu --kernel-id ::foo:2 ./app            # 2nd call of foo\nncu --kernel-id 1|5:2::7 ./app           # ctx 1 or 5, stream 2, 7th call\n```\n\n```bash\nncu --nvtx --nvtx-include \"A_range/\" ./app                    # push/pop range\nncu --nvtx --nvtx-include \"Domain-A@A_range/\" ./app           # Specify domain\nncu --nvtx --nvtx-include \"A_range/*/B_range\" ./app           # Nested range\n```\n\n```bash\nncu --devices 0,2 ./app\n```\n\n```bash\nncu --call-stack-type python --python-include train.py@forward python app.py\n```\n\n```bash\nncu --list-sets # column set\nncu --list-sections # column section\nncu --query-metrics # column metric\nncu --query-metrics --chips gh100 --query-metrics-mode all #\n\n# section\nncu --section LaunchStats --section Occupancy ./app\nncu --section \"regex:.*Stats\" ./app\n\n# metric\nncu --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed ./app\nncu --metrics \"regex:sm__.*\" ./app\nncu --metrics \"breakdown:sm__throughput.avg\" ./app\n```\n\n```bash\nncu --replay-mode kernel ./app\n```\n\n```bash\nncu --replay-mode application ./app\n```\n\n```bash\nncu --replay-mode range --nvtx --nvtx-include \"MyRange/\" ./app\n```\n\n```bash\nncu --replay-mode app-range ./app\n```\n\n```bash\n# defaultrow: SM + flush cache\nncu --clock-control base --cache-control all ./app\n\n# nsight systems , use\nnvidia-smi -lgc <freq>\nncu --clock-control none ./app\n\n# profiling\nncu --clock-control reset\n```\n\n```bash\nncu --target-processes all -o report mpirun [args] ./app\n```\n\n```bash\nmpirun [args] ncu -o report_%q{OMPI_COMM_WORLD_RANK} ./app\n```\n\n```bash\n#!/bin/bash\nif [[ $OMPI_COMM_WORLD_RANK == 0 ]]; then\n    ncu -o report_${OMPI_COMM_WORLD_RANK} --target-processes all \"$@\"\nelse\n    \"$@\"\nfi\n```\n\n```bash\nmpirun -np 4 ncu --communicator tcp --communicator-num-peers 4 \\\n    --lockstep-kernel-launch -o report ./app\n```\n\n```bash\nncu --communicator shmem --communicator-shmem-num-peers 2 \\\n    -f -o report -k regex:nccl.* torchrun --nproc_per_node=2 app.py\n```\n\n```bash\n#!/bin/bash\nnodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )\nhead_node=${nodes[0]}\nhead_node_addr=$(srun --nodes=1 --ntasks=1 -w \"$head_node\" hostname)\n\nsrun ncu \\\n    --communicator=tcp \\\n    --communicator-tcp-hostname=\"$head_node_addr\" \\\n    --communicator-tcp-num-peers=\"$SLURM_NTASKS\" \\\n    --lockstep-kernel-launch \\\n    ./application\n```\n\n```bash\nncu --target-processes-filter MatrixMul ./app #\nncu --target-processes-filter regex:Matrix ./app #\nncu --target-processes-filter exclude:launcher.exe ./app #\n```\n\n```bash\nncu --graph-profiling node ./app # by kernel profile(default)\nncu --graph-profiling graph ./app # entire graph workload profile\n```\n\n```bash\nncu --metrics \"pmsampling:sm__throughput\" ./app\nncu --pm-sampling-interval 1000 ./app # sampling(cycles/ns)\n```\n\n```bash\nncu --warp-sampling-interval 10 ./app # sampling = 2^(5+value) cycles\n```\n\n```bash\n# Basic profiling\nncu -o profile ./app\n\n# Full metrics collection\nncu --set full -o full_profile ./app\n\n# Profile specific kernel, limit count\nncu -k regex:matmul -c 3 -s 2 -o report ./app\n\n# CSV output for script processing\nncu --csv --page raw --metrics sm__throughput.avg.pct_of_peak_sustained_elapsed ./app\n\n# With source correlation\nncu --page source --print-source cuda,sass --section SpeedOfLight ./app\n\n# Application replay (non-replayable kernels)\nncu --replay-mode application -c 1 ./app\n\n# NVTX range replay\nncu --replay-mode range --nvtx --nvtx-include \"training_step/\" ./app\n\n# Query specific chip metrics\nncu --query-metrics --chips gh100 --query-metrics-mode all\n\n# Import and re-filter report\nncu -i old.ncu-rep -o filtered.ncu-rep -k regex:conv -c 5\n\n# Per-kernel summary\nncu --print-summary per-kernel ./app\n\n# Reset clock\nncu --clock-control reset\n```\n\n```bash\n# Target machine\nncu --mode launch ./app\n\n# Host (attach)\nncu --mode attach --hostname <target-ip>\n```\n\n```ini\n[Launch-and-attach]\n-c = 1\n--section = LaunchStats, Occupancy\n\n[Import]\n--open-in-ui\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ncu-profiling-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

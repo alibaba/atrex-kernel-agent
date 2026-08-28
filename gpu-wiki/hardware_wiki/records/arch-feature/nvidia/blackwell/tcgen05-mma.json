@@ -1,0 +1,40 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.tcgen05-mma",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "tcgen05-mma",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "`tcgen05.mma` is the Blackwell (SM100/SM100a) matrix-multiply-accumulate instruction that replaces Hopper's `wgmma.mma_async`. The name stands for **Tensor Core Generation 05**. NVIDIA also refers to the higher-level abstraction as **UMMA** (Unified Matrix Multiply-Accumulate) in the CUTLASS framework.",
+  "why_it_matters": "Key differences from `wgmma`:",
+  "related_instructions": [
+   "tcgen05",
+   "tcgen05.mma",
+   "tcgen05.mma.cta_group",
+   "tcgen05.mma.fence",
+   "tcgen05.mma.kind"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "tcgen05.mma -- Blackwell MMA Instruction",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/tcgen05-mma.md"
+   }
+  ]
+ }
+}

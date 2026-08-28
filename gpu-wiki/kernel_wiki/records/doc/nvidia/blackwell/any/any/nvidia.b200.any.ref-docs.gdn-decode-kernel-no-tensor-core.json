@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.ref-docs.gdn-decode-kernel-no-tensor-core",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gdn|gdn-decode-kernel-no-tensor-core|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): B200 GDN Kernel Optimization: Why Decode Cannot Use Tensor Core",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "B200 GDN Kernel Optimization: Why Decode Cannot Use Tensor Core"
+  },
+  "title": "B200 GDN Kernel Optimization: Why Decode Cannot Use Tensor Core",
+  "summary": "A deep analysis of why Gated Delta Networks decode kernels are fundamentally memory-bound and cannot leverage Tensor Cores, contrasting with the compute-bound prefill phase.",
+  "sections": [
+   {
+    "heading": "Glossary",
+    "anchor": "glossary",
+    "gist": "`tcgen05.mma` — Blackwell 5th-gen Tensor Core instruction; `WGMMA` — Hopper 4th-gen; `Swizzle` — address remapping to eliminate bank conflicts; `Ridge Point` — roofline compute-bandwidth inflection; `AI = FLOPs/byte`; `CuTe DSL` — CUTLASS …"
+   },
+   {
+    "heading": "TL;DR",
+    "anchor": "tl-dr",
+    "gist": "table columns: Phase, Operation Type, Tensor Core, Bottleneck, Best Strategy"
+   },
+   {
+    "heading": "1. Gated Delta Net Background",
+    "anchor": "1-gated-delta-net-background",
+    "gist": "A linear attention variant with recurrent state updates at O(L) complexity."
+   },
+   {
+    "heading": "2. B200 Hardware Specifications (Excerpts)",
+    "anchor": "2-b200-hardware-specifications-excerpts",
+    "gist": "- Tensor Core instruction evolution: mma.sync (A100, 1x) → wgmma (H100, ~2x) → **tcgen05.mma (B200, 2-4x vs Hopper)** - BF16 Tensor 2.25 PFLOPS / FP32 CUDA 74.45 TFLOPS / HBM3e 8 TB/s - Ridge Point: BF16 281 FLOP/byte, FP32 9.3 FLOP/byte"
+   },
+   {
+    "heading": "3. Decode: Why Tensor Core Fails",
+    "anchor": "3-decode-why-tensor-core-fails",
+    "gist": "`S @ k` and `S @ q` are both `[128,128]×[128]` GEMV operations — `N = 1 < 16`, which cannot fill a tcgen05.mma tile."
+   },
+   {
+    "heading": "4. Prefill: Chunked Recurrence Converts GEMV to GEMM",
+    "anchor": "4-prefill-chunked-recurrence-converts-gemv-to-gemm",
+    "gist": "AI improvement: no chunk 1 → chunk=64 ~7.5 → chunk=128 ~12."
+   },
+   {
+    "heading": "5. Technology Stack Comparison",
+    "anchor": "5-technology-stack-comparison",
+    "gist": "table columns: Version, Stack, Key Optimization, Lines, Bandwidth Utilization"
+   },
+   {
+    "heading": "6. Performance Comparison",
+    "anchor": "6-performance-comparison",
+    "gist": "Decode @ Batch=256 on B200: All versions except Triton achieve ~7600 GB/s (95% bandwidth)."
+   },
+   {
+    "heading": "7. Conclusions and Technology Selection",
+    "anchor": "7-conclusions-and-technology-selection",
+    "gist": "- Not all operators should pursue Tensor Core: Memory-bound decode → optimize bandwidth; Compute-bound prefill (chunked) → tcgen05.mma - Rapid prototyping: Triton/cuTile; Memory-intensive: CuTe Swizzle abstraction; Compute-intensive: CuTe …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\ng = exp(-exp(A_log) * softplus(a))   # decay gate\nbeta = sigmoid(b)                    # update gate\nS = g * S\nold_v = k @ S                        # [K] × [K,V] → [V]\nnew_v = beta * v + (1-beta) * old_v\nS = S + outer(k, new_v - old_v)      # Delta Rule\no = scale * q @ S                    # [K] × [K,V] → [V]\n```\n\n```python\nfor start in range(0, L, chunk_size):\n    Q_chunk = Q[start:end]            # [C, K]\n    O_chunk = S @ Q_chunk.T            # [V,K] × [K,C] → mat-mat! tcgen05.mma applicable\n    for t in range(start, end):\n        S = g[t] * S + outer(k[t], delta[t])   # sequential portion\n```\n\n```\nphysical = logical XOR ((logical >> 3) & 7)\n```\n\n```python\n@ct.kernel\ndef gdn_decode_v11(state, q, k, v, out, D=128, V=128):\n    batch_id, head_id = ct.bid(0), ct.bid(1)\n    state_tile = ct.load(state, (batch_id, head_id), (V, D))\n    q_tile = ct.load(q, (batch_id, head_id), (D,))\n    o_tile = ct.sum(state_tile * q_tile, axis=1)\n    state_tile = state_tile + ct.outer(k_tile, v_tile - o_tile)\n    ct.store(state, ..., state_tile)\n    ct.store(out, ..., o_tile)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/gdn-decode-kernel-no-tensor-core.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.wgmma-to-tcgen05.side-by-side-comparison",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|wgmma-to-tcgen05#side-by-side-comparison|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "side-by-side-comparison"
+  ],
+  "triggers": [
+   "the 'Side-by-Side Comparison' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Side-by-Side Comparison",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Migrating from wgmma to tcgen05 -- Side-by-Side Comparison"
+  },
+  "technique": "Side-by-Side Comparison",
+  "what": "SM90 GEMM kernel using wgmma",
+  "when": "SM90 GEMM kernel using wgmma",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// SM90 GEMM kernel using wgmma\n__global__ void hopper_gemm(\n    const half* A, const half* B, half* C,\n    int M, int N, int K\n) {\n    extern __shared__ char smem[];\n    half* smem_a = reinterpret_cast<half*>(smem);\n    half* smem_b = smem_a + TILE_M * TILE_K;\n\n    // Register accumulators -- HIGH REGISTER PRESSURE\n    float acc[MMA_M_FRAGS][MMA_N_FRAGS];  // 128+ registers!\n    for (int i = 0; i < MMA_M_FRAGS; ++i)\n        for (int j = 0; j < MMA_N_FRAGS; ++j)\n            acc[i][j] = 0.0f;\n\n    // Mainloop\n    for (int k = 0; k < K / TILE_K; ++k) {\n        // Load A to SMEM (TMA or cp.async)\n        tma_load(smem_a, A, tile_m, k);\n        tma_load(smem_b, B, k, tile_n);\n\n        // Load A fragment from SMEM to registers via ldmatrix\n        uint32_t a_frag[4];\n        asm volatile(\n            \"ldmatrix.sync.aligned.m8n8.x4.shared.b16 \"\n            \"{%0,%1,%2,%3}, [%4];\"\n            : \"=r\"(a_frag[0]), \"=r\"(a_frag[1]),\n              \"=r\"(a_frag[2]), \"=r\"(a_frag[3])\n            : \"r\"(smem_a_addr)\n        );\n\n        // Issue wgmma -- ALL 128 THREADS IN WARPGROUP participate\n        asm volatile(\n            \"wgmma.mma_async.sync.aligned.m64n256k16.f32.bf16.bf16 \"\n            \"{%0, %1, %2, %3, %4, %5, %6, %7, ...}, \"  // acc registers\n            \"{%N, %N+1, %N+2, %N+3}, \"                   // A in registers\n            \"desc_b, ...\"                                  // B descriptor\n            : \"+f\"(acc[0][0]), \"+f\"(acc[0][1]), ...\n            : \"r\"(a_frag[0]), ...\n        );\n\n        // Commit and wait for warpgroup\n        asm volatile(\"wgmma.commit_group.sync.aligned;\");\n        asm volatile(\"wgmma.wait_group.sync.aligned 0;\");\n    }\n\n    // Epilogue: accumulators already in registers\n    // Write directly to GMEM (or through SMEM for vectorized stores)\n    for (int i = 0; i < MMA_M_FRAGS; ++i)\n        for (int j = 0; j < MMA_N_FRAGS; ++j)\n            C[row + i][col + j] = (half)acc[i][j];\n}\n```\n\n```cuda\n// SM100 GEMM kernel using tcgen05\n__global__ void blackwell_gemm(\n    const half* A, const half* B, half* C,\n    int M, int N, int K\n) {\n    extern __shared__ char smem[];\n    half* smem_a = reinterpret_cast<half*>(smem);\n    half* smem_b = smem_a + TILE_M * TILE_K;\n\n    // TMEM accumulator -- NO REGISTER PRESSURE\n    uint32_t tmem_acc;\n    if (threadIdx.x == 0) {\n        asm volatile(\n            \"tcgen05.alloc.cta_group::1.sync.aligned.b32 %0, %1;\"\n            : \"=r\"(tmem_acc)\n            : \"r\"(256)  // 256 columns for 128x256 tile\n        );\n    }\n    tmem_acc = __shfl_sync(0xFFFFFFFF, tmem_acc, 0);\n\n    // Zero TMEM accumulator\n    tmem_zero(tmem_acc, 256);\n\n    // Mainloop\n    for (int k = 0; k < K / TILE_K; ++k) {\n        // TMA load with 128B swizzle (mandatory for tcgen05)\n        tma_load_128b_swizzle(smem_a, A, tile_m, k);\n        tma_load_128b_swizzle(smem_b, B, k, tile_n);\n        wait_barrier();\n\n        // NO ldmatrix -- tcgen05 reads directly from SMEM\n        // SINGLE THREAD issues MMA (not warpgroup)\n        if (threadIdx.x == 0) {\n            asm volatile(\n                \"tcgen05.mma.cta_group::1.kind::f16 \"\n                \"[%0], %1, %2, %3, 1;\"\n                :\n                : \"r\"(tmem_acc),\n                  \"l\"(make_smem_desc_128b(smem_a)),\n                  \"l\"(make_smem_desc_128b(smem_b)),\n                  \"r\"(0)\n            );\n        }\n        // NO commit/wait -- fully async, fence-based\n    }\n\n    // Fence before reading TMEM (replaces wgmma.wait_group)\n    asm volatile(\"tcgen05.mma.fence::before_thread_sync;\");\n    __syncthreads();\n\n    // Epilogue: read from TMEM, then write to GMEM\n    float4 acc_vals = tmem_load_f32x4(tmem_acc + col_offset);\n    // Apply bias, activation, etc.\n    store_output(acc_vals, C, row, col);\n\n    // Deallocate TMEM (no equivalent needed on Hopper)\n    if (threadIdx.x == 0) {\n        asm volatile(\n            \"tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;\"\n            :\n            : \"r\"(tmem_acc), \"r\"(256)\n        );\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/wgmma-to-tcgen05.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

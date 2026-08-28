@@ -1,0 +1,155 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna3.gluon.ref-docs.common_optimizations",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|ref-docs|common_optimizations|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "cdna3"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD CDNA3 (gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA3 (gfx942): ISA Optimization Detailed Checklist",
+  "problem": {
+   "target": "AMD CDNA3 (gfx942)",
+   "statement": "ISA Optimization Detailed Checklist"
+  },
+  "title": "ISA Optimization Detailed Checklist",
+  "summary": "> **Note**: This document contains general ISA optimization steps (§3.0-§3.5) applicable to all AMD CDNA3 kernels. > For GEMM-specific `warp_pipeline_stage` optimizations, see ``. > See Appendix A of this document for a quick-reference optimization decision table for various kernel types.",
+  "sections": [
+   {
+    "heading": "⚠️ Core Principles",
+    "anchor": "core-principles",
+    "gist": "1."
+   },
+   {
+    "heading": "3.0 Coalesced Memory Access Pre-Check (Step Zero) ⚠️⚠️⚠️",
+    "anchor": "3-0-coalesced-memory-access-pre-check-step-zero",
+    "gist": "> **This is the prerequisite for all optimizations."
+   },
+   {
+    "heading": "3.1 Ensure Coalesced Access + Maximize buffer_load/buffer_store Instruction Width",
+    "anchor": "3-1-ensure-coalesced-access-maximize-buffer-load-buffer-store-instruction-width",
+    "gist": "**On the premise of ensuring coalesced memory access**, maximize the instruction width for global memory and LDS: - Global load/store: `buffer_load_dwordx4` / `buffer_store_dwordx4` (128-bit) - LDS read/write: `ds_read_b128` / `ds_write_b1…"
+   },
+   {
+    "heading": "3.2 Check Swizzle for Bank Conflicts",
+    "anchor": "3-2-check-swizzle-for-bank-conflicts",
+    "gist": "Eliminate LDS (Shared Memory) bank conflicts to reduce stall cycles in `ds_read`/`ds_write`."
+   },
+   {
+    "heading": "3.3 Eliminate ds_bpermute Instructions",
+    "anchor": "3-3-eliminate-ds-bpermute-instructions",
+    "gist": "Reduce or eliminate `ds_bpermute_b32` instructions, which are high-latency cross-lane data exchange operations."
+   },
+   {
+    "heading": "3.4 Eliminating Scratch Operations (Register Spilling)",
+    "anchor": "3-4-eliminating-scratch-operations-register-spilling",
+    "gist": "Eliminate `buffer_load`/`buffer_store` or `scratch_load`/`scratch_store` targeting scratch space — these indicate VGPR spilling to video memory."
+   },
+   {
+    "heading": "3.5 Optimizing Memory Access Stalls (Compute-Memory Overlap)",
+    "anchor": "3-5-optimizing-memory-access-stalls-compute-memory-overlap",
+    "gist": "Ensure memory load latency is effectively hidden by compute operations, avoiding pipeline stalls."
+   },
+   {
+    "heading": "3.6 warp_pipeline_stage Full-Stage Packing (GEMM-Specific Optimization)",
+    "anchor": "3-6-warp-pipeline-stage-full-stage-packing-gemm-specific-optimization",
+    "gist": "> ⚠️ **This optimization applies only to large-tile GEMM**, not to Flash Attention or small-matrix GEMM."
+   },
+   {
+    "heading": "Verification Checklist",
+    "anchor": "verification-checklist",
+    "gist": "Must perform after each optimization step:"
+   },
+   {
+    "heading": "Appendix A: Optimization Decision Quick Reference",
+    "anchor": "appendix-a-optimization-decision-quick-reference",
+    "gist": "table columns: Bottleneck Type, Tier 1 Optimization, Tier 2 Optimization, Tier 3 Optimization"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **Prerequisites**: CDNA3 Hardware Specifications — Required for Roofline analysis - **Cross-Architecture Reference**: CDNA4 ISA Optimization Checklist"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# 1. Confirm tensor stride\n# A[M, K]: stride_am=K, stride_ak=1 → K dimension (dim 1) is contiguous → order=[1, 0]\n# B[K, N]: stride_bk=N, stride_bn=1 → N dimension (dim 1) is contiguous → order=[1, 0]\n# B[N, K]: stride_bn=K, stride_bk=1 → K dimension (dim 1) is contiguous → order=[1, 0]\n\n# 2. Confirm spt in contiguous dimension ≥ 8 (bf16/fp16) or ≥ 4 (fp32) to achieve dwordx4\n```\n\n```bash\ngrep -c 'buffer_load_ushort' kernel.amdgcn    # > 0 → Non-coalesced access! Check order immediately\ngrep -c 'buffer_load_dwordx4' kernel.amdgcn   # = 0 → Same as above\n```\n\n```python\n# Matrix A: shape [M, K], stride_am=K, stride_ak=1 → K dimension is contiguous in memory\n# → blocked_a's order should make K dimension (dim 1) contiguous\nblocked_a = gl.SwizzledSharedLayout(\n    vec=8,                    # K dimension spt=8 → dwordx4 (bf16)\n    perPhase=1,\n    maxPhase=8,\n    threads_per_warp=[16, 4],  # K dimension tpw=4, adjacent threads contiguous in K dimension\n    warps_per_cta=[4, 1],\n    order=[1, 0]               # dim 1 (K) contiguous → matches memory layout\n)\n\n# Matrix B: shape [K, N], stride_bk=N, stride_bn=1 → N dimension is contiguous in memory\n# → blocked_b's order should make N dimension (dim 1) contiguous\nblocked_b = gl.SwizzledSharedLayout(\n    vec=8,                    # N dimension spt=8 → dwordx4 (bf16)\n    perPhase=1,\n    maxPhase=8,\n    threads_per_warp=[16, 4],  # N dimension tpw=4, adjacent threads contiguous in N dimension\n    warps_per_cta=[4, 1],\n    order=[1, 0]               # dim 1 (N) contiguous → matches memory layout\n)\n```\n\n```bash\n# 1. Extract assembly\n# 2. Check load width\ngrep -c 'buffer_load_dword ' kernel.asm         # dwordx1 (32-bit) → Not ideal\ngrep -c 'buffer_load_dwordx2' kernel.asm        # dwordx2 (64-bit) → Acceptable\ngrep -c 'buffer_load_dwordx4' kernel.asm        # dwordx4 (128-bit) → Optimal\n\n# 3. Check LDS width\ngrep -c 'ds_read_b32' kernel.asm                # 32-bit → Not ideal\ngrep -c 'ds_read_b64' kernel.asm                # 64-bit → Acceptable\ngrep -c 'ds_read_b128' kernel.asm               # 128-bit → Optimal\n\n# 4. Store\ngrep -c 'ds_write_b32' kernel.asm\ngrep -c 'ds_write_b64' kernel.asm\ngrep -c 'ds_write_b128' kernel.asm\n\n# 5. Check coalesced access (need to analyze with kernel source code)\n# Confirm blocked layout's order matches tensor's memory layout\n```\n\n```\nBytes per thread = size_per_thread[contiguous_dim] × element_size_bytes\nInstruction width = min(Bytes per thread, 16)  # Max dwordx4 = 16 bytes\n```\n\n```python\n# Analyze tensor's stride to determine which dimension is contiguous in memory\n# Dimension with smallest stride = contiguous dimension in memory\n# For example: stride_am=K, stride_ak=1 → K dimension is contiguous (stride=1)\n# For example: stride_bk=N, stride_bn=1 → N dimension is contiguous (stride=1)\n```\n\n```python\n# First element of order = innermost (contiguous) dimension\n# If K dimension (dim 1) is contiguous in memory → order=[1, 0]\n# If M dimension (dim 0) is contiguous in memory → order=[0, 1]\n```\n\n```python\n# ❌ Non-coalesced + narrow load\n# Matrix A: stride_am=K, stride_ak=1 (K dimension contiguous)\n# But order=[0, 1] makes M dimension contiguous → adjacent threads expand in M dimension → strided access\nblocked_a_wrong = gl.SwizzledSharedLayout(\n    vec=2,                    # M dimension spt=2, but M dimension stride=K → non-contiguous\n    perPhase=1,\n    maxPhase=8,\n    threads_per_warp=[16, 4],\n    warps_per_cta=[4, 1],\n    order=[0, 1]               # ❌ M dimension contiguous, but K dimension is contiguous in memory\n)\n\n# ✅ Coalesced + wide load\n# order=[1, 0] makes K dimension contiguous → matches memory layout → coalesced access\nblocked_a_correct = gl.SwizzledSharedLayout(\n    vec=8,                    # K dimension spt=8 → bf16 × 8 = 16B → dwordx4\n    threads_per_warp=[16, 4],  # K dimension tpw=4, adjacent threads expand in K dimension\n    warps_per_cta=[4, 1],\n    order=[1, 0]               # ✅ K dimension contiguous → matches memory layout\n)\n```\n\n```bash\n# 1. Hardware counters\nrocprofv3 --pmc SQ_LDS_BANK_CONFLICT -d ./pmc -- python <kernel.py>\n\n# 2. Check ds_read/ds_write Stall in ATT\ngrep 'ds_read\\|ds_write' stats_*.csv | sort -t',' -k6 -nr\n\n# 3. Gluon API check\n# Add in kernel code (for debugging):\nconflicts = gl.bank_conflicts(shared_layout)\n```\n\n```python\ngl.SwizzledSharedLayout(vec, perPhase, maxPhase, order=[1, 0])\n```\n\n```\nswizzled_col = (col / vec) XOR ((row / perPhase) % maxPhase) * vec + (col % vec)\n```\n\n```bash\n# 1. Check ds_bpermute count in assembly\ngrep -c 'ds_bpermute' kernel.asm\n\n# 2. Check ds_bpermute latency contribution in ATT\ngrep 'ds_bpermute' stats_*.csv | awk -F',' '{sum+=$5} END {print \"Total latency:\", sum}'\n\n# 3. Search for convert_layout calls in Gluon source code\ngrep 'convert_layout' kernel.py\n```\n\n```python\n# ❌ convert_layout immediately after load\ndata = gl.amd.cdna3.buffer_load(ptr=base, offsets=offs, mask=mask, other=0.0)  # blocked layout\ndata_mma = gl.convert_layout(data, mma)  # Triggers ds_bpermute\n\n# ✅ If data will eventually enter shared memory and then do MFMA, load directly with blocked layout\n# Then naturally convert layout through shared memory path\ndata = gl.amd.cdna3.buffer_load(ptr=base, offsets=offs, mask=mask, other=0.0)\ndata_smem = gl.allocate_shared_memory(data.dtype, shape, shared_layout, value=data)\ndata_dot = data_smem.load(layout=dot_op)  # Through smem path, usually won't generate ds_bpermute\n```\n\n```python\n# ❌ Use mma slice layout for load, then store in blocked layout smem\nrow_idx = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, mma))      # mma slice\ndata = gl.amd.cdna3.buffer_load(...)                                  # mma layout data\n# If blocked layout is needed later, compiler will insert convert_layout\n\n# ✅ Use blocked slice layout for load, consistent with storage layout\nrow_idx = gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, blocked))   # blocked slice\ndata = gl.amd.cdna3.buffer_load(...)                                  # blocked layout data\ndata_smem = gl.allocate_shared_memory(..., value=data)                # No conversion needed\n```\n\n```bash\n# 1. Check scratch operations in assembly\ngrep -c 'scratch_load\\|scratch_store' kernel.asm\n\n# 2. Check VGPR usage count and spill count\ngrep 'vgpr_count\\|vgpr_spill_count\\|sgpr_spill_count' kernel.asm\n# .vgpr_count:       256\n# .vgpr_spill_count: 0     ← Must be 0!\n\n# 3. Check AGPR to VGPR transfers (warning sign)\ngrep -c 'v_accvgpr_read_b32\\|v_accvgpr_write_b32' kernel.asm\n\n# 4. Hardware counters\nrocprofv3 --pmc SPI_RA_VGPR_SGPR_FULL_CSN -d ./pmc -- python <kernel.py>\n```\n\n```python\n# ❌ Block size too large, not enough VGPRs\nBLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64  # Accumulator 128×256 = 32768 elements\n\n# ✅ Reduce block size\nBLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64  # Accumulator 128×128 = 16384 elements\n```\n\n```python\n# ❌ All variables simultaneously active\na = gl.amd.cdna3.buffer_load(...)  # a becomes active\nb = gl.amd.cdna3.buffer_load(...)  # b becomes active\nc = gl.amd.cdna3.buffer_load(...)  # c becomes active\n# Here a, b, c all active → high VGPR pressure\nresult_a = process(a)\nresult_b = process(b)\nresult_c = process(c)\n\n# ✅ Stagger active ranges\na = gl.amd.cdna3.buffer_load(...)\nresult_a = process(a)  # a dies after use\nb = gl.amd.cdna3.buffer_load(...)\nresult_b = process(b)  # b dies after use\nc = gl.amd.cdna3.buffer_load(...)\nresult_c = process(c)\n```\n\n```python\n# ❌ Deep pipeline = more simultaneously active buffers\nsmem = gl.allocate_shared_memory(dtype, [3, M, K], layout)  # depth=3, 3 copies of data simultaneously active\n\n# ✅ Shallow pipeline\nsmem = gl.allocate_shared_memory(dtype, [1, M, K], layout)  # depth=1, only 1 copy\n```\n\n```python\n# ❌ Unnecessary intermediate variables\ntmp1 = a * b\ntmp2 = tmp1 + c\ntmp3 = gl.exp(tmp2)\nresult = tmp3 * d\n\n# ✅ Chained computation (compiler easier to reuse registers)\nresult = gl.exp(a * b + c) * d\n```\n\n```bash\n# 1. Check buffer_load Stall and Idle\ngrep 'buffer_load' stats_*.csv | sort -t',' -k6 -nr | head -10\n\n# 2. Check MFMA Idle (waiting for data ready)\ngrep 'v_mfma' stats_*.csv | sort -t',' -k7 -nr | head -10\n\n# 3. Overall stall distribution\nawk -F',' 'NR>1 {total_lat+=$5; total_stall+=$6; total_idle+=$7}\n    END {printf \"Latency: %d, Stall: %d (%.1f%%), Idle: %d (%.1f%%)\\n\",\n         total_lat, total_stall, total_stall/total_lat*100,\n         total_idle, total_idle/total_lat*100}' stats_*.csv\n```\n\n```python\n# Prologue: Prefetch first batch\ndata_0 = gl.amd.cdna3.buffer_load(...)\nsmem.index(0).store(data_0)\n\n# Main loop: compute current + prefetch next batch\nfor i in range(NT - 1):\n    next_data = gl.amd.cdna3.buffer_load(...)     # Next batch load (async)\n    dot = smem.index(0).load(layout=dot_op)       # Consume current data\n    acc = gl.amd.cdna3.mfma(dot, other, acc)      # Compute (covers load latency)\n    smem.index(0).store(next_data)                # Store prefetch result\n\n# Epilogue: Process last batch\ndot = smem.index(0).load(layout=dot_op)\nacc = gl.amd.cdna3.mfma(dot, other, acc)\n```\n\n```python\n# ❌ Load and compute serial\ndata_a = gl.amd.cdna3.buffer_load(...)  # load A\nresult_a = compute(data_a)               # compute A (wait for A to arrive)\ndata_b = gl.amd.cdna3.buffer_load(...)  # load B\nresult_b = compute(data_b)               # compute B (wait for B to arrive)\n\n# ✅ Load issued early, compute delayed consumption\ndata_a = gl.amd.cdna3.buffer_load(...)  # load A (issued)\ndata_b = gl.amd.cdna3.buffer_load(...)  # load B (issued, overlaps with A)\nresult_a = compute(data_a)               # compute A (A may have arrived)\nresult_b = compute(data_b)               # compute B (B may have arrived)\n```\n\n```bash\n# 1. Accuracy verification\npython <validation-command> \\\n    optimized_kernel.py reference_kernel.py --var-name result_gold\n\n# 2. Performance verification\npython tools/measure_kernel_time.py optimized_kernel.py \\\n    --wrapper-name <wrapper> --setup-name <setup>\n\n# 3. Compare before and after optimization\necho \"Before optimization: X.XXX ms → After optimization: Y.YYY ms (improved by Z%)\"\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/ref-docs/gluon/common_optimizations.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

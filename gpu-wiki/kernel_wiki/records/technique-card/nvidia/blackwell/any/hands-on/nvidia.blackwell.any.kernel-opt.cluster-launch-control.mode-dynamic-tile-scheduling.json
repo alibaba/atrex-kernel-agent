@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.cluster-launch-control.mode-dynamic-tile-scheduling",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|cluster-launch-control#mode-dynamic-tile-scheduling|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mode-dynamic-tile-scheduling"
+  ],
+  "triggers": [
+   "the 'Mode: Dynamic Tile Scheduling' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Mode: Dynamic Tile Scheduling",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CLC (Cluster Launch Control) -- Mode: Dynamic Tile Scheduling"
+  },
+  "technique": "Mode: Dynamic Tile Scheduling",
+  "what": "**Source**: `gluon/triton/08b-persistent-matmul-clc.py`, `cutedsl/cutlass/`",
+  "when": "**Source**: `gluon/triton/08b-persistent-matmul-clc.py`, `cutedsl/cutlass/`",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CLC: Hardware-level dynamic work distribution\n# Replaces the traditional \"pid → tile\" static mapping\n\n# Gluon CLC usage:\nfrom triton.experimental.gluon.nvidia.blackwell import clc\n\n@gluon.jit\ndef persistent_matmul_clc(a, b, c, ...):\n    # CLC dynamically retrieves the next pending tile\n    tile_id = clc.get_work_item()\n\n    while tile_id is not None:\n        m_tile, n_tile = decode_tile_id(tile_id)\n        # Execute GEMM\n        compute_gemm(a, b, c, m_tile, n_tile)\n        # Retrieve the next tile\n        tile_id = clc.get_work_item()\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/cluster-launch-control.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

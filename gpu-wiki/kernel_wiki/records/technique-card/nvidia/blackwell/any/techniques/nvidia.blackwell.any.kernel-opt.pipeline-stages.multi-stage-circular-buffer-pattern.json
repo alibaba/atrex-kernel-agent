@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.pipeline-stages.multi-stage-circular-buffer-pattern",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|pipeline-stages#multi-stage-circular-buffer-pattern|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "multi-stage-circular-buffer-pattern"
+  ],
+  "triggers": [
+   "the 'Multi-Stage Circular Buffer Pattern' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Multi-Stage Circular Buffer Pattern",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Software Pipelining and Multi-Stage Buffering -- Multi-Stage Circular Buffer Pattern"
+  },
+  "technique": "Multi-Stage Circular Buffer Pattern",
+  "what": "The fundamental pattern allocates `NUM_STAGES` copies of each SMEM buffer and cycles through them:",
+  "when": "The fundamental pattern allocates `NUM_STAGES` copies of each SMEM buffer and cycles through them:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// 3-stage circular buffer with mbarrier synchronization\n// Stages: [0] loading, [1] ready for MMA, [2] being consumed by MMA\n#define NUM_STAGES 3\n\n__global__ void __launch_bounds__(512)\npipelined_gemm(const __grid_constant__ GemmParams params)\n{\n    extern __shared__ char smem[];\n\n    // Circular buffer layout in shared memory\n    // Each stage has its own A and B tile buffers\n    half* smem_A[NUM_STAGES];\n    half* smem_B[NUM_STAGES];\n    for (int s = 0; s < NUM_STAGES; s++) {\n        smem_A[s] = reinterpret_cast<half*>(\n            smem + s * (TILE_A_BYTES + TILE_B_BYTES));\n        smem_B[s] = reinterpret_cast<half*>(\n            smem + s * (TILE_A_BYTES + TILE_B_BYTES) + TILE_A_BYTES);\n    }\n\n    // mbarrier arrays for producer-consumer sync\n    __shared__ uint64_t mbar_load_complete[NUM_STAGES];\n    __shared__ uint64_t mbar_mma_complete[NUM_STAGES];\n\n    int warp_id = threadIdx.x / 32;\n    int lane_id = threadIdx.x % 32;\n\n    // Initialize barriers\n    if (threadIdx.x == 0) {\n        for (int s = 0; s < NUM_STAGES; s++) {\n            mbarrier_init(&mbar_load_complete[s], 1);\n            mbarrier_init(&mbar_mma_complete[s], 1);\n        }\n    }\n    __syncthreads();\n\n    int num_k_tiles = params.K / TILE_K;\n\n    if (warp_id == 0) {\n        // ===== TMA PRODUCER =====\n        // Prologue: fill the first NUM_STAGES buffers\n        for (int s = 0; s < NUM_STAGES && s < num_k_tiles; s++) {\n            if (lane_id == 0) {\n                // Set expected TX bytes on mbarrier BEFORE issuing TMA.\n                // TMA hardware will arrive on the mbarrier when transfer completes.\n                uint32_t tx_bytes = TILE_A_BYTES + TILE_B_BYTES;\n                mbarrier_arrive_expect_tx(&mbar_load_complete[s], tx_bytes);\n                tma_load_tile_A(smem_A[s], params, s, &mbar_load_complete[s]);\n                tma_load_tile_B(smem_B[s], params, s, &mbar_load_complete[s]);\n                // NOTE: Do NOT manually arrive after TMA issue -- the TMA\n                // hardware signals the mbarrier upon transfer completion.\n            }\n        }\n\n        // Steady state: load stage s while MMA processes stage s-NUM_STAGES\n        for (int k = NUM_STAGES; k < num_k_tiles; k++) {\n            int stage = k % NUM_STAGES;\n            // Wait for MMA to finish with this buffer\n            mbarrier_wait(&mbar_mma_complete[stage]);\n            if (lane_id == 0) {\n                uint32_t tx_bytes = TILE_A_BYTES + TILE_B_BYTES;\n                mbarrier_arrive_expect_tx(&mbar_load_complete[stage], tx_bytes);\n                tma_load_tile_A(smem_A[stage], params, k, &mbar_load_complete[stage]);\n                tma_load_tile_B(smem_B[stage], params, k, &mbar_load_complete[stage]);\n            }\n        }\n\n    } else if (warp_id == 1) {\n        // ===== MMA CONSUMER =====\n        for (int k = 0; k < num_k_tiles; k++) {\n            int stage = k % NUM_STAGES;\n            // Wait for TMA to fill this buffer\n            mbarrier_wait(&mbar_load_complete[stage]);\n\n            // Issue MMA on the filled buffer\n            if (lane_id == 0) {\n                tcgen05_mma(smem_A[stage], smem_B[stage]);\n            }\n            __syncwarp();\n\n            // Signal that this buffer is free for reuse\n            if (lane_id == 0) {\n                mbarrier_arrive(&mbar_mma_complete[stage]);\n            }\n        }\n    }\n    // Epilogue warps omitted for clarity\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/pipeline-stages.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

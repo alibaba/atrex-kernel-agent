@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.5-cute-jit-helper-scoping-has-zero-effect-on-register-pressure",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#5-cute-jit-helper-scoping-has-zero-effect-on-register-pressure|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '5. @cute.jit helper scoping has ZERO effect on register pressure' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 5. @cute.jit helper scoping has ZERO effect on register pressure",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 5. @cute.jit helper scoping has ZERO effect on register pressure"
+  },
+  "attempted": "You factor accumulator-heavy code into `@cute.jit` helper functions, expecting the compiler to limit accumulator live ranges to the helper's scope.",
+  "verdict": "api-limitation",
+  "lesson": "Don't waste time refactoring for register relief via helpers. The only ways to reduce register pressure in CuTeDSL are: (a) reduce algorithmic live values, (b) reduce tile sizes, (c) SMEM stride padding to reduce bank conflicts (which reduces spill cycles, not register count).",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "`@cute.jit` functions are always inlined before LLVM live-range analysis. The compiler sees one flat function body regardless of source-level scoping. Python-level function boundaries have no effect on register allocation."
+  },
+  "observed": "No change in register count or spill traffic. Measured across three independent attempts (V5a, V9, V12a of the broader DeltaNet optimization campaign).",
+  "root_cause": "`@cute.jit` functions are always inlined before LLVM live-range analysis. The compiler sees one flat function body regardless of source-level scoping. Python-level function boundaries have no effect on register allocation."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

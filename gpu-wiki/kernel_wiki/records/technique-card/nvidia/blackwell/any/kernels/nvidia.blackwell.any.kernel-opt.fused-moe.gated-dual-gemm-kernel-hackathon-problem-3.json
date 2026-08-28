@@ -1,0 +1,109 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fused-moe.gated-dual-gemm-kernel-hackathon-problem-3",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|fused-moe#gated-dual-gemm-kernel-hackathon-problem-3|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gated-dual-gemm-kernel-hackathon-problem-3",
+   "gemm",
+   "moe"
+  ],
+  "triggers": [
+   "the 'Gated Dual GEMM Kernel (Hackathon Problem 3)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Gated Dual GEMM Kernel (Hackathon Problem 3)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fused MoE -- FP8 Block-Scale Routing + Dual GEMM -- Gated Dual GEMM Kernel (Hackathon Problem 3)"
+  },
+  "technique": "Gated Dual GEMM Kernel (Hackathon Problem 3)",
+  "what": "The gate-up projection fuses two GEMMs with SiLU activation and element-wise multiply:",
+  "when": "The gate-up projection fuses two GEMMs with SiLU activation and element-wise multiply:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Fused gate-up: two GEMMs + SiLU + multiply in one kernel\n// Avoids writing intermediate gate and up results to global memory\n\ntemplate <int BLOCK_M, int BLOCK_N, int BLOCK_K, int NUM_STAGES>\n__global__ void gated_dual_gemm_fused(\n    const fp8_t* __restrict__ X,       // [M, K] input tokens\n    const fp8_t* __restrict__ W_gate,  // [N, K] gate weights\n    const fp8_t* __restrict__ W_up,    // [N, K] up weights\n    const float* __restrict__ sf_x,    // Block scales for X\n    const float* __restrict__ sf_gate, // Block scales for W_gate\n    const float* __restrict__ sf_up,   // Block scales for W_up\n    half* __restrict__ output,         // [M, N] fused output\n    int M, int N, int K\n) {\n    // Two TMEM regions: one for gate accumulator, one for up accumulator\n    uint32_t tmem_gate, tmem_up;\n    asm volatile(\"tcgen05.alloc.cta_group::1.sync.aligned %0, %1;\"\n                 : \"=r\"(tmem_gate) : \"r\"(256));\n    asm volatile(\"tcgen05.alloc.cta_group::1.sync.aligned %0, %1;\"\n                 : \"=r\"(tmem_up) : \"r\"(256));\n\n    // Pipelined main loop\n    for (int k = 0; k < K; k += BLOCK_K) {\n        int stage = (k / BLOCK_K) % NUM_STAGES;\n        barrier_wait(stage);\n\n        // Two MMAs per K-tile: gate and up projections\n        // Both read same X tile, different weight tiles\n        asm volatile(\n            \"tcgen05.mma.cta_group::1.kind::f8f6f4\"\n            \" [%0], %1, %2, %3, %4;\"\n            :: \"r\"(tmem_gate), \"l\"(x_smem[stage]),\n               \"l\"(wg_smem[stage]), \"r\"(scales_gate), \"n\"(1)\n        );\n        asm volatile(\n            \"tcgen05.mma.cta_group::1.kind::f8f6f4\"\n            \" [%0], %1, %2, %3, %4;\"\n            :: \"r\"(tmem_up), \"l\"(x_smem[stage]),\n               \"l\"(wu_smem[stage]), \"r\"(scales_up), \"n\"(1)\n        );\n    }\n\n    // Fused epilogue: SiLU(gate) * up\n    // Read both accumulators from TMEM, apply activation, store result\n    float gate_val, up_val;\n    asm volatile(\"tcgen05.ld.sync.aligned.32x32b.x1 {%0}, [%1];\"\n                 : \"=r\"(gate_val) : \"r\"(tmem_gate));\n    asm volatile(\"tcgen05.ld.sync.aligned.32x32b.x1 {%0}, [%1];\"\n                 : \"=r\"(up_val) : \"r\"(tmem_up));\n\n    // SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))\n    float silu_gate = gate_val / (1.0f + expf(-gate_val));\n    output[row * N + col] = __float2half(silu_gate * up_val);\n\n    // Deallocate TMEM\n    asm volatile(\"tcgen05.dealloc.cta_group::1.sync.aligned %0, %1;\"\n                 :: \"r\"(tmem_gate), \"r\"(256));\n    asm volatile(\"tcgen05.dealloc.cta_group::1.sync.aligned %0, %1;\"\n                 :: \"r\"(tmem_up), \"r\"(256));\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/fused-moe.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

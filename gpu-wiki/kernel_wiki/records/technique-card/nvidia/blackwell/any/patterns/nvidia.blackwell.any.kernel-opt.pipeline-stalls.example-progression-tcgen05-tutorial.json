@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.pipeline-stalls.example-progression-tcgen05-tutorial",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|patterns|pipeline-stalls#example-progression-tcgen05-tutorial|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "patterns",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "example-progression-tcgen05-tutorial"
+  ],
+  "triggers": [
+   "the 'Example Progression (tcgen05 tutorial)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Example Progression (tcgen05 tutorial)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Pipeline Stalls -- Example Progression (tcgen05 tutorial)"
+  },
+  "technique": "Example Progression (tcgen05 tutorial)",
+  "what": "- 1-stage: 62% of cuBLAS (TMA blocks MMA) - 3-stage pipelined: 70% (hide most TMA latency) - Warp specialized: 80% (no role switching) - Add 2-SM MMA: 86% (larger tile, more reuse) - Persistent + CLC: 98% (eliminate tail effect)",
+  "when": "- 1-stage: 62% of cuBLAS (TMA blocks MMA) - 3-stage pipelined: 70% (hide most TMA latency) - Warp specialized: 80% (no role switching) - Add 2-SM MMA: 86% (larger tile, more reuse) - Persistent + CLC: 98% (eliminate tail effect)",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/patterns/pipeline-stalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

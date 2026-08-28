@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.hopper-cuda-core-promotion-nc-128",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#hopper-cuda-core-promotion-nc-128|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "hopper-cuda-core-promotion-nc-128",
+   "quantization"
+  ],
+  "triggers": [
+   "the 'Hopper: CUDA Core Promotion (Nc=128)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Hopper: CUDA Core Promotion (Nc=128)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- Hopper: CUDA Core Promotion (Nc=128)"
+  },
+  "technique": "Hopper: CUDA Core Promotion (Nc=128)",
+  "what": "On Hopper (SM90), the wgmma instruction accumulates in Tensor Core registers with limited precision (~FP22, not true FP32). To maintain numerical accuracy, DeepGEMM promotes the partial sum to a separate FP32 accumulator on CUDA Cores every 4 wgmma instructions (Nc=128, since each wgmma processes 32 K-elements):",
+  "when": "On Hopper (SM90), the wgmma instruction accumulates in Tensor Core registers with limited precision (~FP22, not true FP32).",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Hopper FP8 GEMM with CUDA Core promotion (DeepGEMM pattern)\n// Every Nc=128 K-elements, promote Tensor Core accumulator to FP32\n\n__device__ void hopper_fp8_gemm_with_promotion(\n    const fp8_e4m3* A, const fp8_e4m3* B,\n    const float* scale_A, const float* scale_B,\n    float* C_accumulator,\n    int K)\n{\n    // Tensor Core limited-precision accumulator (FP22-ish)\n    // These are wgmma output registers\n    float tc_acc[TILE_M_PER_THREAD][TILE_N_PER_THREAD] = {0};\n\n    // True FP32 accumulator on CUDA Cores\n    float fp32_acc[TILE_M_PER_THREAD][TILE_N_PER_THREAD] = {0};\n\n    int promotion_interval = 128;  // Nc = 128 elements = 4 wgmma ops\n    int wgmma_count = 0;\n\n    for (int k = 0; k < K; k += 32) {\n        // Issue wgmma (accumulates in limited-precision tc_acc)\n        wgmma_mma_async(tc_acc, smem_A_ptr, smem_B_ptr);\n        wgmma_count++;\n\n        if (wgmma_count == 4) {  // Every 128 K-elements\n            // Promote: transfer tc_acc to fp32_acc on CUDA Cores\n            wgmma_wait();  // Ensure wgmma is complete\n\n            int k_block = k / promotion_interval;\n            for (int m = 0; m < TILE_M_PER_THREAD; m++) {\n                float sa = scale_A[/*...*/];\n                for (int n = 0; n < TILE_N_PER_THREAD; n++) {\n                    float sb = scale_B[/*...*/];\n                    // Add scaled partial to true FP32 accumulator\n                    fp32_acc[m][n] += tc_acc[m][n] * sa * sb;\n                    // Reset TC accumulator for next interval\n                    tc_acc[m][n] = 0;\n                }\n            }\n            wgmma_count = 0;\n        }\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

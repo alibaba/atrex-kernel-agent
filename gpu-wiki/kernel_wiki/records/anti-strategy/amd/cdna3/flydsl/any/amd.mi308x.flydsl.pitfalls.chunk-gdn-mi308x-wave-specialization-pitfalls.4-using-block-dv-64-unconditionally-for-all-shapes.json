@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.chunk-gdn-mi308x-wave-specialization-pitfalls.4-using-block-dv-64-unconditionally-for-all-shapes",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|gdn|chunk-gdn-mi308x-wave-specialization-pitfalls#4-using-block-dv-64-unconditionally-for-all-shapes|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '4. Using `BLOCK_DV=64` Unconditionally for All Shapes' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 4. Using `BLOCK_DV=64` Unconditionally for All Shapes",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Chunk-GDN Wave-Specialized Megakernel on MI308X -- 4. Using `BLOCK_DV=64` Unconditionally for All Shapes"
+  },
+  "attempted": "On the hot path, `(8,32,128,128)` with BDV64 is significantly faster, so all Qwen3.5/Qwen3.6 runtime shapes are routed to the same BDV64 kernel.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "The hot `(8,32)` retains BDV64; small H `(2,8)` / `(8,16)` use a BDV32 fast path. For every new shape, first calculate grid blocks / CU, then run correctness + rocprofv3 sweep.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "BDV64 reduces duplication in Q/K/A/g/beta staging and P/Ag work, but also reduces V-axis parallelism. Small H shapes need more CTAs, not the largest tile."
+  },
+  "observed": "The grid for `(2,8,128,128)` and `(8,16,128,128)` has only 16/32 CTAs, leaving MI308X's 80 CUs underfilled, and long sequences may also lose to Triton.",
+  "root_cause": "BDV64 reduces duplication in Q/K/A/g/beta staging and P/Ag work, but also reduces V-axis parallelism. Small H shapes need more CTAs, not the largest tile."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

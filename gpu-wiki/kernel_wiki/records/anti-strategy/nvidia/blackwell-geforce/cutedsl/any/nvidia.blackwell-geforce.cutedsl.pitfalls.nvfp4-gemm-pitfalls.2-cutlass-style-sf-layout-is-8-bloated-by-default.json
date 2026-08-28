@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.nvfp4-gemm-pitfalls.2-cutlass-style-sf-layout-is-8-bloated-by-default",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|nvfp4-gemm-pitfalls#2-cutlass-style-sf-layout-is-8-bloated-by-default|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '2. CUTLASS-style SF layout is 8× bloated by default' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 2. CUTLASS-style SF layout is 8× bloated by default",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "cute-DSL NVFP4 GEMM pitfalls (sm_120, RTX PRO 5000) -- 2. CUTLASS-style SF layout is 8× bloated by default"
+  },
+  "attempted": "You read CUTLASS's reference `(128, 4)`-bytes-per-atom SF layout, copy it faithfully, and budget your smem accordingly. Then BLOCK_K=128 doesn't fit.",
+  "verdict": "not-worth-it-here",
+  "lesson": "Use a tight pack `(M_blocks_outer, SF_TILES_K, atoms_per_block, atom_dim, 4)` with read index `sSFA_u32[stage, kb, atom, sfa_logical, 0]` (NO `* 4`). 8× smem reduction, frees BLOCK_K=128 + STAGES=4 to fit in 100 KB. See `pack_sf_per_block` in sm120_nvfp4_pack_helpers.py. This single change accounts for **+37%** end-to-end perf (v38 → v43).",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "The (128, 4) layout matches a CUTLASS/MMA broadcast pattern where consecutive groups of 4 rows correspond to one logical SF value (so a single ldmatrix-style copy slices `sfa_phys = sfa_logical * 4`). When you instead read the SF as a single `ld.shared.u32`, only one of the four rows is touched."
+  },
+  "observed": "Every stage of SF takes 512 bytes per atom, of which only **64 bytes carry data** — every 4th row holds a 4-byte SF entry (the lane-mapping `sfa_phys = sfa_logical * 4`), the other 3 rows are zero padding. With STAGES * (ATOMS_M + ATOMS_N) atoms per CTA, that's ~21 KB of zeros taking up smem you need for BLOCK_K=128 + STAGES≥3.",
+  "root_cause": "The (128, 4) layout matches a CUTLASS/MMA broadcast pattern where consecutive groups of 4 rows correspond to one logical SF value (so a single ldmatrix-style copy slices `sfa_phys = sfa_logical * 4`). When you instead read the SF as a single `ld.shared.u32`, only one of the four rows is touched."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/nvfp4-gemm-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

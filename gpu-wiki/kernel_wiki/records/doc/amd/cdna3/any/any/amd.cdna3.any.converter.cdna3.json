@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna3.any.converter.cdna3",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|any|conv|cdna3|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "cdna3"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "conv",
+   "operators": [
+    "conv"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "any",
+   "workload_family": "conv-vision"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "conv"
+  ],
+  "triggers": [
+   "converter reference for AMD CDNA3 (gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA3 (gfx942): Triton → Gluon cheat sheet — AMD CDNA3 (MI300, gfx942)",
+  "problem": {
+   "target": "AMD CDNA3 (gfx942)",
+   "statement": "Triton → Gluon cheat sheet — AMD CDNA3 (MI300, gfx942)"
+  },
+  "title": "Triton → Gluon cheat sheet — AMD CDNA3 (MI300, gfx942)",
+  "summary": "Single-file conversion reference for a **convert-only** session. Read once; open source for the construct you convert.",
+  "sections": [
+   {
+    "heading": "Job (convert only, no optimization)",
+    "anchor": "job-convert-only-no-optimization",
+    "gist": "Lower the current Triton kernel to Gluon **preserving algorithm and tiling** — same numerics and per-shape tolerances."
+   },
+   {
+    "heading": "Workflow",
+    "anchor": "workflow",
+    "gist": "1."
+   },
+   {
+    "heading": "API map (Triton → Gluon CDNA3)",
+    "anchor": "api-map-triton-gluon-cdna3",
+    "gist": "table columns: Triton, Gluon (CDNA3), Notes"
+   },
+   {
+    "heading": "Software pipeline (num_stages>1; CDNA3 has no hardware async)",
+    "anchor": "software-pipeline-num-stages-1-cdna3-has-no-hardware-async",
+    "gist": "Manual prefetch: prologue loads iter 0 to smem slot 0 (and register-resident operands via `buffer_load`); main loop computes `i` while `buffer_load`-prefetching `i+1`; epilogue handles the last iter."
+   },
+   {
+    "heading": "Pitfalls (CDNA3-specific)",
+    "anchor": "pitfalls-cdna3-specific",
+    "gist": "1."
+   },
+   {
+    "heading": "Common failures (symptom → cause → fix)",
+    "anchor": "common-failures-symptom-cause-fix",
+    "gist": "table columns: Symptom, Cause → Fix"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/converter/cdna3.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

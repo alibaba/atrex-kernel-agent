@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-moe-data-prep-pitfalls.4-meta-rule-ncu-est-speedup-rebalances-rather-than-reduces-wall-time-on-multi-bottleneck-kernels-v8-v10-v11-a-three-strike-convergence",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep-pitfalls#4-meta-rule-ncu-est-speedup-rebalances-rather-than-reduces-wall-time-on-multi-bottleneck-kernels-v8-v10-v11-a-three-strike-convergence|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '4. Meta-rule: NCU \"% est. speedup\" rebalances rather than reduces wall time on multi-bottleneck kernels (V8 + V10 + V11-A, three-strike convergence)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 4. Meta-rule: NCU \"% est. speedup\" rebalances rather than reduces wall time on multi-bottleneck kernels (V8 + V10 + V11-A, three-strike convergence)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 INT32 MoE Data-Prep — Pitfalls -- 4. Meta-rule: NCU \"% est. speedup\" rebalances rather than reduces wall time on multi-bottleneck kernels (V8 + V10 + V11-A, three-strike convergence)"
+  },
+  "attempted": "NCU's per-rule `Estimated Speedup %` suggests fixing the rule's root cause will save that fraction of kernel time. Three iterations attacked three different high-est. levers in this kernel. **All three regressed wall time** even though each fix DID move its targeted metric in the right direction.",
+  "verdict": "performance-ceiling",
+  "lesson": "- **Three-strike convergence as a stop signal**: if 3 independent attacks at 3 different NCU-cited levers all regress in the same shape (target metric improves architecturally, wall time degrades due to rebalancing), the kernel is at its practical ceiling for single-rule attacks. Either accept the ceiling or commit to a holistic restructure. - When NCU shows multiple stalls each > 30%, **don't trust per-rule \"% est.\" as a wall-time lever estimate**. Treat it as a **per-rule architectural ceiling** (the fix may improve that metric architecturally, but won't necessarily save wall time). - The cheapest profile-driven optimizations (V9-A bank replication, ~5 KB smem reorganization, no new primitives) are often the ones that don't try to remove barriers or restructure phases — they just reduce contention within an existing structure. **These succeed more often than heavyweight restructures**, even when their NCU-estimate ceiling is smaller. V9-A delivered more architectural improvement (Eligible Warps/Sched +52%, Warp Cyc/Inst -10.6%) than V8/V10/V11-A combined, with zero regression. - **Account for fix cost in pre-decision analysis**. NCU shows pre-fix metrics; you have to estimate post-fix instruction count + smem traffic + register pressure separately. V10's CUB introduced 5.8× issued instructions — predictable in advance from CUB's documented complexity, but not part of NCU's pre-fix picture.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "in a multi-bottleneck kernel where 3+ stalls each contribute 30%+ of CPI (this histogram had Barrier ~45%, LongScoreboard ~30%, atomic-merge ~20%), Amdahl's-style accounting on a single rule is misleading because the other stalls aren't independent latencies — they're often **hidden by the same parallelism the targeted rule looks \"wasteful\" against**."
+  },
+  "root_cause": "in a multi-bottleneck kernel where 3+ stalls each contribute 30%+ of CPI (this histogram had Barrier ~45%, LongScoreboard ~30%, atomic-merge ~20%), Amdahl's-style accounting on a single rule is misleading because the other stalls aren't independent latencies — they're often **hidden by the same parallelism the targeted rule looks \"wasteful\" against**."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

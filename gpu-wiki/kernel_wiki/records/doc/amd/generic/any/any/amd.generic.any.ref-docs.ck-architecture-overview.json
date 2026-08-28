@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-architecture-overview",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ck-architecture-overview|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Composable Kernel (CK) Architecture Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Composable Kernel (CK) Architecture Overview"
+  },
+  "title": "Composable Kernel (CK) Architecture Overview",
+  "summary": "Composable Kernel (CK) is AMD's official high-performance GPU kernel programming library, implemented in HIP C++. Through two core concepts—the Tile-based programming model and Tensor Coordinate Transformation—it enables portable high-performance kernels across multiple GPU architectures. This document outlines CK's overall architectural layering, the CK-Tile programming model, component classification, and key terminology.",
+  "sections": [
+   {
+    "heading": "CK Four-Layer Architecture",
+    "anchor": "ck-four-layer-architecture",
+    "gist": "The overall structure of the CK library is divided into four layers, from bottom to top:"
+   },
+   {
+    "heading": "CK-Tile Programming Model",
+    "anchor": "ck-tile-programming-model",
+    "gist": "CK-Tile is the next-generation programming model of the CK library, located under the `include/ck_tile/` directory."
+   },
+   {
+    "heading": "Component Classification",
+    "anchor": "component-classification",
+    "gist": "CK-Tile's source code is organized into several independent components, each requiring only a single header include to use."
+   },
+   {
+    "heading": "Key Terminology",
+    "anchor": "key-terminology",
+    "gist": "table columns: Term, Description"
+   },
+   {
+    "heading": "Typical Usage Pattern",
+    "anchor": "typical-usage-pattern",
+    "gist": "The following is a typical pattern for implementing distributed tile loading using CK-Tile:"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- TileDistribution and Coordinate System -- P/Y/X/D coordinate space, transform composition, encoding internals - AMD GPU Kernel Optimization Framework Overview"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nKernel = Pipeline + Tile Partitioner + Epilogue\n```\n\n```cpp\n#include \"ck_tile/core.hpp\"\n```\n\n```cpp\n#include \"ck_tile/host.hpp\" // orby include singlefile\n```\n\n```cpp\n#include \"ck_tile/core.hpp\"\n\n// 1. definition(compilation)\nusing Encoding = ck_tile::tile_distribution_encoding<\n ck_tile::sequence<>, // R: nonedimension\n    ck_tile::tuple<\n ck_tile::sequence<4, 2, 8, 4>, // M dimension: [Repeat, WarpPerBlock, ThreadPerWarp, Vector]\n ck_tile::sequence<4, 2, 8, 4>>, // N dimension\n    ck_tile::tuple<ck_tile::sequence<1, 2>,\n                   ck_tile::sequence<1, 2>>,       // P -> RH major\n    ck_tile::tuple<ck_tile::sequence<1, 1>,\n                   ck_tile::sequence<2, 2>>,       // P -> RH minor\n    ck_tile::sequence<1, 1, 2, 2>,                // Y -> RH major\n    ck_tile::sequence<0, 3, 0, 3>                 // Y -> RH minor\n>;\n\n// 2. create distribution tensor view\nconstexpr auto distribution = ck_tile::make_static_tile_distribution(Encoding{});\nauto tensor_view = ck_tile::make_naive_tensor_view_packed<\n    ck_tile::address_space_enum::global>(ptr, ck_tile::make_tuple(M, N));\n\n// 3. create tile window loaddata\nauto window = ck_tile::make_tile_window(\n    tensor_view, window_lengths, origin, distribution);\nauto tile_data = window.load();\n\n// 4. tile datarowcompute\nck_tile::sweep_tile(tile_data, [&](auto idx) {\n    auto val = tile_data(idx);\n // ... compute ...\n});\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-architecture-overview.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

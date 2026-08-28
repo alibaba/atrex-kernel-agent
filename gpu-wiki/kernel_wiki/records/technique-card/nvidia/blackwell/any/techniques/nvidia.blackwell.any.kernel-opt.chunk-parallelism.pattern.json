@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.chunk-parallelism.pattern",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|chunk-parallelism#pattern|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern"
+  ],
+  "triggers": [
+   "the 'Pattern' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Pattern",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Chunk-Based Parallelism -- Pattern"
+  },
+  "technique": "Pattern",
+  "what": "Grid: (num_chunks, num_heads, batch)",
+  "when": "Grid: (num_chunks, num_heads, batch)",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n@triton.jit\ndef chunk_parallel_linear_attn(Q, K, V, State, Output,\n                                chunk_size: tl.constexpr,\n                                d: tl.constexpr):\n    # Grid: (num_chunks, num_heads, batch)\n    chunk_id = tl.program_id(0)\n\n    # Load chunk of Q, K, V\n    q = tl.load(Q + chunk_id * chunk_size * d + offsets)  # [C, d]\n    k = tl.load(K + chunk_id * chunk_size * d + offsets)\n    v = tl.load(V + chunk_id * chunk_size * d + offsets)\n\n    # Intra-chunk: parallel O(C^2) attention-like compute\n    scores = tl.dot(q, tl.trans(k))\n    o_intra = tl.dot(scores, v)\n\n    # Inter-chunk: sequential state propagation\n    state = tl.load(State)  # From previous chunk\n    o_inter = tl.dot(q, state)\n\n    # Combine and update state\n    output = o_intra + o_inter\n    state = update_state(state, k, v)\n\n    tl.store(Output + offsets, output)\n    tl.store(State, state)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/chunk-parallelism.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

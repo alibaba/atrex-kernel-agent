@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.tokenspeed-inference-framework-analysis",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|tokenspeed-inference-framework-analysis|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): TokenSpeed Inference Framework Architecture",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "TokenSpeed Inference Framework Architecture"
+  },
+  "title": "TokenSpeed Inference Framework Architecture",
+  "summary": "A comprehensive technical analysis of the TokenSpeed LLM inference engine, covering its five-layer architecture, C++ scheduler FSM, kernel registry selection algorithm, PD disaggregation with RDMA transfer, and core mechanisms including continuous batching, paged attention, CUDA Graph, and speculative decoding.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "TokenSpeed is a high-performance LLM inference engine targeting TensorRT-LLM-level performance with vLLM-level usability."
+   },
+   {
+    "heading": "2. Five-Layer Architecture",
+    "anchor": "2-five-layer-architecture",
+    "gist": "table columns: Component, File, Responsibility"
+   },
+   {
+    "heading": "3. Request Lifecycle",
+    "anchor": "3-request-lifecycle",
+    "gist": ""
+   },
+   {
+    "heading": "4. C++ Scheduler FSM",
+    "anchor": "4-c-scheduler-fsm",
+    "gist": "table columns: State, Meaning, Held Resources"
+   },
+   {
+    "heading": "5. Kernel Registry Selection Algorithm",
+    "anchor": "5-kernel-registry-selection-algorithm",
+    "gist": "Selection uses lexicographic ranking (oracle, objective, priority) — highest score wins:"
+   },
+   {
+    "heading": "6. PD Disaggregation: RDMA Transfer Flow",
+    "anchor": "6-pd-disaggregation-rdma-transfer-flow",
+    "gist": "Uses GPU Direct RDMA (GDR) for GPU-to-GPU zero-copy transfer."
+   },
+   {
+    "heading": "7. Core Mechanisms",
+    "anchor": "7-core-mechanisms",
+    "gist": "Each EventLoop iteration can insert new requests and remove completed ones."
+   },
+   {
+    "heading": "8. Advanced Mechanism Interactions",
+    "anchor": "8-advanced-mechanism-interactions",
+    "gist": "All DP ranks synchronize via CPU `all_gather` exchanging `global_num_tokens` and `global_batch_size`."
+   },
+   {
+    "heading": "9. Key Design Decisions Summary",
+    "anchor": "9-key-design-decisions-summary",
+    "gist": "table columns: Dimension, Design Choice"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ntokenspeed/\n├── python/tokenspeed/          # Main runtime (core inference engine)\n├── tokenspeed-kernel/          # GPU kernel registry and dispatch framework\n├── tokenspeed-scheduler/       # C++ high-performance scheduler (pybind11)\n├── tokenspeed-mla/             # Blackwell GPU specialized MLA attention kernel\n├── docker/                     # Docker deployment\n├── docs/                       # VitePress documentation\n└── test/                       # Integration tests and benchmarks\n```\n\n```\nUser HTTP Request (POST /v1/chat/completions)\n  → http_server.py: FastAPI route handler\n  → OpenAIServingChat.handle_request() → GenerateReqInput\n  → AsyncLLM.generate_request(obj)\n  → InputProcessor.tokenize_one_request()\n  → ZMQ IPC (send_to_scheduler.send_pyobj)\n  → EventLoop.event_loop()\n    → _process_new_requests()\n    → scheduler.next_execution_plan()  [C++ Scheduler]\n    → model_executor.execute_forward_op()\n    → ModelExecutionResult (next_token_ids, logprobs)\n  → OutputProcessor.post_process_forward_op()\n  → ZMQ (send_to_tokenizer)\n  → AsyncLLM._result_dispatcher\n  → HTTP StreamingResponse\n```\n\n```cpp\nusing State = std::variant<\n    Bootstrapping, Submitted, Prefetching, PrefetchDone,\n    Aborting, Prefilling, PrefillDone, Decoding,\n    Draining, WritingBack, Retracting, Retracted, Finished>;\n```\n\n```cpp\nExecutionPlan Scheduler::NextExecutionPlan() {\n    // 1. Generate WriteBack ops (completed requests KV → Host)\n    write_back_ops = newWriteBackOperation(requests_);\n    // 2. Clean up Finished requests\n    std::erase_if(requests_, [](auto& req) { return req->Is<Finished>(); });\n    // 3. Collect schedulable candidates\n    candidates = collect_candidates();\n    // 4. Generate Forward operations (select batch composition)\n    auto [fwd_ops, cache_ops] = newForwardOperation(candidates);\n    // 5. Assemble execution plan\n    return plan.With(FlatForwardOperation{fwd_ops})\n               .With(CacheOperation{write_back_ops})\n               .With(CacheOperation{load_back_ops});\n}\n```\n\n```python\nclass Priority(IntEnum):\n    REFERENCE = 0      # Correctness verification only\n    PORTABLE = 4       # Generic (e.g., default Triton)\n    PERFORMANT = 8     # Optimized (e.g., Triton for Hopper+)\n    SPECIALIZED = 12   # Highly optimized (e.g., CuTe DSL FP8 for Blackwell)\n    PLUGIN = 16        # Plugin reserved (third-party override)\n```\n\n```\nEnvironment variable (highest)\n  → Context Manager: kernel_override(\"gemm\", \"mm\", \"deep_gemm\")\n  → Config file: ~/.config/tokenspeed-kernel/overrides.yaml\n  → Heuristic selection (normal scoring)\n```\n\n```python\n@dataclass(frozen=True)\nclass CapabilityRequirement:\n    min_arch_version: ArchVersion | None  # e.g. SM90\n    vendors: frozenset[str]               # e.g. {\"nvidia\"}\n    required_features: frozenset[str]     # e.g. {\"tensor_core:f8\", \"tcgen05\"}\n```\n\n```\nPrefill Node                          Decode Node\n  User Request → Prefill                Bootstrap ← AsyncLLM\n    → Model Forward (all layers)          Wait for KV from Prefill\n    → KV Cache in GPU VRAM                Receive KV via RDMA\n    → MooncakeKVSender ─── RDMA ────────→ MooncakeKVReceiver\n    → Send first token via ZMQ            Continue Decode (token by token)\n```\n\n```python\nclass ForwardMode(IntEnum):\n    EXTEND = auto()          # Prefill (extend KV cache)\n    DECODE = auto()          # Token-by-token decode\n    MIXED = auto()           # Chunked prefill + Decode mixed\n    IDLE = auto()            # DP attention idle rank\n    TARGET_VERIFY = auto()   # Speculative: target model verification\n    DRAFT_EXTEND = auto()    # Speculative: draft model extension\n```\n\n```\nRadixTree (shared structure)\n├── DeviceResource (L1 GPU Pages)\n├── HostResource (L2 Host Pages)\n└── page_hashes_ (L3 Storage Keys via SHA256 hash chain)\n```\n\n```\nOriginal: [B0, B1, B2, B3, B4, B5, B6, B7]\ncp_rank0: [B0, B7]  (first+last for balance)\ncp_rank1: [B1, B6]\ncp_rank2: [B2, B5]\ncp_rank3: [B3, B4]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/tokenspeed-inference-framework-analysis.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

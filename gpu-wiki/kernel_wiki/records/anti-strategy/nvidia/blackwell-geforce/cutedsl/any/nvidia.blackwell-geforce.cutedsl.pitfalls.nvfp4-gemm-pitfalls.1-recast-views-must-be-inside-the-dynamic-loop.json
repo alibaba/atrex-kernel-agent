@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.nvfp4-gemm-pitfalls.1-recast-views-must-be-inside-the-dynamic-loop",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|nvfp4-gemm-pitfalls#1-recast-views-must-be-inside-the-dynamic-loop|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '1. Recast views MUST be inside the dynamic loop' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 1. Recast views MUST be inside the dynamic loop",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "cute-DSL NVFP4 GEMM pitfalls (sm_120, RTX PRO 5000) -- 1. Recast views MUST be inside the dynamic loop"
+  },
+  "attempted": "View construction is \"static\" at the Python layer, so you assume hoisting it above the K-loop is a free optimization:",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Re-issue `cute.recast_tensor` inside the dynamic loop body where you use it. Same warning applies to any cute view-construction call (`make_tensor` from an iterator, new strided view) that wraps an smem tensor with stride changes inside the kernel. Treat the recast like a per-iteration `volatile` view, not like a Python alias.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "Inside an enclosing `cutlass.range(...)` dynamic loop, the IR pipeline carries iterator state per-iteration. A hoisted recast view captures that state at construction time and the lowered loads end up reading from a stale iteration's view. The Python identity is the same; the MLIR IR isn't."
+  },
+  "observed": "kernel runs, single-tile correctness is clean (rel_err 1e-7), but at multi-tile shapes you get **non-deterministic** rel_err in the 1e-3..1e-2 range (different value every run). v38 specifically: `rel_err = 7.5e-4`, then `2.3e-4`, then `5.0e-3` over three identical runs.",
+  "root_cause": "Inside an enclosing `cutlass.range(...)` dynamic loop, the IR pipeline carries iterator state per-iteration. A hoisted recast view captures that state at construction time and the lowered loads end up reading from a stale iteration's view. The Python identity is the same; the MLIR IR isn't.",
+  "implementation": {
+   "snippet": "```python\nsSFA_u32 = cute.recast_tensor(sSFA, cutlass.Uint32)   # before for kt in ...\nfor kt in cutlass.range(K_TILES, unroll=1):\n    ... sSFA_u32[stage, kb, atom, lane, 0] ...\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/nvfp4-gemm-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

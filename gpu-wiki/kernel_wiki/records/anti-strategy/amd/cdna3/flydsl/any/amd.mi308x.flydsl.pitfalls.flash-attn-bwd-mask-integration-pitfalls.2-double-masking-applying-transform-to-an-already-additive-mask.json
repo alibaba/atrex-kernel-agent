@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-bwd-mask-integration-pitfalls.2-double-masking-applying-transform-to-an-already-additive-mask",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-bwd-mask-integration-pitfalls#2-double-masking-applying-transform-to-an-already-additive-mask|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '2. Double-masking: applying transform to an already-additive mask' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 2. Double-masking: applying transform to an already-additive mask",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention Backward — Arbitrary Mask Integration on MI308X -- 2. Double-masking: applying transform to an already-additive mask"
+  },
+  "attempted": "Additive mask convention is 0.0 = attend, -1e6 = masked. Code from a different project used `(mask - 1.0) * 1e6` to convert from {0, 1} binary format. If the mask is already in additive format, this transform sends 0.0 → -1e6 and -1e6 → -1e12, effectively masking ALL positions.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Always verify mask format before applying transforms. Check `mask.min()` and `mask.max()` — if min ≈ -1e6 and max ≈ 0, it's already additive. If min ≈ 0 and max ≈ 1, it's binary and needs conversion.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "`(0.0 - 1.0) * 1e6 = -1e6` makes valid positions masked. `(-1e6 - 1.0) * 1e6 ≈ -1e12` stays masked. Everything is blocked."
+  },
+  "observed": "All attention outputs are NaN or zero; gradients all zero.",
+  "root_cause": "`(0.0 - 1.0) * 1e6 = -1e6` makes valid positions masked. `(-1e6 - 1.0) * 1e6 ≈ -1e12` stays masked. Everything is blocked."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-bwd-mask-integration-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

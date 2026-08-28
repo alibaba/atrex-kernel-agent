@@ -1,0 +1,150 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.flydsl.ref-docs.cdna4-flash-attention-gqa-d256",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|flydsl|flash-attention|cdna4-flash-attention-gqa-d256|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): Flash Attention GQA D=256 Optimization on MI355X (CDNA4 / gfx950)",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "Flash Attention GQA D=256 Optimization on MI355X (CDNA4 / gfx950)"
+  },
+  "title": "Flash Attention GQA D=256 Optimization on MI355X (CDNA4 / gfx950)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target Workload",
+    "anchor": "target-workload",
+    "gist": "Qwen 3.5 397B prefill, TP=2, bf16 causal attention with GQA."
+   },
+   {
+    "heading": "Final Results: 10-15% faster than aiter CK",
+    "anchor": "final-results-10-15-faster-than-aiter-ck",
+    "gist": "table columns: Shape, aiter CK (ms), FlyDSL (ms), Speedup, TFLOPS"
+   },
+   {
+    "heading": "Kernel Architecture",
+    "anchor": "kernel-architecture",
+    "gist": "Based on the MI308X reference flash attention kernel (`flash_attn_func_mi308x.py`) with three key additions for D=256 on CDNA4."
+   },
+   {
+    "heading": "Profiling Setup",
+    "anchor": "profiling-setup",
+    "gist": "PyTorch bundles `librocprofiler-sdk.so` which conflicts with rocprofv3."
+   },
+   {
+    "heading": "Hardware Counter Analysis",
+    "anchor": "hardware-counter-analysis",
+    "gist": "table columns: Counter, Total, Per-wave, Interpretation"
+   },
+   {
+    "heading": "Optimization Journey",
+    "anchor": "optimization-journey",
+    "gist": "table columns: Version, Change, Result, Delta"
+   },
+   {
+    "heading": "Remaining Bottleneck",
+    "anchor": "remaining-bottleneck",
+    "gist": "**62% MFMA utilization** with 38% stalls."
+   },
+   {
+    "heading": "Key Architectural Insights (MI355X)",
+    "anchor": "key-architectural-insights-mi355x",
+    "gist": "1."
+   },
+   {
+    "heading": "Files",
+    "anchor": "files",
+    "gist": "- **Kernel**: `reference-kernels/amd/cdna4/flydsl/FlyDSL/flash_attn_func_gqa_d256.py` - **Pitfalls**: `` - **Base kernel**: `reference-kernels/amd/cdna3/flydsl/FlyDSL/flash_attn_fun…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# BEFORE: K DMA at sub-tile top\nrocdl.s_waitcnt(0)\ngpu.barrier()\ncoop_dma_k(next_sub_tile, next_buf)  # ← only GEMM2 time to hide\n# ... K reads, GEMM1, softmax, waitcnt, barrier, GEMM2 ...\n\n# AFTER: K DMA after GEMM1\nrocdl.s_waitcnt(0)\ngpu.barrier()\n# ... K reads ...\n# ... GEMM1 ...\ncoop_dma_k(next_sub_tile, next_buf)  # ← softmax + GEMM2 time to hide\n# ... softmax, waitcnt, barrier, GEMM2 ...\n```\n\n```python\n# pid → (chunk, kv_head, q_head_in_group, tile_in_chunk)\ntile_in_chunk = logical_pid % TILE_GROUP\nrest = logical_pid // TILE_GROUP\nq_head_in_group = rest % GQA_GROUP_SIZE\nrest2 = rest // GQA_GROUP_SIZE\nkv_head = rest2 % NUM_KV_HEADS\nchunk = rest2 // NUM_KV_HEADS\n```\n\n```bash\nTORCH_LIB=$(python -c \"import torch,os; print(os.path.dirname(torch.__file__))\")/lib\nmv $TORCH_LIB/librocprofiler-register.so $TORCH_LIB/librocprofiler-register.so.orig\nmv $TORCH_LIB/librocprofiler-sdk.so $TORCH_LIB/librocprofiler-sdk.so.orig\nln -s /opt/rocm/lib/librocprofiler-register.so $TORCH_LIB/librocprofiler-register.so\nln -s /opt/rocm/lib/librocprofiler-sdk.so $TORCH_LIB/librocprofiler-sdk.so\n```\n\n```bash\n# Install trace decoder\ncp <path>/librocprof-trace-decoder.so /opt/rocm/lib/\n\n# input_att.yaml\njobs:\n  - kernel_iteration_range: \"[3]\"\n    output_directory: tt_test\n    output_format: [json, csv]\n    truncate_kernels: true\n    sys_trace: false\n    advanced_thread_trace: true\n    att_target_cu: 1\n    att_shader_engine_mask: \"0x1\"\n    att_simd_select: \"0xf\"\n    att_buffer_size: \"0x6000000\"\n\n# Run\nenv LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \\\n    rocprofv3 --att --att-library-path /opt/rocm/lib \\\n    -i input_att.yaml -- python profile.py\n```\n\n```asm\nds_read_b128 K_hi[ks]         ; LDS read issued\ns_nop 0                       ; compiler NOP (waste)\nmfma_lo K_lo[ks]              ; Stall=0 (K_lo ready)\ns_waitcnt lgkmcnt(2)\nmfma_hi K_hi[ks]              ; Stall=104K cycles! (K_hi not ready)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/flydsl/cdna4-flash-attention-gqa-d256.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

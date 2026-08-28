@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-tile-distribution-coordinates",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ck-tile-distribution-coordinates|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CK-Tile TileDistribution and Coordinate System",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CK-Tile TileDistribution and Coordinate System"
+  },
+  "title": "CK-Tile TileDistribution and Coordinate System",
+  "summary": "The core innovation of CK-Tile lies in its compile-time coordinate transformation system, which automatically generates optimal memory access patterns. This article provides a detailed introduction to the five coordinate spaces (P/Y/X/D/R), coordinate transformation primitives, the TileDistribution compile-time abstraction, the thread-to-data mapping mechanism, and the internal implementation of the encoding.",
+  "sections": [
+   {
+    "heading": "The Five Coordinate Spaces",
+    "anchor": "the-five-coordinate-spaces",
+    "gist": "CK-Tile uses five interrelated coordinate spaces, each representing an abstraction level in the process from thread identification to memory access."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nThread ID -> P-space -> (P + Y) -> X-space -> D-space (Memory Address)\n```\n\n```cpp\n// CK-Tile internal implementation\nstatic auto _get_partition_index()\n{\n    if constexpr(NDimP == 1)\n        return array<index_t, 1>{get_lane_id()};\n    else if constexpr(NDimP == 2)\n        return array<index_t, 2>{get_warp_id(), get_lane_id()};\n}\n```\n\n```\nY = [Repeat, WarpDim, ThreadDim, VectorDim]\n```\n\n```cpp\nsweep_tile(distributed_tensor, [&](auto y_coord) {\n    // y_coord is compile-time multi_index\n    // All iterations are fully unrolled at compile time\n    auto value = distributed_tensor(y_coord);\n    // ... processing ...\n});\n```\n\n```cpp\n// GEMM: NWarpPerBlock warps share A data, MWarpPerBlock warps share B data\n// No replication```\n\n```\nD = x0 * stride_0 + x1 * stride_1 + ... + xN * stride_N\n```\n\n```\nX = f(P, Y) = BasePosition(P) + LocalOffset(Y)\n```\n\n```cpp\n// [4, 5] -> [20]\nauto transform = make_merge_transform(make_tuple(4, 5));\n\n// Forward: (2, 3) -> 2*5 + 3 = 13\n// Inverse: 13 -> (13/5, 13%5) = (2, 3)\n```\n\n```cpp\n// [24] -> [3, 4, 2]\nauto transform = make_unmerge_transform(make_tuple(3, 4, 2));\n\n// Forward: 14 -> (14/8, (14%8)/2, (14%8)%2) = (1, 3, 0)\n// where 8 = 4*2\n```\n\n```cpp\n// Use stride [12, 1] to map linear index to 2D\nauto transform = make_embed_transform(make_tuple(2, 3), make_tuple(12, 1));\n// 14 -> (14/12, 14%12) = (1, 2)\n```\n\n```cpp\n// Transform [2, 6] tensor to [2, 2, 3] view\nauto transformed = transform_tensor_descriptor(\n    base_descriptor,\n    make_tuple(\n        make_pass_through_transform(2),           // Dimension 0 unchanged\n        make_unmerge_transform(make_tuple(2, 3))  // Split dimension 1\n    ),\n    make_tuple(sequence<0>{}, sequence<1>{}),      // Input mapping\n    make_tuple(sequence<0>{}, sequence<1, 2>{})    // Output mapping\n);\n```\n\n```cpp\ntemplate <typename PsYs2XsAdaptor_,           // P+Y -> X coordinate transform adapter\n          typename Ys2DDescriptor_,             // Y -> D linearization descriptor\n          typename StaticTileDistributionEncoding_,  // Encoding specification\n          typename TileDistributionDetail_>     // Implementation details\nstruct tile_distribution\n{\n    // Get current thread's P coordinate\n    static auto _get_partition_index();\n\n // P compute Y-space\n    template <typename PartitionIndex>\n    static auto calculate_tile_Ys_index(const PartitionIndex& ps_idx);\n};\n```\n\n```cpp\ntemplate <typename RsLengths_,      // R dimension lengths (replication)\n          typename HsLengthss_,     // H dimension hierarchical decomposition\n          typename Ps2RHssMajor_,   // P -> RH mapping (major index)\n          typename Ps2RHssMinor_,   // P -> RH mapping (minor index)\n          typename Ys2RHsMajor_,    // Y -> RH mapping (major index)\n          typename Ys2RHsMinor_>    // Y -> RH mapping (minor index)\nstruct tile_distribution_encoding;\n```\n\n```cpp\n// GEMM: NWarpPerBlock warp shared A data, MWarpPerBlock warp shared B data\nusing RsLengths = sequence<NWarpPerBlock, MWarpPerBlock>;\n\n// none\nusing RsLengths = sequence<>;\n```\n\n```cpp\nusing HsLengthss = tuple<\n    sequence<MRepeat, MWarp, MThread, MVec>,  // M dimension: repeat*warp*thread*vector\n    sequence<NRepeat, NWarp, NThread, NVec>   // N dimension: same as above\n>;\n\n// For example sequence<4, 2, 8, 4>:\n// - 4: Repeat 4 times per thread\n// - 2: 2 warps participate\n// - 8: 8 threads per warp\n// - 4: Vectorize 4 elements per operation\n// Total: 4 * 2 * 8 * 4 = 256 elements\n```\n\n```cpp\n// P0=warp_id maps to component 1 of H dimension group 1\n// P1=lane_id maps to component 2 of H dimension group 2\nusing Ps2RHssMajor = tuple<sequence<1, 2>, sequence<1, 2>>;\nusing Ps2RHssMinor = tuple<sequence<1, 1>, sequence<2, 2>>;\n```\n\n```cpp\nusing Ys2RHsMajor = sequence<1, 1, 2, 2>;  // Y0,Y1 map to H1; Y2,Y3 map to H2\nusing Ys2RHsMinor = sequence<0, 3, 0, 3>;  // Map to components 0,3,0,3 respectively\n```\n\n```\nP + Y coordinates  -->  Replicate  -->  Unmerge  -->  Merge  -->  X coordinates\n(thread+local)       (handle replication) (hierarchical) (merge to X dims)  (global position)\n```\n\n```cpp\ntemplate <typename Encoding>\nauto make_ps_ys_to_xs_adaptor(const Encoding& encoding)\n{\n    // 1. Create each transform\n    constexpr auto replicate_transform = make_replicate_transform(\n        encoding.get_rs_lengths());\n    constexpr auto unmerge_transform = make_unmerge_transform(\n        encoding.get_hs_lengthss());\n    constexpr auto merge_transform = make_merge_transform(\n        encoding.get_rhs_to_xs_mapping());\n\n    // 2. Chain composition\n    constexpr auto chain = chain_transforms(\n        replicate_transform, unmerge_transform, merge_transform);\n\n    // 3. Create adapter\n    return make_tile_adaptor(chain, encoding.get_lower_dimension_hidden_idss());\n}\n```\n\n```cpp\ntemplate <typename YLengths, typename YStrides>\nstruct ys_to_d_descriptor\n{\n    // Calculate register offset from Y coordinates\n    template <typename YIndex>\n    constexpr index_t calculate_offset(const YIndex& idx_y) const\n    {\n        index_t offset = 0;\n        static_for<0, num_of_dimension, 1>{}([&](auto i) {\n            offset += idx_y[i] * YStrides{}[i];\n        });\n        return offset;\n    }\n\n    // Total number of elements per thread\n    static constexpr index_t get_element_space_size()\n    {\n        return reduce_on_sequence(YLengths{}, multiplies{}, number<1>{});\n    }\n};\n```\n\n```cpp\ntemplate <typename TileDistribution>\nstruct static_distributed_tensor\n{\n    using ys_to_d_descriptor = typename TileDistribution::ys_to_d_descriptor;\n\n    static constexpr index_t thread_buffer_size =\n        ys_to_d_descriptor::get_element_space_size();\n\n    DataType thread_buffer_[thread_buffer_size];  // Thread-local storage\n\n    template <typename YIndex>\n    DataType& at(const YIndex& idx_y)\n    {\n        const index_t offset = ys_to_d_descriptor{}.calculate_offset(idx_y);\n        return thread_buffer_[offset];\n    }\n};\n```\n\n```cpp\n// Layout: [M/VectorSize][N][VectorSize]\n// Ensure vectorized load data is contiguous in memory\ntemplate <index_t M, index_t N, index_t VectorSize>\nusing GemmYsToD = tile_descriptor<\n    sequence<M/VectorSize, N, VectorSize>,\n    sequence<N * VectorSize, VectorSize, 1>>;\n```\n\n```cpp\n// Custom stride (with padding)\nauto desc = make_naive_tensor_descriptor(\n    make_tuple(3, 4),    // shape: [3, 4]\n    make_tuple(8, 1)     // strides: [8, 1], 8 elements per row (4 data + 4 padding)\n);\n\n// Compact row-major\nauto desc_packed = make_naive_tensor_descriptor_packed(make_tuple(3, 4));\n// Strides automatically [4, 1]\n\n// Aligned layout\nauto desc_aligned = make_naive_tensor_descriptor_aligned(\n    make_tuple(4, 5), 8);  // Align each row to 8 element boundary\n// Stride becomes [8, 1], total size 4*8=32\n```\n\n```cpp\n// Matrix transpose view\nauto transposed = transform_tensor_descriptor(\n    original,\n    make_tuple(make_pass_through_transform(N), make_pass_through_transform(M)),\n    make_tuple(sequence<1>{}, sequence<0>{}),  // Swap input dimensions\n    make_tuple(sequence<0>{}, sequence<1>{})\n);\n\n// 5D -> 3D merge (GPU thread block work mapping)\nauto merged = transform_tensor_descriptor(\n    base_5d,\n    make_tuple(\n        make_pass_through_transform(NumIssues),\n        make_merge_transform(make_tuple(wavesPerM, wavesPerK)),\n        make_merge_transform(make_tuple(WarpSize, KVector))\n    ),\n    make_tuple(sequence<0>{}, sequence<1, 2>{}, sequence<3, 4>{}),\n    make_tuple(sequence<0>{}, sequence<1>{}, sequence<2>{})\n);\n```\n\n```cpp\n// Define GEMM distribution encoding\nusing GemmEncoding = tile_distribution_encoding<\n    sequence<>,                              // R: No replication\n    tuple<sequence<4, 2, 8, 4>,             // M dimension: [MRepeat=4, MWarp=2, MThread=8, MVec=4]\n          sequence<4, 2, 8, 4>>,            // N dimension: [NRepeat=4, NWarp=2, NThread=8, NVec=4]\n    tuple<sequence<1, 2>, sequence<1, 2>>,  // P -> RH major\n    tuple<sequence<1, 1>, sequence<2, 2>>,  // P -> RH minor\n    sequence<1, 1, 2, 2>,                   // Y -> RH major\n    sequence<0, 3, 0, 3>                    // Y -> RH minor\n>;\n\n// Create distribution\nconstexpr auto distribution = make_static_tile_distribution(GemmEncoding{});\n\n// Use in kernel\n__global__ void gemm_kernel(...)\n{\n    // Step 1: Get P coordinates (thread identifier)\n    const auto p_coord = distribution.calculate_p_coord();\n    // For thread 37: warp_id=1, lane_id=5 -> P=[1, 5]\n\n    // Step 2: Create tile window\n    auto c_window = make_tile_window(\n        c_view,\n        make_tuple(number<256>{}, number<256>{}),  // Tile size\n        {blockIdx.x * 256, blockIdx.y * 256},      // origin\n        distribution);\n\n    // Step 3: Load data to registers (distributed tensor)\n    auto c_tile = c_window.load();\n\n    // Step 4: Traverse Y-space for computation\n    sweep_tile(c_tile, [&](auto y_coord) {\n        // Compile-time: P+Y -> X transform\n        // Runtime: Directly access corresponding memory address\n        c_tile(y_coord) = compute_element(...);\n    });\n\n    // Step 5: Write back\n    c_window.store(c_tile);\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-tile-distribution-coordinates.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

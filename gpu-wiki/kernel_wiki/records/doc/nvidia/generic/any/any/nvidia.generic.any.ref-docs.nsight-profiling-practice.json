@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.nsight-profiling-practice",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|nsight-profiling-practice|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Nsight Profiling in Practice",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Nsight Profiling in Practice"
+  },
+  "title": "Nsight Profiling in Practice",
+  "summary": "> Compiled from multiple technical articles in the Zhihu community, covering practical topics including Nsight Systems system-level analysis, Nsight Compute kernel-level analysis, Warp Stall diagnosis, and Roofline analysis.",
+  "sections": [
+   {
+    "heading": "1. Tool Overview: Nsight Systems vs Nsight Compute",
+    "anchor": "1-tool-overview-nsight-systems-vs-nsight-compute",
+    "gist": "NVIDIA provides two layers of performance analysis tools, targeting performance bottlenecks at different granularities:"
+   },
+   {
+    "heading": "2. Nsight Systems in Practice",
+    "anchor": "2-nsight-systems-in-practice",
+    "gist": "Key parameter descriptions: - `--trace`: Specifies the types of APIs to trace; `cuda` traces CUDA runtime/driver API, `nvtx` traces user markers - `--delay` / `--duration`: Controls the collection time window to avoid capturing irrelevant …"
+   },
+   {
+    "heading": "3. Nsight Compute in Practice",
+    "anchor": "3-nsight-compute-in-practice",
+    "gist": "`--set detailed` collects complete performance metrics, including all panels such as Roofline, Occupancy, Memory, Compute, and Scheduler."
+   },
+   {
+    "heading": "4. Warp Stall Cause Analysis",
+    "anchor": "4-warp-stall-cause-analysis",
+    "gist": "When a warp is not in the Eligible state, it is in the Stall state."
+   },
+   {
+    "heading": "5. Practical Tips and Common Pitfalls",
+    "anchor": "5-practical-tips-and-common-pitfalls",
+    "gist": "**Misconception 1**: GPU utilization at 100% = performance is already optimal"
+   },
+   {
+    "heading": "6. eGPU: Next-Generation GPU Performance Analysis Framework",
+    "anchor": "6-egpu-next-generation-gpu-performance-analysis-framework",
+    "gist": "eGPU is an observability framework that offloads eBPF bytecode to the GPU through dynamic PTX injection, representing a new direction in GPU performance analysis:"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- NCU Performance Analysis Guide — Detailed Nsight Compute metrics and analysis methodology - Profiling Tools by Architecture — Profiling tool support for different GPU …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\n# profiling\nnsys profile -o output_report ./my_app\n\n# recommendedparameter\nnsys profile \\\n --trace=cuda,nvtx,osrt \\ # CUDA API, NVTX , OS row\n --duration=30 \\ # 30 seconds\n --delay=5 \\ # 5 seconds\n --cudabacktrace=true \\ # CUDA\n    --output=report \\\n    ./my_app\n\n# PyTorch\nnsys profile \\\n    --trace=cuda,nvtx,cudnn,cublas \\\n    -o training_report \\\n    python train.py\n```\n\n```python\n# PyTorch use NVTX\nimport torch\n\nwith torch.cuda.nvtx.range(\"forward_pass\"):\n    output = model(input)\n\nwith torch.cuda.nvtx.range(\"backward_pass\"):\n    loss.backward()\n\nwith torch.cuda.nvtx.range(\"optimizer_step\"):\n    optimizer.step()\n```\n\n```cpp\n// CUDA C++ use NVTX\n#include <nvtx3/nvToolsExt.h>\n\nnvtxRangePush(\"matrix_multiply\");\nkernel<<<grid, block>>>(args);\nnvtxRangePop();\n```\n\n```bash\n# analysis( kernel)\nncu --set detailed -o report ./my_app\n\n# analysis kernel\nncu --set detailed --kernel-name \"regex:gemm\" -o report ./my_app\n\n# recommendedcompilation(keep)\nnvcc -O3 -lineinfo -arch=sm_90 kernel.cu -o kernel\n```\n\n```\n ┌────── compute (Peak FLOPS)\nFLOPS        │     /\n(performance) │ / ← memory = peakbandwidth\n             │   /\n             │  /  ● Compute Bound Kernel\n             │ /\n             │/ ● Memory Bound Kernel\n             └──────────────────────────\n                Arithmetic Intensity\n                (FLOP/Byte)\n```\n\n```cpp\n// kernel_C coalescedaccess\nconst int stride = 16;\nint strided_idx = threadIdx.x * stride + ...;\nA[idx] = B[strided_idx] + B[strided_idx];\n```\n\n```\nEligible cycles low -> warp high\n│\n├── Selected (execute)\n├── Eligible  -> stalled_not_selected\n└── Stalled\n ├── Long Scoreboard (globalmemorywait)\n ├── Short Scoreboard (shared memorywait)\n ├── Barrier (synchronouswait)\n ├── Math Throttle (compute)\n    └── ...\n```\n\n```bash\n# recommended profiling compilation\nnvcc -O3 -lineinfo -arch=sm_90 kernel.cu\n\n# English note\n# -O3 : highoptimization(do not -O0 profiling, resultactualperformance)\n# -lineinfo : keeprow, source-SASS (performance)\n# -arch : ,\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/nsight-profiling-practice.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

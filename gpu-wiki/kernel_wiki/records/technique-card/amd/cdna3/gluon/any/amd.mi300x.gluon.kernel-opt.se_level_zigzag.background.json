@@ -1,0 +1,101 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi300x.gluon.kernel-opt.se_level_zigzag.background",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|se_level_zigzag#background|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi300x"
+   ],
+   "product": "mi300x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "background"
+  ],
+  "triggers": [
+   "the 'Background' technique is being considered on AMD MI300X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI300X (CDNA3 / gfx942): Background",
+  "problem": {
+   "target": "AMD MI300X (CDNA3 / gfx942)",
+   "statement": "SE-level Causal Attention Load Balancing -- Background"
+  },
+  "technique": "Background",
+  "what": "In causal attention, the computational workload varies significantly across different `start_m` values: - Small `start_m` (e.g., 0, 1, 2): requires computing a large number of K values (because the causal mask only limits `end_n ≤ start_m`) - Large `start_m` (e.g., M-1, M-2): requires computing only a small number of K values",
+  "when": "In causal attention, the computational workload varies significantly across different `start_m` values: - Small `start_m` (e.g., 0, 1, 2): requires computing a large number of K values (because the causal mask only limits `end_n ≤ start_m`…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi300x/kernel-opt/gluon/se_level_zigzag.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

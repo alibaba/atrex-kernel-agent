@@ -1,0 +1,238 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.sglang-performance-optimization-september-2025",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|sglang-performance-optimization-september-2025|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): SGLang Performance Optimization Notes: September 2025",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "SGLang Performance Optimization Notes: September 2025"
+  },
+  "title": "SGLang Performance Optimization Notes: September 2025",
+  "summary": "A compilation of 28 performance optimization techniques applied to the SGLang inference framework during September 2025, covering kernel unification, architecture-specific optimizations, memory management fixes, and distributed inference improvements.",
+  "sections": [
+   {
+    "heading": "1. Mooncake Store Metadata Fetch: CPU Tensor to List Acceleration",
+    "anchor": "1-mooncake-store-metadata-fetch-cpu-tensor-to-list-acceleration",
+    "gist": "Optimizes the `get_buffer_meta` method in Mooncake distributed KV cache by pre-converting CPU tensors to Python lists, avoiding repeated PyTorch indexing overhead in loops."
+   },
+   {
+    "heading": "2. GPT-OSS FP8 KV Cache: Disabling Fused Set KV Buffer",
+    "anchor": "2-gpt-oss-fp8-kv-cache-disabling-fused-set-kv-buffer",
+    "gist": "Enables FP8 KV cache for GPT-OSS on B200/GB200 by conditionally disabling the fused set kv buffer operation (which only supports bfloat16)."
+   },
+   {
+    "heading": "3. DeepSeek-R1 W4AFP8 Quantization: TP Mode Support",
+    "anchor": "3-deepseek-r1-w4afp8-quantization-tp-mode-support",
+    "gist": "Adds TP (Tensor Parallelism) mode support for DeepSeek-R1 W4AFP8 (weight INT4, activation FP8) quantization, offering better first-token latency compared to EP mode."
+   },
+   {
+    "heading": "4. Nsys Profiling Tool: Automated GPU Kernel Classification",
+    "anchor": "4-nsys-profiling-tool-automated-gpu-kernel-classification",
+    "gist": "An automated nsys performance analysis tool that classifies, aggregates, and visualizes GPU kernel traces, supporting Llama, DeepSeek, and GPT-OSS models."
+   },
+   {
+    "heading": "5. Expert Model Parallel Communication Group Memory: Smart TP Reuse",
+    "anchor": "5-expert-model-parallel-communication-group-memory-smart-tp-reuse",
+    "gist": "Reduces redundant communication resource allocation for MoE expert parallelism by reusing existing TP communication groups when EP/ETP sizes match TP size."
+   },
+   {
+    "heading": "6. DeepSeek-V3/R1 MXFP4 Quantization: Kernel Fusion for Activation Quantization (AMD)",
+    "anchor": "6-deepseek-v3-r1-mxfp4-quantization-kernel-fusion-for-activation-quantization-amd",
+    "gist": "Fuses activation tensor quantization into different operators (activation, layernorm, gemm, flatten) to eliminate standalone quantization kernel overhead for MXFP4 inference."
+   },
+   {
+    "heading": "7. Qwen3-MoE: FlashInfer Fused AllReduce",
+    "anchor": "7-qwen3-moe-flashinfer-fused-allreduce",
+    "gist": "Simplifies Qwen3-MoE model code (removes deepep path, dual stream complexity) to correctly leverage FlashInfer fused allreduce, merging AllReduce+RMSNorm+ResidualAdd into a single kernel."
+   },
+   {
+    "heading": "8. DeepSeek-R1 TRT-LLM MLA Backend: Prefill Optimization",
+    "anchor": "8-deepseek-r1-trt-llm-mla-backend-prefill-optimization",
+    "gist": "Adds prefill support to the TRT-LLM MLA backend using FlashInfer's `trtllm_ragged_attention_deepseek` kernel, with FP8 KV cache support."
+   },
+   {
+    "heading": "9. Per-Token Group Quant 8bit Kernel Unification",
+    "anchor": "9-per-token-group-quant-8bit-kernel-unification",
+    "gist": "Comprehensive refactoring of INT8/FP8 quantization kernels: removes the v2 branch, unifies implementation, and adds MoE-specific optimizations."
+   },
+   {
+    "heading": "10. DeepSeek-V3 Blackwell Optimization: Router GEMM Dtype and Correction Bias",
+    "anchor": "10-deepseek-v3-blackwell-optimization-router-gemm-dtype-and-correction-bias",
+    "gist": "Optimizes Router GEMM output type and correction bias dtype for DeepSeek-V3 on Blackwell, eliminating unnecessary type conversion overhead."
+   },
+   {
+    "heading": "11. MoE Sum Reduce Kernel: 2D Tile Batch Processing",
+    "anchor": "11-moe-sum-reduce-kernel-2d-tile-batch-processing",
+    "gist": "Replaces serial per-token processing with 2D tile batch processing for the MoE sum reduce operation, significantly improving parallelism and memory access efficiency."
+   },
+   {
+    "heading": "12. SM120 Architecture FP8 Blockwise GEMM Support",
+    "anchor": "12-sm120-architecture-fp8-blockwise-gemm-support",
+    "gist": "Adds FP8 blockwise scaled matrix multiplication for the SM120 architecture (next-generation GPU) with specialized tile configurations."
+   },
+   {
+    "heading": "13. NVFP4 GEMM Dynamic Configuration: Eliminating Small-Batch Redundancy",
+    "anchor": "13-nvfp4-gemm-dynamic-configuration-eliminating-small-batch-redundancy",
+    "gist": "Implements M-dimension adaptive ClusterShape and TileShape configuration for NVIDIA FP4 block-scaled GEMM, eliminating redundant computation in small-batch decode scenarios."
+   },
+   {
+    "heading": "14. Retract Memory Release Fix: Page Size > 1 OOM",
+    "anchor": "14-retract-memory-release-fix-page-size-1-oom",
+    "gist": "Fixes OOM caused by incorrect memory release during retract operations when page_size > 1, by unifying memory check logic and precise per-request subset memory calculation."
+   },
+   {
+    "heading": "15. Speculative Decoding Attention Backend Configuration",
+    "anchor": "15-speculative-decoding-attention-backend-configuration",
+    "gist": "Adds `--speculative-attention-backend` parameter allowing target verify and draft extend operations to use either prefill or decode backend."
+   },
+   {
+    "heading": "16. MLA K Matrix Concat: Warp-Level Vectorized Memory Access",
+    "anchor": "16-mla-k-matrix-concat-warp-level-vectorized-memory-access",
+    "gist": "Implements a highly optimized K matrix concatenation kernel for DeepSeek-V2/V3 MLA architecture using warp-level cooperation and vectorized memory access."
+   },
+   {
+    "heading": "17. FlashAttention-4 (FA Cute) Support: CUTLASS DSL Implementation",
+    "anchor": "17-flashattention-4-fa-cute-support-cutlass-dsl-implementation",
+    "gist": "Adds FlashAttention-4 support based on CUTLASS Cute DSL, optimized for both Hopper (Sm90) and Blackwell (Sm100) architectures."
+   },
+   {
+    "heading": "18. Pipeline Parallelism KV Cache Fix: Cross-Rank Memory Synchronization",
+    "anchor": "18-pipeline-parallelism-kv-cache-fix-cross-rank-memory-synchronization",
+    "gist": "Fixes inconsistent KV cache token capacity across different PP ranks by adding an all-reduce synchronization to ensure all ranks use the same minimum capacity."
+   },
+   {
+    "heading": "19. Data Parallel Controller: Orphan Process Prevention",
+    "anchor": "19-data-parallel-controller-orphan-process-prevention",
+    "gist": "Adds parent process monitoring and fault handling to the DP controller process, preventing orphan processes when the parent unexpectedly exits."
+   },
+   {
+    "heading": "20. Qwen2-MoE Dual Stream: Shared Experts Parallel with Router Experts",
+    "anchor": "20-qwen2-moe-dual-stream-shared-experts-parallel-with-router-experts",
+    "gist": "Parallelizes shared experts and router experts computation using dual CUDA streams for Qwen2-MoE, improving MoE layer efficiency in small-batch scenarios."
+   },
+   {
+    "heading": "21. HiCache Page First Direct Memory Layout",
+    "anchor": "21-hicache-page-first-direct-memory-layout",
+    "gist": "Adds `page_first_direct` memory layout for HiCache distributed KV cache, optimizing host-device data transfer efficiency through page-level direct memory access."
+   },
+   {
+    "heading": "22. DP Attention Race Condition Fix: Independent Buffers",
+    "anchor": "22-dp-attention-race-condition-fix-independent-buffers",
+    "gist": "Fixes a race condition in DP Attention by allocating independent buffers per LogitsMetadata instead of sharing a global buffer."
+   },
+   {
+    "heading": "23. DP Attention Extend Mode Consistency Fix",
+    "anchor": "23-dp-attention-extend-mode-consistency-fix",
+    "gist": "Fixes padding mode inconsistency in DP Attention extend mode by forcing SUM_LEN padding strategy for extend operations, ensuring all ranks use identical strategies."
+   },
+   {
+    "heading": "24. Dynamic Batch Tokenizer: Async Queue for Concurrency",
+    "anchor": "24-dynamic-batch-tokenizer-async-queue-for-concurrency",
+    "gist": "Introduces an async dynamic batching tokenizer using `asyncio.Queue` to collect concurrent requests and batch-process them, reducing tokenization overhead under high concurrency."
+   },
+   {
+    "heading": "25. Generative Score API: Prefill-Only Optimization",
+    "anchor": "25-generative-score-api-prefill-only-optimization",
+    "gist": "Optimizes the Generative Score API for prefill-only scenarios by skipping unnecessary input token logprobs computation, sampling steps, and deferring GPU-to-CPU copies."
+   },
+   {
+    "heading": "26. Triton Attention Deterministic Inference: Fixed Tile Size Split-KV",
+    "anchor": "26-triton-attention-deterministic-inference-fixed-tile-size-split-kv",
+    "gist": "Adds a fixed tile size split-KV strategy for Triton Attention to ensure deterministic inference results."
+   },
+   {
+    "heading": "27. OpenTelemetry Request Tracing System",
+    "anchor": "27-opentelemetry-request-tracing-system",
+    "gist": "Adds distributed request tracing based on OpenTelemetry with fine-grained latency monitoring and Jaeger visualization."
+   },
+   {
+    "heading": "28. CUTLASS Update and FP8 Blockwise GEMM Schedule Rename",
+    "anchor": "28-cutlass-update-and-fp8-blockwise-gemm-schedule-rename",
+    "gist": "Updates the CUTLASS library version and unifies FP8 blockwise GEMM kernel schedule naming from `FP8BlockScaledAccum` to `FP8Blockwise` for consistency and performance."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\ndef get_buffer_meta(self, keys, indices, local_rank):\n    kv_buffer_data_ptr = self.kv_buffer.data_ptr()\n    indices = indices.tolist()  # Core optimization: avoid tensor indexing\n    for index in range(0, len(indices), self.page_size):\n        k_ptr = kv_buffer_data_ptr + indices[index] * ...\n        ptr_list.append(k_ptr)\n```\n\n```bash\npython3 examples/profiler/nsys_profile_tools/gputrc2graph.py \\\n    --in_file nsys_res.nsys-rep,sglang,llama,132 \\\n    --title \"Llama-3.1-8B Performance Analysis\"\n```\n\n```python\nglobal _MOE_EP\nif moe_ep_size == tensor_model_parallel_size:\n    _MOE_EP = _TP  # Reuse TP group\nelse:\n    _MOE_EP = init_model_parallel_group(...)\n\nglobal _MOE_TP\nif moe_tp_size == tensor_model_parallel_size:\n    _MOE_TP = _TP  # Reuse TP group\nelse:\n    _MOE_TP = init_model_parallel_group(...)\n```\n\n```cpp\n// Blackwell-optimized SiLU\n__device__ __forceinline__ float silu(const float& val) {\n#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)\n    float half = 0.5f * val;\n    float t = __tanhf(half);\n    return half * (1.0f + t);\n#else\n    return val / (1.0f + __expf(-val));\n#endif\n}\n```\n\n```python\n# Before: serial per-token\nfor token_index in range(token_start, token_end):\n    accumulator = tl.zeros((BLOCK_DIM,), dtype=tl.float32)\n    for i in range(topk_num):\n        tmp = tl.load(input_t_ptr + i * input_stride_1, ...)\n        accumulator += tmp\n\n# After: 2D tile batch\naccumulator = tl.zeros((BLOCK_M, BLOCK_DIM), dtype=tl.float32)\nfor i in range(topk_num):\n    tile = tl.load(base_ptrs + i * input_stride_1, ...)\n    accumulator += tile.to(tl.float32)\n```\n\n```cpp\nusing ElementA = cutlass::float_e4m3_t;\nusing ElementB = cutlass::float_e4m3_t;\nusing ArchTag = cutlass::arch::Sm120;\nusing MmaTileShape = Shape<_128, _128, _128>;\nusing PerSmTileShape = Shape<_128, _128, _128>;\nusing EpilogueTileShape = Shape<_128, _64>;\n```\n\n```python\ndef new_page_count_next_decode(self, selected_indices=None):\n    page_size = self.token_to_kv_pool_allocator.page_size\n    requests = (self.reqs if selected_indices is None\n                else [self.reqs[i] for i in selected_indices])\n    if page_size == 1:\n        return len(requests)\n    return sum(1 for req in requests if req.seqlen % page_size == 0)\n```\n\n```python\ndef _select_backend(self, forward_mode):\n    if forward_mode.is_decode_or_idle():\n        return self.decode_backend\n    elif forward_mode.is_target_verify() or forward_mode.is_draft_extend():\n        return (self.decode_backend\n                if self.server_args.speculative_attention_backend == \"decode\"\n                else self.prefill_backend)\n    else:\n        return self.prefill_backend\n```\n\n```cpp\nconstexpr int NUM_LOCAL_HEADS = 128;\nconstexpr int HEAD_CHUNK_SIZE = 16;\nconstexpr int NUM_HEAD_CHUNKS = NUM_LOCAL_HEADS / HEAD_CHUNK_SIZE;  // 8\n\n// Vectorized access per warp: \n// Read k_nope: 16 heads x 128 dim x 2 bytes = 4,096 bytes\n// Read k_rope: 1 x 64 dim x 2 bytes = 128 bytes (shared)\n// Write k: 16 heads x 192 dim x 2 bytes = 6,144 bytes\n```\n\n```python\nfrom flash_attn.cute.flash_fwd import FlashAttentionForwardSm90\nfrom flash_attn.cute.flash_fwd_sm100 import FlashAttentionForwardSm100\n\ndef flash_attn_varlen_func(..., ver=3):\n    if ver == 4:\n        return flash_attn_varlen_func_v4(\n            q, k, v, cu_seqlens_q, cu_seqlens_k,\n            softmax_scale=softmax_scale, causal=causal,\n            pack_gqa=pack_gqa, learnable_sink=sinks)\n```\n\n```python\nif self.pp_size > 1:\n    tensor = torch.tensor(self.max_total_num_tokens, dtype=torch.int64)\n    torch.distributed.all_reduce(\n        tensor, op=torch.distributed.ReduceOp.MIN,\n        group=get_world_group().cpu_group)\n    self.max_total_num_tokens = tensor.item()\n```\n\n```python\ndef run_data_parallel_controller_process(server_args, port_args, pipe_writer):\n    kill_itself_when_parent_died()  # Auto-terminate if parent exits\n    setproctitle.setproctitle(\"sglang::data_parallel_controller\")\n    faulthandler.enable()  # Print stack trace on crash\n```\n\n```python\nDUAL_STREAM_TOKEN_THRESHOLD = 1024\n\ndef forward_normal_dual_stream(self, hidden_states):\n    current_stream = torch.cuda.current_stream()\n    self.alt_stream.wait_stream(current_stream)\n    # Main stream: shared experts\n    shared_output = self._forward_shared_experts(hidden_states)\n    # Alt stream: router experts (parallel)\n    with torch.cuda.stream(self.alt_stream):\n        router_output = self._forward_router_experts(hidden_states)\n    current_stream.wait_stream(self.alt_stream)\n    return router_output, shared_output\n```\n\n```python\n# Before: global shared buffer (race condition)\nhidden_states = get_global_dp_buffer()\n\n# After: per-metadata independent buffer\nhidden_states = logits_metadata.gathered_buffer\n```\n\n```python\nif self.forward_mode.is_extend():\n    dp_padding_mode = DpPaddingMode.SUM_LEN  # Fixed for extend\nelse:\n    dp_padding_mode = DpPaddingMode.get_dp_padding_mode(global_num_tokens)\n```\n\n```python\nclass AsyncDynamicbatchTokenizer:\n    def __init__(self, tokenizer, max_batch_size=32, batch_wait_timeout_s=0.002):\n        self._queue = asyncio.Queue()\n\n    async def encode(self, prompt, **kwargs):\n        result_future = asyncio.get_running_loop().create_future()\n        await self._queue.put((prompt, kwargs, result_future))\n        return await result_future\n```\n\n```bash\npython3 -m sglang.launch_server \\\n    --model-path Qwen/Qwen3-8B \\\n    --attention-backend triton \\\n    --triton-attention-split-tile-size 256\n```\n\n```bash\npython -m sglang.launch_server --model MODEL \\\n    --enable-trace --oltp-traces-endpoint localhost:4317\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/sglang-performance-optimization-september-2025.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

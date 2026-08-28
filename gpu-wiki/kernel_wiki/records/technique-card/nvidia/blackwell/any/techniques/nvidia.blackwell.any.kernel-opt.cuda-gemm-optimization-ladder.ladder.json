@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.cuda-gemm-optimization-ladder.ladder",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|cuda-gemm-optimization-ladder#ladder|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "ladder"
+  ],
+  "triggers": [
+   "the 'Ladder' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Ladder",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "CUDA GEMM Optimization Ladder -- Ladder"
+  },
+  "technique": "Ladder",
+  "what": "| Step | Bottleneck question | Typical edit | |---|---|---| | Naive | Is the baseline correct? | one thread computes one C element | | Coalesced global | Are warp loads contiguous? | map thread axes so adjacent lanes read adjacent addresses | | Shared tiling | Is global traffic reused? | stage A/B tiles in shared memory | | Thread/register tiling | Is each load reused enough? | compute multiple C elements per thread | | Vectorized loads | Is instruction overhead or transaction width limiting? | use `float4`, `half2`, or packed loads when aligned | | Bank conflict fix | Is shared memory serialized? | pad or swizzle shared tiles | | Warp tiling | Is work partitioned well across lanes? | assign subtiles per warp | | Double buffering | Are loads and compute overlapped? | pipeline global-to-shared stages |",
+  "when": "| Step | Bottleneck question | Typical edit | |---|---|---| | Naive | Is the baseline correct?",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/cuda-gemm-optimization-ladder.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

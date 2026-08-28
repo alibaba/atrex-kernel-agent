@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.warp-specialization-design-principles",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|warp-specialization-design-principles|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Warp Specialization Design Principles",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Warp Specialization Design Principles"
+  },
+  "title": "Warp Specialization Design Principles",
+  "summary": "Warp specialization is a core optimization strategy in modern GPU kernel design. This document explains **when to use, why it works, and how to design** warp specialization kernels, focusing on design decisions at the hardware level rather than specific framework APIs.",
+  "sections": [
+   {
+    "heading": "1. What is Warp Specialization",
+    "anchor": "1-what-is-warp-specialization",
+    "gist": "All warps execute the same code path and share the same workload:"
+   },
+   {
+    "heading": "2. When to Use Warp Specialization (Decision Framework)",
+    "anchor": "2-when-to-use-warp-specialization-decision-framework",
+    "gist": "table columns: Condition, Recommended Strategy, Reason"
+   },
+   {
+    "heading": "3. Role Partitioning Strategies",
+    "anchor": "3-role-partitioning-strategies",
+    "gist": "**Structure**: 1 producer warp group (128 threads) + 1 consumer warp group (128 threads)"
+   },
+   {
+    "heading": "4. Inter-Role Synchronization",
+    "anchor": "4-inter-role-synchronization",
+    "gist": "The synchronization core of warp specialization is the **circular buffer pipeline**:"
+   },
+   {
+    "heading": "5. Load Balancing Between Roles",
+    "anchor": "5-load-balancing-between-roles",
+    "gist": "**Adjust pipeline depth**: Deeper pipelines tolerate greater producer/consumer speed differences."
+   },
+   {
+    "heading": "6. Historical Evolution",
+    "anchor": "6-historical-evolution",
+    "gist": "Software double-buffering, with all threads participating in all operations."
+   },
+   {
+    "heading": "7. Practical Guide",
+    "anchor": "7-practical-guide",
+    "gist": "1."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n// GEMM: warp load + compute\nfor (int k = 0; k < K; k += TILE_K) {\n load_tile_A(smem_A, gmem_A); // warp\n load_tile_B(smem_B, gmem_B); // warp\n    __syncthreads();\n mma(accum, smem_A, smem_B); // warp\n    __syncthreads();\n}\n```\n\n```\n// Warp Specialization: producer load, consumer compute, row\nif (is_producer_warp) {\n    for (int k = 0; k < K; k += TILE_K) {\n pipeline.acquire(stage); // wait buffer\n tma_load(smem[stage], gmem, k); // 1 TMA\n pipeline.commit(stage); // notify consumer data\n    }\n} else {  // consumer warp\n    for (int k = 0; k < K; k += TILE_K) {\n pipeline.wait(stage); // waitdata\n wgmma(accum, smem[stage]); // 128 execute Tensor Core MMA\n pipeline.release(stage); // notify producer buffer\n    }\n}\n```\n\n```\n kernel use TMA / asynchronousload？\n├── -> use( warp load)\nEnglish description\n ├── Compute-bound(compute)->\n │ : warp spec warp producer( 1 TMA),\n │ compute warp\n    │\n ├── Memory-bound-> Warp spec\n │ : datacompute, memory latency\n    │\n └── -> Warp spec + Pingpong compute epilogue\n : consumer MMA epilogue,\n```\n\n```\n 0-127: Producer (TMA load A + B)\n 128-255: Consumer (WGMMA + Epilogue)\nTotal: 256 threads = 8 warps\n```\n\n```\n 0-127: Producer WG0\n  ├── Warp 0: TMA Load (mainloop)\n  ├── Warp 1: Scheduler (tile scheduler)\n  ├── Warp 2: Epilogue Load (TMA load C)\n  └── Warp 3: Auxiliary Load (optional)\n 128-255: Consumer0 (MMA -> Epilogue -> MMA -> ...)\n 256-383: Consumer1 (Epilogue -> MMA -> Epilogue -> ...)\nTotal: 384 threads = 12 warps\n```\n\n```\nEnglish description\nConsumer0: [MMA tile0] [Epi tile0] [MMA tile2] [Epi tile2] ...\nConsumer1: [Epi ----] [MMA tile1] [Epi tile1] [MMA tile3] ...\nProducer:  [Load 0] [Load 1] [Load 2] [Load 3] ...\n```\n\n```\n 0-127: Producer WG\n 128-255: Consumer0 ─┐\n 256-383: Consumer1 ─┘ Jointly compute 1 tile\nTotal: 384 threads = 12 warps\n```\n\n```\nWarp 0: MMA          (Tensor Core UMMA computation)\nWarp 1: Scheduler    (CLC scheduling, get next tile)\nWarp 2: Mainloop Load (TMA load A/B)\nWarp 3: Epilogue Load (TMA load C)\nWarp 4+: Epilogue     (epilogue computation + TMA store D)\nTotal: 160 threads = 5 warps\n```\n\n```cpp\n// Blackwell: map role directly using warp index\nint warp_idx = canonical_warp_idx_sync();\nWarpCategory warp_category;\nif (warp_idx < 4) {\n    warp_category = WarpCategory(warp_idx);  // MMA=0, Sched=1, Load=2, EpiLoad=3\n} else {\n    warp_category = WarpCategory::Epilogue;  // Warp 4+ are all epilogue\n}\n```\n\n```\nStep 1: List all independent operations in kernel\n  For example GEMM: load_A, load_B, compute_MMA, epilogue_load_C, epilogue_store_D\n\nStep 2: Mark hardware unit used by each operation\n  load_A/B:       TMA Unit (1 thread to launch)\n  compute_MMA:    Tensor Core (128 or 32 threads)\n  epilogue_load:  TMA Unit (1 thread to launch)\n  epilogue_store: TMA Unit (1 thread to launch)\n\nStep 3: Merge operations using same hardware unit into same warp\n  TMA loads can share 1 warp (serial launch, but TMA hardware executes in parallel)\n  MMA needs independent warp/warp group\n\nStep 4: Check if register budget allows so many warps\n  See register-pressure-warp-occupancy.md\n```\n\n```\nShared memory buffer:  [Stage 0] [Stage 1] [Stage 2] ... [Stage N-1]\n\nProducer:  acquire(stage) → write data → commit(stage)\nConsumer:  wait(stage) → read and compute → release(stage)\n\nStage state:  Empty → Filling → Full → Draining → Empty\n              ↑                                      │\n              └──────────────────────────────────────┘\n```\n\n```cpp\n// Producer: TMA automatically arrives at barrier after completion\ntma_load.with(*barrier, mcast_mask);  // TMA hardware auto-arrives after completion\n\n// Consumer: wait for barrier\nbarrier.try_wait(phase);  // non-blocking check\nbarrier.wait(phase);      // blocking wait\n```\n\n```\nOrderedSequenceBarrier<SequenceDepth=2, SequenceLength=2>\n\nConsumer0: wait() → [MMA] → arrive() → wait() → [Epilogue] → arrive()\nConsumer1:          wait() → [MMA] → arrive() → wait() → [Epilogue] → arrive()\n```\n\n```\nMainloop Load warp: [load A/B complete] → arrive()\nEpilogue Load warp: wait() → [start loading C]\n```\n\n```cpp\n// MMA warp: notify epilogue after computation complete\naccumulator_pipeline.producer_commit(state);\n\n// Epilogue warp: wait for accumulator ready\naccumulator_pipeline.consumer_wait(state);\n```\n\n```\nIdeal case (perfect overlap):\nProducer: [Load 0][Load 1][Load 2][Load 3]\nConsumer: --------[MMA 0 ][MMA 1 ][MMA 2 ][MMA 3]\nTotal time: T_load + T_compute  (pipeline startup + steady state)\n\nProducer too fast:\nProducer: [L0][L1][L2][idle][idle][idle]\nConsumer: --------[MMA 0    ][MMA 1    ][MMA 2    ]\n→ Producer warp resources wasted\n\nConsumer too fast:\nProducer: [Load 0        ][Load 1        ][Load 2        ]\nConsumer: --------[MMA 0][stall][MMA 1 ][stall][MMA 2 ]\n→ Pipeline bubble, Tensor Core utilization drops\n```\n\n```\nPipeline depth = 2: Producer at most 1 step ahead\nPipeline depth = 7: Producer at most 6 steps ahead\n\nDeeper depth → tolerate more latency fluctuation → but consumes more shared memory\n```\n\n```\n128x128 tile: MMA computation time long → consumer slow → need deeper pipeline\n64x64 tile:   MMA computation time short → consumer fast → 2-3 stages may be enough\n```\n\n```cpp\nint lane_predicate = cute::elect_one_sync();\nif (lane_predicate) {\n    // Only 1 thread executes TMA load\n    tma_copy(src, dst, barrier);\n}\n// Remaining 31 threads (or 127 threads, if warp group) idle\n```\n\n```\nAll warps cooperate:\nfor (k) {\n    // Phase 1: global → register → shared memory\n    gmem_load(reg, gmem[k+1]);      // prefetch next round\n    __syncthreads();\n\n    // Phase 2: shared memory → register → MMA\n    smem_load(frag, smem[k]);\n    mma_sync(accum, frag_a, frag_b);\n\n    // Phase 3: register → shared memory\n    smem_store(smem, reg);\n    __syncthreads();\n}\n```\n\n```\n// cp.async bypasses registers, direct GMEM → SMEM\ncp_async(smem[stage], gmem[k]);\ncp_async_commit_group();\ncp_async_wait_group<STAGES-2>();\n```\n\n```\n// TMA: 1 thread launches, hardware handles copy automatically\n// mbarrier: hardware synchronization, auto-arrives after TMA completion\n// setmaxnreg: dynamic register reallocation\n// WGMMA: 128-thread warp group MMA\n\n→ True producer-consumer decoupling\n→ Three variants: 2-role, pingpong, cooperative\n```\n\n```\n// CLC: hardware tile scheduling\n// TMEM: dedicated accumulator memory, frees registers\n// UMMA: 1-warp MMA (no longer needs warp group)\n// AccumulatorPipeline: async pipeline MMA → Epilogue\n\n→ Finer-grained role division (5 independent warps)\n→ Accumulators flow in TMEM, not through registers\n→ Higher CTA concurrency\n```\n\n```\nSM70: 1 role type, all warps same       → serial load/compute\nSM80: 1 role type + async copy             → partial overlap\nSM90: 2-3 role types (warp group granularity)   → complete load/compute overlap\nSM100: 5+ role types (single warp granularity)      → one role per hardware unit\nFuture:  more hardware accelerator units → more roles\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/warp-specialization-design-principles.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

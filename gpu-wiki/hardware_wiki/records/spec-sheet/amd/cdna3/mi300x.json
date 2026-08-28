@@ -1,0 +1,102 @@
+{
+ "schema": "hw-1.0",
+ "id": "amd.cdna3.spec-sheet.mi300x",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "amd",
+  "arch": "cdna3",
+  "product": "mi300x",
+  "sm_arch": null,
+  "compute_capability": null
+ },
+ "facts": {
+  "summary": "AMD GPU Hardware Compute Power Specification Table",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 81.7,
+    "provenance": "architecture-analysis",
+    "use_case": "Scientific computing"
+   },
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 163.4,
+    "provenance": "architecture-analysis",
+    "use_case": "FP64 matrix multiply"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 163.4,
+    "provenance": "architecture-analysis",
+    "use_case": "General-purpose computation"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 653.7,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 1307.4,
+    "use_case": "Training (low-precision matmul)"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1307.4,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2614.9,
+    "use_case": "Inference / Training"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2614.9,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 5229.8,
+    "use_case": "Inference"
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2614.9,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 5229.8,
+    "use_case": "Quantized inference"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 192,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "sm_count": 304,
+   "cuda_cores": 19456,
+   "tensor_cores": 1216,
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "AMD GPU Hardware Compute Power Specification Table",
+    "kind": "third-party-analysis",
+    "ref": "amd/cdna3/mi300x/hardware-specs/hardware_specs_mi300x.md"
+   }
+  ]
+ }
+}

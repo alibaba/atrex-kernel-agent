@@ -1,0 +1,109 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.any.kernel-opt.cdna3-grouped-gemm.hipblaslt-grouped-gemm",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|any|gemm|cdna3-grouped-gemm#hipblaslt-grouped-gemm|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "grouped-gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "grouped-gemm",
+   "hipblaslt-grouped-gemm"
+  ],
+  "triggers": [
+   "the 'hipBLASLt Grouped GEMM' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): hipBLASLt Grouped GEMM",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Grouped GEMM Optimization (MI308X) -- hipBLASLt Grouped GEMM"
+  },
+  "technique": "hipBLASLt Grouped GEMM",
+  "what": "Pack matrix multiplications of different sizes into a single kernel launch to reduce launch overhead:",
+  "when": "Pack matrix multiplications of different sizes into a single kernel launch to reduce launch overhead:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```bash\n# Phase 1: Enable hipBLASLt\nUSE_HIPBLASLT_GROUPED_GEMM=1\n\n# Phase 2: Generate tuning parameters\nUSE_HIPBLASLT_GROUPED_GEMM=2  # → hipblaslt_gemm_tune.txt\n\n# Phase 3: Apply tuning parameters\nUSE_HIPBLASLT_GROUPED_GEMM=3\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/cdna3-grouped-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

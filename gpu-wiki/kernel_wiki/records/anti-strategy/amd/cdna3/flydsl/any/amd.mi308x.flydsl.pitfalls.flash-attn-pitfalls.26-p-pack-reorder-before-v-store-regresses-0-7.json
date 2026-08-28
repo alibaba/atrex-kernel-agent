@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.26-p-pack-reorder-before-v-store-regresses-0-7",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#26-p-pack-reorder-before-v-store-regresses-0-7|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '26. P-pack reorder (before V store) regresses −0.7%' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 26. P-pack reorder (before V store) regresses −0.7%",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 26. P-pack reorder (before V store) regresses −0.7%"
+  },
+  "attempted": "P softmax output packing (f32 → bf16 truncation for GEMM2) is currently done AFTER the V LDS store + barrier. Moving P-pack BEFORE the V store would overlap P-pack VALU with the V store's LDS write latency. \"Classic latency hiding.\"",
+  "verdict": "api-limitation",
+  "lesson": "\"Move compute earlier to hide memory latency\" is not always correct when the compute is already hidden by a different mechanism (MFMA pipeline bubbles). Moving it creates new serialization with address-math VALU. Profile before reordering.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The P-pack VALU (~32 instructions) is already well-hidden by the MFMA pipeline in its current position (after barrier, before GEMM2). Moving it earlier puts it in competition with V store address computation and the barrier's synchronization overhead. The compiler ends up serializing the P-pack with V-store address math instead of overlapping them, because both use VALU and the machine scheduler cannot reorder across the barrier."
+  },
+  "observed": "−0.7% regression. Consistent across shapes.",
+  "root_cause": "The P-pack VALU (~32 instructions) is already well-hidden by the MFMA pipeline in its current position (after barrier, before GEMM2). Moving it earlier puts it in competition with V store address computation and the barrier's synchronization overhead. The compiler ends up serializing the P-pack with V-store address math instead of overlapping them, because both use VALU and the machine scheduler cannot reorder across the barrier."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

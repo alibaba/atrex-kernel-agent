@@ -1,0 +1,119 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.tokenspeed-qwen3.5-peak-throughput",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|tokenspeed-qwen3.5-peak-throughput|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): TokenSpeed Achieves 580 TPS on Qwen3.5-397B-A17B with Blackwell",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "TokenSpeed Achieves 580 TPS on Qwen3.5-397B-A17B with Blackwell"
+  },
+  "title": "TokenSpeed Achieves 580 TPS on Qwen3.5-397B-A17B with Blackwell",
+  "summary": "How TokenSpeed achieves peak single-user agentic throughput of 580 tokens/second for Qwen3.5-397B-A17B on Blackwell GPUs through systematic elimination of memory copies, deep kernel fusion, and fully overlapped CPU-GPU execution.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "Qwen3.5 uses **hybrid attention** (most layers are GDN linear attention, with full attention + KV cache every N layers) to significantly reduce long-sequence inference complexity."
+   },
+   {
+    "heading": "2. Runtime Design",
+    "anchor": "2-runtime-design",
+    "gist": "Layered responsibilities:"
+   },
+   {
+    "heading": "3. Performance Optimizations",
+    "anchor": "3-performance-optimizations",
+    "gist": "**Before:** `fused_mamba_state_scatter_with_mask` copies across `num_layers × state_dim` full tensors every decode step."
+   },
+   {
+    "heading": "4. Benchmarks (EvalScope, B200, NVFP4)",
+    "anchor": "4-benchmarks-evalscope-b200-nvfp4",
+    "gist": "**Baseline:** Attn TP8 + MoE TP8 / Attn TP8 + MoE EP8, bs=1 with MTP enabled: **+100% to +159%**; high-concurrency gains correlate with output length — long output (>4096 tok) at bs=32/64 still achieves +38% to +90%; short output (1024 tok…"
+   },
+   {
+    "heading": "5. Conclusion",
+    "anchor": "5-conclusion",
+    "gist": "TokenSpeed pushes Qwen3.5-397B-A17B agentic single-user throughput to 580 tps on B200 through: dual resource pool scheduling + GDN prefix caching + unified PD state transfer + index-indirect Mamba state update + multi-stream overlap + exte…"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/tokenspeed-qwen3.5-peak-throughput.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

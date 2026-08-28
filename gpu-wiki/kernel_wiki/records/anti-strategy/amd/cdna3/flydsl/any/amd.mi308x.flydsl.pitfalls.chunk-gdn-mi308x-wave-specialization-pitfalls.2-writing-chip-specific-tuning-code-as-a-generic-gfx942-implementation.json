@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.chunk-gdn-mi308x-wave-specialization-pitfalls.2-writing-chip-specific-tuning-code-as-a-generic-gfx942-implementation",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|gdn|chunk-gdn-mi308x-wave-specialization-pitfalls#2-writing-chip-specific-tuning-code-as-a-generic-gfx942-implementation|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '2. Writing Chip-Specific Tuning Code as a Generic gfx942 Implementation' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 2. Writing Chip-Specific Tuning Code as a Generic gfx942 Implementation",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Chunk-GDN Wave-Specialized Megakernel on MI308X -- 2. Writing Chip-Specific Tuning Code as a Generic gfx942 Implementation"
+  },
+  "attempted": "Because gfx942 covers multiple CDNA3 models, writing MI308X-specific tuned code as a generic gfx942 implementation, or keeping historical filenames from non-target chips.",
+  "verdict": "not-worth-it-here",
+  "lesson": "This implementation is uniformly labeled as MI308X-specific; filenames use `mi308x`, and performance conclusions are only stated as validated on MI308X/gfx942.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "gpu-wiki's archival rules require not overwriting generic architecture baselines. Hardware-specific tuning implementations should be placed under arch-specific paths like `amd/cdna3/...`, with the target chip clearly indicated in the filename, docstring, and README."
+  },
+  "observed": "Readers will misinterpret MI308X-specific conclusions (80 CUs, ~64KB LDS, 397B-TP2 profile) as generic gfx942 architecture conclusions, and won't know whether the file can safely cover a generic CDNA baseline.",
+  "root_cause": "gpu-wiki's archival rules require not overwriting generic architecture baselines. Hardware-specific tuning implementations should be placed under arch-specific paths like `amd/cdna3/...`, with the target chip clearly indicated in the filename, docstring, and README."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/chunk-gdn-mi308x-wave-specialization-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

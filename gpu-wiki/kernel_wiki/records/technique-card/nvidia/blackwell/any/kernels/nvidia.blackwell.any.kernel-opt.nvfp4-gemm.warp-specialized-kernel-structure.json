@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.nvfp4-gemm.warp-specialized-kernel-structure",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|nvfp4-gemm#warp-specialized-kernel-structure|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "warp-specialized-kernel-structure"
+  ],
+  "triggers": [
+   "the 'Warp-Specialized Kernel Structure' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Warp-Specialized Kernel Structure",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "NVFP4 GEMM -- 4-bit Floating Point Matrix Multiply -- Warp-Specialized Kernel Structure"
+  },
+  "technique": "Warp-Specialized Kernel Structure",
+  "what": "Warp specialization: TMA producer + MMA consumer + epilogue",
+  "when": "Warp specialization: TMA producer + MMA consumer + epilogue",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Warp specialization: TMA producer + MMA consumer + epilogue\n// Shared memory holds pipelined A/B tiles + scale factors\n\nconstexpr int NUM_STAGES = 4;  // Pipeline depth\n\n// Shared memory layout\nstruct SharedStorage {\n    // Double-buffered across NUM_STAGES\n    nvfp4_t A_smem[NUM_STAGES][BLOCK_M * BLOCK_K / 2];  // Packed FP4: 2 per byte\n    nvfp4_t B_smem[NUM_STAGES][BLOCK_N * BLOCK_K / 2];\n    fp8_t   sfa_smem[NUM_STAGES][BLOCK_M * (BLOCK_K / 16)];  // 1 scale per 16 elements\n    fp8_t   sfb_smem[NUM_STAGES][BLOCK_N * (BLOCK_K / 16)];\n    uint64_t mbarrier[NUM_STAGES];\n};\n\n__global__ void nvfp4_gemm_kernel(\n    const nvfp4_t* A, const nvfp4_t* B,\n    const fp8_t* sfa, const fp8_t* sfb,\n    float sf_a_global, float sf_b_global,\n    float* C, int M, int N, int K\n) {\n    extern __shared__ SharedStorage smem[];\n    int warp_id = threadIdx.x / 32;\n    int lane_id = threadIdx.x % 32;\n\n    if (warp_id == 0 && lane_id == 0) {\n        // TMA producer warp: async bulk loads\n        for (int k = 0; k < K; k += BLOCK_K) {\n            int stage = (k / BLOCK_K) % NUM_STAGES;\n\n            // TMA descriptor-based bulk load (128-byte aligned)\n            asm volatile(\n                \"cp.async.bulk.tensor.2d.shared::cluster.global.tile\"\n                \".mbarrier::complete_tx::bytes\"\n                \" [%0], [%1, {%2, %3}], [%4];\"\n                :: \"r\"((uint32_t)&smem->A_smem[stage]),\n                   \"l\"(tma_desc_A),\n                   \"r\"(tile_m), \"r\"(k),\n                   \"r\"((uint32_t)&smem->mbarrier[stage])\n            );\n            // Similarly for B, sfa, sfb\n        }\n    } else if (warp_id == 1 && lane_id == 0) {\n        // MMA consumer warp: tcgen05.mma\n        uint32_t tmem_addr;\n        asm volatile(\n            \"tcgen05.alloc.cta_group::1.sync.aligned %0, %1;\"\n            : \"=r\"(tmem_addr) : \"r\"(256)  // 256 TMEM columns\n        );\n\n        for (int k = 0; k < K; k += BLOCK_K) {\n            int stage = (k / BLOCK_K) % NUM_STAGES;\n            // Wait for TMA to complete this stage\n            mbarrier_wait(&smem->mbarrier[stage]);\n\n            // tcgen05.mma with native block scaling\n            // Reads A/B from SMEM, accumulates into TMEM\n            asm volatile(\n                \"tcgen05.mma.cta_group::1.kind::f8f6f4\"\n                \" [%0], %1, %2, %3, %4;\"\n                :: \"r\"(tmem_addr),\n                   \"l\"((uint64_t)&smem->A_smem[stage]),\n                   \"l\"((uint64_t)&smem->B_smem[stage]),\n                   \"r\"(packed_scales),\n                   \"n\"(1)  // scale_D enabled\n            );\n        }\n\n        // Signal epilogue warps\n    } else {\n        // Epilogue warps: read from TMEM, apply global scales, store to C\n        // tmem -> registers -> global\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/nvfp4-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

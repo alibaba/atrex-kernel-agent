@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.wgmma-to-tcgen05.warp-specialization-changes",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|migration|wgmma-to-tcgen05#warp-specialization-changes|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "migration",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "warp-specialization-changes"
+  ],
+  "triggers": [
+   "the 'Warp Specialization Changes' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Warp Specialization Changes",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Migrating from wgmma to tcgen05 -- Warp Specialization Changes"
+  },
+  "technique": "Warp Specialization Changes",
+  "what": "With tcgen05, far fewer warps are dedicated to MMA because only one thread is needed to issue the instruction. The freed warps can be repurposed for: - More aggressive data prefetching - Overlapped epilogue (read TMEM while next tile's MMA is computing) - Softmax or other reductions (FlashAttention-style)",
+  "when": "With tcgen05, far fewer warps are dedicated to MMA because only one thread is needed to issue the instruction.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nWarp 0-3:  Warpgroup 0 -- MMA producer (all 128 threads issue wgmma)\nWarp 4-7:  Warpgroup 1 -- MMA producer (backup/double-buffer)\nWarp 8-11: Data movement (TMA loads, SMEM management)\nWarp 12:   Tile scheduler\n\nTotal: 13+ warps, 416+ threads\n```\n\n```\nWarp 0:    MMA producer (single thread issues tcgen05)\nWarp 1-2:  TMA data movement (load A, load B, manage barriers)\nWarp 3:    Epilogue (read TMEM, apply post-ops, store to GMEM)\nWarp 4:    Tile scheduler / CLC management\n\nTotal: 5 warps, 160 threads (can be fewer)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/migration/wgmma-to-tcgen05.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

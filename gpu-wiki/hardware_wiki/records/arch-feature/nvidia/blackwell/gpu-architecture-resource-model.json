@@ -1,0 +1,42 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.gpu-architecture-resource-model",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "gpu-architecture-resource-model",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "Use this page before changing tile size, stage count, block size, or occupancy assumptions. The key is to separate the physical resource that bottlenecks the kernel from the programming interface used to reach it.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices.",
+  "constraints": [
+   "If the kernel is GEMM-like and targets SM100, first ask whether a tcgen05/TMEM path exists in CUTLASS, CuTe DSL, Triton 3.6+, or a tracked PR.",
+   "If the kernel is memory-bound, architecture differences mostly change the bandwidth/L2/occupancy tradeoff; coalescing and vectorized loads remain first checks.",
+   "If the kernel is tail-limited, SM100 CLC may be the right primitive; on SM90/SM120 use persistent scheduling or tile splitting.",
+   "If porting from Hopper to Blackwell, do not just enlarge tiles. Re-check accumulator location, shared-memory usage, TMA overlap, and resident blocks."
+  ],
+  "related_instructions": [
+   "tcgen05"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "GPU Architecture Resource Model",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/gpu-architecture-resource-model.md"
+   }
+  ]
+ }
+}

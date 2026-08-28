@@ -1,0 +1,149 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.ref-docs.qwen3.5-gdn-prefill-kernel-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gdn|qwen3.5-gdn-prefill-kernel-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Qwen3.5 GDN Prefill Kernel Optimization on SM100",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Qwen3.5 GDN Prefill Kernel Optimization on SM100"
+  },
+  "title": "Qwen3.5 GDN Prefill Kernel Optimization on SM100",
+  "summary": "Practical optimization of Qwen3.5 GDN prefill kernels using Gluon on Blackwell, covering TMA pipelining, async scatter, bitmask causal masking, and zero-copy transpose.",
+  "sections": [
+   {
+    "heading": "1. Algorithm Overview",
+    "anchor": "1-algorithm-overview",
+    "gist": "Qwen3.5 GDN prefill uses a chunk-wise algorithm: sequence length T is divided into ⌈T/C⌉ chunks (C=64)."
+   },
+   {
+    "heading": "2. Gluon vs Triton",
+    "anchor": "2-gluon-vs-triton",
+    "gist": "table columns: Feature, Triton, Gluon"
+   },
+   {
+    "heading": "3. Blackwell Feature Overview",
+    "anchor": "3-blackwell-feature-overview",
+    "gist": "- **TMEM**: 128 rows × 512 cols × 32 bit = **256 KB / CTA**, serves directly as tcgen05_mma output accumulator, eliminating the Hopper WGMMA register accumulator bottleneck - **tcgen05_mma**: Inputs from SMEM/TMEM, output to TMEM, throughp…"
+   },
+   {
+    "heading": "4. chunk_delta_h: Recurrence + Pipelining",
+    "anchor": "4-chunk-delta-h-recurrence-pipelining",
+    "gist": "Each chunk update has 4 steps: (1) store h_t → (2) v_new = v - w @ h_t → (3) apply gate (v_new *= exp(g_last-g), h *= exp(g_last)) → (4) h_{t+1} = h_t + k^T @ v_new."
+   },
+   {
+    "heading": "5. Varlen async_scatter (Key Optimization)",
+    "anchor": "5-varlen-async-scatter-key-optimization",
+    "gist": "`tma.async_copy_shared_to_global` writes in fixed blocks, which can overwrite the next sequence."
+   },
+   {
+    "heading": "6. chunk_o: Bitmask Causal Mask",
+    "anchor": "6-chunk-o-bitmask-causal-mask",
+    "gist": "Original approach: BT×BT element-wise comparison + where, producing many setp instructions."
+   },
+   {
+    "heading": "7. Transposed State Zero-Copy",
+    "anchor": "7-transposed-state-zero-copy",
+    "gist": "GDN hidden state `[N,H,K,V]` requires `[N,H,V,K]` (K-dimension contiguous) for the decode CuTeDSL kernel."
+   },
+   {
+    "heading": "8. cumsum Vectorization",
+    "anchor": "8-cumsum-vectorization",
+    "gist": "The original `chunk_local_cumsum_scalar_kernel` processes only 1 head per chunk per block, with uncoalesced memory access."
+   },
+   {
+    "heading": "9. Notes",
+    "anchor": "9-notes",
+    "gist": "- chunk_size=64 aligns well with Hopper MMA performance; Blackwell theoretically allows tuning but this PR maintains consistency - Only supports sm100"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nt_offsets = gl.arange(0, BT)\nrow_valid = t_offsets < t_limit_right\nx_offsets = gl.where(row_valid, bos + i_t*BT + t_offsets, 0x7FFFFFFF)\ntma.async_scatter(v_new_desc, x_offsets, i_h*V + i_v*BV, v_new_smem)\n```\n\n```python\n@gluon.jit\ndef _mask_scalar(A, col_limit_right, s, i):\n    col_lim_right_cur = max(col_limit_right - s, 0)\n    mask = -1 << col_lim_right_cur\n    return gl.where((mask & (1 << i)) == 0, A, 0.0)\n\n@gluon.jit\ndef _apply_causal_mask(A, col_limit_right):\n    offs_n = gl.arange(0, A.shape[1])[None, :]\n    s = offs_n & ~0xF   # group start\n    i = offs_n & 0xF    # intra-group offset\n    return gl.map_elementwise(_mask_scalar, A, col_limit_right, s, i)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/qwen3.5-gdn-prefill-kernel-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

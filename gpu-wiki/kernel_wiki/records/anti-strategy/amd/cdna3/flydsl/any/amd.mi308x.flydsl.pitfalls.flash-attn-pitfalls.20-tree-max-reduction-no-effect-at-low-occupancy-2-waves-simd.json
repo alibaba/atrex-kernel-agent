@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.20-tree-max-reduction-no-effect-at-low-occupancy-2-waves-simd",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#20-tree-max-reduction-no-effect-at-low-occupancy-2-waves-simd|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '20. Tree max reduction no effect at low occupancy (2 waves/SIMD)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 20. Tree max reduction no effect at low occupancy (2 waves/SIMD)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 20. Tree max reduction no effect at low occupancy (2 waves/SIMD)"
+  },
+  "attempted": "The softmax row-max is computed via a sequential LDS-based reduction across lanes. Replacing it with a tree-based DPP reduction (butterfly pattern: `dpp_reduce(XOR-1, XOR-2, XOR-4, …)`) should reduce the reduction depth from O(N) to O(log₂N). \"Tree reduce is algorithmically better.\"",
+  "verdict": "not-worth-it-here",
+  "lesson": "Micro-optimizations that reduce instruction count but don't shorten the critical path are invisible at low occupancy. The MFMA pipeline is the pacemaker at 2 waves/SIMD; ancillary work (softmax reductions, address computations) fills bubbles. Only optimize operations that are ON the critical path.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "At 2 waves/SIMD, the MFMA pipeline has enough bubbles to hide the sequential reduction latency. The reduction instructions execute during MFMA stall cycles that would otherwise be idle. Tree reduction eliminates work that was already \"free\" — the critical path is the MFMA chain, not the reduction."
+  },
+  "observed": "No measurable improvement (within noise, <0.5%).",
+  "root_cause": "At 2 waves/SIMD, the MFMA pipeline has enough bubbles to hide the sequential reduction latency. The reduction instructions execute during MFMA stall cycles that would otherwise be idle. Tree reduction eliminates work that was already \"free\" — the critical path is the MFMA chain, not the reduction."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

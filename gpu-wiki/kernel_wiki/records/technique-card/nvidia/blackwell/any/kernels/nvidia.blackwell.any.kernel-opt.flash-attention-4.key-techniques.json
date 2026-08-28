@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.flash-attention-4.key-techniques",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|flash-attention|flash-attention-4#key-techniques|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention",
+   "key-techniques"
+  ],
+  "triggers": [
+   "the 'Key Techniques' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Key Techniques",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FlashAttention-4 -- Key Techniques"
+  },
+  "technique": "Key Techniques",
+  "what": "Two 128-token query tiles are assigned to each CTA. While one tile's matmul runs on the tensor cores, the other tile's softmax rescaling runs on dedicated warpgroups accessing TMEM. This hides the softmax latency behind MMA compute.",
+  "when": "Two 128-token query tiles are assigned to each CTA.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# CuTe DSL: Ping-pong tile scheduling (simplified)\n# Two query tiles per CTA, alternating MMA and softmax phases\n\n@cute.kernel\ndef flash_attention_4_fwd(Q, K, V, O, L):\n    # Each CTA processes 2 query tiles of 128 tokens\n    TILE_Q = 128\n    NUM_TILES = 2\n\n    # Phase A: tile_0 does MMA(Q0, K), tile_1 does softmax rescale\n    # Phase B: tile_1 does MMA(Q1, K), tile_0 does softmax rescale\n\n    for kv_block in range(num_kv_blocks):\n        # Ping: MMA on tile 0, softmax on tile 1\n        with warpgroup(mma_wg):\n            S0 = cute.mma(Q_tile[0], K_block)  # tcgen05.mma -> TMEM\n        with warpgroup(softmax_wg):\n            O_tile[1], L_tile[1] = rescale_and_accumulate(\n                O_tile[1], L_tile[1], S1, V_prev\n            )\n\n        # Pong: MMA on tile 1, softmax on tile 0\n        with warpgroup(mma_wg):\n            S1 = cute.mma(Q_tile[1], K_block)\n        with warpgroup(softmax_wg):\n            O_tile[0], L_tile[0] = rescale_and_accumulate(\n                O_tile[0], L_tile[0], S0, V_block\n            )\n```\n\n```python\n# Software exp2 via Cody-Waite range reduction + Horner polynomial\n# Distributes across FMA units instead of using scarce SFU hardware\n\ndef software_exp2(x):\n    \"\"\"\n    Compute 2^x using FMA units instead of SFU ex2.\n    Cody-Waite range reduction splits x into integer + fraction.\n    Horner polynomial approximates 2^frac.\n    \"\"\"\n    # Range reduction: x = n + f, where n is integer, f in [-0.5, 0.5]\n    n = round(x)\n    f = x - n  # Cody-Waite: use extended precision subtraction\n\n    # Horner polynomial for 2^f on [-0.5, 0.5]\n    # Coefficients chosen for bf16 precision target\n    p = f * (C5 + f * (C4 + f * (C3 + f * (C2 + f * C1))))\n    p = 1.0 + p\n\n    # Reconstruct: 2^x = 2^n * 2^f\n    return ldexp(p, n)  # Integer exponent via bit manipulation\n```\n\n```python\n# Only rescale when max changes substantially\ndef conditional_rescale(O_acc, lse_old, lse_new, threshold=2.0):\n    diff = lse_new - lse_old\n    if abs(diff) > threshold:\n        # Full rescale: O_acc *= exp(lse_old - lse_new)\n        scale = software_exp2((lse_old - lse_new) * LOG2E)\n        O_acc = O_acc * scale\n    # Otherwise: skip rescale, accumulate normally\n    return O_acc\n```\n\n```python\n# 2-CTA backward: paired CTAs share TMEM via 2-SM cooperative mode\n@cute.kernel\ndef flash_attention_4_bwd(Q, K, V, O, dO, dQ, dK, dV):\n    # Two CTAs cooperate: CTA_0 and CTA_1 in same cluster\n    # tcgen05.mma shape: m256 x n256 x k16 (2-SM cooperative)\n\n    cta_id = cute.cluster_rank()  # 0 or 1\n\n    for q_block in range(num_q_blocks):\n        # Both CTAs load shared KV block via TMA\n        K_smem = tma_load(K, kv_offset)\n        V_smem = tma_load(V, kv_offset)\n\n        # CTA_0: compute dK contribution\n        # CTA_1: compute dV contribution\n        if cta_id == 0:\n            # dK += dS^T @ Q  (accumulated in TMEM)\n            dS = compute_dS(O, dO, S)\n            cute.mma(dS.T, Q_tile, accumulator=dK_tmem)\n        else:\n            # dV += S^T @ dO  (accumulated in TMEM)\n            cute.mma(S.T, dO_tile, accumulator=dV_tmem)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/flash-attention-4.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization-guide.version-information",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|optimization-guide#version-information|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "version-information"
+  ],
+  "triggers": [
+   "the 'Version Information' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Version Information",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Gluon Kernel Performance Optimization Guide -- Version Information"
+  },
+  "technique": "Version Information",
+  "what": "**Guide Version**: v2.3 **Last Updated**: 2026-03-18 **Design Principle**: Closed-loop optimization based on compute utilization + instruction-level profile-driven **v1.1 Update**: Added Step 3.6 warp_pipeline_stage full-stage packing (key GEMM optimization) + Appendix C practical pitfalls experience (including 6 lessons learned) **v1.2 Update**: §3.6 added buffer_load placement between pipeline stages + A/B load splitting technique (182→193 TFLOPS, +6.3%) + Appendix C pitfall 7 **v1.3 Update**: §3.6 added ds_write inserted between MFMA instructions to achieve compute↔store overlap technique (193→204 TFLOPS, +5.8%, surpasses Triton) + Appendix C pitfall 8 + final best code template **v1.4 Update**: ⚠️ buffer_load other=0.0 causes WarpPipeliner degradation (134→204.7, +53%) + sched_group_barrier vs warp_pipeline_stage comparison + epilogue simplification + Appendix C pitfalls 9/10/11 **v1.5 Update**: Added §3.7 layout+num_warps joint tuning (key for large Tile GEMM) — 8-warp unlocks VGPR-limit tile pipeline optimization + layout must be jointly adjusted with strategy + systematic ablation methodology + Appendix C pitfalls 12-15 (including 84 combinations measured data for 256×256×64 fp16 GEMM) **v1.6 Update**: Added Appendix D medium Tile (128×128×64) optimization pitfalls experience 16-23 — MFMA instr_shape selection, depth=2 LDS overload trap, MI308X XCD remapping (4 XCD), tl.assume compiler hint, scalar vs tensor offset stepping, blocked_b K-contiguous vs N-contiguous layout, SUBK=32 vs SUBK=16 applicable scenarios, reference implementation comparison methodology. Synchronously updated §4.4 PID reordering as a complete three-step combination solution **v1.7 Update**: Added §3.8 Attention Specialized Optimization + Appendix E Flash Attention pitfalls experience 24-31 — full/masked block separation (non-causal flips from negative to positive), V goes through convert_layout not smem, K instant smem vs persistent smem, P→smem actually slower (ds_bpermute vs ds_read_u16 trade-off), shared layout order must match dot_op read pattern, `1/d_i` reciprocal multiplication triggers Newton-Raphson, pointer arithmetic replacing offset accumulation. Includes complete measured data for multiple configurations (Gluon comprehensively surpasses Triton)**v1.8 Update**: Added §3.9 Small Matrix/Low CU Utilization Special Optimization + Appendix F Small Matrix GEMM Pitfall Experience 32-37 — CU utilization is the primary bottleneck for small matrices (priority above all ISA optimizations), BLOCK_SIZE_K doubling is the highest ROI optimization (+17%, surpassing Triton by 10-17%), warp_pipeline_stage/num_warps=8/value= is detrimental in low loop count scenarios (-13~-14%), \"always do\" optimizations (removing other=0.0 + tl.assume) are effective for all sizes. Includes complete measured data for 8 variants (128×256 tile, fp16, MI308X). **v1.9 Update**: §3.9 Major Update — Tile reduction elevated to highest priority (⭐⭐), priority elevated from §3.9.2 to §3.9.1. Added Appendix F pitfalls 41-43: tile reduction from 128×256→32×32 measured improvement of **2.5-2.85×** (far exceeding BLOCK_K doubling's 1.17×), Gluon faster than Triton by **2.6-2.85×** on all test cases. Includes complete grid/performance comparison data for 5 tile configurations + TTGIR layout extraction comparison table. Key conclusion: tile reduction ≫ BLOCK_K ≫ ISA optimizations ≫ pipeline/warp tuning. **v1.9 Update**: Added §3.8.7 SE-level Zigzag Remap (Causal Attention Load Balancing) + Appendix G pitfalls 38-40 — Causal workload balancing across MI308X 16 SEs, start_m × batch-head joint zigzag arrangement (significant causal improvement), must include batch-head dimension (start_m-only remap is ineffective when M-blocks ≤ NUM_SES), non-causal must maintain bh-first arrangement to avoid L2 cache hit rate degradation. Includes complete measured data for multiple seq_len × remap strategies. **v2.0 Update**: Added Appendix H General GEMM (B=KN Layout) Multi-Strategy Parallel Tuning Pitfalls 44-52 — Tile size is the largest lever (128×128 vs 128×256 difference of 37%, far exceeding pipeline tuning's 3%), BLOCK_K=16 restricts warp_pipeline (requires ≥32 for 4 subslice), TTGIR's shared_b order is unsuitable for scenarios without convert_layout transpose pattern (change order=[1,0] for B=KN, +24%), sched_group_barrier outperforms warp_pipeline_stage in small tile scenarios (+2.5%), 8-warp is universally effective for all large tiles (not just VGPR limits), optimization priority order: Tile>BLOCK_K>num_warps>pipeline>schedule>layout. Includes complete measured comparison data for 7 strategies (fp16 4096³ from Triton 130.98→Gluon 175.90 TFLOPS, +34.3%). **v2.1 Update**: Added Appendix I Pitfall 53 — blocked_b order=[0,1] with B=KN layout causes 3x performance loss (60.9→181.3 TFLOPS). This is the most insidious performance trap: no errors, no accuracy impact, ASM main loop structure appears correct, but buffer_load degrades to 16-bit element-by-element loading (buffer_load_ushort vs buffer_load_dwordx4). order is \"step zero\", priority updated to: **order correctness > Tile size > BLOCK_K > num_warps > pipeline > schedule > layout**. Also records removing in-loop masks to reduce v_cndmask interference. Includes complete comparison data for 6 matrix sizes (bf16, MI308X, 1024³~8192³, small sizes surpass Triton by 100.5%, large sizes reach 88-95%). **v2.2 Update**: Added Appendix J 256×256×64 Large Tile GEMM Optimization Pitfalls 54-59 — The decisive impact of `instr_shape=[16,16,16]` vs `[32,32,8]` on large tiles (+22.6%, 155→190 TFLOPS), `in_thread_transpose` completely infeasible at BLOCK_K≤32 (-68%, ds_bpermute overhead far exceeds benefit), `in_thread_transpose` also inferior to not doing it even on 256×256 tile (+22.6%), WPS subslice count must be minimized (4 sub >> 8 sub), multi-kernel mixed benchmarks are severely distorted (requires isolated process testing), tile selection strategy (≤1024 use 128×128, ≥2048 use 256×256). Includes complete measured data for fp16 GEMM 5 sizes × 2 tiles (MI308X, Gluon 256×256 achieves 240 TFLOPS at 8192³ = 103% peak). Optimization priority updated to: **order > instr_shape > Tile size > BLOCK_K > num_warps > pipeline > in_thread_transpose (usually skip) > schedule > layout**. **v2.3 Update**: Added acceptance checklist guidance that prevents the \"convert only, don't optimize\" anti-pattern. Clearly defines completion criteria (≥85% Triton or checklist exhausted), mandatory artifacts (Roofline analysis, completed checklist status table, performance comparison table), acceptance protocol. §1.6 Stop Conditions adds 4 explicit \"unsatisfactory stop condition\" counterexamples. Step 5 output requirements changed from advisory to mandatory (missing items = incomplete).",
+  "when": "**Guide Version**: v2.3 **Last Updated**: 2026-03-18 **Design Principle**: Closed-loop optimization based on compute utilization + instruction-level profile-driven **v1.1 Update**: Added Step 3.6 warp_pipeline_stage full-stage packing (key…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

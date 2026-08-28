@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.tile-rasterization-l2-locality",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|tile-rasterization-l2-locality|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Tile Rasterization and L2 Cache Locality",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Tile Rasterization and L2 Cache Locality"
+  },
+  "title": "Tile Rasterization and L2 Cache Locality",
+  "summary": "How the traversal order (rasterization strategy) of GEMM tiles affects L2 cache hit rate: row-major, column-major, swizzle patterns, persistent kernels, and tile scheduling.",
+  "sections": [
+   {
+    "heading": "1. L2 Cache Locality Issues",
+    "anchor": "1-l2-cache-locality-issues",
+    "gist": "In matrix multiplication C = A * B, each output tile C[i][j] needs to read: - The i-th row stripe of matrix A (tile_M x K) - The j-th column stripe of matrix B (K x tile_N)"
+   },
+   {
+    "heading": "2. Rasterization Strategies",
+    "anchor": "2-rasterization-strategies",
+    "gist": "CTAs traverse the output tile grid by row:"
+   },
+   {
+    "heading": "3. Swizzle Size Selection",
+    "anchor": "3-swizzle-size-selection",
+    "gist": "`swizzle_size` is the number of tiles in a swizzle block along the minor dimension."
+   },
+   {
+    "heading": "4. Persistent Kernel and Tile Scheduling",
+    "anchor": "4-persistent-kernel-and-tile-scheduling",
+    "gist": "In a standard GEMM launch, the kernel launches M_tiles * N_tiles CTAs, and the GPU hardware scheduler decides which CTA runs on which SM."
+   },
+   {
+    "heading": "5. Performance Impact and Metrics",
+    "anchor": "5-performance-impact-and-metrics",
+    "gist": "table columns: Metric, Meaning, Expected Value"
+   },
+   {
+    "heading": "6. Beyond GEMM",
+    "anchor": "6-beyond-gemm",
+    "gist": "Convolution after im2col is equivalent to GEMM Facts apply directly."
+   },
+   {
+    "heading": "7. Practical Decision Guide",
+    "anchor": "7-practical-decision-guide",
+    "gist": "1."
+   },
+   {
+    "heading": "Further Reading",
+    "anchor": "further-reading",
+    "gist": "- L2 Cache Persistence — L2 set-aside strategy, complementary to swizzle - Occupancy Tuning — CTA count selection for persistent kernels - [Thread Block …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n        B (K x N)\n        j   j+1  j+2  j+3\n       +-+--+-+--+-+--+-+\n | | | | | | | | K row\n       | |  | |  | |  | |\n       +-+--+-+--+-+--+-+\n\nA (M x K)\n     +--------+        C (M x N)\n i   |========| ---->  [C00][C01][C02][C03]\n i+1 |========| ---->  [C10][C11][C12][C13]\n i+2 |========| ---->  [C20][C21][C22][C23]\n i+3 |========| ---->  [C30][C31][C32][C33]\n     +--------+\n\nCompute C[0][0] needs: Row 0 of A + Column 0 of B\nCompute C[0][1] needs: Row 0 of A + Column 1 of B\n                    ↑ Row 0 of A reused!\n```\n\n```\nData volume comparison (M=N=K=8192, tile=128):\n  No reuse: Each tile reads A_strip + B_strip = 2 * 128 * 8192 * 2B = 4MB\n           64x64 = 4096 tiles, total read = 16 TB  ← Disaster\n  Perfect reuse: A read once + B read once = 2 * 8192 * 8192 * 2B = 256 MB\n```\n\n```\nEnglish description\n  (0,0) → (0,1) → (0,2) → (0,3) → (0,4) → (0,5) →\n  (1,0) → (1,1) → (1,2) → (1,3) → (1,4) → (1,5) →\n  (2,0) → (2,1) → (2,2) → ...\n\n N (column) ->\nM  +----+----+----+----+----+----+\n(  | 0  | 1  | 2  | 3  | 4  | 5  |\nrow +----+----+----+----+----+----+\n | 6 | 7 | 8 | 9 | 10 | 11 |\nEnglish description\n)  | 12 | 13 | 14 | 15 | 16 | 17 |\n↓  +----+----+----+----+----+----+\n```\n\n```\n N (column) ->\nM  +----+----+----+----+----+----+\n(  | 0  | 3  | 6  | 9  | 12 | 15 |\nrow +----+----+----+----+----+----+\n | 1 | 4 | 7 | 10 | 13 | 16 |\nEnglish description\n)  | 2  | 5  | 8  | 11 | 14 | 17 |\n↓  +----+----+----+----+----+----+\n```\n\n```\nSwizzle Size = 4 example (6x6 tile grid):\n\nWithin each 4x4 swizzle block:\n  Row 0: 0, 1, 2, 3     (normal order)\n  Row 1: 5, 4, 7, 6     (XOR flipped)\n  Row 2: 8, 9, 10, 11   (normal order)\n  Row 3: 13, 12, 15, 14 (XOR flipped)\n```\n\n```python\ndef swizzle_tile_index(linear_idx, num_tiles_major, log_swizzle_size):\n    \"\"\"Map linear tile index to (minor, major) coordinates\"\"\"\n    swizzle_size = 1 << log_swizzle_size\n\n    # Extract offset within swizzle block\n    offset = linear_idx & (swizzle_size - 1)         # Low log_swizzle_size bits\n    extra = linear_idx >> log_swizzle_size            # High bits\n\n    # Extract major and minor block indices from high bits\n    minor_div_swizzle = extra // num_tiles_major\n    major = extra % num_tiles_major\n\n    # Reconstruct minor coordinate: block index * swizzle_size + offset\n    minor = minor_div_swizzle * swizzle_size + offset\n\n    return minor, major\n```\n\n```python\ndef choose_raster_order(tiles_m, tiles_n):\n    \"\"\"Choose rasterization direction\"\"\"\n        return \"AlongM\"    # Column-major: N dimension large, keep B columns in L2\n        return \"AlongN\"    # Row-major: M dimension large, keep A rows in L2\n```\n\n```\nswizzle_size = 1:  Degrades to pure linear traversal (no swizzle)\nswizzle_size = 2:  2 adjacent tiles as a group interleaved\nswizzle_size = 4:  4 adjacent tiles as a group\nswizzle_size = 8:  8 adjacent tiles as a group (maximum common value)\n```\n\n```\nswizzle_size * tile_K * element_size  <=  L2_effective_capacity\n\nFor example:\n  tile_K = 128 elements\n  element_size = 2 bytes (FP16)\n  L2 per SM partition ≈ 256 KB (H100 has 50 MB L2, ~72 partitions)\n\n  swizzle_size <= 256 KB / (128 * 2) = 1024  ← Theoretical upper bound\n\nActually limited by concurrently active CTA count and other L2 users:\n  Actual effective L2 ≈ 64 KB per CTA\n  swizzle_size <= 64 KB / (128 * 2) = 256   ← Still large\n\nSo the bottleneck is usually not L2 capacity, but tile grid size.\n```\n\n```python\ndef get_log_swizzle_size(tiles_m, tiles_n, max_swizzle_size):\n    \"\"\"Select swizzle size based on tile grid dimensions\"\"\"\n    min_dim = min(tiles_m, tiles_n)\n\n    if max_swizzle_size >= 8 and min_dim >= 6:\n        return 3    # swizzle_size = 8\n    elif max_swizzle_size >= 4 and min_dim >= 3:\n        return 2    # swizzle_size = 4\n    elif max_swizzle_size >= 2 and min_dim >= 2:\n        return 1    # swizzle_size = 2\n    else:\n        return 0    # swizzle_size = 1 (no swizzle)\n```\n\n```\nActual swizzle granularity = swizzle_size * cluster_shape_minor\n\nFor example: cluster_shape = (2, 1), swizzle_size = 4\n  → Actual granularity = 4 * 2 = 8 CTAs as a swizzle group\n```\n\n```\nPersistent Kernel:\ngridDim = (num_SMs, 1, 1)   # e.g., 114 CTAs (H100 has 114 SMs)\n\n  Each CTA:\n      tile_idx = atomicAdd(&global_counter, 1)   # Atomic increment to get next tile\n      (m, n) = swizzle(tile_idx)                 # Apply swizzle mapping\n```\n\n```\n                    +-------------------+\n                    | Global linear counter     |\n                    | atomic_counter = 0 |\n                    +--------+----------+\n                             |\n              +--------------+--------------+\n              |              |              |\n         CTA 0          CTA 1          CTA 2        ...\n              |              |              |\n     claim tile 0    claim tile 1    claim tile 2\n              |              |              |\n      swizzle(0)     swizzle(1)     swizzle(2)\n     → (m=0,n=0)    → (m=0,n=1)    → (m=0,n=2)\n              |              |              |\n     compute(0,0)   compute(0,1)   compute(0,2)\n              |              |              |\n     claim tile 3    claim tile 4    claim tile 5\n      swizzle(3)     swizzle(4)     swizzle(5)\n     → (m=0,n=3)    → (m=1,n=0)    → (m=1,n=1)\n              |              |              |\n            ...            ...            ...\n```\n\n```python\n\"\"\"Get next tile to process\"\"\"\n    # Atomic increment global counter\n\n    # Check if exceeding total tile count\n        return None  # No more work\n\n    # Handle batch dimension\n\n    # Apply swizzle mapping to (m, n)\n```\n\n```\nStandard partition: Each CTA handles complete K dimension\n  CTA 0: C[0,0] = sum_k(A[0,:] * B[:,0])\n\nStream-K partition: Multiple CTAs share same tile's K dimension\n  CTA 0: partial_0 = sum_k0..k1(A[0,:] * B[:,0])\n  CTA 1: partial_1 = sum_k1..k2(A[0,:] * B[:,0])\n  C[0,0] = partial_0 + partial_1  (requires synchronous reduction)\n```\n\n```\nTile grid: 64 x 64 = 4096 tiles\n\nEach tile needs to read:\n  A strip: 128 * 4096 * 2 = 1 MB\n  B strip: 4096 * 128 * 2 = 1 MB\n\nNo reuse (worst case):\n  Total HBM read = 4096 * 2 MB = 8 GB\n\nPerfect row-major reuse:\n  A: Read each row once, 64 rows * 1 MB = 64 MB\n  B: Process each new row, B fully reloaded: 64 * 64 MB = 4 GB\n  Total HBM read = 64 MB + 4 GB ≈ 4 GB\n\nSwizzle (size=8) reuse:\n  A: Every 8 rows as a group, A reused 8 times within group: 64 MB\n  B: Every 8 columns as a group, B reused 8 times within group: 64 MB * (64/8) = 512 MB\n  Total HBM read ≈ 64 MB + 512 MB = 576 MB\n\nTheoretical minimum (A+B each read once):\n  A: 8192 * 4096 * 2 = 64 MB\n  B: 4096 * 8192 * 2 = 64 MB\n  Total = 128 MB\n```\n\n```\nTraversal order selection:\n  Option A: batch priority → Traverse all tiles within same batch → Good reuse when batch is small\n  Option B: tile priority → Same tile across all batches → Good for weight sharing (inference scenario)\n```\n\n```\nGPU 0 processes C[:, 0:N/2]    # Only needs B[:, 0:N/2]\nGPU 1 processes C[:, N/2:N]    # Only needs B[:, N/2:N]\n```\n\n```\nIf L2 hit rate is low:\n  1. Check if persistent kernel is used (non-persistent cannot control swizzle)\n  2. Check if swizzle size fits current problem scale\n  3. Use NCU to compare L2 hit rate for raster_order = AlongM vs AlongN\n  4. Check if other kernels run concurrently, competing for L2\n\nIf swizzle brings no improvement:\n  1. Problem may already fit L2 (check A+B total size vs L2 capacity)\n  2. Kernel may be compute-bound rather than memory-bound\n  3. Tile size may be too large, each tile's strip already exceeds L2 capacity\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/tile-rasterization-l2-locality.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

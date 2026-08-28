@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.amd-kernel-optimization",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|amd-kernel-optimization|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community AMD GPU Kernel Optimization",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community AMD GPU Kernel Optimization"
+  },
+  "title": "Community AMD GPU Kernel Optimization",
+  "summary": "A comprehensive collection of practical knowledge from the Zhihu community on AMD GPU kernel optimization, supplementing the existing documentation in AMD General Optimization Knowledge with community perspectives and hands-on experience.",
+  "sections": [
+   {
+    "heading": "1. AMD GPU Kernel Disassembly Analysis Methods",
+    "anchor": "1-amd-gpu-kernel-disassembly-analysis-methods",
+    "gist": "Understanding ISA through disassembly is a key approachhed to AMD GPU optimization."
+   },
+   {
+    "heading": "2. Triton Optimization Practices on AMD GPUs",
+    "anchor": "2-triton-optimization-practices-on-amd-gpus",
+    "gist": "The Triton compiler consists of three modules:"
+   },
+   {
+    "heading": "3. AMD MoE Kernel Runtime Selection Strategy",
+    "anchor": "3-amd-moe-kernel-runtime-selection-strategy",
+    "gist": "The AITER library pre-compiles a large number of hand-written assembly kernels (.co files) for AMD MI300X and other GPUs, automatically selecting the optimal variant at runtime via the `get_heuristic_kernel` function."
+   },
+   {
+    "heading": "4. RDNA Architecture Optimization Highlights",
+    "anchor": "4-rdna-architecture-optimization-highlights",
+    "gist": "The RDNA architecture (for gaming/general-purpose computing) differs significantly from CDNA (for AI/HPC), requiring corresponding adjustments to optimization strategies."
+   },
+   {
+    "heading": "5. CK (Composable Kernel) Template Optimization Practices",
+    "anchor": "5-ck-composable-kernel-template-optimization-practices",
+    "gist": "CK is the core framework for optimizing GEMM in the AMD ROCm ecosystem, parameterizing all optimization dimensions through C++ template metaprogramming."
+   },
+   {
+    "heading": "6. MI300X/MI355X Hardware Architecture Essentials",
+    "anchor": "6-mi300x-mi355x-hardware-architecture-essentials",
+    "gist": "- **MI300X**: chiplet design, 8 XCDs (304 CUs total), each CU has 4 16-lane SIMDs - Physically 16 lanes, executing continuously for 4 cycles to complete one wave (64 threads) — a design philosophy of **trading area for quantity** - Each SI…"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- AMD MFMA Matrix Core Instructions — MFMA instruction details and selection guide - LDS Bank Conflict Optimization — LDS optimization strategies - [Occupancy O…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\nclang++ -x hip --offload-arch=gfx1103 --offload-device-only -O2 -S kernel.cpp\n```\n\n```\ntg_num = (inter_dim / subGU_n) * sub_X_cnt // thread group\nlocal_round = ceil(tg_num / num_cu) // execute\nempty_cu = local_round * num_cu - tg_num // CU\n```\n\n```\nmoe_ck2stages_gemm1_256x32x64x64_1x4_TypeCast_v1_Nswizzle0_Quant0_MulRoutedWeight0_silu_B16_B16_B16\n```\n\n```\nMXDLPerWave = MPerBlock / (MNPerXDL * MWaves) // M wave MFMA\nNXDLPerWave = NPerBlock / (MNPerXDL * NWaves) // N wave MFMA\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/amd-kernel-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

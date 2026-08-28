@@ -1,0 +1,155 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.gluon.ref-docs.common_optimizations",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|gluon|ref-docs|common_optimizations|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Hopper (H20 / H100 / H200 / SM90) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Hopper (H20 / H100 / H200 / SM90): Hopper (sm_90) General ISA Optimization Checklist",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Hopper (sm_90) General ISA Optimization Checklist"
+  },
+  "title": "Hopper (sm_90) General ISA Optimization Checklist",
+  "summary": "1. **Execute in order** — **3.0** → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6; fixes at each step may resolve issues in subsequent steps 2. **Verify at each step** — After each optimization step, you must verify accuracy and performance 3. **Accuracy first** — If an optimization step causes accuracy regression, roll back immediately 4. **Record changes** — Log specific modifications and performance changes for each step",
+  "sections": [
+   {
+    "heading": "⚠️ Core Principles",
+    "anchor": "core-principles",
+    "gist": "1."
+   },
+   {
+    "heading": "3.0 Coalesced Access Pre-check (Step Zero) ⚠️⚠️⚠️",
+    "anchor": "3-0-coalesced-access-pre-check-step-zero",
+    "gist": "> **This is the prerequisite for all optimizations."
+   },
+   {
+    "heading": "3.1 Ensure Coalesced Access + Maximize Load/Store Instruction Width",
+    "anchor": "3-1-ensure-coalesced-access-maximize-load-store-instruction-width",
+    "gist": "On the **premise of guaranteeing coalesced access**, maximize the instruction width of global memory and shared memory: - Global load/store: `LDG.E.128` / `STG.E.128` (128-bit) - Shared memory: `STS.128` / `LDS.128` (128-bit) - CP_ASYNC: `…"
+   },
+   {
+    "heading": "3.2 Checking for Shared Memory Bank Conflicts",
+    "anchor": "3-2-checking-for-shared-memory-bank-conflicts",
+    "gist": "Eliminate shared memory bank conflicts to reduce the latency of `LDS`/`STS`."
+   },
+   {
+    "heading": "3.3 Eliminating Scratch/Local Memory Operations (Register Spills)",
+    "anchor": "3-3-eliminating-scratch-local-memory-operations-register-spills",
+    "gist": "Eliminate local memory loads/stores (i.e., register spills to DRAM)."
+   },
+   {
+    "heading": "3.4 async_copy Pipeline Optimization",
+    "anchor": "3-4-async-copy-pipeline-optimization",
+    "gist": "Ensure `async_copy_global_to_shared` (CP_ASYNC DMA) is used for global → shared memory data transfers, and implement software pipelining to overlap data loading with computation."
+   },
+   {
+    "heading": "3.5 wgmma fence/wait Correctness",
+    "anchor": "3-5-wgmma-fence-wait-correctness",
+    "gist": "Ensure the three-step pattern for wgmma (warp group matrix multiply-accumulate) is complete and correct."
+   },
+   {
+    "heading": "3.6 SM Utilization / Tile Size Tuning (Small Matrix Specialization)",
+    "anchor": "3-6-sm-utilization-tile-size-tuning-small-matrix-specialization",
+    "gist": "For scenarios involving small matrices (grid size far less than SM count), maximize actual throughput by adjusting tiling strategies."
+   },
+   {
+    "heading": "Appendix A: Optimization Decision Quick Reference",
+    "anchor": "appendix-a-optimization-decision-quick-reference",
+    "gist": "table columns: Bottleneck Type, Primary Optimization (Highest Return), Secondary Optimization, Tertiary Optimization (Fine-Tuning)"
+   },
+   {
+    "heading": "Appendix B: Hopper vs AMD Optimization Differences Quick Reference",
+    "anchor": "appendix-b-hopper-vs-amd-optimization-differences-quick-reference",
+    "gist": "table columns: Optimization Dimension, AMD (CDNA3), Hopper (sm_90)"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **Prerequisites**: Hopper Hardware Specifications - **Cross-Architecture Reference**: CDNA3 ISA Optimization Checklist | [CD…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# 1. Confirm tensor stride\n# A[M, K]: stride_am=K, stride_ak=1 → K dimension (dim 1) contiguous → order=[1, 0]\n# B[K, N]: stride_bk=N, stride_bn=1 → N dimension (dim 1) contiguous → order=[1, 0]\n# B[N, K]: stride_bn=K, stride_bk=1 → K dimension (dim 1) contiguous → order=[1, 0]\n\n# 2. Confirm spt in contiguous dimension ≥ 8 (bf16/fp16) or ≥ 4 (fp32) to achieve 128-bit load\n```\n\n```bash\n# Check load instruction width in SASS\n# Large amounts of LDG.E.32 / LDG.E.U16 → Non-coalesced access! Check order immediately\nncu --import profile.ncu-rep --page source --print-source sass | grep -c 'LDG.E.32'\nncu --import profile.ncu-rep --page source --print-source sass | grep -c 'LDG.E.128'\n```\n\n```\ncoalesced (coalesced):\n  thread 0 → addr 0x1000\n  thread 1 → addr 0x1010 ← contiguous access\n  thread 2 → addr 0x1020\n  ...\n  → coalesced sectors, high bandwidth utilization\n\ncoalesced (strided):\n  thread 0 → addr 0x1000\n  thread 1 → addr 0x2000 ← strided access\n  thread 2 → addr 0x3000\n  ...\n  → independent sectors, low bandwidth utilization\n```\n\n```python\n# Matrix A: shape [M, K], stride_am=K, stride_ak=1 → K dimension contiguous in memory\n# → blocked_a's order should make K dimension (dim 1) contiguous\nblocked_a: gl.constexpr = gl.BlockedLayout(\n    size_per_thread=[1, 8],    # K dimension spt=8 → dwordx4 (bf16)\n    threads_per_warp=[32, 1],  # Hopper: warp size = 32\n    warps_per_cta=[4, 1],\n    order=[1, 0]               # dim 1 (K) contiguous → match memory layout\n)\n```\n\n```\nBytes per thread = size_per_thread[contiguous_dim] × element_size_bytes\nInstruction width = min(bytes per thread, 16)  # Max 128-bit = 16 bytes\n```\n\n```bash\n# 1. ncu metrics check bank conflicts\nncu --import profile.ncu-rep --metrics \\\n    l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum,\\\n    l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum\n\n# 2. Gluon API check\n# Add to kernel code (for debugging):\nconflicts = gl.bank_conflicts(shared_layout)\n```\n\n```python\ngl.NVMMASharedLayout(\n    swizzle_byte_width=128,   # swizzle mode (32/64/128)\n    element_bitwidth=16,       # element bit width (bf16=16)\n    transposed=False           # whether transposed\n)\n```\n\n```python\ngl.SwizzledSharedLayout(vec, perPhase, maxPhase, order=[1, 0])\n```\n\n```bash\n# 1. Check STL/LDL instructions in SASS\nncu --import profile.ncu-rep --page source --print-source sass | grep -E 'STL|LDL'\n\n# 2. Check ncu local memory metrics\nncu --import profile.ncu-rep --metrics \\\n    lts__t_sectors_op_read_lookup_hit.sum,\\\n    lts__t_sectors_op_write.sum\n\n# 3. Check compiler spill information\n# View registers per thread in Launch Statistics of ncu report\n```\n\n```bash\n# Check if async_copy (LDGSTS) is used\nncu --import profile_output.ncu-rep --page source --print-source sass | grep -c 'LDGSTS'\n\n# If = 0 and has LDG+STS → async_copy not used → must fix\n```\n\n```python\nfrom triton.experimental.gluon.language.nvidia.hopper import async_copy\n\n# ✅ CP_ASYNC DMA (bypass registers, optimal performance)\nasync_copy.async_copy_global_to_shared(\n    smem.index(slot),\n    ptr + gl.cast(offsets, gl.int32),\n    mask=mask\n)\nasync_copy.commit_group()\n# ... can insert computation to overlap ...\nasync_copy.wait_group(num_outstanding=0)\n```\n\n```python\n# Allocate multi-slot smem buffer\na_smem = gl.allocate_shared_memory(dtype, [num_stages, BM, BK], smem_layout)\n\n# Prologue: Preload first num_stages-1 stages\nfor s in range(num_stages - 1):\n    async_copy.async_copy_global_to_shared(a_smem.index(s), ...)\n    async_copy.commit_group()\n\n# Main loop\nfor i in range(num_stages - 1, num_iters):\n    # 1. Initiate next stage load\n    slot_next = i % num_stages\n    async_copy.async_copy_global_to_shared(a_smem.index(slot_next), ...)\n    async_copy.commit_group()\n\n    # 2. Wait for current stage ready\n    async_copy.wait_group(num_outstanding=num_stages - 1)\n\n    # 3. Compute using current stage data\n    slot_cur = (i - num_stages + 1) % num_stages\n    fence_async_shared()\n    acc = warpgroup_mma(a_smem.index(slot_cur), b_smem.index(slot_cur), acc, is_async=True)\n    acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))\n\n# Epilogue: Process remaining stages\nfor s in range(min(num_stages - 1, num_iters)):\n    async_copy.wait_group(num_outstanding=num_stages - 2 - s)\n    # ... compute ...\n```\n\n```python\n# Step 1: fence — Ensure smem writes visible to wgmma\nfence_async_shared()\n\n# Step 2: Async wgmma — Operands in NVMMASharedLayout shared memory\nacc = warpgroup_mma(a_smem, b_smem, acc, is_async=True)\n\n# Step 3: wait — Wait for wgmma completion before using results\nacc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))\n```\n\n```python\n# Correct order:\nasync_copy.wait_group(...)          # 1. Wait for smem data ready\nfence_async_shared()                 # 2. fence: smem writes visible to wgmma\nacc = warpgroup_mma(a, b, acc, ...) # 3. Initiate wgmma\nacc = warpgroup_mma_wait(...)       # 4. Wait for wgmma completion\n```\n\n```\ngrid_blocks = cdiv(M, BLOCK_SIZE_M) × cdiv(N, BLOCK_SIZE_N)\nSM_utilization = grid_blocks / num_SMs\n\nH20: 78 SMs, H100/H200: 132 SMs\n```\n\n```python\n# Add at beginning of kernel function\ntl.assume(stride_am > 0)\ntl.assume(stride_ak > 0)\ntl.assume(stride_bk > 0)\ntl.assume(stride_bn > 0)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/ref-docs/gluon/common_optimizations.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-3x-architecture",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutlass-3x-architecture|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS 3.x Architecture",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS 3.x Architecture"
+  },
+  "title": "CUTLASS 3.x Architecture",
+  "summary": "CUTLASS 3.x is a major architectural overhaul of CUTLASS 2.x with the core goal of introducing CuTe as a unified Layout algebra system, decoupling the GEMM hierarchy from hardware-coupled designs into algorithm-driven abstraction layers. This document covers the design philosophy, four-level hierarchy, Builder pattern, scheduling strategy system, code organization, and feature matrix of 3.x.",
+  "sections": [
+   {
+    "heading": "Changes from 2.x to 3.x",
+    "anchor": "changes-from-2-x-to-3-x",
+    "gist": "The hierarchical design of CUTLASS 2.x is tightly coupled to GPU hardware organization (warp-level, threadblock-level, etc.), leading to:"
+   },
+   {
+    "heading": "Four-Level GEMM Hierarchy",
+    "anchor": "four-level-gemm-hierarchy",
+    "gist": "CUTLASS 3.x decomposes GEMM into five conceptual levels (users mainly interact with the first four):"
+   },
+   {
+    "heading": "CollectiveBuilder Pattern",
+    "anchor": "collectivebuilder-pattern",
+    "gist": "`CollectiveBuilder` is a simplified interface for non-expert users that automatically constructs the optimal `CollectiveMma` using 2.x-style parameters:"
+   },
+   {
+    "heading": "Dispatch Policy System",
+    "anchor": "dispatch-policy-system",
+    "gist": "CUTLASS 3.x uses tag-based dispatch in place of named types."
+   },
+   {
+    "heading": "Code Organization",
+    "anchor": "code-organization",
+    "gist": "**Tag-based dispatch**: Use empty structs as compile-time tags, selecting implementations through template specialization:"
+   },
+   {
+    "heading": "Feature Matrix",
+    "anchor": "feature-matrix",
+    "gist": "table columns: Data Type, Compute Capability, CUDA Toolkit, Layout"
+   },
+   {
+    "heading": "Assembling a 3.x GEMM Kernel",
+    "anchor": "assembling-a-3-x-gemm-kernel",
+    "gist": "Complete four-step assembly process:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\n// Kernel (Device launch): cluster tile\nfor (cluster_m, cluster_n) { // <- Kernel scheduling\n\n // Collective : k mainloop\n  for (k_tile = 0; k_tile < K_tiles; k_tile++) {   // <- CollectiveMma\n\n // Tiled MMA : unrolled loop\n    for (tiled_mma_k, tiled_mma_m, tiled_mma_n) {  // <- cute::gemm()\n      mma.call(d, a, b, c);                        // <- Atom\n    }\n  }\n}\n```\n\n```cpp\ntemplate <class GemmKernel_, class Enable = void>\nclass GemmUniversalAdapter;\n```\n\n```cpp\ntemplate <\n  class ProblemShapeOrThreadblockMma_,  // cute::Shape<int,int,int,int> for 3.x\n  class CollectiveMainloop_,\n  class CollectiveEpilogue_,\n  class TileScheduler_ = void,\n  class Enable = void\n>\nclass GemmUniversal;\n```\n\n```cpp\ntemplate <\n  class DispatchPolicy, class TileShape,\n  class ElementA, class StrideA,\n  class ElementB, class StrideB,\n  class TiledMma,\n  class GmemTiledCopyA, class SmemLayoutAtomA, class SmemCopyAtomA, class TransformA,\n  class GmemTiledCopyB, class SmemLayoutAtomB, class SmemCopyAtomB, class TransformB\n>\nstruct CollectiveMma;\n```\n\n```cpp\ntemplate <\n  class ArchTag,            // arch::Sm90, arch::Sm100, arch::Sm120\n  class OpClass,            // arch::OpClassTensorOp\n  class ElementA, class GmemLayoutA, int AlignmentA,\n  class ElementB, class GmemLayoutB, int AlignmentB,\n  class ElementAccumulator,\n  class TileShape_MNK,      // cute::Shape<_128, _256, _64>\n  class ClusterShape_MNK,   // cute::Shape<_2, _1, _1>\n  class StageCountType,     // StageCountAuto or StageCount<N>\n  class KernelScheduleType, // KernelScheduleAuto or specific tag\n  class Enable = void\n>\nstruct CollectiveBuilder;\n```\n\n```cpp\n// SM90 TMA + GMMA warp-specialized\ntemplate<int Stages_, class ClusterShape_, class KernelSchedule>\nstruct MainloopSm90TmaGmmaWarpSpecialized {\n  constexpr static int Stages = Stages_;\n  using ClusterShape = ClusterShape_;\n  using ArchTag = arch::Sm90;\n using Schedule = KernelSchedule; // kernel\n};\n\n// SM100 TMA + UMMA warp-specialized\ntemplate<int Stages_, int SchedulerPipelineStageCount_,\n         int AccumulatorPipelineStageCount_, class ClusterShape_>\nstruct MainloopSm100TmaUmmaWarpSpecialized {\n  constexpr static int Stages = Stages_;\n  using ClusterShape = ClusterShape_;\n  using ArchTag = arch::Sm100;\n  using Schedule = KernelTmaWarpSpecializedSm100<\n      SchedulerPipelineStageCount_, AccumulatorPipelineStageCount_>;\n};\n```\n\n```\ninclude/\n  cutlass/\n arch/ # direct(instruction-level GEMM)\n    gemm/\n thread/ #\n warp/ # Warp\n collective/ # 3.x Collective\n collective_mma.hpp # CollectiveMma\n collective_builder.hpp # CollectiveBuilder\n builders/ # builder (.inl file)\n threadblock/ # 2.x CTA\n kernel/ # Kernel entry + TileScheduler\n        gemm_universal.hpp   #   3.x GemmUniversal\n sm90_gemm_*.hpp # SM90 schedule kernel\n sm100_gemm_*.hpp # SM100 schedule kernel\n        sm90_tile_scheduler*.hpp  # SM90 tile scheduler\n        sm100_tile_scheduler*.hpp # SM100 tile scheduler\n tile_scheduler.hpp # TileSchedulerSelector\n      device/                # Host-side launch\n        gemm_universal_adapter.h  # GemmUniversalAdapter\n dispatch_policy.hpp # schedule tag + mainloop policy definition\n layout/ # memorylayoutdefinition\n    epilogue/\n collective/ # Collective epilogue\n\n cute/ # CuTe core(independent CUTLASS)\n algorithm/ # gemm, copy core\n arch/ # PTX\n atom/ # Mma_Atom, Copy_Atom +\n      mma_atom.hpp           # cute::Mma_Atom + TiledMma\n      copy_atom.hpp          # cute::Copy_Atom + TiledCopy\n *.hpp # Shape, Stride, Layout, Tensor coretype\n```\n\n```cpp\n// dispatch_policy.hpp definition tag\nstruct KernelTmaWarpSpecializedCooperative { };\n\n// sm90_gemm_tma_warpspecialized_cooperative.hpp passed enable_if\ntemplate <class ProblemShape_, class CollectiveMainloop_, ...>\nclass GemmUniversal<ProblemShape_, CollectiveMainloop_, ...,\n    std::enable_if_t<std::is_base_of_v<KernelTmaWarpSpecializedCooperative,\n        typename CollectiveMainloop_::DispatchPolicy::Schedule>>>\n```\n\n```cpp\ntemplate<class Subclass>\nclass StaticPersistentTileScheduler { ... };\n\nclass PersistentTileSchedulerSm90 :\n    public StaticPersistentTileScheduler<PersistentTileSchedulerSm90> { ... };\n```\n\n```cpp\n// Step 1: passed CollectiveBuilder mainloop\nusing CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<\n    arch::Sm90, arch::OpClassTensorOp,\n    half_t, layout::RowMajor, 8,        // A: half, RowMajor, 128-bit aligned\n    half_t, layout::ColumnMajor, 8,     // B: half, ColMajor, 128-bit aligned\n    float,                              // accumulator\n    Shape<_128, _256, _64>,             // tile shape MNK\n    Shape<_2, _1, _1>,                  // cluster shape\n StageCountAuto, // automaticcompute pipeline\n KernelScheduleAuto // automatic schedule\n>::CollectiveOp;\n\n// Step 2: epilogue\nusing CollectiveEpilogue = cutlass::epilogue::collective::DefaultEpilogue<\n    half_t, /* stride_C, stride_D, thread_epilogue_op */ ...>;\n\n// Step 3: kernel\nusing GemmKernel = cutlass::gemm::kernel::GemmUniversal<\n    Shape<int,int,int,int>,  // ProblemShape [M,N,K,L]\n    CollectiveMainloop,\n    CollectiveEpilogue\n>;\n\n// Step 4: host handle\nusing Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-3x-architecture.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.cutedsl.ref-docs.colfax-blackwell-gemm-part2-hardware-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|colfax-blackwell-gemm-part2-hardware-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): Blackwell Matrix Multiplication Part 2: Hardware Feature Optimization",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "Blackwell Matrix Multiplication Part 2: Hardware Feature Optimization"
+  },
+  "title": "Blackwell Matrix Multiplication Part 2: Hardware Feature Optimization",
+  "summary": "Loop tiling, TMA loads, tcgen05 MMA with Tensor Memory, swizzle patterns for bank-conflict-free shared memory access, and TMA store — building from 5 TFLOPS to 293 TFLOPS on B200.",
+  "sections": [
+   {
+    "heading": "1. Performance Roadmap",
+    "anchor": "1-performance-roadmap",
+    "gist": "Focus on a specific matmul shape: A is M×K, B is K×N (transposed), C is M×N, with M=N=K=4096."
+   },
+   {
+    "heading": "2. Kernel 1: Loop Tiling",
+    "anchor": "2-kernel-1-loop-tiling",
+    "gist": "Loop tiling loads small blocks (tiles) into faster memory (shared memory), allowing the processor to execute all necessary computation on that block before returning to slow main memory."
+   },
+   {
+    "heading": "3. Kernel 2: TMA and Tensor Core",
+    "anchor": "3-kernel-2-tma-and-tensor-core",
+    "gist": "The Tensor Memory Accelerator (TMA) is a dedicated hardware unit introduced in Hopper for asynchronous data transfer between global and shared memory."
+   },
+   {
+    "heading": "4. Kernel 3: Swizzle",
+    "anchor": "4-kernel-3-swizzle",
+    "gist": "Shared memory consists of 32 consecutive 4-byte-wide banks."
+   },
+   {
+    "heading": "5. Kernel 4: Pack Output in SMEM + TMA Store",
+    "anchor": "5-kernel-4-pack-output-in-smem-tma-store",
+    "gist": "Previous kernel writes 4-byte stores (two BF16 values) — too granular given Blackwell's 32-byte maximum store width."
+   },
+   {
+    "heading": "6. Appendix: Descriptors",
+    "anchor": "6-appendix-descriptors",
+    "gist": "The shared memory descriptor encodes: - **LBO (Leading dimension Byte Offset)**: Bytes between adjacent core matrices along K (e.g., BM×16B = 1024B) - **SBO (Stride dimension Byte Offset)**: Bytes between adjacent core matrices along M/N (…"
+   },
+   {
+    "heading": "7. Appendix: Swizzle Math",
+    "anchor": "7-appendix-swizzle-math",
+    "gist": "Given `Swizzle(bits, base, shift)`: extracts bits at positions [base+shift, base+shift+bits) as a mask, XORs with bits at positions [base, base+bits)."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n# Only need to tell TMA and tcgen05.mma which swizzle mode to use\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/cutedsl/colfax-blackwell-gemm-part2-hardware-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

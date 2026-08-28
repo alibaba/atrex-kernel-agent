@@ -1,0 +1,113 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.cutlass-epilogue-visitor-tree",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|ref-docs|cutlass-epilogue-visitor-tree|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUTLASS Epilogue Visitor Tree (EVT)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUTLASS Epilogue Visitor Tree (EVT)"
+  },
+  "title": "CUTLASS Epilogue Visitor Tree (EVT)",
+  "summary": "CUTLASS's Epilogue Visitor Tree (EVT) is a composable fusion framework based on template metaprogramming, allowing arbitrary element-wise operation trees (such as `D = activation(alpha * acc + beta * C + bias)`) to be expressed during the GEMM epilogue stage, all fused into a single kernel execution. This document covers FusionOperation predefined operations, EVT template recursion patterns, leaf/compute/store nodes, and DAG fusion.",
+  "sections": [
+   {
+    "heading": "1. FusionOperation Predefined Operation Hierarchy",
+    "anchor": "1-fusionoperation-predefined-operation-hierarchy",
+    "gist": "**Source File**: `include/cutlass/epilogue/fusion/operations.hpp`"
+   },
+   {
+    "heading": "2. EVT (Epilogue Visitor Tree) Pattern",
+    "anchor": "2-evt-epilogue-visitor-tree-pattern",
+    "gist": "**Source file**: `include/cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp`"
+   },
+   {
+    "heading": "3. Leaf Nodes",
+    "anchor": "3-leaf-nodes",
+    "gist": "**Source file**: `include/cutlass/epilogue/fusion/sm90_visitor_load_tma_warpspecialized.hpp`"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nFusionOperation (base)\n  |\n  +-- ScaledAcc                            D = alpha * acc\n  |     |\n  |     +-- LinearCombination              D = alpha * acc + beta * C\n  |           |\n  |           +-- LinCombEltAct            D = activation(alpha * acc + beta * C)\n  |           |     |\n  |           |     +-- LinCombEltActBlockScaleFactor   + block scale output\n  |           |\n  |           +-- LinCombTopKSoftmaxCol    D = softmax(top_k(alpha * acc + beta * C))\n  |           |\n  |           +-- LinearCombinationGroupedWgrad   (grouped conv wgrad)\n  |           |\n  |           +-- LinCombBlockScaleFactor  D = alpha * acc + beta * C + block scale output\n  |           |\n  |           +-- LinCombPerRowBias        D = alpha * acc + beta * C + per-row bias\n  |           |     |\n  |           |     +-- LinCombPerRowBiasBlockScaleFactor   + block scale\n  |           |     |\n  |           |     +-- LinCombPerRowBiasEltAct  D = act(... + per-row bias)\n  |           |           |\n  |           |           +-- LinCombPerRowBiasEltActBlockScaleFactor   + block scale\n  |           |           |\n  |           |           +-- LinCombPerRowBiasEltActAux     + aux store\n  |           |           |\n  |           |           +-- PerRowLinCombPerRowBiasEltAct   + per-row alpha/beta\n  |           |           |\n  |           |           +-- ScaledLinCombPerRowBiasEltAct   + scale_a * scale_b\n  |           |                 |\n  |           |                 +-- ScaledLinCombPerRowBiasEltActAmaxAux  + amax + aux\n  |           |\n  |           +-- LinCombPerColBias        D = alpha * acc + beta * C + per-col bias\n  |           |     |\n  |           |     +-- LinCombPerColBiasBlockScaleFactor   + block scale\n  |           |     |\n  |           |     +-- LinCombPerColBiasEltAct  D = act(... + per-col bias)\n  |           |           |\n  |           |           +-- LinCombPerColBiasEltActBlockScaleFactor   + block scale\n  |           |           |\n  |           |           +-- LinCombPerColBiasEltActAux      + aux store\n  |           |           |\n  |           |           +-- PerColLinCombPerColBiasEltAct    + per-col alpha/beta\n  |           |           |     |\n  |           |           |     +-- PerColResAddPerColBiasEltAct  + residual add\n  |           |           |\n  |           |           +-- ScaledLinCombPerColBiasEltAct    + scale_a * scale_b\n  |           |                 |\n  |           |                 +-- ScaledLinCombPerColBiasEltActAmaxAux  + amax + aux\n  |           |\n  |           +-- LinCombDeEltAct          D = d_activation(dY, Z)  (backward)\n  |                 |\n  |                 +-- LinCombDeEltActDePerRowBias    + dBias reduction\n```\n\n```cpp\nstruct FusionOperation {\n  using ElementOutput = void;\n  using ElementCompute = void;\n\n  // Source (C matrix) support\n  static constexpr bool IsSourceSupported = false;\n  static constexpr bool IsResidualSupported = false;\n\n  // Scaling support\n  static constexpr bool IsScaleFactorSupported = false;     // scale_a * scale_b\n  static constexpr bool IsPerRowScaleSupported = false;\n  static constexpr bool IsPerColScaleSupported = false;\n\n  // Bias support\n  static constexpr bool IsPerRowBiasSupported = false;\n  static constexpr bool IsPerColBiasSupported = false;\n\n  // Activation support\n  static constexpr bool IsEltActSupported = false;\n\n  // Auxiliary output support\n  static constexpr bool IsAuxOutSupported = false;\n  static constexpr bool IsAbsMaxSupported = false;\n\n  // Block-scaled output support (SM100/SM120)\n  using ElementBlockScaleFactor = void;\n  static constexpr int SFVecSize = 0;\n  static constexpr bool IsBlockScaleSupported = false;\n};\n```\n\n```cpp\ntemplate<int SFVecSize_, class ElementOutput_, class ElementCompute_,\n         class ElementBlockScaleFactor_, ...>\nstruct LinCombBlockScaleFactor\n    : LinearCombination<...> {\n  using ElementBlockScaleFactor = ElementBlockScaleFactor_;\n  static constexpr int SFVecSize = SFVecSize_;\n  static constexpr bool IsBlockScaleSupported = true;\n};\n```\n\n```cpp\ntemplate <class NodeOp, class... ChildOps>\nstruct Sm90TreeVisitor : Sm90VisitorImpl<ChildOps..., NodeOp> {\n  // ...\n  template <typename ElementAccumulator, int FragmentSize>\n  CUTLASS_DEVICE auto\n  visit(Array<ElementAccumulator, FragmentSize> const& frg_acc,\n        int epi_v, int epi_m, int epi_n) {\n    constexpr int Rm1 = sizeof...(ChildOps);\n    return cute::detail::tapply(callbacks_tuple,\n // 1. child visit(transform stage)\n      [&] (auto& child_callbacks) {\n        return child_callbacks.visit(frg_acc, epi_v, epi_m, epi_n);\n      },\n // 2. child result node op(apply stage)\n      [&] (auto&&... frg_inputs) {\n        return get<Rm1>(callbacks_tuple).visit(\n          frg_acc, epi_v, epi_m, epi_n, frg_inputs...);\n      },\n make_seq<Rm1>{} // transform R-1 (children), apply (node)\n    );\n  }\n};\n```\n\n```cpp\ntemplate <class... Ops>\nstruct Sm90VisitorImplBase {\n  using SharedStorage = tuple<typename Ops::SharedStorage...>;\n  using Arguments = tuple<typename Ops::Arguments...>;\n  using Params = tuple<typename Ops::Params...>;\n  tuple<Ops...> ops;\n};\n```\n\n```cpp\nstruct Sm90AccFetch : Sm90VisitorImpl<> {\n  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {\n    template <typename ElementAccumulator, int FragmentSize>\n    CUTLASS_DEVICE Array<ElementAccumulator, FragmentSize>\n    visit(Array<ElementAccumulator, FragmentSize> const& frg_acc,\n          int epi_v, int epi_m, int epi_n) {\n return frg_acc; // directreturns\n    }\n  };\n};\n```\n\n```cpp\ntemplate <class Element>\nstruct Sm90SrcFetch : Sm90VisitorImpl<> {\n  CUTLASS_DEVICE bool is_C_load_needed() const {\n return not is_void_v<Element>; // Element=void C load\n  }\n\n  CUTLASS_DEVICE bool is_zero() const {\n    return is_void_v<Element>;\n  }\n\n  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {\n    SrcTensor const& tCrC;  // register-resident C fragment\n\n    visit(...) {\n      return recast<Array<value_type, FragmentSize>>(tCrC)(epi_v);\n    }\n  };\n};\n```\n\n```cpp\n// StrideMNL = Stride<_0, _0, dL>: batch dimension stride\n// BroadcastCount: scalarreduction\n// ReductionFn: multiplies( scale_a * scale_b)\n```\n\n```cpp\n// StrideMNL = Stride<_0, _1, dL>: N stride\n// passed TMA load row vector smem, visit M\n// StrideMNL = Stride<_1, _0, dL>: M stride\n// N ```\n\n```cpp\ntemplate<\n template <class> class ComputeFn, // computefunction\n class ElementOutput, // outputtype\n class ElementCompute, // computeaccuracy\n FloatRoundStyle RoundStyle // mode\n>\nstruct Sm90Compute {\n  struct ConsumerStoreCallbacks : EmptyConsumerStoreCallbacks {\n visit(frg_acc, epi_v, epi_m, epi_n, frg_inputs...) {// 1. inputconversion ElementCompute\n// 2. ComputeFn compute\n// 3. resultconversion ElementOutput return convert_output(compute_output(cvt_frg_inputs...));\n    }\n  };\n};\n```\n\n```cpp\n// : beta * C + Z\ntemplate <...>\nstruct Sm90TreeVisitor<\n  Sm90Compute<homogeneous_multiply_add, ...>,\n  InputScaleOp,          // beta\n  Sm90SrcFetch<Element>, // C\n  InputAddOp             // Z\n> {\n  CUTLASS_DEVICE bool is_C_load_needed() const {\n// if beta , requiresload C\nreturn (not scale_op.is_zero() && src_op.is_C_load_needed())  }\n\n// compute Z\nArray frg_I = convert_Z(frg_added);\n// if C void, beta * C + Z\nif constexpr (!is_void_v<ElementSource>) {};\n```\n\n```cpp\ntemplate <int Stages, class EpilogueTile, class Element, ...>\nstruct Sm90AuxStore {\n  struct SharedStorage {\n array_aligned<Element, size(SmemLayout{})> smem_aux; // independent smem buffer\n  };\n\n  struct ConsumerStoreCallbacks {\n// input conversion register buffer\ntC_rAux_frg(epi_v) = convert_input(frg_input);\nreturn frg_input;  // pass-through\n\n// Register -> Smem (R2S copy)\ncopy(tiled_r2s, tRS_rAux, tRS_sAux(_,_,_,store_pipe_index));\n\n// Smem -> Gmem (TMA store)\ncopy(tma_store_aux, bSG_sAux(_,_,_,pipe), bSG_gAux(_,_,_,epi_m,epi_n));\n  };\n};\n```\n\n```cpp\n// visit: fragment register-level reduction\n// end: passed atomic reduction gmem\n```\n\n```cpp\ntemplate <class InputTree, class OutputTree, class... AuxOutTrees>\nstruct Sm90SplitTreeVisitor : Sm90VisitorImpl<InputTree, AuxOutTrees..., OutputTree> {\n\n  visit(frg_acc, epi_v, epi_m, epi_n) {\n // 1. sharedinput\n    Array frg_input = get<0>(callbacks_tuple).visit(frg_acc, ...);\n\n // 2. resultoutput(side effects)\n    for_each(make_seq<sizeof...(AuxOutTrees)>{}, [&](auto I) {\n      get<I+1>(callbacks_tuple).visit(frg_input, ...);\n    });\n\n // 3. resultmainoutput\n// 3. resultmainoutput\nreturn get<Rm2+1>(callbacks_tuple).visit(frg_input, ...);\n```\n\n```cpp\ntemplate <class ElementCompute, class EdgeTuple, class... Ops>\nstruct Sm90TopologicalVisitor : Sm90VisitorImpl<Ops...> {\n // EdgeTuple: Op column\n // by Op, resultcache frg_compute_tuple\n};\n```\n\n```cpp\ntemplate <...>\nstruct FusionCallbacks<\n    epilogue::Sm100TmaWarpSpecialized<...>, Operation, ...>\n  : FusionCallbacks<\n      epilogue::Sm90TmaWarpSpecialized<...>, Operation, ...> {\n // SM90\n};\n```\n\n```cpp\n// SM120 block-scaled output epilogue\n// 1. 32 F32 max\n// 2. conversion max UE8 (or UE4M3) store scale factor\n// 3. UE8 F32 scale\n// 4. MUFU\n// 5. F32 , conversion ElementD\n```\n\n```cpp\nusing EVT =\n  Sm90TreeVisitor<\n    Sm90Compute<ReLu, ElementD, float, round_to_nearest>,     // ReLU\n    Sm90TreeVisitor<\n      Sm90Compute<homogeneous_multiply_add, float, float, round_to_nearest>,  // beta*C + Z\n      Sm90ScalarBroadcast<float>,                              // beta\n      Sm90SrcFetch<ElementC>,                                  // C\n      Sm90TreeVisitor<\n        Sm90Compute<multiply_add, float, float, round_to_nearest>,  // alpha*acc + bias\n        Sm90ScalarBroadcast<float>,                            // alpha\n        Sm90AccFetch,                                          // accumulator\n        Sm90RowBroadcast<...>                                  // row bias\n      >\n    >\n  >;\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/cutlass-epilogue-visitor-tree.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

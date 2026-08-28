@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fine-grained-quantization.ue8m0-vs-e4m3-scale-formats",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|quantization|fine-grained-quantization#ue8m0-vs-e4m3-scale-formats|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "quantization",
+   "operators": [
+    "quantization"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "quantization",
+   "ue8m0-vs-e4m3-scale-formats"
+  ],
+  "triggers": [
+   "the 'UE8M0 vs E4M3 Scale Formats' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): UE8M0 vs E4M3 Scale Formats",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Fine-Grained FP8/FP4 Quantization -- UE8M0 vs E4M3 Scale Formats"
+  },
+  "technique": "UE8M0 vs E4M3 Scale Formats",
+  "what": "| Property | UE8M0 (Blackwell native) | E4M3 (NVFP4 hackathon) | FP32 (DeepGEMM Hopper) | |----------|-------------------------|------------------------|------------------------| | Bits | 8 | 8 | 32 | | Representable values | Powers of 2 only | 240 distinct values | Full FP32 range | | Range | 2^-127 to 2^128 | ~0 to 448 | Full FP32 | | Block size | 32 (MXFP standard) | 16 (NVFP4) | 128 (DeepGEMM) | | Hardware support | tcgen05.mma native | Software decode | Software promotion | | Precision impact | Coarser (power-of-2 only) | Fine (non-power-of-2) | Best (FP32) |",
+  "when": "| Property | UE8M0 (Blackwell native) | E4M3 (NVFP4 hackathon) | FP32 (DeepGEMM Hopper) | |----------|-------------------------|------------------------|------------------------| | Bits | 8 | 8 | 32 | | Representable values | Powers of 2 o…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/fine-grained-quantization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

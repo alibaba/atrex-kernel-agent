@@ -1,0 +1,57 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.tma",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "tma",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "The Tensor Memory Accelerator (TMA) is a hardware unit that performs **asynchronous bulk data transfers** between global memory and shared memory. First introduced on Hopper (SM90), TMA carries forward to Blackwell (SM100) with stricter requirements for tcgen05 compatibility.",
+  "why_it_matters": "TMA offloads data movement from CUDA cores entirely -- a single thread issues the transfer, and the TMA hardware engine handles the multi-dimensional copy, address calculation, out-of-bounds clamping, and format conversion.",
+  "parameters": {
+   "transfer_direction": "GMEM <-> SMEM (bidirectional)",
+   "dimensionality": "1D to 5D tensor copies",
+   "max_transfer_size": "Up to 256 bytes per element, tiles up to 128x256",
+   "swizzle_modes": "None, 32B, 64B, 128B (128B required for tcgen05)",
+   "format_conversion": "FP32<->BF16, FP32<->FP16 during transfer",
+   "multicast": "Single GMEM tile -> multiple CTAs in a cluster",
+   "synchronization": "mbarrier-based (arrive/wait)",
+   "thread_requirement": "Single thread issues the operation"
+  },
+  "related_instructions": [
+   "cp.async.bulk.commit_group",
+   "cp.async.bulk.tensor.2d.global.shared",
+   "cp.async.bulk.tensor.2d.shared",
+   "mbarrier",
+   "mbarrier.arrive.expect_tx.shared.b64",
+   "mbarrier.init.shared.b64",
+   "mbarrier.try_wait.parity.shared.b64",
+   "mbarrier_init",
+   "mbarrier_wait",
+   "mbarriers",
+   "tcgen05",
+   "tcgen05.ld"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Tensor Memory Accelerator (TMA)",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/tma.md"
+   }
+  ]
+ }
+}

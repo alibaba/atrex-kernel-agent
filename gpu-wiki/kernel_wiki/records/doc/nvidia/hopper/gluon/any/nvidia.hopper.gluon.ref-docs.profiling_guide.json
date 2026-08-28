@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.gluon.ref-docs.profiling_guide",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|gluon|ref-docs|profiling_guide|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for NVIDIA Hopper (H20 / H100 / H200 / SM90) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Hopper (H20 / H100 / H200 / SM90): Nsight Compute (ncu) Profiling Guide",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Nsight Compute (ncu) Profiling Guide"
+  },
+  "title": "Nsight Compute (ncu) Profiling Guide",
+  "summary": "Nsight Compute (ncu) is NVIDIA's official GPU kernel profiling tool. This guide focuses on **kernel performance analysis in a CLI environment**, usedотор to locate performance hotspots in Gluon kernels.",
+  "sections": [
+   {
+    "heading": "Overview",
+    "anchor": "overview",
+    "gist": "Nsight Compute (ncu) is NVIDIA's official GPU kernel profiling tool."
+   },
+   {
+    "heading": "1. Basic Profile Commands",
+    "anchor": "1-basic-profile-commands",
+    "gist": "> **Key Practice**: Before executing the target kernel, Gluon kernel Python scripts typically trigger a significant number of PyTorch internal kernel launches (`torch.randn` random number generation, `torch.cat` copies, elementwise operati…"
+   },
+   {
+    "heading": "2. Viewing Profile Data via CLI",
+    "anchor": "2-viewing-profile-data-via-cli",
+    "gist": "table columns: Metric, Meaning, Used For Diagnosis"
+   },
+   {
+    "heading": "3. SASS Disassembly Analysis",
+    "anchor": "3-sass-disassembly-analysis",
+    "gist": "table columns: SASS Instruction Pattern, Meaning, Possible Issue, Optimization Step"
+   },
+   {
+    "heading": "5. Common Issues and Solutions",
+    "anchor": "5-common-issues-and-solutions",
+    "gist": "**Cause**: Requires root privileges or profiling permission configuration."
+   },
+   {
+    "heading": "6. ncu Common Commands Quick Reference",
+    "anchor": "6-ncu-common-commands-quick-reference",
+    "gist": "- Nsight Compute CLI Guide - Nsight Compute Metrics Reference - [CUDA Profiling Too…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\n# Step 0: List all kernel launch names and indices in the script\nncu --print-summary per-kernel python <kernel.py>\n```\n\n```\n==PROF== Profiling \"distribution_elementwise_grid...\" - 0: ...\n==PROF== Profiling \"vectorized_elementwise_kernel\" - 1: ...\n...\n==PROF== Profiling \"chunk_gated_delta_rule_fwd_ke...\" - 23: ...\n```\n\n```bash\n# Replace N with the index determined in Step 1.0\n# Collect complete data from all sections (most comprehensive)\nncu --set full \\\n    --launch-skip <N> --launch-count 1 \\\n    -o profile_output \\\n    python <kernel.py>\n```\n\n```bash\n# Only profile kernels matching the name\nncu --set full \\\n    --kernel-name \"chunk_gated_delta_rule_fwd\" \\\n    --launch-count 1 \\\n    -o profile_output \\\n    python <kernel.py>\n```\n\n```bash\n# Only collect memory and compute throughput\nncu --metrics \\\n    sm__throughput.avg.pct_of_peak_sustained_elapsed,\\\n    dram__throughput.avg.pct_of_peak_sustained_elapsed,\\\n    l1tex__throughput.avg.pct_of_peak_sustained_elapsed,\\\n    launch__occupancy \\\n    --launch-skip 10 --launch-count 1 \\\n    python <kernel.py>\n```\n\n```bash\n# View summary of all sections\nncu --import profile_output.ncu-rep --page raw\n\n# View specific metrics\nncu --import profile_output.ncu-rep --metrics \\\n    sm__throughput.avg.pct_of_peak_sustained_elapsed,\\\n    dram__throughput.avg.pct_of_peak_sustained_elapsed\n```\n\n```bash\n# Method 1: Extract via ncu report\nncu --import profile_output.ncu-rep --page source --print-source sass\n\n# Method 2: Directly disassemble cubin\ncuobjdump -sass <kernel.cubin>\n\n# Method 3: Via nvdisasm\nnvdisasm <kernel.cubin>\n```\n\n```bash\n# Method 1: Run as root\nsudo ncu --set full ...\n\n# Method 2: Set perf permissions\necho 0 | sudo tee /proc/sys/kernel/perf_event_paranoid\n```\n\n```bash\n# First step (recommended): List all kernel launches and indices, find target kernel\nncu --print-summary per-kernel python <kernel.py>\n# Find target kernel name and index in output (e.g., \"chunk_gated_delta_rule_fwd_ke...\" - 23)\n\n# Second step: Profile with determined index\nncu --set full --launch-skip 23 --launch-count 1 -o profile python <kernel.py>\n\n# Alternative: Filter by name (name may be truncated, need regex match)\nncu --set full --kernel-name \"chunk_gated_delta_rule\" --launch-count 1 -o profile python <kernel.py>\n```\n\n```bash\nncu --import profile.ncu-rep --metrics \\\n    sm__sass_thread_inst_executed_op_fadd_pred_on.sum,\\\n    sm__sass_thread_inst_executed_op_fmul_pred_on.sum,\\\n    sm__sass_thread_inst_executed_op_ffma_pred_on.sum,\\\n    dram__bytes.sum,\\\n    gpu__time_duration.sum\n```\n\n```bash\n# Step 0: Locate target kernel launch index (mandatory!)\nncu --print-summary per-kernel python kernel.py\n\n# Complete profile (replace N with index determined in previous step)\nncu --set full --launch-skip <N> --launch-count 1 -o out python kernel.py\n\n# Quick profile (view summary only)\nncu --set basic --launch-skip <N> --launch-count 1 python kernel.py\n\n# View memory and compute throughput only\nncu --section SpeedOfLight --launch-skip <N> --launch-count 1 python kernel.py\n\n# View occupancy limiting factors\nncu --section Occupancy --launch-skip <N> --launch-count 1 python kernel.py\n\n# View warp stall reasons\nncu --section WarpStateStatistics --launch-skip <N> --launch-count 1 python kernel.py\n\n# View SASS source\nncu --import out.ncu-rep --page source --print-source sass\n\n# Import and view all metrics\nncu --import out.ncu-rep --page details\n\n# List all available metrics\nncu --query-metrics\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/ref-docs/gluon/profiling_guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

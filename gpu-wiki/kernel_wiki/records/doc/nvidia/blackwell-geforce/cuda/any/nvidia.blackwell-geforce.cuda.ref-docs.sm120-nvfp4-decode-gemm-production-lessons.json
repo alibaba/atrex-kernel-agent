@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cuda.ref-docs.sm120-nvfp4-decode-gemm-production-lessons",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cuda|gemm|sm120-nvfp4-decode-gemm-production-lessons|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cuda",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cuda",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): SM120 NVFP4 Decode GEMM Production Lessons",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 NVFP4 Decode GEMM Production Lessons"
+  },
+  "title": "SM120 NVFP4 Decode GEMM Production Lessons",
+  "summary": "This report summarizes the reusable SM120 NVFP4 decode and prefill GEMM knowledge distilled from the omoExplore wiki. It intentionally removes experiment numbering and keeps only the stable engineering conclusions.",
+  "sections": [
+   {
+    "heading": "Scope",
+    "anchor": "scope",
+    "gist": "- Hardware: NVIDIA RTX PRO 5000 / 4000 Blackwell-GeForce, `sm_120` / `compute_120a`."
+   },
+   {
+    "heading": "Shape Taxonomy",
+    "anchor": "shape-taxonomy",
+    "gist": "table columns: Shape family, Typical dimensions, Production lesson"
+   },
+   {
+    "heading": "Split-K Dispatch Rule",
+    "anchor": "split-k-dispatch-rule",
+    "gist": "Split-K is a parallelism fix for shapes with too few output CTAs."
+   },
+   {
+    "heading": "CUDA Graph Methodology",
+    "anchor": "cuda-graph-methodology",
+    "gist": "CUDA Graph replay removes Python dispatch, C++ wrapper overhead, CPU-side kernel launch cost, and CPU-side descriptor creation."
+   },
+   {
+    "heading": "CTA-3D TMA Improvement",
+    "anchor": "cta-3d-tma-improvement",
+    "gist": "The best scoped C2-only follow-up changed the B-load structure rather than only tuning split count or tile width."
+   },
+   {
+    "heading": "Cold Weight-Streaming GEMV Residency Lever",
+    "anchor": "cold-weight-streaming-gemv-residency-lever",
+    "gist": "For a latency-bound, cold-cache, weight-streaming GEMV with visible bandwidth headroom, the useful lever is the number of resident blocks per SM, not deeper per-block prefetching."
+   },
+   {
+    "heading": "Structural DRAM-Bandwidth Ceiling",
+    "anchor": "structural-dram-bandwidth-ceiling",
+    "gist": "For `M=1..16,N=16384,K=5120` NVFP4 decode GEMM, the local ATREX-style multi-wave split-K route could not reliably beat a FlashInfer/CUTLASS b12x route already near the memory roofline."
+   },
+   {
+    "heading": "Prefill and Fusion Boundary",
+    "anchor": "prefill-and-fusion-boundary",
+    "gist": "For large-M prefill, forced b12x tactics on gate/up were too small and inconsistent to justify production routing."
+   },
+   {
+    "heading": "Reference Kernels",
+    "anchor": "reference-kernels",
+    "gist": "- CUDA Split-K decode GEMV: reference-kernels/nvidia/blackwell-geforce/cuda/nvfp4_splitk_gemv/ - Split-K dispatch wrapper: [cutlass_splitk_dispatch_sm120.…"
+   },
+   {
+    "heading": "Sustained Checklist",
+    "anchor": "sustained-checklist",
+    "gist": "1."
+   }
+  ],
+  "implementation": {
+   "snippet": "```text\nUse Split-K only when:\n  M == 1\n  N is small enough to under-fill the GPU\n  K/S satisfies the kernel alignment contract\n  workspace lifetime is stable across CUDA Graph capture/replay\n\nUse CUTLASS / FlashInfer otherwise:\n  C1-like large-N decode\n  batched decode\n  prefill\n  any shape whose base grid is already saturated\n```\n\n```text\nglobal_dims   = [K_split / 2, N, S]\nglobal_strides = [K / 2, K_split / 2]\nbox           = [64 bytes, 8 N rows, S]\n```\n\n```text\ngate_up GEMM -> SiLU*Mul -> NVFP4 payload/scale for down_proj\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cuda/sm120-nvfp4-decode-gemm-production-lessons.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

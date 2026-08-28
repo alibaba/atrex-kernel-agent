@@ -1,0 +1,147 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.hierarchical-reduction-memory-bound",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|hierarchical-reduction-memory-bound|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "misc"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "memory-bound"
+   ]
+  },
+  "technique_tags": [
+   "reduction"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Memory-Bound Kernel Optimization: Hierarchical Reduction",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Memory-Bound Kernel Optimization: Hierarchical Reduction"
+  },
+  "title": "Memory-Bound Kernel Optimization: Hierarchical Reduction",
+  "summary": "The performance bottleneck for memory-bound kernels (such as RMSNorm, Softmax, Cross Entropy, and elementwise operations) is HBM bandwidth rather than compute capacity. This article explains how to leverage the GPU's 4-level memory hierarchy for hierarchical reduction to achieve throughput near the theoretical peak (Speed-of-Light, SOL).",
+  "sections": [
+   {
+    "heading": "1. Memory-Bound vs Compute-Bound",
+    "anchor": "1-memory-bound-vs-compute-bound",
+    "gist": "**Arithmetic Intensity (AI)** = FLOPs / Bytes transferred"
+   },
+   {
+    "heading": "2. Speed-of-Light (SOL) Analysis",
+    "anchor": "2-speed-of-light-sol-analysis",
+    "gist": "Use NVIDIA Nsight Compute to obtain the actual amount of DRAM transfer:"
+   },
+   {
+    "heading": "3. Coalesced Memory Access",
+    "anchor": "3-coalesced-memory-access",
+    "gist": "GPU GMEM access is performed in units of 128 bytes (= 1 cache line)."
+   },
+   {
+    "heading": "4. 4-Level Hierarchical Reduction",
+    "anchor": "4-4-level-hierarchical-reduction",
+    "gist": "Each thread performs reduction on all elements it holds, completed entirely in registers with zero synchronization overhead."
+   },
+   {
+    "heading": "6. Online Algorithms",
+    "anchor": "6-online-algorithms",
+    "gist": "Traditional 3-pass softmax:"
+   },
+   {
+    "heading": "7. NCU Profiling for Memory-Bound Kernels",
+    "anchor": "7-ncu-profiling-for-memory-bound-kernels",
+    "gist": "table columns: Symptom, Possible Cause, Solution"
+   },
+   {
+    "heading": "8. Performance Data (QuACK Benchmarks)",
+    "anchor": "8-performance-data-quack-benchmarks",
+    "gist": "The following data is from H100 80GB HBM3 (peak 3.35 TB/s), batch size 8K-32K."
+   },
+   {
+    "heading": "Rules of Thumb",
+    "anchor": "rules-of-thumb",
+    "gist": "1."
+   },
+   {
+    "heading": "References",
+    "anchor": "references",
+    "gist": "- QuACK Blog: Getting Memory-bound Kernels to Speed-of-Light (github.com/Dao-AILab/quack) -- Core reference - Thread Block Cluster -- Cluster and DSMEM details - [PTX Synchronization and Asynchronou…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n             AI < threshold\n                  |\n     +------------+------------+\n     |                         |\n  Memory-Bound            Compute-Bound\n (bandwidthperformance) (performance)\n```\n\n```\n = total_bytes / HBM_bandwidth\n\n: Softmax, M=16K, N=131K, FP32\n  read  = 16K * 131K * 4B = 8 GB\n  write = 16K * 131K * 4B = 8 GB\n  total = 16 GB\n = 16 GB / 3.35 TB/s = 4.78 ms\n```\n\n```bash\nncu --set full -k \"kernel_name\" ./your_program\n```\n\n```\nachieved_bandwidth = (dram__bytes_read.sum + dram__bytes_write.sum) / kernel_time\nSOL% = achieved_bandwidth / peak_bandwidth * 100%\n```\n\n```\n1-pass: bandwidth = HBM_bandwidth (100%)\n2-pass: bandwidth = HBM_bandwidth / 2 (50%)\n3-pass: bandwidth = HBM_bandwidth / 3 (33%)\n```\n\n```c\n// CUDA C++ example\n// scalarload: 1 instruction per 4 bytes\nfloat val = input[tid];\n\n// vectorload: 1 instruction per 16 bytes (128 bits)\nfloat4 vals = reinterpret_cast<float4*>(input)[tid];\n// load 4 FP32\n\n// BF16 vector: 1 instruction per 16 bytes\n// 8 BF16 = 128 bits\n```\n\n```c\n// CUDA C++ (cp.async)\nasm volatile(\"cp.async.cg.shared.global [%0], [%1], 16;\" :: \"r\"(smem_addr), \"l\"(gmem_addr));\nasm volatile(\"cp.async.commit_group;\");\nasm volatile(\"cp.async.wait_group 0;\");\n```\n\n```\n                    +-----------------------+\n                    |    Global Memory      |  ~400ns, 3.35 TB/s (H100)\n                    |      (HBM DRAM)       |\n                    +-----------+-----------+\n                                |\n                    +-----------v-----------+\n            Level 4 | Distributed Shared    |  ~30-50ns, SM-to-SM fabric\n                    |   Memory (DSMEM)      |  Hopper+ only, up to 16 blocks\n                    +-----------+-----------+\n                                |\n                    +-----------v-----------+\n            Level 3 |   Shared Memory       |  ~20ns, ~20 TB/s\n                    |      (SMEM)           |  Per-SM, 192-256 KB (H100)\n                    +-----------+-----------+\n                                |\n                    +-----------v-----------+\n            Level 2 |   Warp Shuffle        |  ~5ns, ~100 TB/s\n                    |   (Registers)         |  32 threads, no memory access\n                    +-----------+-----------+\n                                |\n                    +-----------v-----------+\n            Level 1 |  Thread Registers     |  ~1ns, >100 TB/s\n                    |   (Local reduce)      |  Zero sync overhead\n                    +-----------+-----------+\n```\n\n```c\n// CUDA C++ example: thread-local reduction\n// Assuming each thread holds 8 BF16 values (after 128-bit vectorized load)\nfloat thread_sum = 0.0f;\nfor (int i = 0; i < elems_per_thread; i++) {\n    thread_sum += values[i] * values[i];  // Example: sum of squares for RMSNorm\n}\n```\n\n```c\n// CUDA C++ example: butterfly warp reduction (summation)\n__device__ float warp_reduce_sum(float val) {\n    for (int offset = 16; offset > 0; offset >>= 1) {\n        val += __shfl_xor_sync(0xffffffff, val, offset);\n    }\n    return val;  // All 32 threads obtain the same reduction result\n}\n\n// Maximum value version\n__device__ float warp_reduce_max(float val) {\n    for (int offset = 16; offset > 0; offset >>= 1) {\n        val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, offset));\n    }\n    return val;\n}\n```\n\n```\nStep 1 (offset=4):  T0<->T4  T1<->T5  T2<->T6  T3<->T7\nStep 2 (offset=2):  T0<->T2  T1<->T3  T4<->T6  T5<->T7\nStep 3 (offset=1):  T0<->T1  T2<->T3  T4<->T5  T6<->T7\n\n32 threads: 5 steps (offset = 16, 8, 4, 2, 1)\n```\n\n```c\n// Reduce only within 8-thread subgroups\nfloat warp_reduce_sum_partial(float val, int width) {\n    for (int offset = width / 2; offset > 0; offset >>= 1) {\n        val += __shfl_xor_sync(0xffffffff, val, offset);\n    }\n    return val;\n}\n```\n\n```\nStep 1 (offset=4):  T0<->T4  T1<->T5  T2<->T6  T3<->T7\nStep 2 (offset=2):  T0<->T2  T1<->T3  T4<->T6  T5<->T7\nStep 3 (offset=1):  T0<->T1  T2<->T3  T4<->T5  T6<->T7\n\n32 : 5 steps (offset = 16, 8, 4, 2, 1)\n```\n\n```c\n// 8 reduction\nfloat warp_reduce_sum_partial(float val, int width) {\n    for (int offset = width / 2; offset > 0; offset >>= 1) {\n        val += __shfl_xor_sync(0xffffffff, val, offset);\n    }\n    return val;\n}\n```\n\n```c\n// CUDA C++ example: block reduction\n__shared__ float reduction_buffer[MAX_WARPS_PER_ROW];\n\n__device__ float block_reduce_sum(float val) {\n    int lane = threadIdx.x % 32;\n    int warp = threadIdx.x / 32;\n    int warps_per_row = blockDim.x / 32;  // Simplified: assuming all warps in the same row\n\n    // Step 1: warp reduction\n    val = warp_reduce_sum(val);\n\n    // Step 2: lane 0 of each warp writes to SMEM\n    if (lane == 0) {\n        reduction_buffer[warp] = val;\n    }\n    __syncthreads();  // ~20 cycles\n\n    // Step 3: first warp reads back and reduces\n    float block_val = 0.0f;\n    if (lane < warps_per_row) {\n        block_val = reduction_buffer[lane];\n    }\n    block_val = warp_reduce_sum(block_val);\n\n    return block_val;  // All threads obtain the same result\n}\n```\n\n```c\n// CUDA C++ conceptual illustration (actual requires PTX or CuTeDSL)\n// Assuming cluster_size = 4, each block completes block-level reduction\n\n// Step 1: Write this block's reduction result to other blocks' SMEM (via DSMEM)\n// Use mapa instruction to get remote SMEM address\nuint32_t remote_smem = __mapa(local_smem_ptr, peer_block_rank);\n// Use st.async to write asynchronously\nasm volatile(\"st.async.shared::cluster.mbarrier::complete_tx::bytes.f32 [%0], %1, [%2];\"\n             :: \"r\"(remote_smem), \"f\"(my_val), \"r\"(remote_mbar));\n\n// Step 2: Wait for all blocks in cluster to finish writing\nasm volatile(\"mbarrier.try_wait ...\"); // Wait for mbarrier\n\n// Step 3: Read all block values from local SMEM's reduction buffer and reduce\nfloat cluster_val = 0.0f;\nfor (int i = 0; i < cluster_size * warps_per_row; i++) {\n    cluster_val += reduction_buffer[i];  // All blocks' data now in local SMEM\n}\n```\n\n```\nThe size of N determines the reduction level needed:\n\nN <= 32 elements:\n  Thread reduction (each thread handles <= 1 element)\n  -> Only warp shuffle needed\n\nN <= 4K elements (BF16):\n  Thread reduction + Warp shuffle\n  -> 128 threads, each thread ~32 elements, 4 warps\n  -> Block reduction (via SMEM)\n\nN <= 16K elements (BF16):\n  Thread reduction + Warp shuffle + Block reduction\n  -> 256 threads, each thread ~64 elements, 8 warps\n  -> Single SM registers sufficient\n\nN = 16K ~ 64K elements (BF16):\n  Need cluster (cluster_n = 2~4)\n  -> Otherwise register spilling or multiple GMEM reads required\n\nN >= 64K elements (BF16):\n  Must use cluster (cluster_n >= 4)\n  -> Without cluster, performance drops ~50% (register spilling)\n  -> cluster_n=16 can handle up to 256K elements\n```\n\n```\n  SM 0           SM 1           SM 2           SM 3\n+--------+    +--------+    +--------+    +--------+\n| SMEM 0 |<-->| SMEM 1 |<-->| SMEM 2 |<-->| SMEM 3 |\n| 256 KB |    | 256 KB |    | 256 KB |    | 256 KB |\n+--------+    +--------+    +--------+    +--------+\n     ^              ^              ^              ^\n     |              |              |              |\n     +--------------+--------------+--------------+\n                SM-to-SM Network (DSMEM fabric)\n                    Cluster (size = 4)\n```\n\n```\nTimeline:\n\nBlock 0:  [reduce] -> [st.async to all] -> [mbar wait] -> [read local buf] -> [reduce]\nBlock 1:  [reduce] -> [st.async to all] -> [mbar wait] -> [read local buf] -> [reduce]\nBlock 2:  [reduce] -> [st.async to all] -> [mbar wait] -> [read local buf] -> [reduce]\nBlock 3:  [reduce] -> [st.async to all] -> [mbar wait] -> [read local buf] -> [reduce]\n\nmbar block st.async complete\n-> block reduction_buffer block\n-> warp reduce obtain cluster reductionresult\n```\n\n```\nPhase 0:  Producer writes to buffer[0] -> full_mbar[0] arrives\n          Consumer waits full_mbar[0] -> reads buffer[0] -> empty_mbar[0] arrives\nPhase 1:  Producer waits empty_mbar[0] -> writes to buffer[1] -> full_mbar[1] arrives\n          Consumer waits full_mbar[1] -> reads buffer[1] -> empty_mbar[1] arrives\n(repeat with phase flipping)\n```\n\n```\nPass 1: max_x = max(x_i)               // 1 GMEM read\nPass 2: sum_exp = sum(exp(x_i - max_x)) // 1 GMEM read (!)\nPass 3: y_i = exp(x_i - max_x) / sum_exp // 1 GMEM read + 1 write\n```\n\n```\n// running max running sum\nmax_prev = -inf\nsum_prev = 0\n\nfor each x_i:\n    max_new = max(max_prev, x_i)\n // fix sum: previous sum max_prev compute, requiresfix\n    sum_new = sum_prev * exp(max_prev - max_new) + exp(x_i - max_new)\n    max_prev = max_new\n    sum_prev = sum_new\n\n// 1 GMEM read (pass 1+2) + 1 read+write (pass 3)\n// 1 complete GMEM read = 33%\n```\n\n```\nmax_final = max(max_a, max_b)\nsum_final = sum_a * exp(max_a - max_final) + sum_b * exp(max_b - max_final)\n```\n\n```\n// sum of squares +, blockreduction\nsum_sq = 0\nfor each x_i:\n    sum_sq += x_i * x_i\nrstd = rsqrt(sum_sq / N + eps)\n```\n\n```bash\n# complete profile\nncu --set full --kernel-name \"softmax\" --launch-count 1 ./program\n\n# memory\nncu --metrics \\\n  dram__bytes_read.sum,\\\n  dram__bytes_write.sum,\\\n  dram__throughput.avg.pct_of_peak_sustained_elapsed,\\\n  lts__t_sectors_srcunit_tex_op_read.sum,\\\n  smsp__sass_inst_executed_op_ldl_pred_on.sum \\\n  ./program\n```\n\n```python\ndef compute_sol(dram_read_bytes, dram_write_bytes, kernel_time_ns, peak_bandwidth_TBps):\n    total_bytes = dram_read_bytes + dram_write_bytes\n    achieved_TBps = total_bytes / (kernel_time_ns * 1e-9) / 1e12\n    sol_pct = achieved_TBps / peak_bandwidth_TBps * 100\n    return achieved_TBps, sol_pct\n\n# example: H100 softmax, M=16K, N=131K, FP32\nachieved, sol = compute_sol(\n    dram_read_bytes=16384 * 131072 * 4,   # 8 GB\n    dram_write_bytes=16384 * 131072 * 4,  # 8 GB\n    kernel_time_ns=5320000,               # 5.32 ms\n    peak_bandwidth_TBps=3.35\n)\n# achieved = 3.01 TB/s, sol = 89.7%\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/hierarchical-reduction-memory-bound.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.2-k-pad-4-looks-16-byte-misaligned-but-is-the-right-choice-anyway",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#2-k-pad-4-looks-16-byte-misaligned-but-is-the-right-choice-anyway|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '2. K_PAD = 4 looks 16-byte-misaligned but is the right choice anyway' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 2. K_PAD = 4 looks 16-byte-misaligned but is the right choice anyway",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 2. K_PAD = 4 looks 16-byte-misaligned but is the right choice anyway"
+  },
+  "attempted": "The K LDS layout uses `K_STRIDE = HEAD_DIM + K_PAD = 132` elements, i.e., 264 bytes/row. Naively 264 % 16 = 8 ⇒ NOT 16-byte aligned, which violates `ds_write_b128`'s alignment requirement. Sweep says K_PAD=8 is the next 16-byte-aligned candidate and benches identically. Tempting to \"fix\" K_PAD to 8.",
+  "verdict": "not-worth-it-here",
+  "lesson": "16-byte alignment for `ds_write_b128` applies to the address issued by each lane, not to the row-base of every LDS row. Row strides should be picked to MAXIMIZE bank diversity (gcd(dword_stride, 32) = 1), not to satisfy a row-base alignment constraint that doesn't exist.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "`ds_write_b128` does NOT require row-base alignment to 16 B; it only needs the per-thread address to be 16 B aligned. Per-thread addresses for the cooperative store are always at multiples of `load_col_base * 2` bytes within a row, which IS 16-aligned for VEC_WIDTH=16 (32 B per thread). Row-to-row stride being non-16-aligned just means rows start at different alignment classes within a 16-byte window — the per-instruction alignment is fine."
+  },
+  "root_cause": "`ds_write_b128` does NOT require row-base alignment to 16 B; it only needs the per-thread address to be 16 B aligned. Per-thread addresses for the cooperative store are always at multiples of `load_col_base * 2` bytes within a row, which IS 16-aligned for VEC_WIDTH=16 (32 B per thread). Row-to-row stride being non-16-aligned just means rows start at different alignment classes within a 16-byte window — the per-instruction alignment is fine."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

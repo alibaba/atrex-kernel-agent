@@ -1,0 +1,126 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.cutedsl.ref-docs.quack-gemm-epilogue",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|cutedsl|gemm|quack-gemm-epilogue|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "blackwell-geforce",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): QuACK GEMM and Composable Epilogue System",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "QuACK GEMM and Composable Epilogue System"
+  },
+  "title": "QuACK GEMM and Composable Epilogue System",
+  "summary": "QuACK (by Tri Dao) is a high-performance GEMM library built on CuTeDSL, with the following core features: - **Multi-architecture unified interface**: The same `gemm()` API automatically dispatches to SM90 (Hopper) / SM100 (Blackwell) / SM120 (Blackwell GeForce) - **Composable Epilogue**: Componentized epilogue operations (bias, activation, normalization, reduction) via `EpiOp`, freely composable into fused kernels - **High-level fusion operations**: GEMM+Activation, GEMM+Norm+Activation, complete MLP blocks, all with PyTorch autograd integration - **JIT compilation cache**: Compiled via TVM-FFI, `@jit_cache` ensures each configuration is compiled only once",
+  "sections": [
+   {
+    "heading": "Part 1: Multi-architecture GEMM",
+    "anchor": "part-1-multi-architecture-gemm",
+    "gist": "QuACK obtains the GPU's SM version number via `get_device_capacity()`, then uses a simple dictionary to dispatch to the corresponding GEMM implementation class:"
+   },
+   {
+    "heading": "Part 2: Composable Epilogue System",
+    "anchor": "part-2-composable-epilogue-system",
+    "gist": "QuACK abstracts epilogue operations into the `EpiOp` base class Each op encapsulates the full lifecycle of a tensor operation:"
+   },
+   {
+    "heading": "Part 3: Fused High-Level Operations",
+    "anchor": "part-3-fused-high-level-operations",
+    "gist": "**Forward: GemmActMixin**"
+   },
+   {
+    "heading": "Part 4: Supporting Infrastructure",
+    "anchor": "part-4-supporting-infrastructure",
+    "gist": "`FastDivmod` wraps CUTLASS's `FastDivmodDivisor` to convert integer division into multiplication + shift, avoiding expensive integer division on the GPU:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\n# gemm.py\nsm_to_cls = {\n    9: GemmDefaultSm90,   # SM90 Hopper (H100/H20)\n    10: GemmDefaultSm100,  # SM100 Blackwell (B200)\n    11: GemmDefaultSm100,  # SM110 also uses SM100 path\n    12: GemmDefaultSm120,  # SM120 Blackwell GeForce (B580)\n}\nGemmCls = sm_to_cls[device_capacity[0]]\n```\n\n```python\n# sm90_utils.py\ndef gemm(tiled_mma, acc, tCrA, tCrB, zero_init=False, wg_wait=0):\n    warpgroup.fence()\n    mma_atom = cute.make_mma_atom(tiled_mma.op)\n    mma_atom.set(warpgroup.Field.ACCUMULATE, not zero_init)\n    for k in cutlass.range_constexpr(cute.size(tCrA.shape[2])):\n        cute.gemm(mma_atom, acc, tCrA[None, None, k], tCrB[None, None, k], acc)\n        mma_atom.set(warpgroup.Field.ACCUMULATE, True)\n    warpgroup.commit_group()\n    if wg_wait >= 0:\n        warpgroup.wait_group(wg_wait)\n```\n\n```python\n# kernel entry warp\nif warp_idx >= self.ab_load_warp_id:\n    cute.arch.setmaxregister_decrease(self.num_regs_load)\n # TMA load mainloop ...\nif warp_idx < self.ab_load_warp_id:\n    cute.arch.setmaxregister_increase(self.num_regs_mma)\n # MMA + Epilogue mainloop ...\n```\n\n```python\n# Pingpong synchronous\nself.pingpong_barrier_sync(warp_group_idx, stage=\"mma\") # wait\nself.pingpong_barrier_arrive(1 - warp_group_idx, stage=\"mma\") # notify\n```\n\n```python\n# automaticcompute pipeline\nab_stage = remaining_smem_bytes // ab_bytes_per_stage # 4-7\nepi_stage = 4 if epi_tile_N <= 16 else 2\nsched_stage = 2 if pingpong else 1\n```\n\n```python\n# 2-CTA\nself.use_2cta_instrs = cluster_shape_mnk[0] == 2 and mma_tiler_mn[0] in (256,)\nself.cta_group = tcgen05.CtaGroup.TWO if self.use_2cta_instrs else tcgen05.CtaGroup.ONE\n```\n\n```python\n# tile_scheduler.py\nclass PersistenceMode(IntEnum):\n    NONE = 0\n    STATIC = 1    # SM90: grid = max_active_clusters\n    DYNAMIC = 2   # SM90: atomicInc semaphore\n    CLC = 3       # SM100: hardware-assisted scheduling\n```\n\n```python\nself.epilog_warp_id = tuple(range(num_epi_warps))  # (0, 1, 2, 3)\nself.mma_warp_id = len(self.epilog_warp_id)         # 4\nself.ab_load_warp_id = self.mma_warp_id + 1          # 5\nself.epi_load_warp_id = self.ab_load_warp_id + 1     # 6 (+ num_ab_load_warps)\nself.scheduler_warp_id = self.epi_load_warp_id + 1   # 7\n```\n\n```python\n# TMEM\ntmem = cutlass.utils.TmemAllocator(\n    storage.tmem_holding_buf,\n    storage.tmem_dealloc_mbar_ptr,\n    self.num_tmem_alloc_cols,\n    barrier_for_retrieve=tmem_alloc_barrier,\n    allocator_warp_id=self.epilog_warp_id[0],\n    is_two_cta=use_2cta_instrs,\n)\n\n# Epilogue use tiled_copy_t2r (TMEM -> RMEM)\ntiled_copy_t2r = tcgen05.make_tmem_copy(...)\n```\n\n```python\n# gemm_sm100.py\n# Epilogue warps (WG0): requiresregister compute-heavy\ncute.arch.setmaxregister_increase(self.num_regs_epi)    # 256\n\n# warps (WG1, WG2): TMEM/TMA, requiresregister\ncute.arch.setmaxregister_decrease(self.num_regs_other)  # 120\n\n# check: 256 + 120 + 120 = 496 <= 504\n```\n\n```python\n# blockscaled_gemm_utils.py / mx_utils.py\nGemmCls = GemmDefaultSm100 # sf_vec_size parameter\n# load SFA/SFB (scale factor) tensors\ntma_atom_sfa, tma_tensor_sfa = cute.nvgpu.make_tiled_tma_atom_A(...)\ntma_atom_sfb, tma_tensor_sfb = cute.nvgpu.make_tiled_tma_atom_B(...)\n```\n\n```python\n# gemm_sm120.py\ndef _setup_tiled_mma(self):\n    op = warp.MmaF16BF16Op(self.a_dtype, self.acc_dtype, self.mma_inst_mnk)\n    tC = cute.make_layout(self.atom_layout_mnk)\n    self.tiled_mma = cute.make_tiled_mma(op, tC, permutation_mnk=permutation_mnk)\n\n# MMA mainloop: ldmatrix + gemm\ndef mma(self, ...):\n    # 1. SMEM -> RMEM via ldmatrix\n    load_sA(tCsA_p[None, None, k], tCrA_copy_view[None, None, k])\n    load_sB(tCsB_p[None, None, k], tCrB_copy_view[None, None, k])\n    # 2. Warp-level MMA\n    cute.gemm(tiled_mma, acc, tCrA[None, None, k], tCrB[None, None, k], acc)\n```\n\n```python\nclass EpiOp:\n def smem_bytes(self, arg_tensor, cta_tile_shape_mnk, epi_tile): ... # SMEM\n def smem_struct_field(self, gemm, params): ... # SMEM struct\n def begin(self, gemm, param, smem_tensor, ctx): ... # tile\n def begin_loop(self, gemm, state, epi_coord): ... # subtile\n def end(self, gemm, param, state, ...): ... # tile reduction/write\n```\n\n```\nbegin():    cp_async load bias[tile_N] from GMEM -> SMEM\n partition_for_epilogue -> tDsV ( subtile )\nbegin_loop(): SMEM -> RMEM copy (tDsV_cur -> tDrV)\n              cast to acc_dtype -> tDrV_cvt\n```\n\n```python\ndef begin_loop(self, gemm, state, epi_coord):\n    epi_n = epi_coord[1]\n if epi_n == 0: # N subtile copy\n        cute.autovec_copy(tDsV_cur, tDrV)\n        tDrV_cvt.store(tDrV.load().to(gemm.acc_dtype))\n    return tDrV_cvt\n```\n\n```python\n# register subtile\ntDrReduce.fill(0.0)\n# epi_visit_subtile : colvec_reduce_accumulate(tDrReduce, input)\n\n# epi_end : warp shuffle reduction + direct gmem write\nfor i in range(size):\n    tDrReduce[i] = cute.arch.warp_reduction(tDrReduce[i], operator.add, threads_in_group=lanes_in_N)\n# directwrite GMEM(warps_in_N == 1, does not require inter-warp reduction)\n```\n\n```python\nclass GemmDefaultEpiMixin(ComposableEpiMixin):\n    _epi_ops = (\n        Scalar(\"alpha\"),\n        Scalar(\"beta\"),\n        RowVecLoad(\"mRowVecBroadcast\"),\n        ColVecLoad(\"mColVecBroadcast\"),\n        Scalar(\"sr_seed\", dtype=Int32),\n    )\n```\n\n```python\nclass GemmActMixin(GemmDefaultEpiMixin):\n    _epi_ops = (*GemmDefaultEpiMixin._epi_ops, TileStore(\"mPostAct\"))\n    _extra_param_fields = ((\"act_fn\", cutlass.Constexpr, None),)\n```\n\n```python\ndef epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC):\n alpha = epi_loop_tensors[\"alpha\"] # dict by\n    tDrRowVec = epi_loop_tensors[\"mRowVecBroadcast\"]\n    tDrColVec = epi_loop_tensors[\"mColVecBroadcast\"]\n # definition compute logical...\n```\n\n```python\nclass GemmActMixin(GemmDefaultEpiMixin):\n    def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC):\n # 1. standard epilogue (alpha, beta, bias)\n        GemmDefaultEpiMixin.epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC)\n        # 2. Apply activation in-place\n        for i in range(cute.size(tRS_rPostAct)):\n            tRS_rPostAct[i] = params.act_fn(tRS_rD[i])\n return tRS_rPostAct # write PostAct tensor via TMA\n```\n\n```python\n# SM100+ path\nfor i in range(cute.size(tRS_rPostAct) // 2):\n    tRS_rPostAct[2*i], tRS_rPostAct[2*i+1] = params.act_fn(\n        (tRS_rD[2*i], tRS_rD[2*i+1])\n    )\n```\n\n```python\nclass GemmGatedMixin(GemmActMixin):\n    _epi_ops = (*GemmDefaultEpiMixin._epi_ops,\n                TileStore(\"mPostAct\", epi_tile_fn=_gated_epi_tile_fn))\n # PostAct shape: (M, N//2), epi_tile N dimension\n```\n\n```python\nclass GemmDActMixin(GemmActMixin):\n    def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC):\n        # D = dout @ W2 (from mainloop)\n        # C = preact (loaded via TMA)\n        # act_fn(preact, dout) -> (dpreact, postact)\n        tRS_rD[i], tRS_rPostAct[i] = params.act_fn(tRS_rC_acc[i], tRS_rD[i])\n```\n\n```python\nclass GemmDGatedMixin(GemmActMixin):\n    _epi_ops = (*GemmActMixin._epi_ops, ColVecReduce(\"mColVecReduce\"))\n```\n\n```python\nclass GemmNormActMixin(GemmActMixin):\n    def epi_visit_subtile(self, params, epi_loop_tensors, tRS_rD, tRS_rC):\n        # 1. D = alpha * (A @ B) + beta * C\n        # 2. D *= colvec (rstd) * rowvec (norm_weight)\n        vec_multiply(self, tRS_rD, tDrColVec, tDrRowVec)\n        # 3. PostAct = act(D)\n        for i in range(size):\n            tRS_rPostAct[i] = params.act_fn(tRS_rD[i])\n```\n\n```python\nclass Linear(nn.Linear):\n    def forward(self, input):\n        if input.is_cuda and self.in_features % 8 == 0 and self.out_features % 8 == 0:\n            return linear_func(input, self.weight, self.bias,\n                             fuse_grad_accum=self.fuse_grad_accum)\n        else:\n            return F.linear(input, self.weight, self.bias)\n```\n\n```python\nif not ctx.fuse_grad_accum or weight_og.grad is None:\n    dweight = matmul_fn(dout.T, x, out_dtype=ctx.weight_dtype)\nelse:\n    gemm_add_inplace(dout.T, x, weight_og.grad)\n    dweight = weight_og.grad\n weight_og.grad = None # PyTorch\n```\n\n```python\ndef chunked_linear_cross_entropy_fwd(x, weight, target, chunk_size=4096):\n # chunk (chunk_size, d):\n    for chunk in chunks:\n logits = x_chunk @ weight.T # (chunk_size, V) -\n        cross_entropy_fwd_out(logits, target)  # in-place gradient\n        dx_chunk = dlogits @ weight            # (chunk_size, d)\n dw += dlogits.T @ x_chunk # dW\n```\n\n```python\ndef mlp_func(x, weight1, weight2, activation, recompute=False):\n    if recompute:\n        return MLPRecomputeFunc.apply(x, weight1, weight2, activation, ...)\n    else:\n        # Normal mode: 2 separate autograd functions\n        preact, postact = fc1_fn(x, weight1, activation)  # gemm_act / gemm_gated\n        out = fc2_fn(preact, weight2, postact, activation) # act_linear / gated_linear\n```\n\n```python\nclass MLPRecomputeFunc(torch.autograd.Function):\n    @staticmethod\n    def backward(ctx, dout):\n # fc1(1 GEMM), gemm_dact preact postact\n        preact = ops.matmul_fwd(x_flat, weight1.T)        # replay fc1 only\n        dpreact, postact = ops.matmul_bwd_dact(dout, weight2, preact, activation)\n # dW2 = dout.T @ postact (postact gemm_dact)\n        # dx = dpreact @ W1\n        # dW1 = dpreact.T @ x\n```\n\n```python\nclass MLP(nn.Module):\n    def __init__(self, in_features, hidden_features=None, activation=\"gelu_tanh_approx\",\n                 fuse_grad_accum=False, recompute=False):\n        fc1_out = 2 * hidden_features if gated else hidden_features\n        self.fc1 = nn.Linear(in_features, fc1_out)\n        self.fc2 = nn.Linear(hidden_features, out_features)\n```\n\n```python\nclass FastDivmod(cute.FastDivmodDivisor):\n    def __init__(self, divisor, is_power_of_2=None):\n        super().__init__(divisor, is_power_of_2=is_power_of_2)\n self.divisor = divisor # keep divisor compute\n```\n\n```python\nclass RoundingMode(IntEnum):\n RN = 0 # Round to nearest even(default)\n    RS = 1  # Stochastic rounding（SM100+ only）\n```\n\n```python\n# PTX: cvt.rs.satfinite.bf16x2.f32 dst, src_hi, src_lo, rand\ndef cvt_f32x2_bf16x2_rs(a, b, rand_bits):\n    return llvm.inline_asm(\"cvt.rs.satfinite.bf16x2.f32 $0, $2, $1, $3;\", ...)\n```\n\n```python\n# : group\nif group_id % 2 == 1:  # serpentine order\n    cid_slow = ncluster_slow - 1 - cid_slow\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cutedsl/quack-gemm-epilogue.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

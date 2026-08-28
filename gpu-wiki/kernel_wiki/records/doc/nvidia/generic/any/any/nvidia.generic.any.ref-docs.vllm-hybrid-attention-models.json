@@ -1,0 +1,155 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.vllm-hybrid-attention-models",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|vllm-hybrid-attention-models|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Hybrid Attention Models as First-Class Citizens in vLLM",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Hybrid Attention Models as First-Class Citizens in vLLM"
+  },
+  "title": "Hybrid Attention Models as First-Class Citizens in vLLM",
+  "summary": "This document covers the integration of hybrid attention models (combining standard attention with Mamba/linear attention) into vLLM V1, including the unified allocator design, stride alignment, CUDA Graph optimization, and benchmark results.",
+  "sections": [
+   {
+    "heading": "1. The Fundamental Bottlenecks of Attention",
+    "anchor": "1-the-fundamental-bottlenecks-of-attention",
+    "gist": "KV cache memory consumption grows linearly with sequence length, and prefill latency scales quadratically with prompt length."
+   },
+   {
+    "heading": "2. Why Long Sequences Matter",
+    "anchor": "2-why-long-sequences-matter",
+    "gist": "- **RAG**: User queries concatenated with multiple documents push prompts from thousands to hundreds of thousands of tokens."
+   },
+   {
+    "heading": "3. A Brief History of SSMs",
+    "anchor": "3-a-brief-history-of-ssms",
+    "gist": "- **S4 (2021)**: A recurrent structure that maps length-T input sequences to outputs through a latent state h."
+   },
+   {
+    "heading": "4. V1 Landscape",
+    "anchor": "4-v1-landscape",
+    "gist": "V1 currently supports hybrid attention models including Nemotron Nano 2, Granite 4.0, Qwen3-Next, MiniMax-Text-01, and Kimi Linear."
+   },
+   {
+    "heading": "5. State Management: Merging Two Worlds",
+    "anchor": "5-state-management-merging-two-worlds",
+    "gist": "- **Attention KV cache**: 16-token blocks, approximately 64 KiB per block."
+   },
+   {
+    "heading": "6. V0: The Fragile Patch",
+    "anchor": "6-v0-the-fragile-patch",
+    "gist": "Mamba states were allocated separately, with size guessed from `max_num_seqs`: too high causes OOM, too low reduces concurrency."
+   },
+   {
+    "heading": "7. V1: The Unified Allocator",
+    "anchor": "7-v1-the-unified-allocator",
+    "gist": "The unified allocator manages both KV cache and Mamba state simultaneously."
+   },
+   {
+    "heading": "8. Stride Adjustment: Perfect Alignment Details",
+    "anchor": "8-stride-adjustment-perfect-alignment-details",
+    "gist": "KVCacheGroups share the same KVCacheTensor but with different view layouts:"
+   },
+   {
+    "heading": "9. Performance Engineering",
+    "anchor": "9-performance-engineering",
+    "gist": "**Triton launch overhead** (triton#2637): Significant impact on ITL for small batches and models with few active parameters."
+   },
+   {
+    "heading": "10. Benchmarks (vLLM v0.10.2, H100)",
+    "anchor": "10-benchmarks-vllm-v0-10-2-h100",
+    "gist": "Input 32K + output 128, sweeping concurrency:"
+   },
+   {
+    "heading": "11. Conclusion",
+    "anchor": "11-conclusion",
+    "gist": "Hybrid attention models in V1 benefit from unified memory allocation, CUDA Graph optimization, prefix caching, KV migration, and PD disaggregation."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\neager → piecewise → decode-only full → FULL_AND_PIECEWISE (full graph for decode + piecewise graph for mixed batches)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/vllm-hybrid-attention-models.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

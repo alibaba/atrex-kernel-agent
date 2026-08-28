@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.25-persistent-kernel-regresses-3-1-on-flash-attention",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#25-persistent-kernel-regresses-3-1-on-flash-attention|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '25. Persistent kernel regresses −3.1% on flash attention' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 25. Persistent kernel regresses −3.1% on flash attention",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 25. Persistent kernel regresses −3.1% on flash attention"
+  },
+  "attempted": "Persistent kernels (one WG processes multiple `(batch, q_tile)` tiles serially) are a standard optimization for reducing kernel launch overhead and improving occupancy utilization. CK uses this for large-batch GEMM with measurable wins. \"Should help attention too.\"",
+  "verdict": "performance-ceiling",
+  "lesson": "Persistent kernels are not free — they add per-tile overhead. Only use them when launch overhead is a significant fraction of runtime (small grid) or when tiles can share data. For flash attention with a full-sized grid, standard dispatch is faster.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Flash attention's per-tile state (Q registers, running max/sum, O accumulators) is expensive to save/restore between tiles. The persistent loop adds: (1) tile-index computation per iteration, (2) Q re-load for each new tile, (3) O writeback + accumulator reset between tiles. These costs exceed the launch overhead savings because the grid is already large enough (512 WGs for B1S4096H32) that launch overhead is amortized."
+  },
+  "observed": "−3.1% regression (87.4T → 84.7T at B1S4096).",
+  "root_cause": "Flash attention's per-tile state (Q registers, running max/sum, O accumulators) is expensive to save/restore between tiles. The persistent loop adds: (1) tile-index computation per iteration, (2) Q re-load for each new tile, (3) O writeback + accumulator reset between tiles. These costs exceed the launch overhead savings because the grid is already large enough (512 WGs for B1S4096H32) that launch overhead is amortized."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,157 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.ck-gemm-pipelines",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|gemm|ck-gemm-pipelines|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Composable Kernel GEMM Pipeline System",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Composable Kernel GEMM Pipeline System"
+  },
+  "title": "Composable Kernel GEMM Pipeline System",
+  "summary": "CK ck_tile framework's GEMM pipeline architecture—covering 8 pipeline variants (mem/comp_v1-v6/async/preshuffle), multi-stage prefetch formula (MinMemInFlyBytes=32KB), Intrawave vs Interwave scheduling, Stream-K work stealing, tail specialization, MFMA instruction selection and register control, and warp GEMM attribute system.",
+  "sections": [
+   {
+    "heading": "1. Pipeline Variant Overview",
+    "anchor": "1-pipeline-variant-overview",
+    "gist": "CK's GEMM pipeline follows the unified naming `gemm_pipeline_ag_bg_cr_<variant>`, where `ag`=A from global, `bg`=B from global, `cr`=C in register."
+   },
+   {
+    "heading": "2. Multi-Stage Prefetch and MinMemInFlyBytes",
+    "anchor": "2-multi-stage-prefetch-and-minmeminflybytes",
+    "gist": "The `mem` pipeline automatically calculates the optimal prefetch depth based on hardware parameters:"
+   },
+   {
+    "heading": "3. Intrawave vs Interwave Scheduling",
+    "anchor": "3-intrawave-vs-interwave-scheduling",
+    "gist": "**Core Idea**: Within the instruction stream of a single wave, precisely control the interleaving order of different types of instructions through `__builtin_amdgcn_sched_group_barrier`, enabling MFMA, DS, and VMEM instructions to execute …"
+   },
+   {
+    "heading": "4. Tail Specialization",
+    "anchor": "4-tail-specialization",
+    "gist": "When the K dimension is not divisible by `KPerBlock * PrefetchStages`, the last few iterations need special handling."
+   },
+   {
+    "heading": "5. Stream-K Work Stealing",
+    "anchor": "5-stream-k-work-stealing",
+    "gist": "Stream-K evenly distributes the GEMM workload by the number of K-dimension iterations across all CTAs, rather than the traditional static allocation by output tiles."
+   },
+   {
+    "heading": "7. Register File Control (WGAttrCtlEnum)",
+    "anchor": "7-register-file-control-wgattrctlenum",
+    "gist": "The three letters represent the register file used by **C (accumulator) - A (input) - B (input)**: - **V** = VGPR (Vector General Purpose Register) - **A** = AGPR (Accumulator General Purpose Register)"
+   },
+   {
+    "heading": "8. Warp GEMM Attribute System",
+    "anchor": "8-warp-gemm-attribute-system",
+    "gist": "table columns: Variant, Function"
+   },
+   {
+    "heading": "9. LDS Double Buffering in GEMM",
+    "anchor": "9-lds-double-buffering-in-gemm",
+    "gist": "Ping-pong pattern:"
+   },
+   {
+    "heading": "10. Pipeline Implementation Details",
+    "anchor": "10-pipeline-implementation-details",
+    "gist": "The B matrix is preprocessed on the host side into an MFMA-friendly layout, skipping the B transpose in LDS at runtime:- PrefetchStages=1: No multi-level prefetch needed (B is already optimal layout) - TailNumber always Empty: No remainder…"
+   },
+   {
+    "heading": "11. Practical Recommendations",
+    "anchor": "11-practical-recommendations",
+    "gist": "__GPU_WIZI_TRANSLATION_PLACEHOLDER_000001__"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- CK Memory Optimization System — BufferView, XOR preshuffle, TileWindow, LoadStoreTraits - AMD MFMA Matrix Core Programming Guide — MFMA naming conventions and register layouts - [L…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```cpp\nconstexpr index_t MinMemInFlyBytes = 32768;  // 32 KB\n\n// WGP (Workgroup Processor) shared CU\nconstexpr auto WgpPerCU = max(4 * warp_size / BlockSize, 1);\n\n// prefetchdata\nconstexpr auto MemBytesPerPrefetch =\n    (MPerBlock * sizeof(ADataType) / PackedA +\n     NPerBlock * sizeof(BDataType) / PackedB) * KPerBlock;\n\n// memoryprefetch\nconstexpr auto FullMemBandPrefetchStages =\n    ceil_div(MinMemInFlyBytes / WgpPerCU, MemBytesPerPrefetch);\n\n// [2, 8] range\nconstexpr auto PrefetchStages =\n    clamp(FullMemBandPrefetchStages, 2, 8);\n```\n\n```\nMemBytesPerPrefetch = (256*2 + 256*2) * 64 = 65536 bytes = 64 KB\nWgpPerCU = max(4*64/256, 1) = 1\nFullMemBandPrefetchStages = ceil(32768/1 / 65536) = 1\nPrefetchStages = clamp(1, 2, 8) = 2 ( 2 )\n```\n\n```\nMemBytesPerPrefetch = (64*2 + 64*2) * 32 = 8192 bytes = 8 KB\nWgpPerCU = max(4*64/256, 1) = 1\nFullMemBandPrefetchStages = ceil(32768 / 8192) = 4\nPrefetchStages = clamp(4, 2, 8) = 4 (4 prefetch)\n```\n\n```cpp\nenum struct GemmPipelineScheduler {\n Default, // compilationdefault\n Intrawave, // wave\n Interwave, // wave pipeline\n};\n```\n\n```cpp\n// Stage 1: DS Write MFMA + prefetch buffer_load\n__builtin_amdgcn_sched_group_barrier(\n    0x100,  // DS write\n    ds_write_issue_cycles,\n    0);\n__builtin_amdgcn_sched_group_barrier(\n    0x008,  // MFMA\n    mfma_cycles_per_issue,\n    0);\n__builtin_amdgcn_sched_group_barrier(\n    0x020,  // VMEM (buffer_load)\n    num_buffer_load_issues,\n    0);\n\n// Stage 2: DS Read MFMA\n__builtin_amdgcn_sched_group_barrier(\n    0x200,  // DS read\n    ds_read_issue_cycles,\n    0);\n__builtin_amdgcn_sched_group_barrier(\n    0x008,  // MFMA\n    remaining_mfma_cycles,\n    0);\n```\n\n```cpp\n// Interwave pipeline :\n// \"no second block_sync_lds because it's interwave\"\n```\n\n```cpp\nenum struct TailNumber {\n // (single/double buffer pipeline)\n Odd, // K iterationcount\n Even, // K iterationcount\n\n // prefetch pipeline ( 8 )\n    One, Two, Three, Four, Five, Six, Seven,\n\n // loop\n Empty, // UnrollStages > PrefetchStages, loopcount UnrollStages\n Full, // UnrollStages <= PrefetchStages, loopcount UnrollStages + PrefetchStages\n};\n```\n\n```cpp\n// mem pipeline tail\nif constexpr (TailNum == TailNumber::One) {\n // 1 iteration\n    pipeline_tail_one(a_window, b_window, c_reg, ...);\n} else if constexpr (TailNum == TailNumber::Two) {\n // 2 iteration\n    pipeline_tail_two(a_window, b_window, c_reg, ...);\n}\n// ... TailNumber::Seven\n```\n\n```cpp\nenum struct StreamKReductionStrategy {\n Atomic, // atomicreduction - CTA direct atomic_add globaloutput\n // Set: separatewrite - CTA independent buffer, coalesced\n};\n```\n\n```cpp\nstruct StreamKTilePartitionerBase<BlockGemmShape, ReductionStrategy> {\n // CTA iteration\n    __device__ auto get_start_iter(index_t block_id) const;\n\n // CTA iterationboundary [start, end)\n    __device__ auto get_iter_boundaries(index_t block_id) const;\n\n // iteration -> output tile\n    __device__ auto get_tile_index(index_t iter) const;\n\n // reduction output tile\n    __device__ auto get_output_tile_index(index_t block_id) const;\n};\n```\n\n```cpp\nenum struct WGAttrCtlEnum {\n Default_, // compilation\n    Raw_vvv,     // C=VGPR, A=VGPR, B=VGPR\n    Raw_vaa,     // C=VGPR, A=AGPR, B=AGPR\n    Raw_vav,     // C=VGPR, A=AGPR, B=VGPR\n    Raw_vva,     // C=VGPR, A=VGPR, B=AGPR\n    Raw_avv,     // C=AGPR, A=VGPR, B=VGPR\n};\n```\n\n```\nWarpGemmAttributeMfmaImpl // : MFMA\n  ↑\nWarpGemmAttributeMfma // : TileDistribution\n  ↑\nWarpGemmAttributeMfmaIterateK // : K iteration (kK *= kKIter)\n  ↑\nWarpGemmAttributeMfmaTransposed* // : C , Swizzle A/B\n```\n\n```cpp\ntemplate <typename Impl,\n          WGAttrNumAccessEnum AttrNumAccessA = Single,\n          WGAttrNumAccessEnum AttrNumAccessB = Single>\nstruct WarpGemmAttributeMfma {\n // Impl, add tile distribution\n    // AttrNumAccessA/B: Single=1, Double=2, Quad=4\n // warp GEMM A/B readcount\n};\n```\n\n```cpp\ntemplate <typename Impl, index_t kKIter>\nstruct WarpGemmAttributeMfmaIterateK {\n // K dimensioniteration kKIter\n // kK = Impl::kK * kKIter\n // decrease K loopcount, increaseinstruction-levelrow\n};\n```\n\n```cpp\n// double buffer\nstatic_assert(DoubleSmemBuffer == true);\n\n// LDS\nconstexpr auto GetSmemSize() { return 2 * smem_size; }\n```\n\n```\niteration 0: LDS[0], compute (prefilled data)\niteration 1: LDS[1], LDS[0] compute\niteration 2: LDS[0], LDS[1] compute\n...\n```\n\n```\n[Prefill stage]\n  for i in 0..PrefetchStages-1:\n global_prefetch(tile[i]) // asynchronousprefetch\n block_sync_lds // wait LDS write\n\n[Hot Loop]\n  for i in PrefetchStages..num_k_tiles-1:\n lds_read(tile[i-PrefetchStages]) // LDS data\n global_prefetch(tile[i]) // prefetchnext\n mfma(a_reg, b_reg, c_reg) // compute\n block_sync_lds // synchronous\n\n[Tail]\n // 1-7 iteration\n```\n\n```\n[Prefill]\n  global_load(tile[0]) → VGPR\n  block_sync_lds()\n\n[Hot Loop] (Intrawave scheduling)\n  ┌─── Stage 1 ───────────────────────┐\n │ ds_write(VGPR->LDS) ←-> MFMA │\n │ buffer_load(prefetch) │\n  └────────────────────────────────────┘\n  block_sync_lds()\n  ┌─── Stage 2 ───────────────────────┐\n │ ds_read(LDS->VGPR) ←-> MFMA │\n  └────────────────────────────────────┘\n  block_sync_lds()\n\n[Tail]\n Odd/Even\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/ck-gemm-pipelines.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

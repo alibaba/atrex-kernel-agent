@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.amd-kernel-optimization-frameworks",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|amd-kernel-optimization-frameworks|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): AMD GPU Kernel Optimization Framework Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "AMD GPU Kernel Optimization Framework Overview"
+  },
+  "title": "AMD GPU Kernel Optimization Framework Overview",
+  "summary": "AMD GPU kernel development has multiple tiers of toolchains:",
+  "sections": [
+   {
+    "heading": "Framework Lineage",
+    "anchor": "framework-lineage",
+    "gist": "AMD GPU kernel development has multiple tiers of toolchains:"
+   },
+   {
+    "heading": "FlyDSL",
+    "anchor": "flydsl",
+    "gist": "FlyDSL (Flexible Layout Python DSL) is built on the MLIR compilation stack, using FLIR (Flexible Layout IR)—a CuTe-inspired (Shape, Stride) layout algebra."
+   },
+   {
+    "heading": "TileLang",
+    "anchor": "tilelang",
+    "gist": "TileLang uses \"Tile\" as the fundamental programming unit, providing declarative GPU programming that supports both AMD and NVIDIA."
+   },
+   {
+    "heading": "Composable Kernel (CK)",
+    "anchor": "composable-kernel-ck",
+    "gist": "CK is AMD's C++ template library that provides composable high-performance GEMM, Attention, and other kernels, similar to NVIDIA CUTLASS."
+   },
+   {
+    "heading": "HIP Low-Level Optimization",
+    "anchor": "hip-low-level-optimization",
+    "gist": "---"
+   },
+   {
+    "heading": "ROCm 7.2 Key Features",
+    "anchor": "rocm-7-2-key-features",
+    "gist": "- **ThinLTO**: Cross-file optimization, supporting function inlining, specialization, and dead code elimination - **rocMLIR FP4 Support**: New precision format for CDNA4 - **FP8 Extension**: Full compiler and graph stack support"
+   },
+   {
+    "heading": "Framework Selection Guide",
+    "anchor": "framework-selection-guide",
+    "gist": "table columns: Scenario, Recommended Framework, Rationale"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nPython kernel → FLIR (Layout Algebra) → MLIR → Canonicalization/CSE\n→ GPU-to-ROCDL Lowering → gfx942/gfx950 Binary\n```\n\n```bash\nexport AITER_ENFORCE_DSL=1\nexport DSL2_ROOT=\"${FLYDSL_ROOT:?set FLYDSL_ROOT}\"\nexport AITER_USE_FLYDSL_MOE=1\nexport MLIR_PATH=\"${MLIR_ROOT:?set MLIR_ROOT}\"\n```\n\n```python\n# Kernel definition\nwith T.Kernel(dim_x, dim_y, threads=N) as (bx, by):\n # memory\n    shared = T.alloc_shared([M, K], dtype)       # LDS\n frag = T.alloc_fragment([M, K], accum_dtype) # register\n\n # data\n    T.copy(src, shared, coalesced_width=width)\n\n # compute\n    T.gemm(A, B, C, transpose_B=True, k_pack=k, policy=GemmWarpPolicy.FullRow)\n\n # reduction\n    T.reduce_max(tensor, result, dim=1)\n    T.reduce_sum(tensor, result, dim=1)\n\n # pipeline\n    for k in T.Pipelined(bound, num_stages=stages):\n        ...\n```\n\n```python\n# JIT compilation\n@tilelang.jit(out_idx=[3])\ndef kernel(Q, K, V, Output):\n    ...\n\n# Autotuning\n@tilelang.autotune(configs=get_configs(), ...)\ndef kernel(Q, K, V, Output):\n    ...\n```\n\n```cpp\n// English comment\nauto desc = make_naive_tensor_descriptor(\n    make_tuple(M, K), make_tuple(K, 1));\n\n// (Unmerge, Merge, PassThrough, Embed)\nauto transformed = transform_tensor_descriptor(desc, transforms, lower_ids, upper_ids);\n\n// computephysicaloffset\nauto offset = transformed.CalculateOffset(make_multi_index(1, 3, 2));\n```\n\n```cpp\nvector_type<float, 16> buf;  // 16 VGPRs\nauto dynamic_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(ptr, size);\nauto data = dynamic_buf.Get<d4_t>(offset, true); // 128-bit vectorread\n```\n\n```cpp\nstatic_for<0, 4, 1>{}([&](auto i) {\n // compilation\n});\n```\n\n```c\n// FP8 MFMA (CDNA4)\n#include <hip/hip_runtime.h>\n\n// directuse MFMA function\n__device__ float4 __builtin_amdgcn_mfma_f32_16x16x128_fp8_fp8(\n    long a, long b, float4 c, int cbsz, int abid, int blgp);\n```\n\n```c\n__builtin_amdgcn_s_barrier // wave barrier\n__builtin_amdgcn_s_setprio(x) // wave (0-3)\n__builtin_amdgcn_sched_barrier(x) // schedulingbarrier\n__builtin_amdgcn_s_waitcnt(x) // wait\n```\n\n```c\nextern \"C\" __device__ void llvm_amdgcn_raw_buffer_load_lds(\n    i32x4 rsrc, as3_uint32_ptr lds_ptr, int size,\n    int voffset, int soffset, int offset, int aux)\n    __asm(\"llvm.amdgcn.raw.buffer.load.lds\");\n\n// Buffer Resource Descriptor\nstruct buffer_resource {\n    uint64_t ptr;\n    uint32_t range;\n    uint32_t config;  // 0x110000\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/amd-kernel-optimization-frameworks.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

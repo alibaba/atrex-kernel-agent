@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.14-direct-global-v-for-rhs-is-slower-than-cp-async-staging",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#14-direct-global-v-for-rhs-is-slower-than-cp-async-staging|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '14. Direct global V for RHS is slower than cp.async staging' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 14. Direct global V for RHS is slower than cp.async staging",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 14. Direct global V for RHS is slower than cp.async staging"
+  },
+  "attempted": "After removing the dead `v_new -> sV` store, original V is only used once to build RHS. It is tempting to skip `mV -> sV` cp.async and read `gV_tile[row, v]` directly inside the RHS R2S loop.",
+  "verdict": "performance-ceiling",
+  "lesson": "\"One-use\" does not automatically mean \"load directly from global.\" In this GDN K1, keep V cp.async staging unless the direct path is vectorized and ncu proves lower long-scoreboard / global-sector cost.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "The CuTeDSL scalar `gV_tile[row, v_col]` access was not a vectorized `CopyUniversalOp` load. It inserted scalar global loads on the RHS critical path (`LDG.E.U16` rose) while removing only a small amount of shared-load work. cp.async V staging remained better because it coalesces and overlaps the load before the RHS dependency chain."
+  },
+  "observed": "Correct but slower. V30 repeat-100 regressed to `0.7200 ms` vs V29 `0.6861 ms`; ncu K1 regressed to `743.58 us` vs `706.40 us`.",
+  "root_cause": "The CuTeDSL scalar `gV_tile[row, v_col]` access was not a vectorized `CopyUniversalOp` load. It inserted scalar global loads on the RHS critical path (`LDG.E.U16` rose) while removing only a small amount of shared-load work. cp.async V staging remained better because it coalesces and overlaps the load before the RHS dependency chain."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

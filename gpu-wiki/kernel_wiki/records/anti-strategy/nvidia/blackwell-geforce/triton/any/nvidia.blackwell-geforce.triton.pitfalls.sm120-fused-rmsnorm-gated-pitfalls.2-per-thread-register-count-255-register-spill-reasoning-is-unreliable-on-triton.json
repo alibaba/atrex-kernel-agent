@@ -1,0 +1,112 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.triton.pitfalls.sm120-fused-rmsnorm-gated-pitfalls.2-per-thread-register-count-255-register-spill-reasoning-is-unreliable-on-triton",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|triton|norm|sm120-fused-rmsnorm-gated-pitfalls#2-per-thread-register-count-255-register-spill-reasoning-is-unreliable-on-triton|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": "norm",
+   "operators": [
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "triton",
+   "workload_family": "norm"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "norm"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '2. \"Per-thread register count > 255 ⇒ register spill\" reasoning is **unreliable** on Triton' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 2. \"Per-thread register count > 255 ⇒ register spill\" reasoning is **unreliable** on Triton",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 Triton fused-RMSNormGated pitfalls -- 2. \"Per-thread register count > 255 ⇒ register spill\" reasoning is **unreliable** on Triton"
+  },
+  "attempted": "Compute per-thread register pressure from naive theory: `(BLOCK_M × H_V × D × 2 inputs) / (num_warps × 32) = bytes/thread`. If this exceeds `255 × 4 = 1020 bytes`, conclude \"register spill, must shrink BLOCK_M\".",
+  "verdict": "not-worth-it-here",
+  "lesson": "**Always grep PTX for `st.local` / `ld.local` before believing a register-spill hypothesis.** Even if theory says you should be over-budget, Triton may have folded enough state to fit. Three commands:",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "triton"
+   },
+   "mechanism": "Triton aggressively folds register reuse — the same physical register is reused across multiple Python-level intermediates because Triton sees the data flow. A \"per-thread fp32 count\" that assumes each Python intermediate materialises into a separate register over-counts by 2-4×."
+  },
+  "observed": "PTX grep across `BLOCK_M ∈ {1, 2, 4, 8, 16}` shows **`st.local: 0`** and **`ld.local: 0`** in every config. **No spill at any BM**.",
+  "root_cause": "Triton aggressively folds register reuse — the same physical register is reused across multiple Python-level intermediates because Triton sees the data flow. A \"per-thread fp32 count\" that assumes each Python intermediate materialises into a separate register over-counts by 2-4×.",
+  "implementation": {
+   "snippet": "```bash\nTRITON_CACHE_DIR=$PWD/.triton_cache python your_script.py\nfind .triton_cache -name '*.ptx' | xargs grep -c 'st.local\\|ld.local'\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/triton/sm120-fused-rmsnorm-gated-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

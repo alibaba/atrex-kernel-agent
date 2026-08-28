@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.pipeline-stages.modular-s-5-stage-implementation",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|pipeline-stages#modular-s-5-stage-implementation|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "pipeline-stalls"
+   ]
+  },
+  "technique_tags": [
+   "modular-s-5-stage-implementation"
+  ],
+  "triggers": [
+   "the 'Modular's 5-Stage Implementation' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Modular's 5-Stage Implementation",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Software Pipelining and Multi-Stage Buffering -- Modular's 5-Stage Implementation"
+  },
+  "technique": "Modular's 5-Stage Implementation",
+  "what": "The Modular blog series describes a 5-stage circular buffer reaching 85% of SOTA performance on Blackwell:",
+  "when": "The Modular blog series describes a 5-stage circular buffer reaching 85% of SOTA performance on Blackwell:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Modular-style 5-stage pipeline constants\n// Chosen to fully hide B200 HBM latency (~400 cycles)\n// while fitting within 228 KB SMEM budget\n\nconstexpr int NUM_STAGES = 5;\nconstexpr int TILE_M = 128;\nconstexpr int TILE_N = 128;  // Smaller N to fit 5 stages\nconstexpr int TILE_K = 64;\n\n// Per stage: A (128*64*2=16KB) + B (64*128*2=16KB) = 32 KB\n// 5 stages: 160 KB + barriers + metadata < 228 KB\n\n// The pipeline timing diagram for steady state:\n//\n// Stage:  0         1         2         3         4\n// TMA:   [load k5] [done]    [done]    [load k8] [load k9]\n// MMA:   [done]    [done]    [comp k7] [done]    [done]\n//\n// At any point: 1 stage being loaded, 1 being computed, 3 in transit or done\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/pipeline-stages.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

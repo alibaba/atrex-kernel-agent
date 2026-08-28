@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-gdn-decode-cpasync-cache-mode.the-4-piece-set-apply-in-order",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|sm120-gdn-decode-cpasync-cache-mode#the-4-piece-set-apply-in-order|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn",
+   "the-4-piece-set-apply-in-order"
+  ],
+  "triggers": [
+   "the 'The 4-Piece Set (Apply in Order)' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): The 4-Piece Set (Apply in Order)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 GDN Decode: cp.async + GLOBAL Cache Quick Reference (kernel-opt) -- The 4-Piece Set (Apply in Order)"
+  },
+  "technique": "The 4-Piece Set (Apply in Order)",
+  "what": "PyTorch CUDA tensors are actually 256-byte aligned, but `from_dlpack` assumes conservative defaults. Without this line → cp.async cp_size=128b will fail the compile-time verifier.",
+  "when": "PyTorch CUDA tensors are actually 256-byte aligned, but `from_dlpack` assumes conservative defaults.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\nmH0 = from_dlpack(h0.contiguous(), assumed_align=16)\nmHt = from_dlpack(ht,                assumed_align=16)\n```\n\n```python\nfrom cutlass.cute.nvgpu import cpasync\ncp_atom = cute.make_copy_atom(\n    cpasync.CopyG2SOp(cache_mode=cpasync.LoadCacheMode.GLOBAL),\n    cutlass.Float32,\n    num_bits_per_copy=128,   # 16B vec\n)\n```\n\n```python\n# Per-thread V slice = 4 × fp32 = 16 bytes contiguous\nthr_layout = cute.make_layout((K_thr, V_thr), stride=(V_thr, 1))\nval_layout = cute.make_layout((K_per_t, V_per_t), stride=(V_per_t, 1))\n# REQUIRE: V_per_t * sizeof(dtype) == 16 (e.g. V_per_t=4 for fp32, =8 for bf16)\n```\n\n```python\n# Issue cp.async, commit\ncute.copy(tiled_copy_h0, thr_gH0, thr_sH0)\ncute.arch.cp_async_commit_group()\n\n# Window for compute that doesn't depend on h0:\n#   - load q/k/v via autovec\n#   - L2 norm (warp shuffle)\n#   - exp(g), beta load\n\ncute.arch.cp_async_wait_group(0)\ncute.arch.barrier()\n\n# Now read state from SMEM (cheap)\nstate[ki, vi] = sH0[k_off + ki, v_smem_base + vi]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-gdn-decode-cpasync-cache-mode.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

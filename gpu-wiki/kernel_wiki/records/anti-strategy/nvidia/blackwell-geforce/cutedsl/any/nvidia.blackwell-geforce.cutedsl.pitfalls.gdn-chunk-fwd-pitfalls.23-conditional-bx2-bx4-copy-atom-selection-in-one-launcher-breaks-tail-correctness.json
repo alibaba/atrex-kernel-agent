@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.23-conditional-bx2-bx4-copy-atom-selection-in-one-launcher-breaks-tail-correctness",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#23-conditional-bx2-bx4-copy-atom-selection-in-one-launcher-breaks-tail-correctness|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '23. Conditional Bx2/Bx4 copy-atom selection in one launcher breaks tail correctness' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 23. Conditional Bx2/Bx4 copy-atom selection in one launcher breaks tail correctness",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 23. Conditional Bx2/Bx4 copy-atom selection in one launcher breaks tail correctness"
+  },
+  "attempted": "Put the fast non-tail B `LdMatrix num_matrices=2` path and the safer B4 tail path behind one conditional launcher. It looks cleaner and avoids maintaining two K1 launch wrappers.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Specialize by launcher, not by runtime condition, when the CuTeDSL copy atom changes shape. V113 accepts `_launch_kernel1_v31_final_state_bx2` for the T=6144 non-tail path and keeps `_launch_kernel1_v31_final_state` for tail / `STATE_SPLIT=True`.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "The two copy-atom shapes induce different static layouts and verifier-visible assumptions. Hiding them behind a runtime condition is not equivalent to compiling two statically separate kernels. Tail / `STATE_SPLIT=True` needs the conservative B4 path."
+  },
+  "observed": "T=50000 output correctness failed with rel_err from `1.5021e-02` to `4.7210e-02`, even though the non-tail T=6144 path was correct.",
+  "root_cause": "The two copy-atom shapes induce different static layouts and verifier-visible assumptions. Hiding them behind a runtime condition is not equivalent to compiling two statically separate kernels. Tail / `STATE_SPLIT=True` needs the conservative B4 path."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

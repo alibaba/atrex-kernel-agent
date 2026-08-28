@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.vectorized-loads.register-budgeting-maxrregcount",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|vectorized-loads#register-budgeting-maxrregcount|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "register-budgeting-maxrregcount"
+  ],
+  "triggers": [
+   "the 'Register Budgeting (-maxrregcount)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Register Budgeting (-maxrregcount)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "nvcc compilation with register budgeting -- Register Budgeting (-maxrregcount)"
+  },
+  "technique": "Register Budgeting (-maxrregcount)",
+  "what": "For memory-bound kernels, occupancy (number of concurrent warps) matters more than per-thread register count. Limiting registers per thread allows more warps to be resident:",
+  "when": "For memory-bound kernels, occupancy (number of concurrent warps) matters more than per-thread register count.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Compile-time register budgeting\n// Lower register count -> higher occupancy -> better latency hiding\n\n// Problem 1 winner (rank 1): -maxrregcount=32\n// This allows 64 warps per SM (100% occupancy on SM100)\n// Sufficient for GEMV where each thread does minimal computation\n\n// Problem 1 rank 3: -maxrregcount=45\n// Allows 44 warps per SM (~69% occupancy)\n// More registers per thread for wider vectorized accumulation\n```\n\n```python\n# nvcc compilation with register budgeting\n# In CMakeLists.txt or build script:\n\n# For memory-bound GEMV kernel:\n# nvcc -maxrregcount=32 -arch=sm_100a gemv_kernel.cu -o gemv_kernel\n\n# For compute-bound GEMM kernel:\n# nvcc -arch=sm_100a gemm_kernel.cu -o gemm_kernel  (no limit; needs ~128+ regs)\n\n# Per-kernel register limits in the same translation unit:\n# Use __launch_bounds__ to control per-kernel\n\n# Memory-bound: maximize occupancy\n__global__ void __launch_bounds__(256, 8)  // 256 threads, min 8 blocks/SM\ngemv_kernel(/* ... */) { /* ... */ }\n\n# Compute-bound: maximize register availability\n__global__ void __launch_bounds__(512, 1)  // 512 threads, min 1 block/SM\ngemm_kernel(/* ... */) { /* ... */ }\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/vectorized-loads.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

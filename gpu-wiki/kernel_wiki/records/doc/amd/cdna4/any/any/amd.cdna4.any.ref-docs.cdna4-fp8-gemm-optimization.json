@@ -1,0 +1,144 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.any.ref-docs.cdna4-fp8-gemm-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|any|gemm|cdna4-fp8-gemm-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): CDNA4 FP8 GEMM Kernel Optimization in Practice",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "CDNA4 FP8 GEMM Kernel Optimization in Practice"
+  },
+  "title": "CDNA4 FP8 GEMM Kernel Optimization in Practice",
+  "summary": "FP8 inputs (E4M3FN), FP32 accumulation, 16x16x128 tile. **A single instruction executes 65,536 FLOPs** (compared to 128 FLOPs for FMA, **512× density**).",
+  "sections": [
+   {
+    "heading": "CDNA4 vs CDNA3 Hardware Comparison",
+    "anchor": "cdna4-vs-cdna3-hardware-comparison",
+    "gist": "table columns: Feature, CDNA4 (MI355X, gfx950), CDNA3 (MI300X, gfx942)"
+   },
+   {
+    "heading": "CDNA4 MFMA Instructions",
+    "anchor": "cdna4-mfma-instructions",
+    "gist": "FP8 inputs (E4M3FN), FP32 accumulation, 16x16x128 tile."
+   },
+   {
+    "heading": "FP8 GEMM Implementation Details",
+    "anchor": "fp8-gemm-implementation-details",
+    "gist": "C = A * B^T, where A is M×K (row-major), B is N×K (row-major), and C is M×N."
+   },
+   {
+    "heading": "LDS Swizzle Optimization",
+    "anchor": "lds-swizzle-optimization",
+    "gist": "The `ds_read_b128` instruction executes in **four phases**, with each phase requiring conflict-free bank access."
+   },
+   {
+    "heading": "Double Buffering",
+    "anchor": "double-buffering",
+    "gist": "Two LDS slots alternate (ping-pong): one is being used for computation while the other is being filled with the next K tile."
+   },
+   {
+    "heading": "Multi-Wave Configuration",
+    "anchor": "multi-wave-configuration",
+    "gist": "Each thread block runs multiple waves that share LDS tiles:"
+   },
+   {
+    "heading": "8-Wave Ping-Pong Scheduling",
+    "anchor": "8-wave-ping-pong-scheduling",
+    "gist": "Based on the HipKittens paper design."
+   },
+   {
+    "heading": "Complete Performance Evolution",
+    "anchor": "complete-performance-evolution",
+    "gist": "table columns: Optimization Stage, Average Time (ms), TFLOPS, M=N=K"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nV_MFMA_SCALE_F32_16X16X128_F8F6F4    // 16x16x128 block-scaled\nV_MFMA_SCALE_F32_32X32X64_F8F6F4     // 32x32x64 block-scaled\n```\n\n```c\nconst int lane = lane_in_wave;          // [0, 63]\nconst int row_in_tile = lane & 15; // [0, 15] row\nconst int row_group = lane >> 4; // [0, 3] K\nconst int k_chunk0 = row_group * 16;    // 0, 16, 32, 48\nconst int k_chunk1 = k_chunk0 + 64;     // 64, 80, 96, 112\n```\n\n```c\nusing fp8x16_t = __attribute__((vector_size(16))) fp8_t;\n\nstatic inline __device__ fp8x16_t load_fp8x16_u4(const fp8_t* p) {\n    const uint4 v = *reinterpret_cast<const uint4*>(p);\n    return *reinterpret_cast<const fp8x16_t*>(&v);\n}\n```\n\n```c\nextern \"C\" __device__ void llvm_amdgcn_raw_buffer_load_lds(\n    i32x4 rsrc, as3_uint32_ptr lds_ptr, int size,\n    int voffset, int soffset, int offset, int aux)\n    __asm(\"llvm.amdgcn.raw.buffer.load.lds\");\n\nstruct buffer_resource {\n    uint64_t ptr;\n    uint32_t range;\n    uint32_t config;  // 0x110000\n};\n```\n\n```\nstage 1: T0-T3, T12-T15, T20-T23, T24-T27\nstage 2: T32-T35, T44-T47, T52-T55, T56-T59\nstage 3: T4-T7, T8-T11, T16-T19, T28-T31\nstage 4: T36-T39, T40-T43, T48-T51, T60-T63\n```\n\n```c\nint swizzle_col(int row, int col) {\n    const int pair = (row >> 1) & 7;\n    const int perm = pair ^ (((pair >> 1) ^ (pair >> 2)) & 1);\n    const int mask = perm << 4;\n    return col ^ mask;\n}\n```\n\n```c\nLdsTile A_lds[2], B_lds[2];\nint cur = 0, nxt = 1;\n\nprefetch_tile_to_lds(A_lds[cur], B_lds[cur], 0);\nwait_for_global_loads();\nblock_sync();\n\nfor (int t = 0; t < num_k_tiles; ++t) {\n    if (t + 1 < num_k_tiles)\n        prefetch_tile_to_lds_async(A_lds[nxt], B_lds[nxt], t + 1);\n\n    fragments_a = read_fragments_from_lds(A_lds[cur]);\n    fragments_b = read_fragments_from_lds(B_lds[cur]);\n    acc = mfma(acc, fragments_a, fragments_b);\n\n    if (t + 1 < num_k_tiles) {\n        wait_for_global_loads();\n        block_sync();\n        cur ^= 1; nxt ^= 1;\n    }\n}\n```\n\n```c\n__builtin_amdgcn_s_barrier // wave, increaseexecute\n__builtin_amdgcn_s_setprio(x) // compilation wave (0-3)\n__builtin_amdgcn_sched_barrier(x) // barrier\n// sched_barrier(0) =\n```\n\n```c\nint waveid = threadIdx.x / 64;  // 0...7\nint wave_m = waveid / 4;        // 0...1\nint wave_n = waveid % 4;        // 0...3\n\n// SIMD mapping:\n// Waves 0,4 → SIMD 0\n// Waves 1,5 → SIMD 1\n// Waves 2,6 → SIMD 2\n// Waves 3,7 → SIMD 3\n```\n\n```c\n__shared__ fp8 A_lds[2][2][128*128]; // [block][data]\n__shared__ fp8 B_lds[2][2][128*128];\n```\n\n```c\n// 8 buffer loads :\ns_waitcnt vmcnt(4); // wait 4 pending\n// 6 buffer loads :\ns_waitcnt vmcnt(6); // wait 6 pending\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/cdna4-fp8-gemm-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

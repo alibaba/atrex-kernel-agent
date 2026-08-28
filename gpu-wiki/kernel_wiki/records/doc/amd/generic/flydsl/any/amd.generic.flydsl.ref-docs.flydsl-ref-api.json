@@ -1,0 +1,148 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-api",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-api|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Documentation] Python API Reference",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Documentation] Python API Reference"
+  },
+  "title": "[FlyDSL Original Documentation] Python API Reference",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "1. Compiler API (`flydsl.compiler`)",
+    "anchor": "1-compiler-api-flydsl-compiler",
+    "gist": "table columns: API, Description"
+   },
+   {
+    "heading": "2. Expression API (`flydsl.expr`)",
+    "anchor": "2-expression-api-flydsl-expr",
+    "gist": "table columns: Type, Description"
+   },
+   {
+    "heading": "3. GPU Intrinsics (`flydsl.expr.gpu`)",
+    "anchor": "3-gpu-intrinsics-flydsl-expr-gpu",
+    "gist": "table columns: API, Description"
+   },
+   {
+    "heading": "4. Arithmetic (`flydsl.expr.arith`)",
+    "anchor": "4-arithmetic-flydsl-expr-arith",
+    "gist": "Operator-overloaded arithmetic via `ArithValue`:"
+   },
+   {
+    "heading": "5. Vector Operations (`flydsl.expr.vector`)",
+    "anchor": "5-vector-operations-flydsl-expr-vector",
+    "gist": "table columns: API, Description"
+   },
+   {
+    "heading": "6. Buffer Operations (`flydsl.expr.buffer_ops`)",
+    "anchor": "6-buffer-operations-flydsl-expr-buffer-ops",
+    "gist": "AMD CDNA3/CDNA4 buffer load/store with hardware bounds checking:"
+   },
+   {
+    "heading": "7. ROCDL Operations (`flydsl.expr.rocdl`)",
+    "anchor": "7-rocdl-operations-flydsl-expr-rocdl",
+    "gist": "AMD-specific operations for ROCm:"
+   },
+   {
+    "heading": "8. Pre-built Kernels (`kernels/`)",
+    "anchor": "8-pre-built-kernels-kernels",
+    "gist": "table columns: Module, Description"
+   },
+   {
+    "heading": "9. Autotuner (`flydsl.autotune`)",
+    "anchor": "9-autotuner-flydsl-autotune",
+    "gist": "table columns: API, Description"
+   },
+   {
+    "heading": "10. Utilities",
+    "anchor": "10-utilities",
+    "gist": "table columns: API, Description"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nimport flydsl.compiler as flyc\n```\n\n```python\ntA = flyc.from_dlpack(torch_tensor).mark_layout_dynamic(\n    leading_dim=0, divisibility=4\n)\n```\n\n```bash\nfly-opt --fly-canonicalize input.mlir\nfly-opt --fly-layout-lowering input.mlir\nfly-opt --help\n```\n\n```python\nimport flydsl.expr as fx\n```\n\n```python\nfrom flydsl.expr import arith\n```\n\n```python\nfrom flydsl.expr import buffer_ops\n\nrsrc = buffer_ops.create_buffer_resource(tensor, max_size=True)\ndata = buffer_ops.buffer_load(rsrc, offset, vec_width=4, dtype=T.i32)\nbuffer_ops.buffer_store(data, rsrc, offset, mask=is_valid)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-api.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

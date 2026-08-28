@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.symptom.moe-load-imbalance",
+ "type": "symptom-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|moe-load-imbalance|moe-load-imbalance|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "moe-load-imbalance",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "moe-load-imbalance"
+   ]
+  },
+  "technique_tags": [
+   "candidate-techniques",
+   "example-reward-hack-in-gpu-mode-problem-4",
+   "moe",
+   "caveats",
+   "likely-causes",
+   "symptom",
+   "when-not-an-issue"
+  ],
+  "triggers": [
+   "the profile shows moe-load-imbalance and a candidate lever is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Choose a lever after profiling shows moe-load-imbalance on NVIDIA Blackwell (SM100)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "The profile points at moe-load-imbalance; which documented techniques address it on NVIDIA Blackwell (SM100)?",
+   "bottleneck": "moe-load-imbalance"
+  },
+  "likely_causes": [],
+  "candidate_techniques": [
+   {
+    "technique": "candidate-techniques",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "example-reward-hack-in-gpu-mode-problem-4",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "moe",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "caveats",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "likely-causes",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "symptom",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   },
+   {
+    "technique": "when-not-an-issue",
+    "success_rate_pct": null,
+    "typical_gain_pct": null
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/patterns/moe-load-imbalance.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

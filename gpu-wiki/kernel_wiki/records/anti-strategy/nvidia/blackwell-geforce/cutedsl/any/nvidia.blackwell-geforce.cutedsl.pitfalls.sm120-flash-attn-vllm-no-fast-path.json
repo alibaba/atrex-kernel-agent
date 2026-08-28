@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-flash-attn-vllm-no-fast-path",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|flash-attention|sm120-flash-attn-vllm-no-fast-path|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the 'sm_120 trap: `vllm.vllm_flash_attn.flash_attn_varlen_func` has no fast path on Blackwell-Geforce' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): sm_120 trap: `vllm.vllm_flash_attn.flash_attn_varlen_func` has no fast path on Blackwell-Geforce",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "sm_120 trap: `vllm.vllm_flash_attn.flash_attn_varlen_func` has no fast path on Blackwell-Geforce"
+  },
+  "attempted": "When porting an attention pipeline from datacenter Hopper/Blackwell (sm_90/sm_100) to Blackwell-Geforce sm_120 (RTX PRO 5000 / 4000 / 50xx), `vllm.vllm_flash_attn.flash_attn_varlen_func` runs **far slower than the memory-bandwidth ceiling would predict**, even though the function imports cleanly and produces numerically-correct output.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "1. **For sm_120 attention work, do not assume vllm is fast.** Bench it on actual sm_120 hardware before committing to a hybrid (vllm-FA + custom-epilogue) architecture. A Path-1 fused-attn-into-epilogue kernel is the only way to actually hit the memory ceiling on Blackwell-Geforce as of 2026-04. 2. **For correctness oracle role**, vllm's slow-but-correct path is fine — it doesn't matter how slow the oracle is, only that it computes the right answer. 3. **Recommended sm_120 attention paths** (in order of expected speed at memory-bound shapes): - Build a custom cute-DSL FA forward with sm_120-specific SMEM/stage tuning + epilogue fusion (requires cutlass 4.5+; see `` for the cutlass 4.4.2 vendor blocker) - Wait for vendor (vllm / flashinfer / Tri Dao) to ship sm_120-tuned wheel - Use Triton attention with sm_120-specific autotune sweep 4. **For pipeline architecture decisions**: when the attention forward dominates wall-clock but you can't speed it up, optimizing the consumer (fp4-quant epilogue, etc.) yields tiny end-to-end wins. Always profile the full pipeline to know where the real ceiling sits.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "sm_120 is **client Blackwell**, not datacenter: - No `tcgen05` / TMEM / wgmma — must use SM80-era `mma.sync.aligned.m16n8k16` - 99 KB SMEM cap (not 163 KB Ampere or 228 KB Blackwell-datacenter) - Tile / stage tuning that works on H100 (228 KB SMEM) won't fit on sm_120"
+  },
+  "observed": "Path-1 attention forward, M=6144 SEQ_LEN, Q (6144, 16, 256) bf16, K/V (6144, 2, 256) bf16 (GQA ratio 8), causal=True:",
+  "root_cause": "sm_120 is **client Blackwell**, not datacenter: - No `tcgen05` / TMEM / wgmma — must use SM80-era `mma.sync.aligned.m16n8k16` - 99 KB SMEM cap (not 163 KB Ampere or 228 KB Blackwell-datacenter) - Tile / stage tuning that works on H100 (228 KB SMEM) won't fit on sm_120"
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-flash-attn-vllm-no-fast-path.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

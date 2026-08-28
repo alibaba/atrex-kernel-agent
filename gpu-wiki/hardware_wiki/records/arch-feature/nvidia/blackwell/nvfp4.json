@@ -1,0 +1,39 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.nvfp4",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "nvfp4",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "NVFP4 is NVIDIA's 4-bit floating-point format (E2M1) with block scaling, native to Blackwell tensor cores.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices.",
+  "related_instructions": [
+   "cvt.rn.f16x2.e2m1x2",
+   "tcgen05",
+   "tcgen05.mma.mxf4.block_scale",
+   "tcgen05.mma.mxf4nvf4.block_scale"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVFP4 and Block-Scaled Narrow Precision",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/nvfp4.md"
+   }
+  ]
+ }
+}

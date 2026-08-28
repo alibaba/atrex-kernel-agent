@@ -1,0 +1,36 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.cvt-rn",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "cvt.rn",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "cvt.rn.f16x2.e2m1x2  result_f16x2, packed_fp4;"
+  ],
+  "semantics": "Convert two packed FP4 values to two FP16 values"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVFP4 Conversion Instructions",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

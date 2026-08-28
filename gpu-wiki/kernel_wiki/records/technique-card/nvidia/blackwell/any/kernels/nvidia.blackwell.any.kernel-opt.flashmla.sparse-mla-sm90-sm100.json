@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.flashmla.sparse-mla-sm90-sm100",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|mla|flashmla#sparse-mla-sm90-sm100|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "mla",
+   "operators": [
+    "mla"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "mla",
+   "sparse-mla-sm90-sm100"
+  ],
+  "triggers": [
+   "the 'Sparse MLA (SM90/SM100)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Sparse MLA (SM90/SM100)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FlashMLA -- Multi-head Latent Attention -- Sparse MLA (SM90/SM100)"
+  },
+  "technique": "Sparse MLA (SM90/SM100)",
+  "what": "Sparse MLA uses token-level sparsity indices to select only relevant tokens from the KV cache, dramatically reducing memory reads for long sequences.",
+  "when": "Sparse MLA uses token-level sparsity indices to select only relevant tokens from the KV cache, dramatically reducing memory reads for long sequences.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Sparse MLA: only attend to selected tokens via indices tensor\n// Each query has a variable-length list of relevant token indices\n\ntemplate <int HEAD_DIM>\n__global__ void flashmla_sparse(\n    const half* Q,\n    const int8_t* KV_cache,\n    const float* scales,\n    const int* token_indices,   // Selected token indices per query\n    const int* num_selected,    // Number of selected tokens per query\n    half* O\n) {\n    const int query_id = blockIdx.x;\n    const int n_tokens = num_selected[query_id];\n\n    // Only load and compute on selected tokens\n    for (int i = 0; i < n_tokens; i += BLOCK_SIZE) {\n        int tok_idx = token_indices[query_id * MAX_TOKENS + i];\n\n        // Load only the selected token's KV entry (656 bytes)\n        load_kv_entry(KV_cache, tok_idx, K_local, V_local);\n        dequant_and_accumulate(Q, K_local, V_local, scales, acc, lse);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/flashmla.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-decode-pitfalls.7-high-l1-hit-rate-is-a-bad-sign-for-streaming-workloads-the-diagnostic-that-flips-intuition",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-decode-pitfalls#7-high-l1-hit-rate-is-a-bad-sign-for-streaming-workloads-the-diagnostic-that-flips-intuition|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '7. High L1 hit rate is a *bad* sign for streaming workloads (the diagnostic that flips intuition)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 7. High L1 hit rate is a *bad* sign for streaming workloads (the diagnostic that flips intuition)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "CuTeDSL GDN Decode on sm_120 — Pitfalls -- 7. High L1 hit rate is a *bad* sign for streaming workloads (the diagnostic that flips intuition)"
+  },
+  "attempted": "ncu shows L1 hit rate 81% — celebrate, \"great cache reuse!\"",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "For decode/streaming kernels, **L1 hit rate >50% in ncu is a diagnostic of L2 false-saturation**, not of beneficial reuse. Switch to `cpasync.LoadCacheMode.GLOBAL` (skip L1 → DRAM directly). Compare:| Version | L1 hit | L2 throughput | DRAM throughput | Wall-clock | |---|---|---|---|---| | V6 (direct load) | 81% | 96% (saturated) | 34% | 389 μs | | V13 (via cp.async copy) | 33.6% | 81% | 87.7% | **246 μs** |",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "Default LDG `.ca` cache mode pulls every load through L1. For streaming workloads (T=1 decode, no inter-iteration reuse), the L1 just gets filled and re-evicted. The \"hit\" is really **redundant LDGs serviced by in-flight L1 lines from the same kernel**, doubling L2 traffic and saturating the L2 throughput long before DRAM. The kernel looks \"BW-bound\" but on the wrong unit."
+  },
+  "observed": "Memory throughput stuck at 411 GB/s; L2 throughput 96% saturated; DRAM throughput only 34%. Kernel is 1.58× slower than FLA Triton despite \"good cache hits\".",
+  "root_cause": "Default LDG `.ca` cache mode pulls every load through L1. For streaming workloads (T=1 decode, no inter-iteration reuse), the L1 just gets filled and re-evicted. The \"hit\" is really **redundant LDGs serviced by in-flight L1 lines from the same kernel**, doubling L2 traffic and saturating the L2 throughput long before DRAM. The kernel looks \"BW-bound\" but on the wrong unit."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-decode-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

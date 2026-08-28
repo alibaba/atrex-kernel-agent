@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.rdna4.any.kernel-opt.rdna4-wmma-optimization.pattern-ds-load-tr16-b128-transpose-load",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "rdna4|any|hands-on|rdna4-wmma-optimization#pattern-ds-load-tr16-b128-transpose-load|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "rdna4",
+   "architectures": [
+    "rdna4"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "rdna4",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-ds-load-tr16-b128-transpose-load"
+  ],
+  "triggers": [
+   "the 'Pattern: ds_load_tr16_b128 Transpose Load' technique is being considered on AMD RDNA4 (gfx1250)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD RDNA4 (gfx1250): Pattern: ds_load_tr16_b128 Transpose Load",
+  "problem": {
+   "target": "AMD RDNA4 (gfx1250)",
+   "statement": "RDNA4-Specific Optimizations -- Pattern: ds_load_tr16_b128 Transpose Load"
+  },
+  "technique": "Pattern: ds_load_tr16_b128 Transpose Load",
+  "what": "**Practical Experience**: - RDNA4's WMMA throughput is lower than CDNA4's MFMA (consumer-oriented) - Wave32 means more waves are needed to fill a CU - `ds_load_tr16_b128` eliminates the overhead of B matrix transposition - RDNA4's LDS is 128 KB/CU (larger than CDNA3's 64 KB)",
+  "when": "**Practical Experience**: - RDNA4's WMMA throughput is lower than CDNA4's MFMA (consumer-oriented) - Wave32 means more waves are needed to fill a CU - `ds_load_tr16_b128` eliminates the overhead of B matrix transposition - RDNA4's LDS is 1…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# RDNA4 new LDS transpose load instruction\n# One instruction completes 128-bit load + 16-bit element transpose\n# Replaces the ds_read + ds_bpermute combination used in CDNA\n\n# Scenario: load the transpose of matrix B (for WMMA's B operand)\nb_transposed = ds_load_tr16_b128(lds_b_ptr)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/rdna4/kernel-opt/hands-on/rdna4-wmma-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.27-sched-group-barrier-mfma-dsrd-interleave-regresses-0-7",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#27-sched-group-barrier-mfma-dsrd-interleave-regresses-0-7|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '27. sched_group_barrier MFMA/DSRD interleave regresses −0.7%' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 27. sched_group_barrier MFMA/DSRD interleave regresses −0.7%",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 27. sched_group_barrier MFMA/DSRD interleave regresses −0.7%"
+  },
+  "attempted": "`sched_group_barrier(mask_mfma, 2, 0)` + `sched_group_barrier( mask_dsrd, 2, 0)` per GEMM1 loop iteration forces fine-grained 2:2 interleaving between MFMA and ds_read instructions. CK GEMM uses similar patterns for optimal MFMA occupancy. \"Should help GEMM1 too.\"",
+  "verdict": "performance-ceiling",
+  "lesson": "`sched_group_barrier` is designed for GEMM kernels with regular, symmetric read/compute patterns. Flash attention's asymmetric K-read pattern (lo + hi subtiles with different LDS offsets) benefits more from soft scheduling hints. Prefer `sched_dsrd` + `sched_mfma` over `sched_group_barrier` for attention kernels.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "`sched_group_barrier` is a HARD constraint — the scheduler MUST emit exactly 2 MFMAs then 2 ds_reads, repeating. `sched_dsrd` / `sched_mfma` are soft hints — the scheduler can deviate when it finds a better ordering. For flash attention's GEMM1 (which has subtile-level K-read patterns and interleaved K lo/hi reads), the hard 2:2 constraint prevents the scheduler from grouping related K reads together, adding pipeline bubbles."
+  },
+  "observed": "−0.7% regression vs the softer `sched_dsrd(2) + sched_mfma(2)`.",
+  "root_cause": "`sched_group_barrier` is a HARD constraint — the scheduler MUST emit exactly 2 MFMAs then 2 ds_reads, repeating. `sched_dsrd` / `sched_mfma` are soft hints — the scheduler can deviate when it finds a better ordering. For flash attention's GEMM1 (which has subtile-level K-read patterns and interleaved K lo/hi reads), the hard 2:2 constraint prevents the scheduler from grouping related K reads together, adding pipeline bubbles."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

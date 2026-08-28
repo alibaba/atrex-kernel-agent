@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-moe-data-prep.when-to-apply-this-recipe",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep#when-to-apply-this-recipe|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe",
+   "when-to-apply-this-recipe"
+  ],
+  "triggers": [
+   "the 'When to apply this recipe' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): When to apply this recipe",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 MoE Data-Prep — Quick Reference -- When to apply this recipe"
+  },
+  "technique": "When to apply this recipe",
+  "what": "- Workload: MoE token-to-expert routing scatter with E=64..1024 experts, K=4..16 topk, T=1024..16384 tokens - Target: NVIDIA RTX PRO 5000 / 4000 Blackwell (sm_120 client) — also applicable in spirit to other multi-CTA scatter-style INT32 kernels on the same arch - Integration: PyTorch + JIT CUDA C++ via `torch.utils.cpp_extension.load_inline` with CUDA-graph capture required - Reference baseline: vLLM `get_cutlass_moe_mm_data` CUDA Graph",
+  "when": "- Workload: MoE token-to-expert routing scatter with E=64..1024 experts, K=4..16 topk, T=1024..16384 tokens - Target: NVIDIA RTX PRO 5000 / 4000 Blackwell (sm_120 client) — also applicable in spirit to other multi-CTA scatter-style INT32 k…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-moe-data-prep.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

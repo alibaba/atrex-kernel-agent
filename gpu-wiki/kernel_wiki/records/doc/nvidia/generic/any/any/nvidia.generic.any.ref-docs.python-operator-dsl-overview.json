@@ -1,0 +1,154 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.python-operator-dsl-overview",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|python-operator-dsl-overview|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Emerging Python Operator DSLs: Triton, CuTeDSL, Mojo Overview",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Emerging Python Operator DSLs: Triton, CuTeDSL, Mojo Overview"
+  },
+  "title": "Emerging Python Operator DSLs: Triton, CuTeDSL, Mojo Overview",
+  "summary": "A survey of emerging Python-based domain-specific languages for GPU kernel development, comparing Triton, CuTeDSL, TileLang, cuTile, Mojo, and other frameworks across abstraction levels, ecosystems, and performance characteristics.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "DSL (Domain-Specific Language) refers to languages designed for specific domains (HTML/SQL/regex)."
+   },
+   {
+    "heading": "2. Triton",
+    "anchor": "2-triton",
+    "gist": "AI kernel computations are highly regular — tiling alone yields good performance."
+   },
+   {
+    "heading": "3. Helion",
+    "anchor": "3-helion",
+    "gist": "A Tensor-oriented DSL with **higher abstraction than Triton**."
+   },
+   {
+    "heading": "4. NVIDIA CUTLASS (CuTeDSL)",
+    "anchor": "4-nvidia-cutlass-cutedsl",
+    "gist": "NVIDIA's response to Triton's success."
+   },
+   {
+    "heading": "5. TileLang",
+    "anchor": "5-tilelang",
+    "gist": "Built on TVM thread-level primitives with **three programming interfaces**: explicit memory declaration, explicit thread control, or hands-off mode."
+   },
+   {
+    "heading": "6. Apache TVM",
+    "anchor": "6-apache-tvm",
+    "gist": "A comprehensive deep learning framework providing DSL operator authoring."
+   },
+   {
+    "heading": "7. Mojo",
+    "anchor": "7-mojo",
+    "gist": "Chris Lattner's vision to build an **AI infrastructure company** serving various hardware vendors toward AI democratization."
+   },
+   {
+    "heading": "8. Halide",
+    "anchor": "8-halide",
+    "gist": "Provides Python bindings (no C++ required)."
+   },
+   {
+    "heading": "9. Tiramisu",
+    "anchor": "9-tiramisu",
+    "gist": "Inspired by Halide but more oriented toward **deeply nested loops, complex scheduling structures, and polyhedral analysis**."
+   },
+   {
+    "heading": "10. NVIDIA cuTile",
+    "anchor": "10-nvidia-cutile",
+    "gist": "NVIDIA's DSL designed to **counter Triton**, directly competing with it."
+   },
+   {
+    "heading": "11. Performance Comparison (tritonbench)",
+    "anchor": "11-performance-comparison-tritonbench",
+    "gist": "**Test environment**: GPU H20 SXM 96GB x1, CPU 16-core, Memory 154 GB."
+   },
+   {
+    "heading": "12. Other Notable Projects",
+    "anchor": "12-other-notable-projects",
+    "gist": "- **HazyResearch/ThunderKittens** (\"tk\"): Framework-oriented with DSL-style kernel definition and schedule API; strong performance, C++."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/python-operator-dsl-overview.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

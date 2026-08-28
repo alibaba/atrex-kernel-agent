@@ -1,0 +1,143 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.flydsl.ref-docs.flydsl-ref-architecture",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|flydsl|ref-docs|flydsl-ref-architecture|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "flydsl",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): [FlyDSL Original Documentation] Architecture & Compilation Pipeline Guide",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "[FlyDSL Original Documentation] Architecture & Compilation Pipeline Guide"
+  },
+  "title": "[FlyDSL Original Documentation] Architecture & Compilation Pipeline Guide",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Quick Reference",
+    "anchor": "quick-reference",
+    "gist": "table columns: Component, Description, Key File"
+   },
+   {
+    "heading": "1. Project Structure",
+    "anchor": "1-project-structure",
+    "gist": "---"
+   },
+   {
+    "heading": "2. Architecture",
+    "anchor": "2-architecture",
+    "gist": "The user-facing API lives in `python/flydsl/`."
+   },
+   {
+    "heading": "3. Compilation Pipeline",
+    "anchor": "3-compilation-pipeline",
+    "gist": "The pipeline is defined in `MlirCompiler._pipeline_fragments()`:"
+   },
+   {
+    "heading": "4. Key Abstractions",
+    "anchor": "4-key-abstractions",
+    "gist": "Decorates a Python function as a JIT-compiled host launcher:"
+   },
+   {
+    "heading": "5. Environment Variables",
+    "anchor": "5-environment-variables",
+    "gist": "table columns: Variable, Default, Description"
+   },
+   {
+    "heading": "6. Target Hardware",
+    "anchor": "6-target-hardware",
+    "gist": "table columns: Architecture, GPU, LDS per CU, Notes"
+   },
+   {
+    "heading": "7. IR Dump Workflow",
+    "anchor": "7-ir-dump-workflow",
+    "gist": "Enable with `FLYDSL_DUMP_IR=1`:"
+   },
+   {
+    "heading": "8. Source Files",
+    "anchor": "8-source-files",
+    "gist": "table columns: File, Description"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nFlyDSL/\n├── include/flydsl/                   # C++ dialect headers\n│   └── Dialect/\n│       ├── Fly/                      # Fly layout dialect\n│       │   ├── IR/\n│       │   │   ├── FlyDialect.td     # Dialect declaration (name = \"fly\")\n│       │   │   ├── FlyOps.td         # Layout ops (make_shape, crd2idx, composition, ...)\n│       │   │   ├── FlyTypeDefs.td    # Custom types (!fly.int_tuple, !fly.layout, ...)\n│       │   │   ├── FlyAttrDefs.td    # Attributes\n│       │   │   └── FlyInterfaces.td  # Op interfaces\n│       │   └── Transforms/\n│       │       ├── Passes.td         # Pass declarations (fly-layout-lowering, etc.)\n│       │       └── LayoutLowering.td # Layout lowering pass\n│       └── FlyROCDL/                 # FlyROCDL dialect (copy/MMA atoms)\n│           └── IR/\n│               ├── Dialect.td        # FlyROCDL dialect declaration\n│               ├── CopyAtom.td       # Copy atom ops\n│               └── MmaAtom.td        # MMA atom ops\n│\n├── lib/                              # C++ dialect implementation\n│   ├── Dialect/Fly/                  # Fly dialect ops, type inference, lowering\n│   ├── Dialect/FlyROCDL/             # FlyROCDL dialect implementation\n│   ├── Conversion/                   # Dialect conversion passes\n│   └── Transforms/                   # Optimization passes\n│\n├── python/flydsl/                    # Python DSL package\n│   ├── __init__.py                   # Package version\n│   ├── compiler/\n│   │   ├── __init__.py               # Public API: jit, kernel, from_dlpack\n│   │   ├── jit_function.py           # @jit decorator, MlirCompiler, JitCacheManager\n│   │   ├── kernel_function.py        # @kernel decorator, KernelFunction, KernelLauncher\n│   │   ├── jit_executor.py           # JITCFunction (ExecutionEngine wrapper)\n│   │   ├── jit_argument.py           # Argument conversion (Tensor, Stream, Int32)\n│   │   ├── ast_rewriter.py           # AST rewriting for Python control flow → MLIR\n│   │   └── protocol.py              # DslType / JitArgument protocols\n│   ├── expr/\n│   │   ├── __init__.py               # Public expr API\n│   │   ├── typing.py                 # Types (T.f32, Tensor, Stream, Constexpr)\n│   │   ├── numeric.py                # DSL numeric types (Float32, Int32, ...)\n│   │   ├── primitive.py              # Primitive operations (layout algebra, copy, gemm)\n│   │   ├── derived.py                # Derived types (CopyAtom, MmaAtom, TiledCopy)\n│   │   ├── arith.py                  # Arithmetic dialect ops\n│   │   ├── vector.py                 # Vector dialect ops\n│   │   ├── gpu.py                    # GPU dialect ops (thread_idx, block_idx, barrier)\n│   │   ├── buffer_ops.py             # Buffer / memory operations\n│   │   └── rocdl.py                  # ROCm-specific intrinsics\n│   ├── runtime/\n│   │   └── device.py                 # get_rocm_arch() — GPU architecture detection\n│   └── utils/\n│       ├── env.py                    # EnvManager — typed environment config\n│       ├── logger.py                 # Logging utilities\n│       └── smem_allocator.py         # SmemAllocator for LDS management\n│\n├── examples/                         # Runnable examples\n│   ├── 01-vectorAdd.py               # Vector addition with layout algebra\n│   └── 02-tiledCopy.py               # Tiled copy with partitioned tensors\n│\n├── kernels/                          # Pre-built GPU kernels\n│   ├── preshuffle_gemm.py       # GEMM with B-preshuffle (@flyc.kernel API)\n│   ├── layernorm_kernel.py           # LayerNorm\n│   ├── rmsnorm_kernel.py             # RMSNorm\n│   ├── softmax_kernel.py             # Softmax\n│   ├── reduce.py                     # Warp/block reduction primitives\n│   ├── mfma_epilogues.py             # MFMA result writeback patterns\n│   ├── mfma_preshuffle_pipeline.py   # Preshuffle helpers for MFMA kernels\n│   └── layout_utils.py              # Layout computation utilities\n│\n├── tests/\n│   ├── mlir/                         # MLIR IR tests (no GPU required)\n│   ├── pyir/                         # Python IR tests (no GPU required)\n│   ├── kernels/                      # GPU kernel tests + benchmarks\n│   ├── python/                       # Python DSL tests\n│   │   ├── examples/                 # Example-based tests\n│   │   ├── gpu/                      # GPU tests\n│   │   └── ir/                       # IR generation tests\n│   ├── conftest.py                   # Pytest fixtures\n│   ├── test_common.py                # Shared test utilities\n│   └── utils.py                      # Compilation helpers\n│\n└── scripts/                          # Build and test helpers\n    ├── build.sh                      # Build FlyDSL (CMake + ninja)\n    ├── build_llvm.sh                 # Build MLIR from ROCm llvm-project\n    ├── run_tests.sh                  # Run GEMM test suite\n    ├── run_benchmark.sh              # Run benchmarks\n    └── dumpir.sh                     # Dump intermediate IR\n```\n\n```\nPython Function (@flyc.kernel / @flyc.jit)\n        │\n        ▼  AST Rewriting\n   Transformed Python Function\n        │\n        ▼  Tracing (execution inside MLIR Context)\n   MLIR Module (gpu, arith, scf, memref dialects)\n        │\n        ▼  MlirCompiler.compile()\n   ┌────────────────────────────────────────────────┐\n   │  gpu-kernel-outlining                          │  Outline GPU kernels\n   │  fly-canonicalize                              │  FlyDSL-specific canonicalization\n   │  fly-layout-lowering                           │  Layout algebra lowering\n   │  convert-fly-to-rocdl                          │  Fly ops → ROCDL intrinsics\n   │  canonicalize                                  │  Standard MLIR canonicalization\n   │  gpu.module(convert-scf-to-cf,                 │  SCF → ControlFlow\n   │             convert-gpu-to-rocdl{...})         │  GPU → ROCDL (inside gpu.module)\n   │  rocdl-attach-target{chip=gfxNNN}              │  Attach ROCm target\n   │  convert-scf-to-cf                             │  Host-side SCF → CF\n   │  convert-cf-to-llvm                            │  CF → LLVM dialect\n   │  gpu-to-llvm                                   │  GPU types → LLVM types\n   │  convert-arith-to-llvm                         │  Arith → LLVM\n   │  convert-func-to-llvm                          │  Func → LLVM\n   │  reconcile-unrealized-casts                    │  Clean up casts\n   │  gpu-module-to-binary{format=fatbin}           │  Emit HSACO binary\n   └────────────────────────────────────────────────┘\n        │\n        ▼\n   JITCFunction (ExecutionEngine)\n```\n\n```python\nimport flydsl.compiler as flyc\nimport flydsl.expr as fx\n\n@flyc.jit\ndef launch(a: fx.Tensor, b: fx.Tensor, n: fx.Constexpr[int],\n           stream: fx.Stream = fx.Stream(None)):\n    my_kernel(a, b, n).launch(grid=(n // 256,), block=(256,), stream=stream)\n```\n\n```python\n@flyc.kernel\ndef my_kernel(a: fx.Tensor, b: fx.Tensor, n: fx.Constexpr[int]):\n    tid = fx.gpu.thread_id(\"x\")\n    bid = fx.gpu.block_id(\"x\")\n    # ... kernel body ...\n```\n\n```python\nlauncher = my_kernel(a, b, 1024)\nlauncher.launch(\n    grid=(num_blocks, 1, 1),\n    block=(256, 1, 1),\n    smem=shared_mem_bytes,\n    stream=stream_value,\n)\n```\n\n```python\n# DslType protocol — for values used inside kernel/jit functions\nclass DslType(Protocol):\n    @classmethod\n    def __fly_construct__(cls, values: List[ir.Value]) -> \"DslType\": ...\n    def __fly_values__(self) -> List[ir.Value]: ...\n\n# JitArgument protocol — for values passed at the host boundary\nclass JitArgument(Protocol):\n    def __fly_types__(self) -> List[ir.Type]: ...\n    def __fly_ptrs__(self) -> List[ctypes.c_void_p]: ...\n```\n\n```python\nfrom flydsl.compiler import JitArgumentRegistry\n\n@JitArgumentRegistry.register(MyPythonType, dsl_type=MyDslType)\nclass MyJitArg:\n    def __fly_types__(self): ...\n    def __fly_ptrs__(self): ...\n```\n\n```bash\nFLYDSL_DUMP_IR=1 FLYDSL_DUMP_DIR=./dumps python test_my_kernel.py\n```\n\n```\ndumps/my_func_name/\n├── 00_original.mlir\n├── 01_gpu-kernel-outlining.mlir\n├── 02_fly-canonicalize.mlir\n├── 03_fly-layout-lowering.mlir\n├── 04_convert-fly-to-rocdl.mlir\n├── 05_canonicalize.mlir\n├── 06_convert-scf-to-cf.mlir\n├── 07_rocdl-attach-target.mlir\n├── 08_convert-scf-to-cf.mlir\n├── 09_convert-cf-to-llvm.mlir\n├── 10_gpu-to-llvm.mlir\n├── 11_convert-arith-to-llvm.mlir\n├── 12_convert-func-to-llvm.mlir\n├── 13_reconcile-unrealized-casts.mlir\n├── 14_gpu-module-to-binary.mlir\n└── final_isa.s                      # AMD ISA assembly (best-effort)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/flydsl/flydsl-ref-architecture.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

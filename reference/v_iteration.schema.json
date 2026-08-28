@@ -1,0 +1,94 @@
+{
+  "version": "v<N>",
+  "masked": false,
+  "timestamp": "<ISO 8601>",
+  "performance": {
+    "latency_us": null,
+    "latency_us_by_shape": {
+      "<sid>": "Evaluator-reported latency (us) for every real workload. Generalized private-case Atrex-Bench layouts use opaque shape ids here while keeping each shape's input parameters and failure details private."
+    },
+    "tflops": null,
+    "bandwidth_gbps": null,
+    "tflops_peak_utilization_pct": null,
+    "bandwidth_peak_utilization_pct": null,
+    "comparison_with_previous": {
+      "latency_delta": null,
+      "tflops_delta": null,
+      "bandwidth_delta": null
+    }
+  },
+  "optimization": {
+    "action_category": "<e.g. vectorized_load / swizzle / double_buffering / baseline>",
+    "action_description": "<what changed in this iteration>",
+    "expected_impact": "<how the action improves the bottleneck>",
+    "risks_and_rollback": "<why it might fail and rollback plan>"
+  },
+  "profile_evidence": {
+    "tool_used": "<ncu / profile_kernel.sh>",
+    "evidence_summary": "<key profile metrics>",
+    "bottleneck_type": "<compute_bound / memory_bound>",
+    "evidence_chain": "<evidence -> inference -> action>"
+  },
+  "experience": {
+    "experiment_count": 0,
+    "recorded_experiment_count": 0,
+    "experiments": [
+      {
+        "index": 1,
+        "name": "<experiment name>",
+        "hypothesis": "<what was expected>",
+        "change": "<what was changed>",
+        "evidence": "<measurement or observation>",
+        "result": "<what happened>",
+        "decision": "<continue / revert / pivot>"
+      }
+    ]
+  },
+  "correctness": {
+    "rel_err": null,
+    "status": "<PASS / FAIL / TIMEOUT_FAIL>"
+  },
+  "isa_metric_progress": [
+    {
+      "metric": "<metric name>",
+      "target": "<target value>",
+      "current": "<current value>",
+      "met": false
+    }
+  ],
+  "search_log": [
+    {
+      "source": "<gpu-wiki / ref-project / public-web>",
+      "query": "<search query>",
+      "finding": "<what was found>",
+      "actionability": "<how it applies>"
+    }
+  ],
+  "pitfalls_and_fixes": [
+    {
+      "error_type": "<compilation / runtime / accuracy / performance / timeout>",
+      "error_message": "<error details>",
+      "root_cause": "<diagnosed cause>",
+      "fix_applied": "<how it was fixed>",
+      "lesson": "<takeaway for future iterations>"
+    }
+  ],
+  "references": [
+    {
+      "source_type": "<gpu-wiki / ref-project / public-web / user-input>",
+      "path_or_url": "<file path or URL>",
+      "description": "<what was referenced and why>"
+    }
+  ],
+  "quality_gate": {
+    "result": "<PASS / FAIL / TIMEOUT_FAIL>",
+    "failure_reason": null
+  },
+  "open_directions": [
+    {
+      "direction": "<candidate optimization lever for the NEXT session to try, most-promising first; max 3>",
+      "rationale": "<evidence/intuition for why this is promising, incl. unfinished-but-promising threads>"
+    }
+  ],
+  "git_commit_hash": null
+}

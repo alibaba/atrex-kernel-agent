@@ -1,0 +1,36 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.instruction.tcgen05-ld",
+ "type": "instruction",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "isa": "ptx",
+  "mnemonic": "tcgen05.ld",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "syntax": [
+   "tcgen05.ld.sync.aligned.32x32b.x1  {regs}, [tmem_addr];"
+  ],
+  "semantics": "Load TMEM to registers"
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "tcgen05 Instructions",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/languages/ptx-sm100.md"
+   }
+  ]
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.vectorized-loads.complete-nvfp4-gemv-example",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|vectorized-loads#complete-nvfp4-gemv-example|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "complete-nvfp4-gemv-example"
+  ],
+  "triggers": [
+   "the 'Complete NVFP4 GEMV Example' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Complete NVFP4 GEMV Example",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "nvcc compilation with register budgeting -- Complete NVFP4 GEMV Example"
+  },
+  "technique": "Complete NVFP4 GEMV Example",
+  "what": "Combining all three techniques for the GPU Mode Hackathon Problem 1:",
+  "when": "Combining all three techniques for the GPU Mode Hackathon Problem 1:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// Optimized NVFP4 Batched GEMV\n// A: [M, K] NVFP4, B: [1, K] NVFP4, C: [M, 1] FP16\n// Memory-bound: maximize bandwidth utilization\n\n// NVFP4 Batched GEMV: each row processed by THREADS_PER_ROW threads\n// Memory-bound: maximize bandwidth with wide loads and cache policies\n\n#define BLOCK_M 4       // Rows per thread block\n#define THREADS 256\n#define THREADS_PER_ROW (THREADS / BLOCK_M)  // 64 threads per row\n\n__global__ void __launch_bounds__(THREADS, 4)\nnvfp4_gemv_optimized(\n    const uint8_t* __restrict__ A,      // [M, K/2] packed FP4\n    const uint8_t* __restrict__ B,      // [1, K/2] packed FP4\n    const fp8_e4m3* __restrict__ sfa,   // [M, K/16] block scales\n    const fp8_e4m3* __restrict__ sfb,   // [1, K/16] block scales\n    half* __restrict__ C,               // [M, 1] output\n    float global_scale_a, float global_scale_b,\n    int M, int K)\n{\n    // Map threads to rows: 64 threads per row, 4 rows per block\n    int local_row = threadIdx.x / THREADS_PER_ROW;      // 0..3\n    int thread_in_row = threadIdx.x % THREADS_PER_ROW;  // 0..63\n    int row = blockIdx.x * BLOCK_M + local_row;\n    if (row >= M) return;\n\n    float acc = 0.0f;\n\n    // Each of the 64 threads handles a distinct K-chunk (no duplication)\n    // 64 elements per load × 64 threads = 4096 K elements per iteration\n    for (int k = thread_in_row * 64; k < K; k += THREADS_PER_ROW * 64) {\n        // Load B (reused across rows): L1::evict_last, 256-bit\n        uint64_t b_raw[4];\n        asm volatile(\n            \"ld.global.L1::evict_last.v4.u64 {%0,%1,%2,%3}, [%4];\"\n            : \"=l\"(b_raw[0]), \"=l\"(b_raw[1]), \"=l\"(b_raw[2]), \"=l\"(b_raw[3])\n            : \"l\"((const uint64_t*)(B + k / 2)));\n\n        // Load A (streamed once): L1::no_allocate, 256-bit\n        uint64_t a_raw[4];\n        asm volatile(\n            \"ld.global.L1::no_allocate.v4.u64 {%0,%1,%2,%3}, [%4];\"\n            : \"=l\"(a_raw[0]), \"=l\"(a_raw[1]), \"=l\"(a_raw[2]), \"=l\"(a_raw[3])\n            : \"l\"((const uint64_t*)(A + row * (K / 2) + k / 2)));\n\n        // Unpack FP4, apply block scale, dot-product\n        for (int i = 0; i < 64; i++) {\n            float a_val = unpack_fp4(a_raw, i) * get_block_scale(sfa, row, k + i);\n            float b_val = unpack_fp4(b_raw, i) * get_block_scale(sfb, 0, k + i);\n            acc += a_val * b_val;\n        }\n    }\n\n    // Two-phase reduction: first within each warp, then across the 2 warps per row\n    // Phase 1: warp-level reduction (32 threads → 1 partial sum per warp)\n    for (int offset = 16; offset > 0; offset >>= 1) {\n        acc += __shfl_xor_sync(0xFFFFFFFF, acc, offset);\n    }\n\n    // Phase 2: shared memory reduction across the 2 warps assigned to this row\n    __shared__ float smem_reduce[BLOCK_M * 2];  // 2 warp partials per row\n    int warp_in_row = thread_in_row / 32;  // 0 or 1\n    int lane = thread_in_row % 32;\n    if (lane == 0) {\n        smem_reduce[local_row * 2 + warp_in_row] = acc;\n    }\n    __syncthreads();\n\n    // Final sum and store (one thread per row)\n    if (thread_in_row == 0) {\n        float result = smem_reduce[local_row * 2] + smem_reduce[local_row * 2 + 1];\n        C[row] = __float2half(result * global_scale_a * global_scale_b);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/vectorized-loads.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

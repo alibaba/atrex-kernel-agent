@@ -1,0 +1,156 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.triton.ref-docs.sm120-fused-rmsnorm-gated-bf16-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|triton|gdn|sm120-fused-rmsnorm-gated-bf16-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn",
+    "norm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "triton",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn",
+   "norm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Triton Fused RMSNormGated (bf16, GDN post) on RTX PRO 5000 (sm_120)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "Triton Fused RMSNormGated (bf16, GDN post) on RTX PRO 5000 (sm_120)"
+  },
+  "title": "Triton Fused RMSNormGated (bf16, GDN post) on RTX PRO 5000 (sm_120)",
+  "summary": "> **Path-of-record for vLLM `_deltanet_post`-style epilogues on Blackwell-GeForce.** > Cross-arch baseline: see CuTeDSL real-fusion attempt > `` > (blocked on cluster cutlass-DSL ≥ 4.5; tracked separately).",
+  "sections": [
+   {
+    "heading": "§0 Punchline",
+    "anchor": "0-punchline",
+    "gist": "table columns: Path, norm+gate kernel, norm+gate + fp4_quant, end-to-end deltanet_forward, vs eager"
+   },
+   {
+    "heading": "§1 Target hardware & shape",
+    "anchor": "1-target-hardware-shape",
+    "gist": "- **GPU**: NVIDIA RTX PRO 5000 72GB Blackwell (`sm_120`, 110 SMs, 72 GB GDDR7 ECC) - **Stack**: PyTorch 2.11 + CUDA 13.0, Triton 3.x bundled with torch - **Workload**: `attn.py::_deltanet_post`'s RMSNormGated + SiLU(z) gating block (consum…"
+   },
+   {
+    "heading": "§2 Algorithm baseline (matches `attn.py::_deltanet_post` lines 75-92)",
+    "anchor": "2-algorithm-baseline-matches-attn-py-deltanet-post-lines-75-92",
+    "gist": "**Eager profile (reference)**: 1404.66 us = ~8 separate ops on the bf16 tensors (rsqrt + mean + 4× elementwise mul + sigmoid + cast)."
+   },
+   {
+    "heading": "§3 Kernel resource footprint (V3 final)",
+    "anchor": "3-kernel-resource-footprint-v3-final",
+    "gist": "table columns: Resource, V3 value, Notes"
+   },
+   {
+    "heading": "§4 Optimization journey",
+    "anchor": "4-optimization-journey",
+    "gist": "- BLOCK_M=8, num_warps=4, num_stages=2."
+   },
+   {
+    "heading": "§5 Final perf vs baseline",
+    "anchor": "5-final-perf-vs-baseline",
+    "gist": "table columns: Stage, eager, V3, speedup"
+   },
+   {
+    "heading": "§6 Why V1 / V2 were 4× slower — the actual bottleneck",
+    "anchor": "6-why-v1-v2-were-4-slower-the-actual-bottleneck",
+    "gist": "`BLOCK_M=8` had **two independent things going wrong simultaneously**, masking each other:"
+   },
+   {
+    "heading": "§7 Remaining bottleneck & what would close the gap",
+    "anchor": "7-remaining-bottleneck-what-would-close-the-gap",
+    "gist": "End-to-end breakdown of V3:"
+   },
+   {
+    "heading": "§8 Sustained recipe",
+    "anchor": "8-sustained-recipe",
+    "gist": "When implementing similar fused-norm-gating-elementwise kernels on sm_120:"
+   },
+   {
+    "heading": "§9 Related docs",
+    "anchor": "9-related-docs",
+    "gist": "- **Code**: `reference-kernels/nvidia/blackwell-geforce/triton/gdn_post/fused_rmsnorm_gated_pro5000.py` - **Pitfalls**: [`…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nx        = core_out.float()\nvar      = x.pow(2).mean(dim=-1, keepdim=True)        # per-head RMSNorm\nx_normed = x * rsqrt(var + eps) * norm_w.float()\nsilu_z   = z.float() * sigmoid(z.float())\nout      = (x_normed * silu_z).to(bf16).reshape(N, H_V*D)\n```\n\n```python\nBLOCK_M=2, num_warps=4, num_stages=3\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/triton/sm120-fused-rmsnorm-gated-bf16-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.preshuffle-b-layout.pattern-pre-permute-weight-matrix-to-avoid-runtime-layout-conversion",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|hands-on|preshuffle-b-layout#pattern-pre-permute-weight-matrix-to-avoid-runtime-layout-conversion|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-pre-permute-weight-matrix-to-avoid-runtime-layout-conversion"
+  ],
+  "triggers": [
+   "the 'Pattern: Pre-Permute Weight Matrix to Avoid Runtime Layout Conversion' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Pattern: Pre-Permute Weight Matrix to Avoid Runtime Layout Conversion",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Preshuffle B Layout -- Pattern: Pre-Permute Weight Matrix to Avoid Runtime Layout Conversion"
+  },
+  "technique": "Pattern: Pre-Permute Weight Matrix to Avoid Runtime Layout Conversion",
+  "what": "**Source**: `cdna/flydsl/FlyDSL/preshuffle_gemm.py`",
+  "when": "**Source**: `cdna/flydsl/FlyDSL/preshuffle_gemm.py`",
+  "caveats": [
+   "Suitable for inference scenarios (fixed weights), not suitable for training (weights updated every step)"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# Problem: MFMA instructions require a specific operand layout\n# Standard row-major B matrix requires runtime conversion → many ds_bpermute instructions\n\n# Solution: Pre-shuffle the B matrix on the host side into an MFMA-friendly layout\ndef preshuffle_b(b_matrix, mfma_shape):\n    \"\"\"Pre-shuffle the B matrix into a layout directly usable by MFMA\"\"\"\n    # Chunk by MFMA tile size\n    # Rearrange elements within each block into a register-direct layout\n    # Allows MFMA to read directly from registers without ds_bpermute\n    ...\n    return b_preshuffled\n\n# In the kernel: directly load the pre-shuffled B, skip layout conversion\nb_tile = tl.load(b_preshuffled_ptr + offsets)\nc = tl.dot(a_tile, b_tile)  # No ds_bpermute overhead\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/hands-on/preshuffle-b-layout.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

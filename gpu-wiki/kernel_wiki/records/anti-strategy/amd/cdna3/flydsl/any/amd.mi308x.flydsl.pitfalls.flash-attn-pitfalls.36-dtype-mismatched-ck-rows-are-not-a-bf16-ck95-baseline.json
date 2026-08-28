@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.36-dtype-mismatched-ck-rows-are-not-a-bf16-ck95-baseline",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#36-dtype-mismatched-ck-rows-are-not-a-bf16-ck95-baseline|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '36. Dtype-mismatched CK rows are not a BF16 CK95 baseline' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 36. Dtype-mismatched CK rows are not a BF16 CK95 baseline",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 36. Dtype-mismatched CK rows are not a BF16 CK95 baseline"
+  },
+  "attempted": "A wiki row says CK/SDPA no-mask is `2.94 ms / 71.3 TFLOPS`, so it is tempting to compute CK95 from that number and use it as the BF16 target.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Separate \"ISA reference\", \"historical context\", and \"performance target\". For BF16 acceptance, use a BF16 CK/SDPA baseline or explicitly state that no dtype-matched CK95 number is available.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Dtype changes the valid comparison set. BF16 FlyDSL vs FP16 CK can be useful context, but it cannot define BF16 CK95. A slower local CK capture is still useful for inspecting instruction ordering, but it also cannot redefine the acceptance line."
+  },
+  "observed": "The optimized FlyDSL no-mask kernel in this round is BF16: `3.479213 ms / 60.189822 TFLOPS`, rel_err `0.017906` vs fp32 and `0.018016` vs bf16. The older CK/SDPA row was FP16, so it is not an apples-to-apples BF16 baseline. Local CK ATT captures were also kept as scheduling evidence only:",
+  "root_cause": "Dtype changes the valid comparison set. BF16 FlyDSL vs FP16 CK can be useful context, but it cannot define BF16 CK95. A slower local CK capture is still useful for inspecting instruction ordering, but it also cannot redefine the acceptance line."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

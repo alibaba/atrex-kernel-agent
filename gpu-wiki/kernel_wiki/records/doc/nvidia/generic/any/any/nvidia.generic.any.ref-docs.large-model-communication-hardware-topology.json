@@ -1,0 +1,119 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.large-model-communication-hardware-topology",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|large-model-communication-hardware-topology|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Large Model Communication: Hardware Topology (MNNVL/NVL72)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Large Model Communication: Hardware Topology (MNNVL/NVL72)"
+  },
+  "title": "Large Model Communication: Hardware Topology (MNNVL/NVL72)",
+  "summary": "Fundamentals of communication hardware topology for large model training and inference, covering NVLink, NVL72, MNNVL, and collective operation patterns.",
+  "sections": [
+   {
+    "heading": "1. Overview",
+    "anchor": "1-overview",
+    "gist": "This document covers the communication hardware topology underlying large-scale model training, focusing on NVIDIA's interconnect hierarchy from intra-node NVLink to multi-node NVLink (MNNVL) and NVL72 rack-scale configurations."
+   },
+   {
+    "heading": "2. Key Topology Concepts",
+    "anchor": "2-key-topology-concepts",
+    "gist": "- **NVLink**: High-bandwidth, low-latency GPU-to-GPU interconnect within a node - **NVL72**: 72-GPU rack-scale configuration using NVLink 5 and NVSwitch, providing 1.8 TB/s per-GPU bidirectional bandwidth with single-hop any-to-any connect…"
+   },
+   {
+    "heading": "3. Communication Hierarchy",
+    "anchor": "3-communication-hierarchy",
+    "gist": "table columns: Level, Interconnect, Bandwidth, Latency"
+   },
+   {
+    "heading": "4. Collective Operations",
+    "anchor": "4-collective-operations",
+    "gist": "- **All-Reduce**: Aggregate gradients across all GPUs; ring-based or tree-based algorithms - **All-to-All**: Token routing in MoE expert parallelism - **All-Gather / Reduce-Scatter**: FSDP parameter reconstruction and gradient sharding - *…"
+   },
+   {
+    "heading": "5. Implications for Parallelism Strategy",
+    "anchor": "5-implications-for-parallelism-strategy",
+    "gist": "The NVL72 topology fundamentally changes optimal parallelism strategies: - Traditional TP limited to 8 GPUs can now extend to 72 within the NVLink domain - Pipeline parallelism becomes less relevant when all GPUs have uniform high-bandwidt…"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/large-model-communication-hardware-topology.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

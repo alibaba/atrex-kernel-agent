@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.fused-moe-fp8-ptpc-pitfalls.3-recomputing-target-us-with-the-wrong-timing-source",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|moe|fused-moe-fp8-ptpc-pitfalls#3-recomputing-target-us-with-the-wrong-timing-source|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '3. Recomputing `target_us` With The Wrong Timing Source' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 3. Recomputing `target_us` With The Wrong Timing Source",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL FP8 PTPC Fused MoE on MI308X -- 3. Recomputing `target_us` With The Wrong Timing Source"
+  },
+  "attempted": "Recreate `target_us` with torch events, torch copy timing, theoretical peak bandwidth, default Python/runtime drift, or `cache_modifier=0` rows.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "Reproduce target rows with `bandwidth_reference.py` or the equivalent `measure_flydsl_load(..., cache_modifier=2, mode=\"loadonly\", tiles_per_thread=4, warmup=10, iters=50, cold=True)` call. Treat other timing paths as diagnostics only.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "Task66 defines `target_5pct_us = 1.05 * fp8_loadonly_ref_us_cm2`. The reference is a FlyDSL load-only kernel over measured HBM bytes, timed through the `profile_cuda_kernels` device-time path by extracting `bw_kernel` device time. `cache_modifier=0` rows and copy/event timings are different measurements."
+  },
+  "observed": "The target can move by enough to create false pass/fail decisions, especially on small-byte rows where profiler variance is already visible.",
+  "root_cause": "Task66 defines `target_5pct_us = 1.05 * fp8_loadonly_ref_us_cm2`. The reference is a FlyDSL load-only kernel over measured HBM bytes, timed through the `profile_cuda_kernels` device-time path by extracting `bw_kernel` device time. `cache_modifier=0` rows and copy/event timings are different measurements."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/fused-moe-fp8-ptpc-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

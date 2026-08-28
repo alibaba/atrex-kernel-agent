@@ -1,0 +1,134 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.ncu-rule-est-speedup-meta-rules",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|ncu-rule-est-speedup-meta-rules|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): NCU \"Estimated Speedup\" — When It's a Wall-Time Lever, When It Isn't",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "NCU \"Estimated Speedup\" — When It's a Wall-Time Lever, When It Isn't"
+  },
+  "title": "NCU \"Estimated Speedup\" — When It's a Wall-Time Lever, When It Isn't",
+  "summary": "Cross-arch meta-rules for interpreting Nsight Compute's per-rule `Estimated Speedup %` in profile-driven kernel optimization. Distilled from multiple sessions where heavyweight single-rule attacks regressed wall time even though each attack moved its targeted metric in the right direction.",
+  "sections": [
+   {
+    "heading": "TL;DR",
+    "anchor": "tl-dr",
+    "gist": "NCU's per-rule `Est."
+   },
+   {
+    "heading": "When the estimate IS reliable",
+    "anchor": "when-the-estimate-is-reliable",
+    "gist": "All of: - The kernel has ONE dominant stall > 60% of CPI - The fix is **structural-additive** (e.g."
+   },
+   {
+    "heading": "When the estimate IS misleading",
+    "anchor": "when-the-estimate-is-misleading",
+    "gist": "- 3+ stalls each contribute 30%+ of CPI - Fixing one rebalances into another (because the other was hidden by the same parallelism the targeted rule looks \"wasteful\" against) - **Three-strike convergence pattern**: 3 independent attacks at…"
+   },
+   {
+    "heading": "Three-strike convergence as a practical-ceiling signal",
+    "anchor": "three-strike-convergence-as-a-practical-ceiling-signal",
+    "gist": "When 3 independent attacks at 3 different NCU-cited levers all regress wall time in the same shape (target metric improves architecturally, wall time degrades due to rebalancing), the kernel is at its **practical ceiling for single-rule at…"
+   },
+   {
+    "heading": "Documented case studies",
+    "anchor": "documented-case-studies",
+    "gist": "table columns: Iter, Rule attacked, NCU est., Targeted-metric outcome, Wall time delta"
+   },
+   {
+    "heading": "Practical workflow",
+    "anchor": "practical-workflow",
+    "gist": "Before committing engineering time on a heavyweight fix, run this checklist:"
+   },
+   {
+    "heading": "Why this matters",
+    "anchor": "why-this-matters",
+    "gist": "Profile-driven optimization sessions can burn 10+ iterations chasing NCU rules that look high-leverage but rebalance instead of reduce."
+   },
+   {
+    "heading": "Related docs",
+    "anchor": "related-docs",
+    "gist": "- NCU profiling fundamentals: `` - Measurement trust (Duration≠latency, noise floor, graph-capture pitfalls): `` - Bank conflict …"
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/ncu-rule-est-speedup-meta-rules.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

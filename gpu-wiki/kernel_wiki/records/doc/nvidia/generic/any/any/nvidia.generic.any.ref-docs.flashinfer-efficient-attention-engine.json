@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.flashinfer-efficient-attention-engine",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|flashinfer-efficient-attention-engine|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): FlashInfer: Efficient and Customizable Attention Engine for LLM Inference",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "FlashInfer: Efficient and Customizable Attention Engine for LLM Inference"
+  },
+  "title": "FlashInfer: Efficient and Customizable Attention Engine for LLM Inference",
+  "summary": "A comprehensive analysis of the FlashInfer system (MLSys 2025), covering its block-sparse KV-Cache format, JIT-compiled attention variants, dynamic load-balanced scheduling, and comparison with FlashAttention.",
+  "sections": [
+   {
+    "heading": "1. Paper Overview",
+    "anchor": "1-paper-overview",
+    "gist": "FlashInfer is published at MLSys 2025, jointly developed by University of Washington, NVIDIA, Carnegie Mellon University, and Perplexity AI."
+   },
+   {
+    "heading": "2. Background and Motivation",
+    "anchor": "2-background-and-motivation",
+    "gist": "Modern LLM inference systems face unprecedented complexity:"
+   },
+   {
+    "heading": "3. System Architecture Design",
+    "anchor": "3-system-architecture-design",
+    "gist": "FlashInfer uses block-sparse matrices as the unified KV-Cache storage format."
+   },
+   {
+    "heading": "4. FlashAttention vs FlashInfer",
+    "anchor": "4-flashattention-vs-flashinfer",
+    "gist": "These are not \"same-layer\" competing products:"
+   },
+   {
+    "heading": "5. vLLM Backend Comparison",
+    "anchor": "5-vllm-backend-comparison",
+    "gist": "Acts as a \"dispatch controller\" — a multi-backend attention execution entry point:"
+   },
+   {
+    "heading": "6. Summary",
+    "anchor": "6-summary",
+    "gist": "FlashInfer represents a paradigm shift from \"one kernel per scenario\" to \"unified abstraction + JIT specialization + runtime scheduling.\" Its block-sparse format provides storage-agnostic KV-Cache representation, the JIT compiler enables O…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nBSR representation = (indptr, indices, values)\nwhere:\n  - indptr[i] = position of first non-zero column block for query block i\n  - indices[j] = column index (physical page number) of the j-th non-zero block\n  - values[k] = actual KV data of the k-th non-zero block\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/flashinfer-efficient-attention-engine.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

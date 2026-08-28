@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.21-waves-per-eu-2-matching-actual-occupancy-doesn-t-improve-codegen",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#21-waves-per-eu-2-matching-actual-occupancy-doesn-t-improve-codegen|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '21. `waves_per_eu=2` matching actual occupancy doesn't improve codegen' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 21. `waves_per_eu=2` matching actual occupancy doesn't improve codegen",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 21. `waves_per_eu=2` matching actual occupancy doesn't improve codegen"
+  },
+  "attempted": "The kernel runs at 2 waves/SIMD due to AccumVGPR pressure. Setting `waves_per_eu=2` (instead of 3) tells the compiler the true occupancy, so it should generate better register allocation and scheduling. \"Telling the compiler the truth should help.\"",
+  "verdict": "api-limitation",
+  "lesson": "`waves_per_eu` is a soft hint, not a hard constraint. If the kernel is already at the occupancy limit set by a different resource (like AccumVGPR), changing the hint to match reality has no effect. The compiler already generates code for the actual resource pressure, not the hint.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "On CDNA3, `waves_per_eu` primarily affects the compiler's register allocation pressure heuristic. Going from 3→2 allows the allocator to use MORE registers (since it doesn't try to leave room for a third wave), but the kernel is already not register-spilling at waves_per_eu=3. The extra register freedom doesn't change the generated code because the register demand is already met. There's also no scheduling benefit because the AMDGPU backend's scheduler doesn't meaningfully adjust its heuristics based on this hint alone."
+  },
+  "observed": "Neutral (1.686 ms vs 1.683 ms at waves_per_eu=3).",
+  "root_cause": "On CDNA3, `waves_per_eu` primarily affects the compiler's register allocation pressure heuristic. Going from 3→2 allows the allocator to use MORE registers (since it doesn't try to leave room for a third wave), but the kernel is already not register-spilling at waves_per_eu=3. The extra register freedom doesn't change the generated code because the register demand is already met. There's also no scheduling benefit because the AMDGPU backend's scheduler doesn't meaningfully adjust its heuristics based on this hint alone."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

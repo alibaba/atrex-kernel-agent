@@ -1,0 +1,142 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.hopper.gluon.ref-docs.linear_attention",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "hopper|gluon|ref-docs|linear_attention|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "hopper",
+   "architectures": [
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "hopper",
+   "language": "gluon",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Hopper (H20 / H100 / H200 / SM90) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Hopper (H20 / H100 / H200 / SM90): Chunk Linear Attention / Recurrent State Update Optimization Guide",
+  "problem": {
+   "target": "NVIDIA Hopper (H20 / H100 / H200 / SM90)",
+   "statement": "Chunk Linear Attention / Recurrent State Update Optimization Guide"
+  },
+  "title": "Chunk Linear Attention / Recurrent State Update Optimization Guide",
+  "summary": "pattern: linear_attention sub_patterns: [matmul] pitfalls: [6, 7, 8, 9, 10]",
+  "sections": [
+   {
+    "heading": "Pattern Characteristics",
+    "anchor": "pattern-characteristics",
+    "gist": "table columns: Characteristic, Description"
+   },
+   {
+    "heading": "Bottleneck Characteristic: Latency-Bound ⚠️",
+    "anchor": "bottleneck-characteristic-latency-bound",
+    "gist": "**Roofline analysis may yield misleading conclusions**."
+   },
+   {
+    "heading": "⚠️ Sub-Pattern Applicability Adjustment: matmul ISA Optimizations Yield Minimal Benefit",
+    "anchor": "sub-pattern-applicability-adjustment-matmul-isa-optimizations-yield-minimal-benefit",
+    "gist": "**Core lesson**: For a kernel with inter-iteration serial dependencies (e.g., chunked recurrent state update), after verifying memory coalescing ✅, load width ✅, async_copy ✅, pipeline reordering ❌ (-10%), and loop invariant hoisting ❌ (-3…"
+   },
+   {
+    "heading": "Optimization Strategies (Sorted by Priority)",
+    "anchor": "optimization-strategies-sorted-by-priority",
+    "gist": "In the serial dependency chain `h[i+1] = f(h[i], x[i])`, each iteration has fixed overhead (fence/wait/barrier synchronization, smem allocation, prefetch issue)."
+   },
+   {
+    "heading": "Anti-Patterns (Things Not to Do)",
+    "anchor": "anti-patterns-things-not-to-do",
+    "gist": "Increasing BV from 16 to 32, expecting each wgmma to perform more useful computation (64×32×BT vs 64×16×BT)."
+   },
+   {
+    "heading": "Stopping Conditions",
+    "anchor": "stopping-conditions",
+    "gist": "- **Measured time / theoretical lower bound < 1.3×** → Approaching architectural limit, stop ISA-level optimization - **BT has reached the smem or register limit** → chunk_size cannot be further increased - Consider **algorithm-level chang…"
+   },
+   {
+    "heading": "Optimization Strategy Priority Quick Reference",
+    "anchor": "optimization-strategy-priority-quick-reference",
+    "gist": "Source: `` Appendix A, \"Recurrent state update\" row."
+   },
+   {
+    "heading": "Applicable Pitfall Experience",
+    "anchor": "applicable-pitfall-experience",
+    "gist": "See `` for details."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\n1. analysismainloopdata:\n - output[i] -> input[i+1] ？\n - if -> Latency-Bound\n\n2. :\n   theoretical_time = NT × per_iter_min_latency\n   per_iter_min_latency ≈ num_wgmma_per_iter × wgmma_latency + sync_overhead\n (Hopper wgmma latency ≈ µs, fence + mma + wait)\n\n3. :\n if elapsed time / theoretical_time < 1.3 ->\n```\n\n```\n1. kernel mainloopwhether there is output[i] -> input[i+1] ？\n - -> Latency-Bound. \"optimization\"\n - -> workflow, reference matmul.md\n\n2. per-iteration elapsed time:\n per_iter_min ≈ #wgmma × µs + fence/wait\n\n3. :\n   theoretical_time = NT × per_iter_min\n\n4. if / < 1.3 -> ISA optimization\n```\n\n```\n1. dimensioncurrent\n2. dimension, compute 2× :\n a. grid_blocks -> SM utilization 20%？\n b. accumulator register -> spill？\n c. smem -> 228 KB？\n3. SM utilization ≥ 20% register spill tile\n4. verification(do notanalysis)\n```\n\n```\n: spt[d] × tpw[d] × wpc[d] = TILE_DIM[d] (dimension d)\nWarp : tpw[0] × tpw[1] = 32 (Hopper warp size)\nWarp total count: wpc[0] × wpc[1] = num_warps\n128-bit : spt[contiguousdimension] × element_bytes ≥ 16\n```\n\n```\ntile_byte_width = TILE_DIM[swizzle_dim] × element_size_bytes\nswizzle_byte_width must ≤ tile_byte_width\n\nexample (bf16, 2B/element):\n  TILE_DIM=16 → 32 bytes → swizzle_byte_width ≤ 32\n  TILE_DIM=32 → 64 bytes → swizzle_byte_width ≤ 64\n  TILE_DIM=64 → 128 bytes → swizzle_byte_width ≤ 128\n  TILE_DIM=128 → 256 bytes → swizzle_byte_width = 128 (max)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/hopper/ref-docs/gluon/linear_attention.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

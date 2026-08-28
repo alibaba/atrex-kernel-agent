@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.ref-docs.aiter-optimization-techniques",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|aiter-optimization-techniques|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): aiter Optimization Techniques in Detail",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "aiter Optimization Techniques in Detail"
+  },
+  "title": "aiter Optimization Techniques in Detail",
+  "summary": "AMD's official AI inference operator library aiter — core optimization patterns and implementation techniques reference.",
+  "sections": [
+   {
+    "heading": "1. aiter Project Overview",
+    "anchor": "1-aiter-project-overview",
+    "gist": "aiter is a high-performance AI inference operator library maintained by the AMD ROCm team, designed for MI300X (gfx942, CDNA3) and MI350 (gfx950, CDNA4)."
+   },
+   {
+    "heading": "2. AMD-Specific Optimization Patterns",
+    "anchor": "2-amd-specific-optimization-patterns",
+    "gist": "The MI300X contains 8 XCDs (eXtended Compute Die)."
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\ndef remap_xcd(pid, NUM_XCD: tl.constexpr):\n    \"\"\"Remap consecutive pids to adjacent tiles on the same XCD\"\"\"\n    # pid 0,1,2,...,7 are on XCD 0~7 respectively\n    # After remapping, pid 0~N/8 are all on XCD 0, improving L2 locality\n    num_pid = tl.num_programs(0)\n    pid_per_xcd = (num_pid + NUM_XCD - 1) // NUM_XCD\n    xcd_id = pid % NUM_XCD\n    local_pid = pid // NUM_XCD\n    return xcd_id * pid_per_xcd + local_pid\n```\n\n```python\nLOG2E: tl.constexpr = 1.44269504089\n# Replace tl.exp(x)\n# Usage in softmax\np = tl.exp2(qk_scaled - m_new)  # Directly maps to v_exp_f32\n```\n\n```python# decode attention: Q is only used once, does not pollute L1\n# lean attention: cross-CTA signal synchronization\ntl.store(lock_ptr, value, cache_modifier=\".wt\")     # write side\nflag = tl.load(lock_ptr, cache_modifier=\".cv\")       # read side (bypass cache)```\n\n```python\ntl.assume(stride_qm > 0)\ntl.assume(stride_kn > 0)\n# Hint compiler that stride is positive, enabling:\n# 1. More efficient address calculation (avoid sign extension)\n# 2. Loop unroll optimization\n# 3. Better vectorization judgment\n```\n\n```python\n# unified pid encoding: pack tile index and K-split index together\npid = tl.program_id(0)\npid = remap_xcd(pid, NUM_XCD)\n\n# Decode tile coordinates and split index\nnum_pid_in_group = GROUP_SIZE_M * num_pid_n\ngroup_id = pid // num_pid_in_group\npid_m = group_id * GROUP_SIZE_M + (pid % GROUP_SIZE_M)\npid_n = (pid % num_pid_in_group) // GROUP_SIZE_M\npid_k = tl.program_id(1)  # K-split dimension\n\n# Each CTA only computes one shard of K\nk_start = pid_k * BLOCK_K * num_k_tiles_per_split\nk_end = min(k_start + BLOCK_K * num_k_tiles_per_split, K)\n\n# Write partial results to workspace, subsequent reduce kernel aggregates them\ntl.store(workspace + pid_k * stride_ws, acc)\n```\n\n```python\n# L2 cache-friendly tile traversal order\nnum_pid_in_group = GROUP_SIZE_M * num_pid_n\ngroup_id = pid // num_pid_in_group\nfirst_pid_m = group_id * GROUP_SIZE_M\npid_m = first_pid_m + (pid % GROUP_SIZE_M)\npid_n = (pid % num_pid_in_group) // GROUP_SIZE_M\n```\n\n```python\n# CDNA4 uses tl.dot_scaled to implement hardware-accelerated block-scaled MMA\nacc = tl.dot_scaled(\n    a_fp4, a_scales, \"e2m1\",   # activation: MXFP4 + per-32 scale\n    b_fp4, b_scales, \"e2m1\",   # weight: MXFP4 + per-32 scale\n    acc                         # FP32 accumulator\n)\n```\n\n```python\n# V1: Single CTA traverses all KV pages\nfor i in range(num_kv_blocks):\n    block_idx = block_table[i]\n    k = load_paged_kv(k_cache, block_idx)  # Load from paged KV cache\n    v = load_paged_kv(v_cache, block_idx)\n    qk = tl.dot(q, k)        # [BLOCK_M, BLOCK_N]\n    # online softmax update\n    m_new = tl.maximum(m, tl.max(qk, axis=1))\n    p = tl.exp2((qk - m_new[:, None]) * LOG2E)\n    acc = acc * tl.exp2((m - m_new) * LOG2E)[:, None] + tl.dot(p, v)\n    m = m_new\n```\n\n```python\n# V2: Each CTA processes a portion of KV blocks\npartition_id = tl.program_id(1)\nkv_start = partition_id * KV_BLOCKS_PER_PARTITION\nkv_end = min(kv_start + KV_BLOCKS_PER_PARTITION, num_kv_blocks)\n\n# Each partition independently computes partial output + log-sum-exp\n# Reduce kernel merges all partition results using LSE\n```\n\n```python\n# Load FP8 KV and dequantize\nk_fp8 = tl.load(k_cache_ptr)             # FP8 E4M3\nk_scale = tl.load(k_scale_ptr + token_id) # per-token scale\nk = k_fp8.to(tl.float16) * k_scale       # Dequantize\n```\n\n```python\n# MLA decode: Separate nope/pe computation\n# Q_nope: [B, H, D_nope]  Q_pe: [B, H, D_pe]\n# KV: [B, S, D_nope]      K_pe: [B, S, D_pe]\n\n# Phase 1: nope part (without RoPE)\nqk_nope = tl.dot(Q_nope, KV.T)  # [H, S]\n\n# Phase 2: pe part (online RoPE application)\nQ_pe_rotated = apply_rope(Q_pe, cos, sin, position)\nK_pe_rotated = apply_rope(K_pe, cos, sin, positions)\nqk_pe = tl.dot(Q_pe_rotated, K_pe_rotated.T)\n\n# Merge\nqk = qk_nope + qk_pe\n# online softmax + value accumulation\n\n# Cross-split reduction uses log-sum-exp\nlse = m + tl.log2(d)  # log-sum-exp for subsequent reduce\n```\n\n```python\n# Ping-pong scheduling: Alternately assign Q-blocks to improve memory locality\n# CTA 0 processes Q[0], Q[2], Q[4]...\n# CTA 1 processes Q[1], Q[3], Q[5]...\nq_block_id = cta_id * 2 + (iteration % 2)\n\n# Cross-CTA lock synchronization (using .wt/.cv cache modifier)\n# Producer CTA notifies Consumer after completion\nif is_producer:\n    tl.store(lock_ptr, 1, cache_modifier=\".wt\")  # write-through\nif is_consumer:\n    while tl.load(lock_ptr, cache_modifier=\".cv\") == 0:  # volatile read\n        pass  # spin-wait\n```\n\n```python\n# Sliding window tile pruning: Skip tiles outside the window\nif SLIDING_WINDOW > 0:\n    window_start = query_pos - SLIDING_WINDOW\n    if kv_block_end < window_start:\n        continue  # Entire tile is outside the window, skip\n\n# Sink token support: Keep first N tokens\nif SINK_TOKEN_LENGTH > 0 and kv_pos < SINK_TOKEN_LENGTH:\n    in_window = True  # Sink tokens always participate in computation\n\n# Binary search seq_idx (multi-sequence batching)\nseq_id = binary_search(seq_starts, kv_pos)\n```\n\n```python\n# Initialize\nm = -float(\"inf\")   # running max\nd = 0.0             # running denominator\nacc = tl.zeros(...)  # running output\n\nfor block in kv_blocks:\n    qk = compute_qk(q, k_block)\n    m_new = tl.maximum(m, tl.max(qk, axis=1))\n    alpha = tl.exp2((m - m_new) * LOG2E)\n    p = tl.exp2((qk - m_new[:, None]) * LOG2E)\n    # Rescale old accumulated value\n    acc = acc * alpha[:, None]\n    d = d * alpha + tl.sum(p, axis=1)\n    acc += tl.dot(p.to(v.dtype), v_block)\n    m = m_new\n\n# Final normalization\nacc = acc / d[:, None]\n```\n\n```python\n# Weight interleaving trick: gate and up are arranged alternately\n# Original: W_gate[E, N, K], W_up[E, N, K]\n# Interleaved: W_interleaved[E, 2N, K] where offs = offs_half + (i % 2) * (N // 2)\n# This makes gate/up results naturally adjacent, no need for extra permute\n\nfor i in range(num_k_tiles):\n    # Compute gate and up simultaneously\n    a = tl.load(A_ptr + ...)\n    w_gate = tl.load(W_ptr + offs_half + 0 * (N // 2) + ...)\n    w_up   = tl.load(W_ptr + offs_half + 1 * (N // 2) + ...)\n    acc_gate += tl.dot(a, w_gate)\n    acc_up   += tl.dot(a, w_up)\n\n# SiLU activation + element-wise multiply\ngate_activated = acc_gate * tl.sigmoid(acc_gate)  # SiLU\nintermediate = gate_activated * acc_up\n\n# Down projection uses atomic_add (multiple experts accumulate to same output)\ntl.atomic_add(out_ptr + ..., down_result, sem=\"relaxed\", scope=\"gpu\")\n```\n\n```python\n# CDNA4 MXFP4 MoE: Use dot_scaled + scale unswizzle\nN_PRESHUFFLE_FACTOR: tl.constexpr = 32  # CDNA4 scale permutation factor\n\n# Unswizzle scales to match MFMA data layout\nscale_offs = (n_base // N_PRESHUFFLE_FACTOR) * scale_stride + k_idx\nw_scales = tl.load(scale_ptr + scale_offs)\n\nacc = tl.dot_scaled(\n    x_fp4, x_scales, \"e4m3\",\n    w_fp4, w_scales, \"e4m3\",\n    acc\n)\n```\n\n```python\n# Bitmatrix: Each token uses bitmask to indicate which experts it is assigned to\n# More compact than sparse indices\n\n# expt_data 32-bit packing: low 16 bits = expert_id, high 16 bits = block_id\nexpt_data = tl.load(expt_data_ptr + pid)\nexpt_id = expt_data & 0xFFFF\nblock_id = expt_data >> 16\n\n# Directly index to corresponding expert's weights and inputs\nw_ptr = W_base + expt_id * expert_stride\n```\n\n```python\n# Standard SiLU: x * sigmoid(x) = x / (1 + exp(-x))\n# Fast implementation (using exp2 hardware instruction):\ns = gate / (1.0 + tl.exp2(-LOG2E * alpha * gate))\n# Final: fma(s, linear, s) i.e., s * (linear + 1)\nresult = s * (linear + 1.0)\n```\n\n```python\n# Three-stage grid encoding\nphase = tl.program_id(2)  # Third dimension distinguishes phases\n\nif phase == 0:\n    # Phase 1: BMM (QKV projection)\n    qkv = tl.dot(input, W_qkv)\n\nelif phase == 1:\n    # Phase 2: RoPE + cache decode\n    q, k = apply_rope(q_raw, k_raw, cos, sin, position)\n    # FP8/FP4 on-the-fly activation quantization\n    k_fp8 = quantize_fp8(k, k_scale)\n    v_fp8 = quantize_fp8(v, v_scale)\n    tl.store(k_cache + cache_slot, k_fp8)\n    tl.store(v_cache + cache_slot, v_fp8)\n\nelif phase == 2:\n    # Phase 3: Cache prefill (batch write multiple positions)\n    for pos in range(seq_start, seq_end):\n        tl.store(k_cache + pos, k_quantized[pos])\n        tl.store(v_cache + pos, v_quantized[pos])\n```\n\n```python\n@triton.jit\ndef rmsnorm_quant_kernel(X, W, Out, Scale, eps, N: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, N)\n    x = tl.load(X + row * N + cols)\n\n    # RMSNorm\n    rms = tl.sqrt(tl.sum(x * x) / N + eps)\n    x_norm = x / rms * tl.load(W + cols)\n\n    # Direct quantization (no extra memory round-trip)\n    amax = tl.max(tl.abs(x_norm))\n    scale = amax / 448.0  # FP8 E4M3 max\n    x_fp8 = (x_norm / scale).to(tl.float8e4m3fn)\n\n    tl.store(Out + row * N + cols, x_fp8)\n    tl.store(Scale + row, scale)\n```\n\n```python\n# W = [W_gate | W_up], concat on N dimension\n# One GEMM computes gate and up simultaneously\nfor k_tile in range(K // BLOCK_K):\n    a = tl.load(A_ptr + ...)\n    w_left  = tl.load(W_ptr + ...)                  # gate part\n    w_right = tl.load(W_ptr + ... + N_half * stride) # up part\n    acc_gate += tl.dot(a, w_left)\n    acc_up   += tl.dot(a, w_right)\n\n# activation\nactivated = silu(acc_gate) * acc_up\n\n# down projection: atomic_add accumulation\n# cyclic K-offset reduces atomic conflicts\nk_offset = (pid_m * 7) % (K_down // BLOCK_K) #\nfor k_tile in range(K_down // BLOCK_K):\n    k_idx = (k_tile + k_offset) % (K_down // BLOCK_K)\n    w_down = tl.load(W_down_ptr + k_idx * BLOCK_K + ...)\n    partial = tl.dot(activated_tile, w_down)\n    tl.atomic_add(out_ptr + ..., partial, sem=\"relaxed\", scope=\"gpu\")\n```\n\n```python\n# One kernel completes:\n# 1. Split Q, K, V from QKV concat tensor\n# 2. Apply RoPE to Q and K\n# 3. Write to respective output buffers\n@triton.jit\ndef fused_qkv_rope_kernel(QKV, Q_out, K_out, V_out, cos, sin, ...):\n    # Split\n    q = tl.load(QKV + q_offset)\n    k = tl.load(QKV + k_offset)\n    v = tl.load(QKV + v_offset)\n\n    # RoPE (only for Q and K)\n    q_rotated = q * cos - rotate_half(q) * sin\n    k_rotated = k * cos - rotate_half(k) * sin\n\n    tl.store(Q_out + ..., q_rotated)\n    tl.store(K_out + ..., k_rotated)\n    tl.store(V_out + ..., v)  # V does not need RoPE\n```\n\n```bash\n# Step 1: Prepare shape configuration (CSV format)\n# shapes.csv:\n# M,N,K,dtype\n# 1,4096,4096,fp16\n# 32,4096,11008,fp8\n\n# Step 2: Run tuning script\npython tune.py --input shapes.csv \\\n    --libtype ck_tile \\\n    --splitK 1,2,4,8 \\\n    --output tuned_results.csv\n\n# Step 3: Tuning output\n# cu_num | kernelId | splitK | timing(us) | tflops | bw(GB/s) | errRatio\n# 304    | 12       | 4      | 15.3       | 285.6  | 1420     | 1e-6\n\n# Step 4: JIT compile optimal kernel\npython build_tuned.py --config tuned_results.csv --output lib/\n```\n\n```python# ASM backend: shuffle layout (32, 16)\n# Reorder weights in (32, 16) tiles to match MFMA data path\n\n# Flat GEMM (CK): [N/128, K*128] layout```\n\n```python\nimport torch\n\ndef get_gemm_kernel(dtype, M, N, K):\n    gpu_arch = torch.cuda.get_device_properties(0).gcnArchName# MI300X: Load CDNA3 optimized .hsaco\n        # MI350: Load CDNA4 optimized .co (includes MXFP4 support)```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/ref-docs/aiter-optimization-techniques.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

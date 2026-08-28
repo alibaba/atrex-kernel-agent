@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.epilogue-fusion.common-fused-epilogue-operations",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|epilogue-fusion#common-fused-epilogue-operations|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "common-fused-epilogue-operations"
+  ],
+  "triggers": [
+   "the 'Common Fused Epilogue Operations' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Common Fused Epilogue Operations",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Epilogue Fusion -- Common Fused Epilogue Operations"
+  },
+  "technique": "Common Fused Epilogue Operations",
+  "what": "| Operation | Description | Typical Use | |-----------|-------------|-------------| | Scale + Bias | `y = alpha * acc + beta * C` | Standard GEMM epilogue | | ReLU / GeLU / SiLU | Element-wise activation | MLP layers | | Quantize | FP32 accumulator to FP8/FP16 | Inference quantization | | SwiGLU gate | `y = SiLU(gate) * up` | Gated dual GEMM (LLM FFN) | | Softmax rescale | `y = acc * exp(max_old - max_new)` | Attention epilogue | | Residual add | `y = acc + residual` | Transformer blocks |",
+  "when": "| Operation | Description | Typical Use | |-----------|-------------|-------------| | Scale + Bias | `y = alpha * acc + beta * C` | Standard GEMM epilogue | | ReLU / GeLU / SiLU | Element-wise activation | MLP layers | | Quantize | FP32 ac…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/epilogue-fusion.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

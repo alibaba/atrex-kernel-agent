@@ -1,0 +1,139 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.cuda-mode-lecture-77-gpu-kernel-dsl",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|cuda-mode-lecture-77-gpu-kernel-dsl|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): CUDA-MODE Lecture 77: DSLs for GPU Kernels",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "CUDA-MODE Lecture 77: DSLs for GPU Kernels"
+  },
+  "title": "CUDA-MODE Lecture 77: DSLs for GPU Kernels",
+  "summary": "Notes from CUDA-MODE Lecture 77 by Tri Dao, covering the GPU kernel DSL ecosystem from PyTorch through Triton to CuTe-DSL, demonstrating performance and development efficiency tradeoffs across abstraction levels via Softmax, GEMM, and Attention examples. Code: `Dao-AILab/quack`.",
+  "sections": [
+   {
+    "heading": "1. Why DSLs?",
+    "anchor": "1-why-dsls",
+    "gist": "Tri Dao's computational efficiency formula:"
+   },
+   {
+    "heading": "2. DSL Spectrum",
+    "anchor": "2-dsl-spectrum",
+    "gist": "**PyTorch is the first DSL** — writing programs in PyTorch turns code into GPU kernels."
+   },
+   {
+    "heading": "3. Other Notable DSLs",
+    "anchor": "3-other-notable-dsls",
+    "gist": "- **ThunderKittens** (Stanford): Simple and fast AI kernel framework - **TileLang**: Tile-based GPU programming abstraction - **Mojo**: Combines Python usability with systems-level performance - **Mosaic GPU**: Alternative GPU programming …"
+   },
+   {
+    "heading": "4. Triton Extensions",
+    "anchor": "4-triton-extensions",
+    "gist": "- **Gluon**: Lower-level language built on Triton compiler technology, exposing fine-grained control over layout, scheduling, and memory - **TLX**: Low-level, warp-aware Triton extension providing hardware-specific intrinsics like `wgmma`,…"
+   },
+   {
+    "heading": "5. Softmax Example",
+    "anchor": "5-softmax-example",
+    "gist": "- **Liger Kernel Triton implementation**: `@triton.jit` — get row ID and offsets → load data with boundary handling → compute max (numerical stability) → compute exp and normalize → output."
+   },
+   {
+    "heading": "6. Softmax Performance (H100 BF16 M=32k)",
+    "anchor": "6-softmax-performance-h100-bf16-m-32k",
+    "gist": "table columns: Implementation, Result"
+   },
+   {
+    "heading": "7. Hopper GEMM A@B Performance (BF16, M=N=8k)",
+    "anchor": "7-hopper-gemm-a-b-performance-bf16-m-n-8k",
+    "gist": "CuTe-DSL outperforms cuBLAS 13.0 at all test points."
+   },
+   {
+    "heading": "8. DSL Selection Matrix",
+    "anchor": "8-dsl-selection-matrix",
+    "gist": "table columns: DSL, Memory-Bound Scenarios, Compute-Bound Scenarios, Ramp-Up Time"
+   },
+   {
+    "heading": "9. Supplementary: H200 Softmax Bandwidth",
+    "anchor": "9-supplementary-h200-softmax-bandwidth",
+    "gist": "Quack (CuTe-DSL) achieves highest bandwidth compared to Torch Naive / Torch Compile / FlashInfer across virtually all configurations."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/cuda-mode-lecture-77-gpu-kernel-dsl.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

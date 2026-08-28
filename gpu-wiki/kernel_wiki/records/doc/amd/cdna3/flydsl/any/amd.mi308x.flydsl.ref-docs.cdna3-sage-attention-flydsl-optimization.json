@@ -1,0 +1,152 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.ref-docs.cdna3-sage-attention-flydsl-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|ref-docs|cdna3-sage-attention-flydsl-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention"
+  ],
+  "triggers": [
+   "ref-docs reference for AMD MI308X (CDNA3 / gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD MI308X (CDNA3 / gfx942): FlyDSL SageAttention Step-by-Step Optimization Practice (MI308X gfx942)",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "FlyDSL SageAttention Step-by-Step Optimization Practice (MI308X gfx942)"
+  },
+  "title": "FlyDSL SageAttention Step-by-Step Optimization Practice (MI308X gfx942)",
+  "summary": "Applicability: backend: flydsl; hardware: amd; topic: reference",
+  "sections": [
+   {
+    "heading": "Target Architecture",
+    "anchor": "target-architecture",
+    "gist": "table columns: Parameter, Value"
+   },
+   {
+    "heading": "SageAttention Algorithm",
+    "anchor": "sageattention-algorithm",
+    "gist": "SageAttention is a quantized Flash Attention variant that reduces computation and bandwidth requirements through mixed precision:"
+   },
+   {
+    "heading": "Kernel Architecture Design",
+    "anchor": "kernel-architecture-design",
+    "gist": "table columns: Parameter, Value, Reason"
+   },
+   {
+    "heading": "Optimization Journey (V1 → V27)",
+    "anchor": "optimization-journey-v1-v27",
+    "gist": "- V1: Basic functional implementation, single buffering - V2: K/V double-buffered LDS loading - V3: Software-pipelined LDS reads for QK and PV"
+   },
+   {
+    "heading": "Dead Ends and Lessons Learned",
+    "anchor": "dead-ends-and-lessons-learned",
+    "gist": "All of the following attempts were made from a ~191 TFLOPS baseline and were all reverted:"
+   },
+   {
+    "heading": "Performance Trajectory Summary",
+    "anchor": "performance-trajectory-summary",
+    "gist": "table columns: Version, S=8192 TFLOPS, Key Change, Improvement"
+   },
+   {
+    "heading": "Compiler Flags",
+    "anchor": "compiler-flags",
+    "gist": ""
+   },
+   {
+    "heading": "ISA-Level Statistics (Confirmed via rocprofv3)",
+    "anchor": "isa-level-statistics-confirmed-via-rocprofv3",
+    "gist": "table columns: Metric, Value"
+   },
+   {
+    "heading": "Core Optimization Principles Summary",
+    "anchor": "core-optimization-principles-summary",
+    "gist": "The occupancy improvement from single-buffer + barrier synchronization (1→3 waves) far outweighs the pipeline overlap benefits of double-buffering."
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- **FlyDSL Programming Guide**: - **FlyDSL API Reference**: - **FlyDSL …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\ninput: Q, K [B, S, H, D] INT8 quantization, per-block descale\n V [B, S, H, D] FP8 (E4M3FN) quantization, per-head descale\n\nGEMM1 (QK): mfma_i32_32x32x16_i8 → INT32 → FP32 → online softmax\nGEMM2 (PV): mfma_f32_32x32x16_fp8_fp8 -> FP32\noutput: O [B, S, H, D] BF16\n```\n\n```\nPhase 0: Setup\n ├── raw pointers\n ├── block_id -> batch, head, q_tile (q_tile-major column)\n ├── load Q i64 B-operand packs (entire kernel register)\n └── load descale factors (Q scale sm_scale * log2(e))\n\nPhase 1: prefetch KV tile LDS -> barrier\n\nPhase 2: Main KV Loop ( [m_old, l_old, buf_id, o_acc_0..3])\n ├── 2a. next tile globalload (non-blocking VMEM)\n ├── 2b. GEMM1 (QK): INT8 MFMA, prefetch depth=2\n │ sched_dsrd(2) + sched_mfma(2)\n │ sched_barrier(0) QK MFMA\n ├── 2c. Row-Max: 32 i32->f32, scaling max, XOR shuffle lane reduction\n ├── 2d. scaling + correction factor, rescale o_accs[0]\n  ├── 2e. P-Packing: FMA(s, qk_scale, -m_new) → exp2 → cvt_pk_fp8_f32\n │ local_sum\n ├── 2f. GEMM2 (PV): load V -> MFMA loop, sched_mfma(4)\n │ o_accs[1..3] sub-tile setup rescale\n └── 2g. lane sum, barrier, storeprefetch K/V LDS, barrier\n\nPhase 3: Output Writeback\n  ├── O = O_acc / l_final * v_scale\n ├── Shift-based F32->BF16 (bit, conversion)\n └── MFMA32 outputregistermapping + guarded store\n```\n\n```\nLDS compute:\n  K: BLOCK_N × HEAD_DIM = 64 × 128 = 8192 bytes\n  V: HEAD_DIM × VT_STRIDE = 128 × 72 = 9216 bytes\n : 17408 bytes -> 64KB / 17408 = 3 workgroups/CU -> 3 waves/SIMD\n```\n\n```python\ncompile_hints = {\n    \"fast_fp_math\": True,\n    \"unsafe_fp_math\": True,\n    \"llvm_options\": {\n \"enable-post-misched\": True, # MachineScheduler\n \"lsr-drop-solution\": True, # LSR: compilation\n \"amdgpu-early-inline-all\": True, # function\n \"misched-postra-direction\": 2, # RA schedulinguse bottom-up\n    },\n}\n\n# Function attributes\n\"rocdl.waves_per_eu\": 3 # LDS occupancy\n\"denormal-fp-math-f32\": \"preserve-sign\" # flush denormals (accuracy)\n\"no-nans-fp-math\": \"true\"\n\"unsafe-fp-math\": \"true\"\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/ref-docs/flydsl/cdna3-sage-attention-flydsl-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

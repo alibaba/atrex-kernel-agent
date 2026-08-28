@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.kernel-opt.optimization-guide.step-1-bottleneck-analysis-and-utilization-evaluation-roofline-model",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|kernel-opt|optimization-guide#step-1-bottleneck-analysis-and-utilization-evaluation-roofline-model|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "step-1-bottleneck-analysis-and-utilization-evaluation-roofline-model"
+  ],
+  "triggers": [
+   "the 'Step 1: Bottleneck Analysis and Utilization Evaluation (Roofline Model)' technique is being considered on AMD CDNA4 (gfx950 / MI355X)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD CDNA4 (gfx950 / MI355X): Step 1: Bottleneck Analysis and Utilization Evaluation (Roofline Model)",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "Gluon Kernel Performance Optimization Guide (AMD CDNA4) -- Step 1: Bottleneck Analysis and Utilization Evaluation (Roofline Model)"
+  },
+  "technique": "Step 1: Bottleneck Analysis and Utilization Evaluation (Roofline Model)",
+  "what": "Before optimizing, **you must first determine whether the operator is compute-bound or memory-bound**, as this determines the subsequent optimization direction and utilization evaluation metrics.",
+  "when": "Before optimizing, **you must first determine whether the operator is compute-bound or memory-bound**, as this determines the subsequent optimization direction and utilization evaluation metrics.",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\nTile AI = Tile_FLOPs / Tile_Bytes (unit: FLOPs/Byte)\n```\n\n```\nRidge Point = Peak Compute (FLOPS) / Peak Bandwidth (Bytes/s)   (unit: FLOPs/Byte)\n```\n\n```\nIf Tile AI ≥ Ridge Point:\n    → Compute Bound\n    → Evaluation metric: Compute utilization\n    → Optimization focus: Improve MFMA instruction throughput, eliminate stalls, increase compute-memory overlap\n\nIf Tile AI < Ridge Point:\n    → Memory Bound\n    → Evaluation metric: Bandwidth utilization\n    → Optimization focus: Reduce memory access, increase cache hit rate, increase data reuse, optimize load/store width\n```\n\n```bash\npython <benchmark-command> <kernel.py> <ref.py> \\\n    --wrapper-name <wrapper> --setup-name <setup>\n```\n\n```\nactual (TFLOPS) = FLOPs / elapsed time (seconds) / 1e12\nactualbandwidth (TB/s) = Bytes_transferred / elapsed time (seconds) / 1e12\n```\n\n```\ngrid_blocks = cdiv(M, BLOCK_SIZE_M) × cdiv(N, BLOCK_SIZE_N)\nCU_ratio = grid_blocks / num_CUs   (MI355X: 256 CUs)\n```\n\n```\ntile_time_min = Tile_FLOPs/peak (Compute) or Tile_Bytes/bandwidthupper bound (Memory)\nnum_waves = ceil(grid_blocks / num_CUs)\ntheoretical_time = num_waves × tile_time_min\n```\n\n```bash\npython tools/compute_utilization.py \\\n    --gpu mi355x --dtype bf16 \\\n    --flops-expr \"2*BM*BN*K\" --bytes-expr \"(BM*K + BN*K + BM*BN)*2\" \\\n    --time-ms 0.5 --grid-blocks 64\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

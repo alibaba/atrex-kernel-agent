@@ -1,0 +1,129 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.b200.any.ref-docs.cutlass-python-blackwell-gemm-peak-performance",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|cutlass-python-blackwell-gemm-peak-performance|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "b200"
+   ],
+   "product": "b200",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA B200 (GB200 / SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA B200 (GB200 / SM100): Achieving Peak Tensor Core Performance for GEMM on Blackwell via CUTLASS Python",
+  "problem": {
+   "target": "NVIDIA B200 (GB200 / SM100)",
+   "statement": "Achieving Peak Tensor Core Performance for GEMM on Blackwell via CUTLASS Python"
+  },
+  "title": "Achieving Peak Tensor Core Performance for GEMM on Blackwell via CUTLASS Python",
+  "summary": "Technical analysis of the GTC 2026 presentation demonstrating progressive GEMM optimization on B200 GPU using CUTLASS Python, from baseline to near-peak Tensor Core throughput.",
+  "sections": [
+   {
+    "heading": "1. Introduction and Motivation",
+    "anchor": "1-introduction-and-motivation",
+    "gist": "This document analyzes the GTC 2026 presentation \"Achieve Peak Tensor Core Performance for GEMM on Blackwell via CUTLASS Python\" by NVIDIA engineers Linfeng Zheng and Albert Di."
+   },
+   {
+    "heading": "2. Basic GEMM Overview",
+    "anchor": "2-basic-gemm-overview",
+    "gist": "The basic GEMM workflow comprises 7 steps:"
+   },
+   {
+    "heading": "3. Progressive Optimization — Compute-Bound Scenarios",
+    "anchor": "3-progressive-optimization-compute-bound-scenarios",
+    "gist": "DRAM load latency is hundreds to thousands of cycles."
+   },
+   {
+    "heading": "4. Additional Optimization Scenarios",
+    "anchor": "4-additional-optimization-scenarios",
+    "gist": "table columns: Feature, Legacy, Static Persistent, Dynamic Persistent"
+   },
+   {
+    "heading": "5. Summary",
+    "anchor": "5-summary",
+    "gist": "table columns: Technique, Principle, TFLOPS Achieved"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfor k_tile_idx in cutlass.range(num_k_tiles, prefetch_stages=ab_stages - 2):\n    # Issue TMA loads\n    ab_empty = ab_producer.acquire_and_advance()\n    cute.copy(...)\n    # Execute one K-block worth of MMA instructions\n    ab_full = ab_consumer.wait_and_advance()\n    cute.gemm(...)\n    # Signal buffer consumed\n    ab_full.release()\n```\n\n```python\nepilogue_warp_ids = (0, 1, 2, 3)  # 4 warps handle epilogue\nmma_warp_id = 4                    # 1 warp handles MMA\ntma_warp_id = 5                    # 1 warp handles TMA\nthreads_per_cta = 32 * 6           # 6 warps = 192 threads\n```\n\n```python\n@cute.kernel()\ndef primary_kernel(...):\n    # prologue & mainloop ...\n    cute.arch.griddepcontrol_launch_dependents()\n    # epilogue ...\n```\n\n```python\n@cute.kernel()\ndef secondary_kernel(...):\n    # prologue ...\n    cute.arch.griddepcontrol_wait()\n    # mainloop & epilogue ...\n```\n\n```python\nkernel(...).launch(grid=grid, block=[threads, 1, 1], stream=stream, use_pdl=True)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/b200/ref-docs/cutlass-python-blackwell-gemm-peak-performance.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

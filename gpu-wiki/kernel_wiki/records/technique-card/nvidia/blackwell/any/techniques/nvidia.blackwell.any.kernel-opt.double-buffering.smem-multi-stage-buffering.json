@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.double-buffering.smem-multi-stage-buffering",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|techniques|double-buffering#smem-multi-stage-buffering|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "techniques",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "smem-multi-stage-buffering"
+  ],
+  "triggers": [
+   "the 'SMEM Multi-Stage Buffering' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): SMEM Multi-Stage Buffering",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Double/Multi-Buffering Patterns -- SMEM Multi-Stage Buffering"
+  },
+  "technique": "SMEM Multi-Stage Buffering",
+  "what": "Shared memory multi-buffering provides multiple copies of the A and B input tiles so that TMA loads can overlap with MMA consumption:",
+  "when": "Shared memory multi-buffering provides multiple copies of the A and B input tiles so that TMA loads can overlap with MMA consumption:",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// SMEM multi-stage buffer allocation\n// 3 stages, each holding one A tile and one B tile\n//\n// Memory layout:\n// +--------+--------+--------+\n// | Stage0 | Stage1 | Stage2 |\n// | A0 B0  | A1 B1  | A2 B2  |\n// +--------+--------+--------+\n//\n// Pipeline state at steady state:\n// Stage 0: TMA loading (k+2)\n// Stage 1: Ready, waiting for MMA\n// Stage 2: MMA consuming (k)\n\nconstexpr int SMEM_STAGES = 3;\nconstexpr int TILE_A_BYTES = TILE_M * TILE_K * sizeof(half);  // e.g. 16 KB\nconstexpr int TILE_B_BYTES = TILE_K * TILE_N * sizeof(half);  // e.g. 32 KB\nconstexpr int STAGE_BYTES  = TILE_A_BYTES + TILE_B_BYTES;     // e.g. 48 KB\n// Total SMEM for operands: 3 * 48 KB = 144 KB\n\nstruct SmemBuffers {\n    half A[SMEM_STAGES][TILE_M][TILE_K];\n    half B[SMEM_STAGES][TILE_K][TILE_N];\n    uint64_t mbar_full[SMEM_STAGES];   // TMA done -> MMA can consume\n    uint64_t mbar_empty[SMEM_STAGES];  // MMA done -> TMA can refill\n};\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/techniques/double-buffering.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

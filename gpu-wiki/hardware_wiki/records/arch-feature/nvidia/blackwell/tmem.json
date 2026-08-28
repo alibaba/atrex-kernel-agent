@@ -1,0 +1,47 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.arch-feature.tmem",
+ "type": "arch-feature",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": null,
+  "feature": "tmem",
+  "sm_arch": "sm_100",
+  "availability": {
+   "sm_arch": [
+    "sm_100"
+   ],
+   "products": []
+  }
+ },
+ "facts": {
+  "what": "Tensor Memory (TMEM) is a new addressable memory space introduced in the Blackwell architecture (SM100). Each SM contains **256KB of dedicated TMEM**, used primarily as the accumulator storage for `tcgen05.mma` operations. TMEM eliminates the register pressure that plagued Hopper's wgmma, where accumulators consumed 128+ registers per warpgroup.",
+  "why_it_matters": "Defines a capability of blackwell that a kernel must target explicitly; the constraints below are hardware-imposed, not tuning choices.",
+  "related_instructions": [
+   "tcgen05.alloc.cta_group",
+   "tcgen05.cp",
+   "tcgen05.cp.cta_group",
+   "tcgen05.dealloc.cta_group",
+   "tcgen05.ld.sync.aligned.32x1b.x1.b32",
+   "tcgen05.ld.sync.aligned.32x1b.x4.b32",
+   "tcgen05.mma",
+   "tcgen05.mma.fence",
+   "tcgen05.st.sync.aligned.32x1b.x1.b32",
+   "tcgen05.st.sync.aligned.32x1b.x4.b32",
+   "tcgen05_fence",
+   "tcgen05_mma"
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "Tensor Memory (TMEM)",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/kernel-opt/hardware/tmem.md"
+   }
+  ]
+ }
+}

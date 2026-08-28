@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.register-pressure-warp-occupancy",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|register-pressure-warp-occupancy|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": [
+    "register-pressure"
+   ]
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Register Pressure and Warp Occupancy",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Register Pressure and Warp Occupancy"
+  },
+  "title": "Register Pressure and Warp Occupancy",
+  "summary": "Registers are the invisible killer of GPU kernel performance. This document explains from the hardware architecture level how the register file affects occupancy, and how to design register budgets in warp-specialized kernels.",
+  "sections": [
+   {
+    "heading": "1. Register File Architecture",
+    "anchor": "1-register-file-architecture",
+    "gist": "Each SM has a fixed-size register file shared by all warps resident on that SM:"
+   },
+   {
+    "heading": "2. Register Pressure in GEMM Kernels",
+    "anchor": "2-register-pressure-in-gemm-kernels",
+    "gist": "In GEMM kernels, the largest consumer of registers is the **MMA accumulator**:"
+   },
+   {
+    "heading": "3. `setmaxnreg` Instruction: Dynamic Register Reallocation",
+    "anchor": "3-setmaxnreg-instruction-dynamic-register-reallocation",
+    "gist": "Starting from Hopper (SM90), PTX provides the `setmaxnreg` instruction, which allows runtime reallocation of registers between warp groups within the same CTA:"
+   },
+   {
+    "heading": "4. Register Spilling",
+    "anchor": "4-register-spilling",
+    "gist": "When the compiler allocates insufficient registers, variables are stored to **local memory** (actually per-thread stack space located in L1 cache / DRAM):"
+   },
+   {
+    "heading": "5. `__launch_bounds__` and Occupancy Control",
+    "anchor": "5-launch-bounds-and-occupancy-control",
+    "gist": "table columns: Parameter, Meaning, Impact"
+   },
+   {
+    "heading": "6. Register Budget Design for Warp-Specialized Kernels",
+    "anchor": "6-register-budget-design-for-warp-specialized-kernels",
+    "gist": "**Adaptive Strategy in CUTLASS**:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nMax warps per SM = min(\n    Registers per SM / (Registers per thread * 32),     // Register limit\n    Max threads per SM / 32,                             // Architecture limit\n    SMEM per SM / SMEM per block * block_warps          // SMEM limit\n)\n```\n\n```\nNumber of accumulator registers = TileM * TileN / threads_per_warp_group * sizeof(AccumType) / sizeof(uint32_t)\n```\n\n```cpp\n// From CUTLASS sm90_gemm_tma_warpspecialized_pingpong.hpp\nstatic constexpr int RegsPerThread =\n    (size<0>(TileShape{}) * size<1>(TileShape{}) * sizeof(ElementAccumulator))\n    / (NumMMAThreads * sizeof(uint32_t));\n```\n\n```\nPTX syntax:\n  setmaxnreg.inc.sync.aligned.u32 Rn;  // Increase current warp group register limit\n  setmaxnreg.dec.sync.aligned.u32 Rn;  // Decrease current warp group register limit\n```\n\n```cpp\n// Increase registers (consumer uses)\ntemplate<uint32_t RegCount>\n__device__ void warpgroup_reg_alloc() {\n    asm volatile(\"setmaxnreg.inc.sync.aligned.u32 %0;\\n\" : : \"n\"(RegCount));\n}\n\n// Decrease registers (producer uses)\ntemplate<uint32_t RegCount>\n__device__ void warpgroup_reg_dealloc() {\n    asm volatile(\"setmaxnreg.dec.sync.aligned.u32 %0;\\n\" : : \"n\"(RegCount));\n}\n```\n\n```cpp\n__global__ void gemm_kernel(...) {\n    int warp_group_idx = threadIdx.x / 128;\n\n    if (warp_group_idx == 0) {\n        // Producer: Release unneeded registers\n        warpgroup_reg_dealloc<40>();   // Reduce to 40 registers\n\n        // ... TMA load code (only needs few registers)\n    }\n    else {\n        // Consumer: Acquire more registers\n        warpgroup_reg_alloc<232>();    // Increase to 232 registers\n\n        // ... WGMMA code (needs many accumulator registers)\n    }\n}\n```\n\n```\nNormal register access:  ~1 cycle\nLocal memory access: ~30-100 cycles (L1 hit) to ~200-800 cycles (L2/DRAM)\n```\n\n```bash\n$ nvcc --ptxas-options=-v -o kernel kernel.cu\nptxas info : Used 128 registers, 0 bytes smem, 0 bytes cmem, 24 bytes spill stores, 24 bytes spill loads\n#                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n#                                                             spill > 0 indicates register spilling\n```\n\n```\nEach spill = 1 store (write to local memory) + 1 load (read back from local memory)\nWorst case: Each spill ≈ 200 cycles (L1 miss → L2/DRAM)\nTypical case: Each spill ≈ 30-50 cycles (L1 hit)\n\nIf kernel has N spills/restores, additional latency ≈ N * 30-50 cycles\n```\n\n```cpp\n__global__ void __launch_bounds__(maxThreadsPerBlock, minBlocksPerMultiprocessor)\nkernel(...) {\n    // ...\n}\n```\n\n```\nmax_regs_per_thread = 65536 / (maxThreadsPerBlock * minBlocksPerMultiprocessor)\n\nExample 1: __launch_bounds__(256, 1) → max_regs = 65536 / 256 = 256\nExample 2: __launch_bounds__(256, 2) → max_regs = 65536 / 512 = 128\nExample 3: __launch_bounds__(384, 1) → max_regs = 65536 / 384 = 170\n```\n\n```cpp\n// Set MaxThreadsPerBlock but not MinBlocks\nstatic constexpr uint32_t MaxThreadsPerBlock = 384;\nstatic constexpr uint32_t MinBlocksPerMultiprocessor = 1;\n// → Compiler allows up to 65536/384 ≈ 170 registers per thread\n\n// Then fine-tune through setmaxnreg:\n// Producer: dealloc to 40 regs (actually only uses addresses + loop variables)\n// Consumer: alloc to 232 regs (accumulators + auxiliary variables)\n```\n\n```\nMore blocks/SM (high occupancy):\n  + Better latency hiding (more warps to switch)\n  + Higher memory-bound kernel performance\n  - Fewer registers per thread → potential spilling\n  - Smaller tile → less data reuse\n\nFewer blocks/SM (low occupancy):\n  + More registers → no spilling\n  + Larger tile → better data reuse\n  + More shared memory available\n  - Less latency hiding capability\n```\n\n```Step 1: Determine CTA total threads and occupancy target\n  Example: 384 threads/CTA, 1 CTA/SM → total budget = 65536 regs\n\nStep 2: List register requirements for each role (profile or estimate)\n  Producer (TMA load):  Address pointers + loop variables ≈ 24-40 regs\n  Consumer (MMA):       Accumulators + auxiliary variables ≈ 200-256 regs\n\nStep 3: Calculate if allocation is feasible\n  Ensure Total * CTA_Threads ≤ 65536\n\nStep 4: Implement allocation using setmaxnreg```\n\n```\nCTA structure:\n  Producer WG: 128 threads (1 warp group)\n  Consumer0:   128 threads (1 warp group)\n  Consumer1:   128 threads (1 warp group)\n  Total:       384 threads\n\nRegister budget:\n  Total available registers (1 CTA/SM): 65536\n  Average per thread: 65536 / 384 = 170.6 → compiler initial allocation ~170/thread\n\nsetmaxnreg reallocation:\n  Producer: dealloc to 40 regs → release (170-40) * 128 = 16640 regs\n  Consumer0: alloc to 232 regs → acquire (232-170) * 128 = 7936 regs\n  Consumer1: alloc to 232 regs → acquire (232-170) * 128 = 7936 regs\n  Verify: 16640 ≈ 7936 + 7936 = 15872  ✓ (small margin)\n\nActual consumption:\n  Producer: 40 * 128 = 5120 regs\n  Consumer0: 232 * 128 = 29696 regs\n  Consumer1: 232 * 128 = 29696 regs\n  Total: 64512 / 65536 = 98.4% utilization\n```\n\n```cpp\n// From sm90_gemm_tma_warpspecialized_pingpong.hpp\nstatic constexpr bool HeavyRegisterPressure = RegsPerThread >= 208;\nstatic constexpr uint32_t LoadRegisterRequirement = !HeavyRegisterPressure ? 40 : 24;\nstatic constexpr uint32_t MmaRegisterRequirement = !HeavyRegisterPressure ? 232 : 240;\n```\n\n```\nCTA structure:\n  MMA:           32 threads (1 warp)\n  Scheduler:     32 threads (1 warp)\n  Mainloop Load: 32 threads (1 warp)\n  Epilogue Load: 32 threads (1 warp)\n  Epilogue:      32 threads (1 warp)\n  Total:         160 threads\n\nRegister budget (1 CTA/SM):\n  Available: 65536\n  Average: 65536 / 160 = 409.6 regs/thread — very abundant\n\nKey difference: Blackwell's MMA accumulators stored in TMEM, not occupying registers!\n  MMA warp:      No accumulator registers needed, only MMA descriptor + addresses\n  Epilogue warp: TMEM → register read + epilogue computation\n\nEstimated allocation:\n  MMA:           ~96 regs (descriptor + loop + pipeline state)\n  Scheduler:     ~32 regs (CLC address + counters)\n  Mainloop Load: ~40 regs (TMA address + loop)\n  Epilogue Load: ~40 regs (TMA address + loop)\n  Epilogue:      ~128 regs (TMEM read + type conversion + store)\n\nTotal consumption: (96+32+40+40+128) * 32 = 10752 regs\nSupported CTA count: 65536 / 10752 ≈ 6 CTA/SM\n\n→ Blackwell can support more CTA concurrency, significantly higher than Hopper's 1-2 CTA/SM\n```\n\n```\nFrom CUTLASS calculation:\n  MaxThreadsPerBlock = (2 + 1) * 128 = 384\n\n  LoadRegisterRequirement = 40 - 2*8 = 24  // Extreme compression\n  TotalRegisterSupply = (65536 / 384 / 1 / 8) * 8 * 384 / 128 = 504\n  MmaRegisterRequirement = ((504 - 24) / 2 / 8) * 8 = 240\n\n  // Note: TotalRegisterSupply is total supply per warp group\n  // Actually producer 24 regs, each consumer 240 regs\n```\n\n```\n128x128 tile → 128 regs/thread (accumulators)\n64x128 tile  → 64 regs/thread\n64x64 tile   → 32 regs/thread\n\nTrade-off:\n  Compute unchanged, but SMEM load count increases\n  Suitable for memory-bound scenarios or scenarios requiring high occupancy\n```\n\n```\nTraditional method (SM90):\n  Accumulators → Register file → 128-256 regs/thread\n\nTMEM method (SM100):\n  Accumulators → TMEM (dedicated hardware) → Register file almost unaffected\n  TMEM capacity: 128 columns * 512 rows per SM = 65536 32-bit values\n\nPerformance:\n  TMEM read/write latency ≈ Register file (design goal)\n  But TMEM is independent storage space, not occupying register file\n```\n\n```\nSS mode (smem-smem):\n  A from SMEM descriptor, B from SMEM descriptor\n  → Less register usage (no need to store A fragment)\n  → But may have SMEM bank conflict\n\nRS mode (reg-smem):\n  A from registers (first SMEM→REG copy), B from SMEM descriptor\n  → Additional A fragment registers (adds 16-32 regs)\n  → Avoid SMEM read conflict\n  → Must use RS for mixed-precision (A needs dequant)\n```\n\n```cpp\n// Staged accumulation: Write accumulators to SMEM every K_CHUNK tiles\nfor (int k_chunk = 0; k_chunk < K; k_chunk += K_CHUNK) {\n    float accum[TILE_M * TILE_N / THREADS];  // Local accumulators in registers\n\n    // Normal accumulation within K_CHUNK\n    for (int k = 0; k < K_CHUNK; k += TILE_K) {\n        mma(accum, smem_A[k], smem_B[k]);\n    }\n\n    // Accumulate to SMEM (release registers)\n    atomicAdd(smem_partial, accum);\n    __syncthreads();\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/register-pressure-warp-occupancy.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

@@ -1,0 +1,138 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.gpu-architecture-deep-dive",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|gpu-architecture-deep-dive|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): GPU Architecture Deep Dive",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "GPU Architecture Deep Dive"
+  },
+  "title": "GPU Architecture Deep Dive",
+  "summary": "> A synthesis of multiple technical articles from the Zhihu community, covering SM microarchitecture, memory hierarchy, SIMT execution model, warp scheduling mechanisms, thread block scheduling strategies, and more.",
+  "sections": [
+   {
+    "heading": "1. SM Microarchitecture Analysis",
+    "anchor": "1-sm-microarchitecture-analysis",
+    "gist": "The SM (Streaming Multiprocessor) is the core compute unit of a GPU."
+   },
+   {
+    "heading": "2. Memory Hierarchy",
+    "anchor": "2-memory-hierarchy",
+    "gist": "The GPU memory hierarchy ranges from registers to HBM, with decreasing bandwidth and increasing latency:"
+   },
+   {
+    "heading": "3. SIMT Execution Model",
+    "anchor": "3-simt-execution-model",
+    "gist": "**Warp Composition**: 32 threads form a warp, executing in SIMT (Single Instruction, Multiple Threads) fashion—all threads execute the same instruction but operate on different data."
+   },
+   {
+    "heading": "4. Instruction Issue and Control Mechanisms",
+    "anchor": "4-instruction-issue-and-control-mechanisms",
+    "gist": "NVIDIA GPU SASS instructions embed hardware scheduling information, with every 3 instructions sharing a 128-bit control word."
+   },
+   {
+    "heading": "5. Thread Block Scheduling Strategy",
+    "anchor": "5-thread-block-scheduling-strategy",
+    "gist": "Through empirical research on Pascal, Volta, and Turing architectures, the actual behavior of NVIDIA's thread block scheduler was revealed—it is not simple Round-Robin, but rather a **Largest Space Policy**:"
+   },
+   {
+    "heading": "6. Memory System Evolution: From V100 to B200",
+    "anchor": "6-memory-system-evolution-from-v100-to-b200",
+    "gist": "As GPU bandwidth continues to grow, but the number of SMs grows even faster, the bandwidth per SM is actually increasing."
+   },
+   {
+    "heading": "7. GPU Optimization Hierarchy Summary",
+    "anchor": "7-gpu-optimization-hierarchy-summary",
+    "gist": "From bottom to top, GPU optimization spans multiple levels:"
+   },
+   {
+    "heading": "Related Documents",
+    "anchor": "related-documents",
+    "gist": "- NVIDIA Compute Capabilities — Detailed table of SM resource limits for each architecture - NVIDIA Architecture-Specific Optimization — …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nA100 GPU\n├── 8 GPC (Graphics Processing Cluster)\n│   ├── Each GPC contains 8 TPC (Texture Processing Cluster)\n│   │   └── Each TPC contains 2 SM\n│   └── Total 128 SM (actually available: 108)\n├── L2 Cache: 40 MB\n├── HBM2e: 80 GB, bandwidth 2039 GB/s\n└── NVLink 3.0: 600 GB/s\n```\n\n```\nRegister\n    ↓ ~1 cycle, ~19.5 TB/s (per SM)\nL1 Cache / Shared Memory\n    ↓ ~5 cycles, ~several TB/s\nL2 Cache\n    ↓ ~tens of cycles, ~4-6 TB/s\nGlobal Memory (HBM)\n    ~500 cycles, ~2-3 TB/s\n```\n\n```\nbytes_in_flight = bandwidth × latency\n```\n\n```\nestimated_bytes_in_flight_per_SM\n    = (#loads/thread) × (#bytes/load) × (#threads/block) × (#blocks/SM)\n```\n\n```\n                 ┌─────────────┐\n                 │ Active Warps│ ← From schedule start to execution finish\n                 │  (on SM)    │\n                 └──────┬──────┘\n                        │\n              ┌─────────┴─────────┐\n              │                   │\n      ┌───────┴───────┐   ┌──────┴──────┐\n      │ Eligible Warps│   │Stalled Warps│\n      │ (ready to run)│   │ (waiting)   │\n      └───────┬───────┘   └─────────────┘\n              │\n      ┌───────┴───────┐\n      │ Selected Warps│ ← Each scheduler selects 1\n      │  (executing)  │\n      └───────────────┘\n```\n\n```cpp\nif (threadIdx.x < 16) {\n    // Branch A: first 16 threads\n    path_A();\n} else {\n    // Branch B: last 16 threads\n    path_B();\n}\n```\n\n```\n                    ┌── Barrier 0 ──┐\nLDG R2, [R4]  ──►  │  counter: 1   │  ← load starts, counter +1\n    ...             │               │\n    ...             │  counter: 0   │  ← load completes, counter -1\nIADD R5, R2, R3 ◄──┘               │  ← wait for barrier 0 to zero\n```\n\n```\n┌─────────────────────────────────────┐\n│ System level: multi-GPU communication, data loading pipeline │\n├─────────────────────────────────────┤\n│ Graph compiler level: operator fusion, memory planning       │\n├─────────────────────────────────────┤\n│ Kernel level: GEMM tiling, pipeline design                   │\n├─────────────────────────────────────┤\n│ Instruction level: PTX/SASS optimization, instruction scheduling │\n├─────────────────────────────────────┤\n│ Hardware level: architecture features, Tensor Core, TMA      │\n└─────────────────────────────────────┘\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/gpu-architecture-deep-dive.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

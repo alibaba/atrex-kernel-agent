@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.kernel-opt.thread-block-cluster.tma-tensor-memory-accelerator",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|thread-block-cluster#tma-tensor-memory-accelerator|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [
+    "blackwell",
+    "blackwell-geforce",
+    "hopper"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "tma-tensor-memory-accelerator"
+  ],
+  "triggers": [
+   "the 'TMA (Tensor Memory Accelerator)' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): TMA (Tensor Memory Accelerator)",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Thread Block Cluster (CC 9.0+) -- TMA (Tensor Memory Accelerator)"
+  },
+  "technique": "TMA (Tensor Memory Accelerator)",
+  "what": "A hardware unit that automatically handles multi-dimensional tensor transfers from global memory to shared memory: - Automatically handles 2D/3D data layout transformations - Supports multicast to multiple blocks within a cluster - Offloads instruction overhead from address calculations",
+  "when": "A hardware unit that automatically handles multi-dimensional tensor transfers from global memory to shared memory: - Automatically handles 2D/3D data layout transformations - Supports multicast to multiple blocks within a cluster - Offload…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/kernel-opt/thread-block-cluster.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

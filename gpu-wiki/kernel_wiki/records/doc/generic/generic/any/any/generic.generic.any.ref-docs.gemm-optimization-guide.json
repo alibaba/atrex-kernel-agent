@@ -1,0 +1,167 @@
+{
+ "schema": "clean-1.3",
+ "id": "generic.generic.any.ref-docs.gemm-optimization-guide",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|gemm|gemm-optimization-guide|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "generic",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): Community GEMM Optimization Practical Summary",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "Community GEMM Optimization Practical Summary"
+  },
+  "title": "Community GEMM Optimization Practical Summary",
+  "summary": "A comprehensive summary of core CUDA GEMM optimization knowledge from the Zhihu community, covering the complete optimization path from naive implementation to near-cuBLAS performance. Supplements CUDA-level optimization details not covered in Triton Grouped GEMM / DeepGEMM Hands-on.",
+  "sections": [
+   {
+    "heading": "1. GEMM Optimization Panorama: From Naive to Extreme",
+    "anchor": "1-gemm-optimization-panorama-from-naive-to-extreme",
+    "gist": "GEMM (General Matrix Multiplication) is the most classic compute-intensive task in GPU programming."
+   },
+   {
+    "heading": "2. Naive Implementation and Global Memory Optimization",
+    "anchor": "2-naive-implementation-and-global-memory-optimization",
+    "gist": "**Performance Problem Analysis**:"
+   },
+   {
+    "heading": "3. Shared Memory Tiling",
+    "anchor": "3-shared-memory-tiling",
+    "gist": "**Core Idea**: Move tiles of matrices A and B from slow Global Memory to fast Shared Memory (on-chip SRAM), reducing Global Memory accesses through data reuse."
+   },
+   {
+    "heading": "4. Register Tiling (Register-Level Tiling and Data Reuse)",
+    "anchor": "4-register-tiling-register-level-tiling-and-data-reuse",
+    "gist": "Using only Shared Memory tiling, where each thread computes 1 element of C, the inner loop structure is:"
+   },
+   {
+    "heading": "5. Vectorized Access and Bank Conflict Elimination",
+    "anchor": "5-vectorized-access-and-bank-conflict-elimination",
+    "gist": "Using `float4` (128-bit) vectorized reads and writes can significantly reduce the number of instructions:"
+   },
+   {
+    "heading": "6. Double Buffering / Pipelining (Hiding Latency)",
+    "anchor": "6-double-buffering-pipelining-hiding-latency",
+    "gist": "**Problem**: In an implementation without double buffering, two `__syncthreads()` are needed: 1."
+   },
+   {
+    "heading": "7. Tensor Core / WMMA / MMA Usage",
+    "anchor": "7-tensor-core-wmma-mma-usage",
+    "gist": "Tensor Cores are dedicated matrix multiply units."
+   },
+   {
+    "heading": "8. Stream-K / Split-K Work Distribution Strategies",
+    "anchor": "8-stream-k-split-k-work-distribution-strategies",
+    "gist": "In the traditional Data Parallel approach, each CTA computes one complete C sub-tile."
+   },
+   {
+    "heading": "9. GEMV Vectorized Optimization",
+    "anchor": "9-gemv-vectorized-optimization",
+    "gist": "GEMV (General Matrix-Vector Multiply) is the most dominant operator in LLM inference determinand is a typical memory-bound operation."
+   },
+   {
+    "heading": "10. Performance Comparison and Analysis with cuBLAS",
+    "anchor": "10-performance-comparison-and-analysis-with-cublas",
+    "gist": "table columns: Platform, Precision, Handwritten Kernel, cuBLAS, Ratio, Scale"
+   },
+   {
+    "heading": "11. Common GEMM Optimization Pitfalls and Lessons",
+    "anchor": "11-common-gemm-optimization-pitfalls-and-lessons",
+    "gist": "- **Register Spilling**: Exceeding the register limit per thread causes spills to local memory (which is actually DRAM), resulting in a cliff-like performance drop."
+   },
+   {
+    "heading": "12. Guide to Selecting Block Size and Tiling Parameters",
+    "anchor": "12-guide-to-selecting-block-size-and-tiling-parameters",
+    "gist": "Considerations for choosing block size and data tiling size:"
+   },
+   {
+    "heading": "Related Documentation",
+    "anchor": "related-documentation",
+    "gist": "- GPU Memory Hierarchy and Optimization — Bandwidth/latency characteristics of registers, SMEM, L1/L2, and HBM - GPU Execution Model and Thread Optimization — SIMT, warp, block, occupanc…"
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nPeak performance = max clock frequency × tensor core count × FLOPs per core per cycle\n         = 1830 MHz x 528 x 1024 ≈ 989 TFLOPS\n```\n\n```cpp\n__global__ void sgemm_naive(int M, int N, int K, float alpha,\n    const float *A, const float *B, float beta, float *C) {\n    const uint x = blockIdx.x * blockDim.x + threadIdx.x;\n    const uint y = blockIdx.y * blockDim.y + threadIdx.y;\n    if (x < M && y < N) {\n        float tmp = 0.0;\n        for (int i = 0; i < K; ++i) {\n            tmp += A[x * K + i] * B[i * N + y];\n        }\n        C[x * N + y] = alpha * tmp + beta * C[x * N + y];\n    }\n}\n```\n\n```cpp\n// Change to 1D block\ndim3 blockDim(32 * 32);\n// Adjust thread mapping to ensure same warp accesses consecutive columns of B\nconst int x = blockIdx.x * BLOCKSIZE + (threadIdx.x / BLOCKSIZE);\nconst int y = blockIdx.y * BLOCKSIZE + (threadIdx.x % BLOCKSIZE);\n```\n\n```\nld.shared A_val     // Read A from SMEM\nld.shared B_val     // Read B from SMEM\nfma c, A_val, B_val // Compute\n```\n\n```cpp\n// Load TM A values and TN B values to registers\n    // TM × TN FMA operations, only TM + TN SMEM reads\n```\n\n```\nThread Block Tile (128 x 128)\n  -> Warp Tile (64 x 32)\n    -> Thread Tile (8 x 8)\n```\n\n```cpp\n// Scalar read: 4 LDS.32 instructions\nfloat a0 = smem[idx], a1 = smem[idx+1], a2 = smem[idx+2], a3 = smem[idx+3];\n\n// Vectorized read: 1 LDS.128 instruction\nfloat4 a = *reinterpret_cast<float4*>(&smem[idx]);\n```\n\n```cpp\n__shared__ float Bs[BK][BN + PADDING];  // Typically PADDING = 4\n```\n\n```cpp\n// XOR swizzle: XOR address high bits with low bits\nint swizzled_addr = addr ^ ((addr >> shift) & mask);\n```\n\n```cpp\n__shared__ float As[2][BK][BM];  // Double buffer\n__shared__ float Bs[2][BK][BN];\nfloat frag_a[2][TM];             // Register double buffer\nfloat frag_b[2][TN];\n\n// Prologue: Load first tile\nload_gmem_to_smem(A, B, As[0], Bs[0]);\n__syncthreads();\n\nint write_stage = 1;\nfor (int k = BK; k < K; k += BK) {\n    // Async load next tile to intermediate registers\n    load_gmem_to_reg(A, B, ldg_a_reg, ldg_b_reg);\n\n    // Compute current tile (load from SMEM to registers + FMA)\n    for (int j = 0; j < BK - 1; ++j) {\n        load_smem_to_reg(As[load_stage], j+1, frag_a[(j+1)%2]);\n        load_smem_to_reg(Bs[load_stage], j+1, frag_b[(j+1)%2]);\n        mma(frag_a[j%2], frag_b[j%2], c);\n    }\n\n    // Write intermediate registers to SMEM (intentionally staggered with compute to hide latency via ILP)\n    store_reg_to_smem(ldg_a_reg, As[write_stage]);\n    store_reg_to_smem(ldg_b_reg, Bs[write_stage]);\n    __syncthreads();\n    write_stage ^= 1;\n\n    mma(frag_a[1], frag_b[1], c);  // Compute last tile\n}\n```\n\n```cpp\n// 4-stage pipeline\ncp.async.cg.shared.global [smem_ptr], [gmem_ptr], 16;  // Async copy 16 bytes\ncp.async.commit_group;                                   // Commit a group\ncp.async.wait_group 2;                                   // Wait until at most 2 groups are pending\n```\n\n```cpp\n// Load fragment\nload_matrix_sync(FragA[i], smem_a + offset, leading_dim);\n// Execute matrix multiply-accumulate\nmma_sync(Accum[idx], FragA[i], FragB[j], Accum[idx]);\n```\n\n```cpp\n// TF32 MMA: m16n8k8 shape\nasm volatile(\n    \"mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 \"\n    \"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\\n\"\n    : \"=f\"(d0), \"=f\"(d1), \"=f\"(d2), \"=f\"(d3)\n    : \"r\"(a0), \"r\"(a1), \"r\"(a2), \"r\"(a3),\n      \"r\"(b0), \"r\"(b1),\n      \"f\"(c0), \"f\"(c1), \"f\"(c2), \"f\"(c3)\n);\n```\n\n```cpp\n// Warp cooperative load of 4 8x8 matrices\nasm volatile(\n    \"ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\\n\"\n    : \"=r\"(r0), \"=r\"(r1), \"=r\"(r2), \"=r\"(r3)\n    : \"r\"(smem_addr)\n);\n```\n\n```\nTotal iterations = ceil(M/BM) * ceil(N/BN) * ceil(K/BK)\nIterations per CTA = ceil(total iterations / number of CTAs)\n```\n\n```\nA[2], B[2];  // double buffer\nfor k-loop:\n    Async Load tile k+1 into A[load_index]\n    Async Load tile k+1 into B[load_index]\n    Compute tile k with A/B[compute_index]\n    swap buffers\n```\n\n```\nCompute-to-memory ratio = BM * BN * BK * 2 / [(BM * BK + BK * BN) * sizeof(dtype)]\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "generic/ref-docs/gemm-optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

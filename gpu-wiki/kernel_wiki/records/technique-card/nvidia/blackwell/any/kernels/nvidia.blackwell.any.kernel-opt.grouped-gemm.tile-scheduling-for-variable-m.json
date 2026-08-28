@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.grouped-gemm.tile-scheduling-for-variable-m",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|grouped-gemm#tile-scheduling-for-variable-m|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm",
+    "grouped-gemm",
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "grouped-gemm",
+   "moe",
+   "tile-scheduling-for-variable-m"
+  ],
+  "triggers": [
+   "the 'Tile Scheduling for Variable M' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Tile Scheduling for Variable M",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Grouped GEMM for MoE -- Tile Scheduling for Variable M"
+  },
+  "technique": "Tile Scheduling for Variable M",
+  "what": "Precompute tile-to-expert mapping on host before launch",
+  "when": "Precompute tile-to-expert mapping on host before launch",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cpp\n// Precompute tile-to-expert mapping on host before launch\nstruct TileInfo {\n    int expert_id;\n    int tile_m_start;  // Local M offset within this expert\n    int tile_n_start;\n};\n\nstd::vector<TileInfo> build_tile_schedule(\n    const int* M_per_expert, int num_experts, int N\n) {\n    std::vector<TileInfo> schedule;\n    for (int e = 0; e < num_experts; e++) {\n        for (int m = 0; m < M_per_expert[e]; m += BLOCK_M)\n            for (int n = 0; n < N; n += BLOCK_N)\n                schedule.push_back({e, m, n});\n    }\n    return schedule;  // Copy to device; blockIdx.x indexes into this\n}\n```\n\n```cpp\n// Persistent kernel with atomic tile counter\n// Each thread block loops, grabbing tiles until all are processed\n__device__ int g_tile_counter = 0;\n\n__global__ void grouped_gemm_persistent(\n    const fp8_t** A_ptrs, const fp8_t** B_ptrs, float** C_ptrs,\n    const int* M_per_expert, int N, int K,\n    const TileInfo* tile_map, int total_tiles\n) {\n    while (true) {\n        int tile_id = atomicAdd(&g_tile_counter, 1);\n        if (tile_id >= total_tiles) return;\n\n        TileInfo info = tile_map[tile_id];\n        int M_e = M_per_expert[info.expert_id];\n\n        // Effective BLOCK_M may be smaller for the last tile of an expert\n        int eff_m = min(BLOCK_M, M_e - info.tile_m_start);\n\n        // TMA load + tcgen05.mma for this tile\n        tma_load(A_ptrs[info.expert_id] + info.tile_m_start * K, ...);\n        tma_load(B_ptrs[info.expert_id] + info.tile_n_start, ...);\n        tcgen05_mma(...);\n\n        // Store result\n        store_tile(C_ptrs[info.expert_id] + info.tile_m_start * N\n                   + info.tile_n_start, eff_m, BLOCK_N);\n    }\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/grouped-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

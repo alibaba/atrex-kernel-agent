@@ -1,0 +1,133 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.generic.any.ref-docs.flashinfer-tensorrt-llm-cubin-integration",
+ "type": "doc",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|ref-docs|flashinfer-tensorrt-llm-cubin-integration|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for GPU (vendor/architecture-general) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for GPU (vendor/architecture-general): FlashInfer Integration of TensorRT-LLM Cubin Kernels",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "FlashInfer Integration of TensorRT-LLM Cubin Kernels"
+  },
+  "title": "FlashInfer Integration of TensorRT-LLM Cubin Kernels",
+  "summary": "Technical analysis of how FlashInfer integrates TensorRT-LLM's optimized kernels via cubin dynamic loading, without importing the entire TRT-LLM source tree. Covers the MoE module as a case study.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "FlashInfer elegantly integrates TensorRT-LLM's optimized kernels into its own ecosystem without bundling the entire TRT-LLM source."
+   },
+   {
+    "heading": "2. TensorRT-LLM Gen System",
+    "anchor": "2-tensorrt-llm-gen-system",
+    "gist": "TRT-LLM Gen is NVIDIA's code generation system that automatically produces highly optimized CUDA kernels."
+   },
+   {
+    "heading": "3. Integration Architecture",
+    "anchor": "3-integration-architecture",
+    "gist": "**Layered responsibilities:** Interface layer (PyTorch-compatible API) → Dispatch layer (kernel selection and parameter validation) → Execution layer (coordinating routing + MoE kernels) → Loading layer (dynamic cubin management)."
+   },
+   {
+    "heading": "4. Source Integration Techniques",
+    "anchor": "4-source-integration-techniques",
+    "gist": "FlashInfer copies TRT-LLM's key header files directly into its own `include` directory:"
+   },
+   {
+    "heading": "5. CUBIN Dynamic Loading System",
+    "anchor": "5-cubin-dynamic-loading-system",
+    "gist": "Path format: `{pipeline_hash}/batched_gemm-{TLLM_GEN_COMMIT}-{TLLM_GEN_BATCHED_GEMM_CONFIG_HASH}/{kernel_name}`."
+   },
+   {
+    "heading": "6. JIT and Kernel Configuration",
+    "anchor": "6-jit-and-kernel-configuration",
+    "gist": "`setup_cubin_loader` registers the Python-side `get_cubin` as a C++ callback, passing cubin byte array pointers back to C++ via `FlashInferSetCurrentCubin`:"
+   },
+   {
+    "heading": "7. Summary",
+    "anchor": "7-summary",
+    "gist": "Through header file copying + namespace isolation + remote cubin repository + JIT callbacks, FlashInfer uses TRT-LLM Gen system's highly optimized kernels without importing TRT-LLM source."
+   }
+  ],
+  "implementation": {
+   "snippet": "```\nFlashInfer Python API\n  ↓\nJIT compilation layer (fused_moe.py)\n  ↓\nCUDA kernel launcher (trtllm_fused_moe_kernel_launcher.cu)\n  ↓\nTRT-LLM kernel runner (trtllm_fused_moe_runner.cu)\n  ↓\nTRT-LLM kernel implementation (DevKernel.h, RoutingKernel.h, etc.)\n  ↓\nCUBIN dynamic loading and execution\n```\n\n```cpp\n// trtllm_fused_moe_kernel_launcher.cu\n#include \"flashinfer/trtllm/batched_gemm/trtllmGen_bmm_export/trtllm/gen/DtypeDecl.h\"\n#include \"flashinfer/trtllm/fused_moe/DevKernel.h\"\n#include \"flashinfer/trtllm/fused_moe/RoutingKernel.h\"\n#include \"flashinfer/trtllm/batched_gemm/trtllmGen_bmm_export/BatchedGemmInterface.h\"\n```\n\n```cpp\nvoid (*callbackGetCubin)(const char* path, const char* sha256) = nullptr;\n\nextern \"C\" void FlashInferSetCubinCallback(void (*callback)(const char* path, const char* sha256));\n\nstd::string getCubin(const std::string& name, const std::string& sha256);\n```\n\n```cpp\nconst std::string pipeline_hash = \"39b7e49bfedde88ea29bfdc2547cbba659f2b236\";\nconst std::string cubin_path = pipeline_hash + \"/\" +\n    std::string(\"batched_gemm-\") + TLLM_GEN_COMMIT + \"-\" +\n    TLLM_GEN_BATCHED_GEMM_CONFIG_HASH + \"/\";\n```\n\n```\n39b7e49bfedde88ea29bfdc2547cbba659f2b236/batched_gemm-c603ed2-65deb07/Bmm_Bfloat16_E2m1E2m1_Fp32_t128x16x256_et128x16_m128x16x64_cga1x1x1_16dp256b_s6_TN_transOut_schedP_bN_dynBatch_sm100a.cubin\n```\n\n```cpp\nauto fiModuleLoadData = [&](CUmodule* module) {\n    const std::string sha256 = config.mHash ? config.mHash : \"\";\n    // ... construct fname_cubin\n    std::string cubin = flashinfer::trtllm_cubin_loader::getCubin(fname_cubin, sha256);\n    cuModuleLoadData(&cuModule, cubin.c_str());\n};\n```\n\n```python\nFLASHINFER_CUBINS_REPOSITORY = os.environ.get(\n    \"FLASHINFER_CUBINS_REPOSITORY\",\n    \"https://edge.urm.nvidia.com/artifactory/sw-kernelinferencelibrary-public-generic-local/\"\n)\n```\n\n```python\ndef get_cubin(name, sha256, file_extension=\".cubin\"):\n    cubin_fname = name + file_extension\n    cubin_path = FLASHINFER_CACHE_DIR / \"cubins\" / cubin_fname\n    # 1. Try local cache\n    cubin = load_cubin(cubin_path, sha256)\n    if cubin:\n        return cubin\n    # 2. Download from remote repository\n    uri = FLASHINFER_CUBINS_REPOSITORY + \"/\" + cubin_fname\n    download_file(uri, cubin_path)\n    return load_cubin(cubin_path, sha256)\n```\n\n```python\ndef setup_cubin_loader(dll_path: str):\n    _LIB = ctypes.CDLL(dll_path)\n    def get_cubin_callback(name, sha256):\n        cubin = get_cubin(name.decode(\"utf-8\"), sha256.decode(\"utf-8\"))\n        _LIB.FlashInferSetCurrentCubin(\n            convert_to_ctypes_char_p(cubin),\n            ctypes.c_int(len(cubin))\n        )\n    cb = CALLBACK_TYPE(get_cubin_callback)\n    _LIB.FlashInferSetCubinCallback(cb)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/common/ref-docs/flashinfer-tensorrt-llm-cubin-integration.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

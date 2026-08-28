@@ -1,0 +1,113 @@
+{
+ "schema": "hw-1.0",
+ "id": "nvidia.blackwell.spec-sheet.b200",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "nvidia",
+  "arch": "blackwell",
+  "product": "b200",
+  "sm_arch": "sm_100",
+  "compute_capability": "10.0"
+ },
+ "facts": {
+  "summary": "NVIDIA B200 GPU Hardware Compute Specification Table",
+  "peak_compute": [
+   {
+    "dtype": "fp64",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 37,
+    "provenance": "architecture-analysis",
+    "use_case": "Scientific computing, double-precision HPC"
+   },
+   {
+    "dtype": "fp32",
+    "unit": "TFLOPS",
+    "unit_kind": "cuda-core",
+    "dense": 75,
+    "provenance": "architecture-analysis",
+    "use_case": "Official HGX B200 total (600 TFLOPS / 8 GPUs)"
+   },
+   {
+    "dtype": "tf32",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 1100,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 2200,
+    "use_case": "Training / inference matrix multiply"
+   },
+   {
+    "dtype": "bf16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 2250,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 4500,
+    "use_case": "Training / inference"
+   },
+   {
+    "dtype": "fp8",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": 4500,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 9000,
+    "use_case": "Inference / low-precision training"
+   },
+   {
+    "dtype": "fp4",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 9000,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 18000,
+    "use_case": "NVFP4 / MXFP4 quantized inference"
+   },
+   {
+    "dtype": "int8",
+    "unit": "TOPS",
+    "unit_kind": "tensor-core",
+    "dense": 4500,
+    "provenance": "architecture-analysis",
+    "sparse_2to4": 9000,
+    "use_case": "Quantized inference"
+   }
+  ],
+  "memory": {
+   "capacity_gb": 180,
+   "l2_cache_mb": 126,
+   "provenance": "architecture-analysis"
+  },
+  "compute_units": {
+   "gpcs": 8,
+   "sm_count": 148,
+   "cuda_cores": 18944,
+   "tensor_cores": 592,
+   "rt_cores": 148,
+   "texture_units": 592,
+   "cuda_cores_per_sm": 128,
+   "tensor_cores_per_sm": 4,
+   "rt_cores_per_sm": 1,
+   "register_file_kb_per_sm": 256,
+   "shared_memory_kb_per_sm": 228,
+   "register_file_kb_total": 37888,
+   "provenance": "architecture-analysis"
+  },
+  "usage_notes": [
+   "utilization = measured throughput / the peak that matches the kernel's dominant compute type.",
+   "Values are architecture-analysis: verify against cudaDeviceProp or the vendor tool on the deployed GPU before hard-coding launch geometry."
+  ]
+ },
+ "provenance": {
+  "evidence_class": "architecture-analysis",
+  "sources": [
+   {
+    "title": "NVIDIA B200 GPU Hardware Compute Specification Table",
+    "kind": "third-party-analysis",
+    "ref": "nvidia/blackwell/b200/hardware-specs/hardware_specs_b200.md"
+   }
+  ]
+ }
+}

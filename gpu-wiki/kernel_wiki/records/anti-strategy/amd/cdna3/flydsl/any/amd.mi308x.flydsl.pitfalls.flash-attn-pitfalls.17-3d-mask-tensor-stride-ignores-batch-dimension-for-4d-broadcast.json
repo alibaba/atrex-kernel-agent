@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.flydsl.pitfalls.flash-attn-pitfalls.17-3d-mask-tensor-stride-ignores-batch-dimension-for-4d-broadcast",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|flydsl|flash-attention|flash-attn-pitfalls#17-3d-mask-tensor-stride-ignores-batch-dimension-for-4d-broadcast|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "flydsl",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "flydsl",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "attention",
+   "flash-attention"
+  ],
+  "triggers": [
+   "a kernel on AMD MI308X (CDNA3 / gfx942) risks the '17. 3D mask tensor stride ignores batch dimension for 4D broadcast' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on AMD MI308X (CDNA3 / gfx942): 17. 3D mask tensor stride ignores batch dimension for 4D broadcast",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Pitfalls: FlyDSL Flash Attention on MI308X (gfx942) -- 17. 3D mask tensor stride ignores batch dimension for 4D broadcast"
+  },
+  "attempted": "The attention mask is conceptually (B, 1, S, S) but PyTorch `F.scaled_dot_product_attention` receives it as a 4D tensor where dim=1 is broadcast over heads. When passing strides to the kernel, you might compute `mask_stride_s = mask.stride(2)` from the 3D physical storage (B, S, S) and use `mask[batch * B_stride + q * stride_s + kv]` as the index. This \"works\" when B=1 but produces garbage for B>1.",
+  "verdict": "accuracy-gate/ceiling",
+  "lesson": "When passing tensor strides as kernel arguments for broadcast dimensions, explicitly extract `mask_stride_b = mask.stride(0)` and `mask_stride_s = mask.stride(2)` from the 4D view. Never assume the physical storage layout matches the logical view. Add an assertion: `assert mask.shape[1] == 1, \"mask must broadcast over heads\"`.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "flydsl"
+   },
+   "mechanism": "The 4D view `(B, 1, S, S)` has strides `(S*S, 0, S, 1)` where dim=1 stride is 0 (broadcast). The 3D physical tensor `(B, S, S)` has strides `(S*S, S, 1)`. If you pass the 3D strides, the kernel uses `stride(0)=S*S` for the batch and `stride(1)=S` for the query row — which matches. But if you accidentally use the 4D view's `stride(1)=0` as the batch stride, or mix up dimension indices, the batch offset is wrong."
+  },
+  "observed": "Incorrect attention output for B>1. The kernel reads mask rows from the wrong batch, producing rel_err > 0.5.",
+  "root_cause": "The 4D view `(B, 1, S, S)` has strides `(S*S, 0, S, 1)` where dim=1 stride is 0 (broadcast). The 3D physical tensor `(B, S, S)` has strides `(S*S, S, 1)`. If you pass the 3D strides, the kernel uses `stride(0)=S*S` for the batch and `stride(1)=S` for the query row — which matches. But if you accidentally use the 4D view's `stride(1)=0` as the batch stride, or mix up dimension indices, the batch offset is wrong."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/pitfalls/flydsl/flash-attn-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

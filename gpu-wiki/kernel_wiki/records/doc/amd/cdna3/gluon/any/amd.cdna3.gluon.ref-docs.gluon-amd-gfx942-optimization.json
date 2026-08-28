@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna3.gluon.ref-docs.gluon-amd-gfx942-optimization",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|ref-docs|gluon-amd-gfx942-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "cdna3"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD CDNA3 (gfx942) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA3 (gfx942): Gluon AMD gfx942 (CDNA3 / MI300) API & Performance Optimization Guide",
+  "problem": {
+   "target": "AMD CDNA3 (gfx942)",
+   "statement": "Gluon AMD gfx942 (CDNA3 / MI300) API & Performance Optimization Guide"
+  },
+  "title": "Gluon AMD gfx942 (CDNA3 / MI300) API & Performance Optimization Guide",
+  "summary": "> Applicable Architecture: AMD gfx942 (CDNA3, MI300 Series) > Framework Version: Triton Gluon (Experimental)",
+  "sections": [
+   {
+    "heading": "1. Module Import",
+    "anchor": "1-module-import",
+    "gist": "---"
+   },
+   {
+    "heading": "2. API Reference",
+    "anchor": "2-api-reference",
+    "gist": "Load from global memory to registers using a scalar base pointer + offset tensor."
+   },
+   {
+    "heading": "3. Layout Type Quick Reference",
+    "anchor": "3-layout-type-quick-reference",
+    "gist": "table columns: Layout Type, Usage, Typical Configuration"
+   },
+   {
+    "heading": "4. High-Performance GEMM Optimization Tips",
+    "anchor": "4-high-performance-gemm-optimization-tips",
+    "gist": "- **Use `buffer_load` instead of `gl.load`**: Saves registers, scalar base pointer + offset mode - **Make the `sizePerThread` contiguous dimension as large as possible**: e.g., `[1, 8]`, to fully leverage 128-bit vector loads - **Match `or…"
+   },
+   {
+    "heading": "5. Features Not Supported on gfx942",
+    "anchor": "5-features-not-supported-on-gfx942",
+    "gist": "table columns: Feature, Required Architecture"
+   },
+   {
+    "heading": "6. Common Parameter Configuration Reference",
+    "anchor": "6-common-parameter-configuration-reference",
+    "gist": "table columns: Parameter, Small GEMM, Medium GEMM, Large GEMM"
+   }
+  ],
+  "implementation": {
+   "snippet": "```python\nfrom triton.experimental import gluon\nfrom triton.experimental.gluon import language as gl\nimport triton.experimental.gluon.language as ttgl\n\n# AMD CDNA3\nfrom triton.experimental.gluon.language.amd import cdna3\nfrom triton.experimental.gluon.language.amd import warp_pipeline_stage\n```\n\n```python\nttgl.amd.cdna3.buffer_load(\n ptr, # scalarpointer\n offsets, # int32 offsettensor\n mask=None, # optional bool mask\n other=None, # optionaldefault( mask)\n cache=None, # cache, \"cs\"\n)\n```\n\n```python\nttgl.amd.cdna3.buffer_store(\n stored_value, # storetensor\n ptr, # scalarpointer\n offsets, # int32 offsettensor\n mask=None, # optional bool mask\n cache=None, # cache\n)\n```\n\n```python\n# highload A matrix (M×K, K contiguous)\nload_layout_a = ttgl.BlockedLayout(\n    size_per_thread=[1, 8],\n    threads_per_warp=[8, 8],\n    warps_per_cta=[8, 1],\n    order=[1, 0],\n)\noffs_am = gl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, load_layout_a))\noffs_ak = gl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, load_layout_a))\noffs_a = (pid_m * BLOCK_M + offs_am)[:, None] * stride_am + offs_ak[None, :]\nk_mask = offs_ak[None, :] < K\na = ttgl.amd.cdna3.buffer_load(a_ptr, offs_a, mask=k_mask)\n```\n\n```python\nttgl.amd.cdna3.mfma(\n a, # , requires DotOperandLayout\n b, # , requires DotOperandLayout\n acc, # , requires AMDMFMALayout\n)\n```\n\n```python\n# layout\nmma_layout = ttgl.amd.AMDMFMALayout(\n    version=3,                   # gfx942\n instr_shape=[16, 16, 16], # MFMA (M, N, K)\n transposed=True, # result, dot\n warps_per_cta=[2, 4], # 8 warp: 2 M, 4 N\n)\n\n# layout\ndot_a = ttgl.DotOperandLayout(operand_index=0, parent=mma_layout, k_width=4)\ndot_b = ttgl.DotOperandLayout(operand_index=1, parent=mma_layout, k_width=4)\n```\n\n```python\nsmem = gl.allocate_shared_memory(\n element_ty, # type, gl.bfloat16\n shape, # , [NUM_BUFFERS, BLOCK_M, BLOCK_K]\n layout, # SharedLayout, SwizzledSharedLayout\n value=None, # optional\n)\n```\n\n```python\nsmem.store(tensor_value) # registerwrite shared memory\nresult = smem.load(layout=target_layout) # shared memory register\n```\n\n```python\nsub = smem.index(i) # 0 i\nsub = smem.slice(start, length, dim=0) # dim\n```\n\n```python\nshared_layout = ttgl.SwizzledSharedLayout(\n vec=4, # 4 swizzle\n per_phase=1, # bit 1\n max_phase=16, # 16 bit\n order=[1, 0], # K contiguous\n)\n```\n\n```python\n# example: 2 VMEM 1 MFMA\nttgl.amd.cdna3.sched_group_barrier(0x020, 2, 0) # 2 VMEM\nttgl.amd.cdna3.sched_group_barrier(0x008, 1, 0) # 1 MFMA\n```\n\n```python\nfrom triton.experimental.gluon.language.amd import warp_pipeline_stage\n\nwith warp_pipeline_stage(\"load\"):\n    a = ttgl.amd.cdna3.buffer_load(a_ptr, offs_a)\n\nwith warp_pipeline_stage(\"compute\"):\n    acc = ttgl.amd.cdna3.mfma(a, b, acc)\n```\n\n```python\nwid = ttgl.amd.cdna3.warp_id # returns int32\n```\n\n```python\nttgl.amd.cdna3.buffer_atomic_add(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_min(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_max(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_and(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_or(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_xor(ptr, offsets, value, mask=None, sem=None, scope=None)\nttgl.amd.cdna3.buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None)\n```\n\n```python\n# manual pingpong mode\ngl.barrier()\nttgl.amd.cdna3.sched_barrier(0)\nttgl.amd.cdna3.s_set_prio(1)\nacc = ttgl.amd.cdna3.mfma(a, b, acc)\nttgl.amd.cdna3.s_set_prio(0)\ngl.barrier()\nttgl.amd.cdna3.sched_barrier(0)\n# ... buffer_load local_store ...\n```\n\n```python\n# ❌ 2D grid: none XCD mapping\nmatmul_kernel[grid_m, grid_n](...)\n\n# ✅ 1D grid: pid mapping\nmatmul_kernel[grid_m * grid_n](...)\n```\n\n```python\n@triton.jit\ndef remap_xcd(pid, GRID_MN, NUM_XCDS: tl.constexpr = 4):\n \"\"\"mapping PID XCD PID contiguous\"\"\"\n    pids_per_xcd = (GRID_MN + NUM_XCDS - 1) // NUM_XCDS\n    tall_xcds = GRID_MN % NUM_XCDS\n    tall_xcds = NUM_XCDS if tall_xcds == 0 else tall_xcds\n    xcd = pid % NUM_XCDS\n    local_pid = pid // NUM_XCDS\n    if xcd < tall_xcds:\n        pid = xcd * pids_per_xcd + local_pid\n    else:\n        pid = tall_xcds * pids_per_xcd + (xcd - tall_xcds) * (pids_per_xcd - 1) + local_pid\n    return pid\n```\n\n```python\n@triton.jit\ndef pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M: tl.constexpr = 8):\n \"\"\" 1D pid mapping 2D grid, grouped ordering\"\"\"\n    if GROUP_SIZE_M == 1:\n        pid_m = pid // num_pid_n\n        pid_n = pid % num_pid_n\n    else:\n        num_pid_in_group = GROUP_SIZE_M * num_pid_n\n        group_id = pid // num_pid_in_group\n        first_pid_m = group_id * GROUP_SIZE_M\n        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)\n        tl.assume(group_size_m >= 0)\n        pid_m = first_pid_m + (pid % group_size_m)\n        pid_n = (pid % num_pid_in_group) // group_size_m\n    return pid_m, pid_n\n```\n\n```python\n@triton.heuristics({\n    \"GRID_MN\": lambda args: triton.cdiv(args[\"M\"], args[\"BLOCK_SIZE_M\"])\n                           * triton.cdiv(args[\"N\"], args[\"BLOCK_SIZE_N\"]),\n})\n@gluon.jit\ndef matmul_kernel(..., GRID_MN: tl.constexpr):\n    pid = gl.program_id(axis=0)\n    pid = remap_xcd(pid, GRID_MN, NUM_XCDS=4)  # MI308X: 4 XCDs\n    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)\n    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)\n    pid_m, pid_n = pid_grid(pid, num_pid_m, num_pid_n, GROUP_SIZE_M=8)\n    tl.assume(pid_m >= 0)\n    tl.assume(pid_n >= 0)\n    # ...\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/ref-docs/gluon/gluon-amd-gfx942-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

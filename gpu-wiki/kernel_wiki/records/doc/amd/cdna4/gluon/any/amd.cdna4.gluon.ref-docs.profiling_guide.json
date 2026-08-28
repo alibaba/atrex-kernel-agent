@@ -1,0 +1,140 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.cdna4.gluon.ref-docs.profiling_guide",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna4|gluon|ref-docs|profiling_guide|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna4",
+   "architectures": [
+    "cdna4"
+   ],
+   "product": "any",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna4",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [],
+  "triggers": [
+   "ref-docs reference for AMD CDNA4 (gfx950 / MI355X) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for AMD CDNA4 (gfx950 / MI355X): ROCm Profiling Guide (CDNA4 / gfx950)",
+  "problem": {
+   "target": "AMD CDNA4 (gfx950 / MI355X)",
+   "statement": "ROCm Profiling Guide (CDNA4 / gfx950)"
+  },
+  "title": "ROCm Profiling Guide (CDNA4 / gfx950)",
+  "summary": "`tools/input_att.yaml`:",
+  "sections": [
+   {
+    "heading": "Prerequisites",
+    "anchor": "prerequisites",
+    "gist": "`tools/input_att.yaml`:"
+   },
+   {
+    "heading": "Step 1: Collect Instruction-Level Trace",
+    "anchor": "step-1-collect-instruction-level-trace",
+    "gist": "**Output**: `tt_test/stats_*.csv`"
+   },
+   {
+    "heading": "Step 2: Collect Hardware Counters",
+    "anchor": "step-2-collect-hardware-counters",
+    "gist": "table columns: Counter, Description, Optimization Target"
+   },
+   {
+    "heading": "Step 3: Analyze Hotspot Instructions",
+    "anchor": "step-3-analyze-hotspot-instructions",
+    "gist": "---"
+   },
+   {
+    "heading": "Step 4: Clean Up Trace Files",
+    "anchor": "step-4-clean-up-trace-files",
+    "gist": "**⚠️ Important**: A single trace outputs ~400-500MB."
+   },
+   {
+    "heading": "Common Diagnostic Patterns",
+    "anchor": "common-diagnostic-patterns",
+    "gist": "**Symptoms**: `buffer_load_dword` shows high values in the Stall column and low values in the Idle column"
+   },
+   {
+    "heading": "NCU vs rocprofv3 Comparison",
+    "anchor": "ncu-vs-rocprofv3-comparison",
+    "gist": "table columns: Feature, Nsight Compute (NVIDIA), rocprofv3 (AMD)"
+   },
+   {
+    "heading": "Utility Scripts",
+    "anchor": "utility-scripts",
+    "gist": "- **General rocprofv3 Usage**: AMD rocprofv3 Profiling Guide — tracing, counter collection, output formats, and other general features - **CDNA3 Instruction-Level Analysis**: [CDNA3 …"
+   }
+  ],
+  "implementation": {
+   "snippet": "```bash\n# rocprofv3 ROCm\n# English note\nrocprofv3 --version\n\n# ATT (Async Trace Tool) library path\nATT_LIB_PATH=\"./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64\"\n```\n\n```yaml\noptions:\n  output_directory: \"tt_test\"\n  trace_dispatch_mode: per_kernel\n  roctx_trace: true\n  kernel_dispatch: true\n```\n\n```bash\nenv LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \\\n    rocprofv3 --att \\\n    --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \\\n    -i tools/input_att.yaml \\\n    -- python <kernel.py>\n```\n\n```bash\nrocprofv3 --pmc \\\n    SQ_LDS_BANK_CONFLICT,SQ_INSTS_VMEM_RD,SQ_INSTS_VMEM_WR,\\\n    SPI_RA_VGPR_SGPR_FULL_CSN,TCP_TCC_MISS \\\n    -d ./pmc_output -- python <kernel.py>\n```\n\n```bash\n# by Latency descending ordercolumn\nsort -t',' -k5 -nr ./profile_output/stats_*.csv | head -20\n\n# by Stall descending ordercolumn\nsort -t',' -k6 -nr ./profile_output/stats_*.csv | head -20\n```\n\n```bash\nrm -rf tt_test\n```\n\n```bash\n#!/bin/bash\n# Usage: bash tools/profile_kernel.sh <kernel.py> --wrapper-name <wrapper> --output-dir ./profile_output\n\nKERNEL=$1\nshift\nOUTPUT_DIR=\"./profile_output\"\n\nwhile [[ $# -gt 0 ]]; do\n    case $1 in\n        --output-dir) OUTPUT_DIR=$2; shift 2;;\n        *) shift;;\n    esac\ndone\n\nmkdir -p $OUTPUT_DIR\n\nrocprofv3 --att \\\n    --att-library-path ./tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64 \\\n    -i tools/input_att.yaml \\\n    --python $KERNEL\n\n# analysisresult\nsort -t',' -k5 -nr tt_test/stats_*.csv | head -20 > $OUTPUT_DIR/top_latency.csv\nsort -t',' -k6 -nr tt_test/stats_*.csv | head -20 > $OUTPUT_DIR/top_stall.csv\n\n# cleanup\nrm -rf tt_test\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna4/ref-docs/gluon/profiling_guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

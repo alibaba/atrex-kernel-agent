@@ -1,0 +1,144 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.ref-docs.sm120-nvfp4-inline-ptx-gemm",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gemm|sm120-nvfp4-inline-ptx-gemm|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): SM120 NVFP4 GEMM: CuTeDSL + inline PTX Pitfall Summary",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 NVFP4 GEMM: CuTeDSL + inline PTX Pitfall Summary"
+  },
+  "title": "SM120 NVFP4 GEMM: CuTeDSL + inline PTX Pitfall Summary",
+  "summary": "Implement a truly runnable NVFP4 `m16n8k64` warp MMA demo on `sm_120a`, with the following constraints:",
+  "sections": [
+   {
+    "heading": "Objective",
+    "anchor": "objective",
+    "gist": "Implement a truly runnable NVFP4 `m16n8k64` warp MMA demo on `sm_120a`, with the following constraints:"
+   },
+   {
+    "heading": "TL;DR",
+    "anchor": "tl-dr",
+    "gist": "SM120's NVFP4 path is closer to Ampere/SM80 warp MMA, rather than SM100's `tcgen05`."
+   },
+   {
+    "heading": "The Most Common Pitfalls",
+    "anchor": "the-most-common-pitfalls",
+    "gist": "This is the biggest pitfall."
+   },
+   {
+    "heading": "Final Confirmed Working Mapping",
+    "anchor": "final-confirmed-working-mapping",
+    "gist": "For lane `t`:"
+   },
+   {
+    "heading": "Recommended Debugging Order",
+    "anchor": "recommended-debugging-order",
+    "gist": "When bringing up from scratch, we recommend the following order:"
+   },
+   {
+    "heading": "Final Verification",
+    "anchor": "final-verification",
+    "gist": "The final minimal demo aligns with the dequantized reference to within numerical noise levels across 10 random seeds:"
+   },
+   {
+    "heading": "Reference Code",
+    "anchor": "reference-code",
+    "gist": "- `reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/sm120_nvfp4_inline_ptx_gemm.py` - `reference-kernels/nvidia/blackwell-geforce/cutedsl/cutlass/test_sm120_nvfp4_inline_ptx_gemm.py`"
+   },
+   {
+    "heading": "Scope",
+    "anchor": "scope",
+    "gist": "The current reference kernel is:"
+   }
+  ],
+  "implementation": {
+   "snippet": "```ptx\nmma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::4X.m16n8k64.row.col.f32.e2m1.e2m1.f32.ue4m3\n```\n\n```text\nreg = nibble0 | (nibble1 << 4) | (nibble2 << 8) | ...\n```\n\n```text\nbitplane0 = b0_0 | (b0_1 << 1) | ...\nbitplane1 = b1_0 | (b1_1 << 1) | ...\n```\n\n```python\ngSFA_u8[r, :]\n```\n\n```python\ngSFA_u8[4 * r, :]\n```\n\n```text\nacc[0] -> (m0, n0)\nacc[1] -> (m0, n1)\nacc[2] -> (m8, n0)\nacc[3] -> (m8, n1)\n```\n\n```python\ndequant_ref = dequant(a_q, a_sf) @ dequant(b_q, b_sf).T\n```\n\n```python\nlane_group = t % 4\nlane_row = t // 4\n```\n\n```python\nlogical_row = lane_row + 8 * v1\nlogical_k = lane_group * 8 + v0 + 32 * v2\n```\n\n```python\nlogical_row = lane_row\nlogical_k = lane_group * 8 + v0 + 32 * v1\n```\n\n```python\nsfa_row = (t // 4) + (t % 2) * 8\nsfb_row = t // 4\n```\n\n```python\nsfa_phys_row = 4 * sfa_row\nsfb_phys_row = 4 * sfb_row\n```\n\n```text\nworst_seed=3\nworst_rel=1.414863107e-07\nworst_abs=3.814697266e-06\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/ref-docs/cutedsl/sm120-nvfp4-inline-ptx-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

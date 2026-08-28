@@ -1,0 +1,130 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.cutedsl.ref-docs.blackwell-gemm-thread-block-cluster",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|cutedsl|gemm|blackwell-gemm-thread-block-cluster|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "cutedsl",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm"
+  ],
+  "triggers": [
+   "ref-docs reference for NVIDIA Blackwell (SM100) is needed"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for NVIDIA Blackwell (SM100): Blackwell GEMM: Thread Block Clusters, TMA Multicast, and Pair-UMMA",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "Blackwell GEMM: Thread Block Clusters, TMA Multicast, and Pair-UMMA"
+  },
+  "title": "Blackwell GEMM: Thread Block Clusters, TMA Multicast, and Pair-UMMA",
+  "summary": "How to leverage thread block clusters for Blackwell GEMM, combining TMA multicast for efficient data sharing and 2-SM UMMA (pair-UMMA) for doubled arithmetic intensity. Part 2 of the Colfax Research CUTLASS Blackwell series.",
+  "sections": [
+   {
+    "heading": "1. Introduction",
+    "anchor": "1-introduction",
+    "gist": "In Part 1, we covered Blackwell's Tensor Memory and UMMA instructions (`tcgen05.mma`)."
+   },
+   {
+    "heading": "2. Thread Block Clusters",
+    "anchor": "2-thread-block-clusters",
+    "gist": "A thread block cluster groups physically proximate SMs (e.g., on the same GPC)."
+   },
+   {
+    "heading": "3. TMA Multicast",
+    "anchor": "3-tma-multicast",
+    "gist": "TMA multicast loads a tensor tile into the SMEM of multiple CTAs in the same cluster in a single operation."
+   },
+   {
+    "heading": "4. CuTe Example: GEMM with TMA Multicast",
+    "anchor": "4-cute-example-gemm-with-tma-multicast",
+    "gist": "Multicast naturally fits GEMM tiling: each tile of operands A and B is used to compute multiple output tiles."
+   },
+   {
+    "heading": "5. CuTe Example: Pair-UMMA with TMA Multicast",
+    "anchor": "5-cute-example-pair-umma-with-tma-multicast",
+    "gist": "Blackwell adds the ability for two adjacent CTAs in the same cluster to cooperatively execute UMMA."
+   },
+   {
+    "heading": "6. Conclusion",
+    "anchor": "6-conclusion",
+    "gist": "TMA multicast reduces global memory traffic by sharing loads among CTAs in a cluster."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/ref-docs/cutedsl/blackwell-gemm-thread-block-cluster.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

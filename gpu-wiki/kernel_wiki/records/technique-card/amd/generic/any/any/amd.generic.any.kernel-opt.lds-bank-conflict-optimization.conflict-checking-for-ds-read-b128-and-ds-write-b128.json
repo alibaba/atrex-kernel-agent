@@ -1,0 +1,102 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.generic.any.kernel-opt.lds-bank-conflict-optimization.conflict-checking-for-ds-read-b128-and-ds-write-b128",
+ "type": "technique-card",
+ "level": "generic",
+ "status": "active",
+ "episode_key": "generic|any|kernel-opt|lds-bank-conflict-optimization#conflict-checking-for-ds-read-b128-and-ds-write-b128|generic",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "generic",
+   "architectures": [],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "any",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "conflict-checking-for-ds-read-b128-and-ds-write-b128"
+  ],
+  "triggers": [
+   "the 'Conflict Checking for `ds_read_b128` and `ds_write_b128`' technique is being considered on GPU (vendor/architecture-general)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for GPU (vendor/architecture-general): Conflict Checking for `ds_read_b128` and `ds_write_b128`",
+  "problem": {
+   "target": "GPU (vendor/architecture-general)",
+   "statement": "LDS Bank Conflict Optimization -- Conflict Checking for `ds_read_b128` and `ds_write_b128`"
+  },
+  "technique": "Conflict Checking for `ds_read_b128` and `ds_write_b128`",
+  "what": "**Write (ds_write_b128)**: Checked in groups of 8 consecutive lanes",
+  "when": "**Write (ds_write_b128)**: Checked in groups of 8 consecutive lanes",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\n{0-7}, {8-15}, {16-23}, {24-31}, {32-39}, {40-47}, {48-55}, {56-63}\n```\n\n```\n{0:3,20:23}, {4:7,16:19}, {8:11,28:31}, {12:15,24:27},\n{32:35,52:55}, {36:39,48:51}, {40:43,60:63}, {44:47,56:59}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/common/kernel-opt/lds-bank-conflict-optimization.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

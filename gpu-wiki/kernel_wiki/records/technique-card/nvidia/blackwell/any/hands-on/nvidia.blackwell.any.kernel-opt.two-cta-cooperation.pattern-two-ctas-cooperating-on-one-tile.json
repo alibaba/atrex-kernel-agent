@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.two-cta-cooperation.pattern-two-ctas-cooperating-on-one-tile",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|hands-on|two-cta-cooperation#pattern-two-ctas-cooperating-on-one-tile|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "hands-on",
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "pattern-two-ctas-cooperating-on-one-tile"
+  ],
+  "triggers": [
+   "the 'Pattern: Two CTAs Cooperating on One Tile' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): Pattern: Two CTAs Cooperating on One Tile",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "2CTA Cooperation -- Pattern: Two CTAs Cooperating on One Tile"
+  },
+  "technique": "Pattern: Two CTAs Cooperating on One Tile",
+  "what": "**Source**: `cutedsl/cutlass/dense_gemm_2cta_sm100.py`, `gluon/triton/10-multi-cta-matmul.py`",
+  "when": "**Source**: `cutedsl/cutlass/dense_gemm_2cta_sm100.py`, `gluon/triton/10-multi-cta-matmul.py`",
+  "caveats": [
+   "Cross-SM shared memory access incurs additional latency; may not benefit compute-bound scenarios"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```python\n# 2CTA: Two CTAs load A and B respectively, share results for computation\n# CTA 0 is responsible for loading A tile\n# CTA 1 is responsible for loading B tile\n# Both perform GEMM computation\n\ncluster_shape = (2, 1, 1)  # 2 CTAs form a cluster\n\nif cta_id_in_cluster == 0:\n    # Load A tile to shared memory\n    cute.copy(tma_a, src_a, smem_a)\n    # B tile is loaded by CTA 1, accessed via cluster shared memory\nelse:\n    # Load B tile\n    cute.copy(tma_b, src_b, smem_b)\n\n# Both CTAs execute GEMM (using shared memory from the other SM)\nacc = cute.gemm(mma, smem_a_remote, smem_b_local, acc)\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/hands-on/two-cta-cooperation.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

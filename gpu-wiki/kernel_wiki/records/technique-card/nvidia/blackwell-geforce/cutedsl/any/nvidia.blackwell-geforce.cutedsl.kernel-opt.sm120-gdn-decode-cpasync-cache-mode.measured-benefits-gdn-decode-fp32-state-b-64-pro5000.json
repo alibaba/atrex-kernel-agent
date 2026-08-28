@@ -1,0 +1,103 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.kernel-opt.sm120-gdn-decode-cpasync-cache-mode.measured-benefits-gdn-decode-fp32-state-b-64-pro5000",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|sm120-gdn-decode-cpasync-cache-mode#measured-benefits-gdn-decode-fp32-state-b-64-pro5000|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn",
+   "measured-benefits-gdn-decode-fp32-state-b-64-pro5000"
+  ],
+  "triggers": [
+   "the 'Measured Benefits (GDN decode, fp32 state, B=64, Pro5000)' technique is being considered on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): Measured Benefits (GDN decode, fp32 state, B=64, Pro5000)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 GDN Decode: cp.async + GLOBAL Cache Quick Reference (kernel-opt) -- Measured Benefits (GDN decode, fp32 state, B=64, Pro5000)"
+  },
+  "technique": "Measured Benefits (GDN decode, fp32 state, B=64, Pro5000)",
+  "what": "| Version | wall-clock | DRAM throughput | Memory throughput | |------|-----------|-----------------|-------------------| | baseline (default ld.ca) | 389 μs | 34% | 411 GB/s | | **+ 4-piece set** | **246 μs** | **87.7%** | **1.04 TB/s** = 100.8% memcpy ceiling |",
+  "when": "| Version | wall-clock | DRAM throughput | Memory throughput | |------|-----------|-----------------|-------------------| | baseline (default ld.ca) | 389 μs | 34% | 411 GB/s | | **+ 4-piece set** | **246 μs** | **87.7%** | **1.04 TB/s** =…",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/kernel-opt/cutedsl/sm120-gdn-decode-cpasync-cache-mode.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

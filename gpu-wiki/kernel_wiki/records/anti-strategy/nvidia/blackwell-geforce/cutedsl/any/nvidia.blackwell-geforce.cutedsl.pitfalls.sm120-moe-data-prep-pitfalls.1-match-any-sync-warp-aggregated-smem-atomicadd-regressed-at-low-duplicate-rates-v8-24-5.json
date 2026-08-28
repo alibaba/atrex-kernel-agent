@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.sm120-moe-data-prep-pitfalls.1-match-any-sync-warp-aggregated-smem-atomicadd-regressed-at-low-duplicate-rates-v8-24-5",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|moe|sm120-moe-data-prep-pitfalls#1-match-any-sync-warp-aggregated-smem-atomicadd-regressed-at-low-duplicate-rates-v8-24-5|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "moe",
+   "operators": [
+    "moe"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "moe"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "moe"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '1. `__match_any_sync` warp-aggregated smem atomicAdd regressed at low duplicate rates (V8, +24.5%)' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 1. `__match_any_sync` warp-aggregated smem atomicAdd regressed at low duplicate rates (V8, +24.5%)",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "SM120 INT32 MoE Data-Prep — Pitfalls -- 1. `__match_any_sync` warp-aggregated smem atomicAdd regressed at low duplicate rates (V8, +24.5%)"
+  },
+  "attempted": "V7 scatter has `atomicAdd(&local_cnts[eid], 1)` on a 256-int smem counter. NCU shows `Bank Conflicts 27.52%` rule firing. Apply textbook warp-aggregation: `__match_any_sync` finds same-eid lanes within a warp, the lowest-index leader does ONE `atomicAdd(&local_cnts[eid], __popc(peers))`, broadcasts the base via `__shfl_sync`, each lane gets exclusive prefix-popc as offset.",
+  "verdict": "performance-ceiling",
+  "lesson": "Before applying warp-aggregation, **estimate the intra-warp duplicate rate from your problem size**. Rule of thumb on sm_120: needs duplicate rate **> ~4 per warp** to break even. For NUM_EXPERTS >> warp_size workloads (E=256 here), the rate is too low — skip warp-aggregation entirely.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "the bank-conflict source is **inter-warp**, not intra-warp. With E=256 and K=8 expanded slots/token, the expected number of intra-warp duplicate eids per warp ≈ `(32 lanes choose 2) / 256 ≈ 1.94`. Warp aggregation only fuses intra-warp duplicates, so it saved ~2 atomicAdds per warp at a cost of ~16 cycles of warp-primitives + branch divergence per iteration. Net negative."
+  },
+  "observed": "- Bank-conflict wavefront ratio UNCHANGED (V7 68.52% → V8 68.57%) - Top stall shifted to **`ShortScoreboard MIO 51.0%`** (the warp primitives themselves are MIO-bound on sm_120) - Branch efficiency 100% → 84% (the `if (laneid == leader)` predicate) - Per-token instruction count UP ~16 cyc/iter - Wall time T=6144 CG: 24.62 → 30.65 µs (**+24.5% regression**)",
+  "root_cause": "the bank-conflict source is **inter-warp**, not intra-warp. With E=256 and K=8 expanded slots/token, the expected number of intra-warp duplicate eids per warp ≈ `(32 lanes choose 2) / 256 ≈ 1.94`. Warp aggregation only fuses intra-warp duplicates, so it saved ~2 atomicAdds per warp at a cost of ~16 cycles of warp-primitives + branch divergence per iteration. Net negative."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/sm120-moe-data-prep-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

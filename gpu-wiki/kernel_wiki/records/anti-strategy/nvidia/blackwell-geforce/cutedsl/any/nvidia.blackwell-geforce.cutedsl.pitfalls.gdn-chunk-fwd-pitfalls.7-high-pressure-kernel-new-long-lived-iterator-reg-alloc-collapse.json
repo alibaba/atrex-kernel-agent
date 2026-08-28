@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell-geforce.cutedsl.pitfalls.gdn-chunk-fwd-pitfalls.7-high-pressure-kernel-new-long-lived-iterator-reg-alloc-collapse",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell-geforce|cutedsl|gdn|gdn-chunk-fwd-pitfalls#7-high-pressure-kernel-new-long-lived-iterator-reg-alloc-collapse|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell-geforce",
+   "architectures": [
+    "blackwell-geforce"
+   ],
+   "product": "any",
+   "dsl": "cutedsl",
+   "operator_family": "gdn",
+   "operators": [
+    "gdn"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell-geforce",
+   "language": "cutedsl",
+   "workload_family": "ssm-linear-attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gdn"
+  ],
+  "triggers": [
+   "a kernel on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120) risks the '7. High-pressure kernel + new long-lived iterator = reg-alloc collapse' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120): 7. High-pressure kernel + new long-lived iterator = reg-alloc collapse",
+  "problem": {
+   "target": "NVIDIA Blackwell GeForce/workstation (RTX PRO 5000 / SM120)",
+   "statement": "GDN Chunk Forward Pitfalls (CuTeDSL, SM120) -- 7. High-pressure kernel + new long-lived iterator = reg-alloc collapse"
+  },
+  "attempted": "Your kernel is at 255 reg/thr with >100M spill instructions. You add a cp.async TiledCopy, swizzle layout, or other construct that creates a new long-lived iterator. Should just be a few extra registers.",
+  "verdict": "performance-ceiling",
+  "lesson": "Fix register pressure FIRST (via loop restructuring, tile size reduction, or stride padding), THEN add iterators. In this project: V1 (t-outer + K2 fusion) dropped regs from 255 to ~198, creating headroom for V3's cp.async TiledCopy.",
+  "established_fact": {
+   "condition": {
+    "sm_arch": "sm_120",
+    "toolchain": "cutedsl"
+   },
+   "mechanism": "When the kernel is already at the register ceiling, any new long-lived iterator (TiledCopy state, swizzle offset) forces ptxas to choose between the cap and the iterator. It drops the cap, allocates freely, and spill traffic explodes because the register file can't hold everything."
+  },
+  "observed": "cute.compile drops the 255 reg cap entirely and spill count jumps 6x. Confirmed twice: V10 (swizzle iterator), V11 (first cp.async attempt). Both had to be reverted.",
+  "root_cause": "When the kernel is already at the register ceiling, any new long-lived iterator (TiledCopy state, swizzle offset) forces ptxas to choose between the cap and the iterator. It drops the cap, allocates freely, and spill traffic explodes because the register file can't hold everything."
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell-geforce/pitfalls/cutedsl/gdn-chunk-fwd-pitfalls.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.45,
+   "tier": "cautionary",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.45,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

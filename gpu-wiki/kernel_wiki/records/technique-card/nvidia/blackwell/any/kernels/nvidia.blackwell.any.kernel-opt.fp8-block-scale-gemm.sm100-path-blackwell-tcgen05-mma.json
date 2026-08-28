@@ -1,0 +1,107 @@
+{
+ "schema": "clean-1.3",
+ "id": "nvidia.blackwell.any.kernel-opt.fp8-block-scale-gemm.sm100-path-blackwell-tcgen05-mma",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "blackwell|any|gemm|fp8-block-scale-gemm#sm100-path-blackwell-tcgen05-mma|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "nvidia",
+   "arch": "blackwell",
+   "architectures": [
+    "blackwell"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "blackwell",
+   "language": "any",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "sm100-path-blackwell-tcgen05-mma"
+  ],
+  "triggers": [
+   "the 'SM100 Path (Blackwell, tcgen05.mma)' technique is being considered on NVIDIA Blackwell (SM100)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for NVIDIA Blackwell (SM100): SM100 Path (Blackwell, tcgen05.mma)",
+  "problem": {
+   "target": "NVIDIA Blackwell (SM100)",
+   "statement": "FP8 Block-Scale GEMM -- SM100 Path (Blackwell, tcgen05.mma)"
+  },
+  "technique": "SM100 Path (Blackwell, tcgen05.mma)",
+  "what": "tcgen05.mma has native UE8M0 block scale support in hardware",
+  "when": "tcgen05.mma has native UE8M0 block scale support in hardware",
+  "caveats": [],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```cuda\n// tcgen05.mma has native UE8M0 block scale support in hardware\n// No promotion needed - scales applied inside MMA\n\n__global__ void sm100_fp8_gemm_block_scale(...) {\n    uint32_t tmem = tmem_alloc(256);\n\n    for (int k = 0; k < K; k += BLOCK_K) {\n        mbarrier_wait(&tma_done);\n\n        // tcgen05.mma.mxf8f6f4.block_scale variant\n        // Reads A, B from SMEM; scales from scale SMEM; accumulates in TMEM\n        asm volatile(\n            \"tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X \"\n            \"[%0], %1, %2, %3, %4, %5;\"\n            :: \"r\"(tmem), \"l\"(a_desc), \"l\"(b_desc),\n               \"r\"(sf_a_desc), \"r\"(sf_b_desc), \"n\"(1)\n        );\n    }\n\n    // Read from TMEM, apply global scale, store\n    float result = tmem_load(tmem) * global_scale;\n    output[row * N + col] = __float2half(result);\n}\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "nvidia/blackwell/kernel-opt/kernels/fp8-block-scale-gemm.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

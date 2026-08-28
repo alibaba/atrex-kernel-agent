@@ -1,0 +1,27 @@
+# Local tooling and OS metadata
+.DS_Store
+.codegraph/
+.codex/
+.claude/
+.qoder/
+docs/superpowers/plans/
+openspec/
+stage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local and temporary test scripts
+tests/
+
+# Optional local AMD ATT decoder checkout
+tools/rocprof-trace-decoder/
+
+# Optimization workspaces created by orchestrator/optimize.py
+kernel_opt_*/
+
+# Git submodules are tracked via .gitmodules
+# reference-projects/ content is managed as submodules

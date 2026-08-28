@@ -1,0 +1,108 @@
+{
+ "schema": "clean-1.3",
+ "id": "amd.mi308x.gluon.kernel-opt.optimization-guide.step-3-iterative-optimization",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "cdna3|gluon|kernel-opt|optimization-guide#step-3-iterative-optimization|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "amd",
+   "arch": "cdna3",
+   "architectures": [
+    "mi308x"
+   ],
+   "product": "mi308x",
+   "dsl": "gluon",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "cdna3",
+   "language": "gluon",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "step-3-iterative-optimization"
+  ],
+  "triggers": [
+   "the 'Step 3: Iterative Optimization' technique is being considered on AMD MI308X (CDNA3 / gfx942)"
+  ]
+ },
+ "payload": {
+  "goal": "Optimization technique for AMD MI308X (CDNA3 / gfx942): Step 3: Iterative Optimization",
+  "problem": {
+   "target": "AMD MI308X (CDNA3 / gfx942)",
+   "statement": "Gluon Kernel Performance Optimization Guide -- Step 3: Iterative Optimization"
+  },
+  "technique": "Step 3: Iterative Optimization",
+  "what": "**File Editing Strategy (to save context):** - **Do not** modify the original file directly → revert → re-verify (this wastes a significant amount of context tokens) - **Must** create a new file for modifications (e.g., original file `kernel.py` → create `kernel_v2.py`), and iterate on the new file - Each round of optimization iteration operates on a new file; after verification passes, overwrite the original file with the new file's content - All intermediate files (`_v2`, `_v3`, etc.) are **deleted at once** after final verification passes",
+  "when": "**File Editing Strategy (to save context):** - **Do not** modify the original file directly → revert → re-verify (this wastes a significant amount of context tokens) - **Must** create a new file for modifications (e.g., original file `kern…",
+  "caveats": [
+   "When the original layout in TTGIR is inherently narrow or non-coalesced, re-select the layout, but must ensure functional equivalence",
+   "Load and compute are not interleaved within the loop",
+   "§3.4 reveals scratch spillage that cannot be resolved by reducing block size (block size is fixed by the upper-level algorithm)"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "implementation": {
+   "snippet": "```\noptimization workflow (verification + iteration):\n\noptimization 3.1 -> create kernel_v2.py\n  │\n  ├─► run validate.py + benchmark\n  │\n  ├─ pass -> keep v2, optimization 3.2 -> create kernel_v3.py\n  │\n  └─ fail -> discard v2, revise the file or abandon that optimization\n```\n\n```python\n# check layout whether there is bank conflict\nconflicts = gl.bank_conflicts(shared_layout)\n# returns 0 meansnoneconflict\n```\n\n```python\nkernel[grid](c, a, b, ..., num_stages=1, num_warps=8)  # 8-warp launch\n```\n\n```python\nif n_full_blocks > 0:\n    acc, d_i, m_i = _attn_inner(..., DO_MASK=False)\nif masked_blocks > 0:\n    acc, d_i, m_i = _attn_inner(..., DO_MASK=True)\n```\n\n```python\nif IS_CAUSAL:\n    NUM_SES: gl.constexpr = 16  # MI308X: 4 XCD × 4 SE\n    total_blocks = num_m_blocks * num_bh\n    wave = flat_pid // NUM_SES\n    pos = flat_pid % NUM_SES\n    is_odd = wave % 2\n    if is_odd:\n        logical_pid = wave * NUM_SES + (NUM_SES - 1 - pos)\n    else:\n        logical_pid = flat_pid\n    logical_pid = tl.minimum(logical_pid, total_blocks - 1)\n    start_m = logical_pid // num_bh\n    off_bs_head = logical_pid % num_bh\nelse:\n    off_bs_head = flat_pid // num_m_blocks\n    start_m = flat_pid % num_m_blocks\n```",
+   "format": "source (verbatim)"
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "amd/cdna3/mi308x/kernel-opt/gluon/optimization-guide.md",
+   "seed": "curated markdown wiki, removed after the JSON migration"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.55,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.55,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-16T13:27:26",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}
