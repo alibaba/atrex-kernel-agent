@@ -313,6 +313,11 @@ def _make_input_bundle(
         workspace_tools = workspace / "tools"
         if workspace_tools.is_symlink() or not workspace_tools.exists():
             add_tree(tf, REPO_ROOT / "tools", "tools")
+        # ``skills/`` is normally a runtime symlink and is intentionally skipped during the
+        # workspace walk.  Materialize only explicitly selected skill files so a profiling
+        # snapshot can use its backend on the worker without uploading every installed skill.
+        if any(path.startswith("skills/") for path in selected_inputs):
+            add_tree(tf, REPO_ROOT / "skills", "skills")
     return base64.b64encode(archive.getvalue()).decode("ascii"), count, skipped
 
 
@@ -2808,7 +2813,13 @@ def _main(argv: list[str] | None = None) -> int:
 
     evaluator_command = _is_test_kernel_command(args.command)
     if evaluator_command:
-        selected_inputs = _evaluation_input_paths(workspace, args.command)
+        selected = set(_evaluation_input_paths(workspace, args.command))
+        try:
+            for value in args.input:
+                selected.update(_expand_workspace_input(workspace, value))
+        except ValueError as exc:
+            raise SystemExit(f"sandbox: {exc}") from exc
+        selected_inputs = frozenset(selected)
     else:
         try:
             selected_inputs = _command_input_paths(
