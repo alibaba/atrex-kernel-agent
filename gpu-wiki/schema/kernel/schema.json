@@ -115,6 +115,7 @@
                 "flydsl",
                 "gluon",
                 "triton",
+                "tilelang",
                 "aiter",
                 "any"
               ]
@@ -185,6 +186,7 @@
                 "flydsl",
                 "gluon",
                 "triton",
+                "tilelang",
                 "aiter",
                 "any"
               ]

@@ -55,7 +55,7 @@
    "statement": "Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)"
   },
   "title": "Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)",
-  "summary": "The vendor's own PPU port of FlashAttention-2 and FlashAttention-3. Its `flash_attn_with_kvcache` entry point is an exact superset of the captured 18-argument production operator contract (paged `page_table`, varlen `cu_seqlens_q`, `cache_seqlens`, causal, `num_splits`), so this is the implementation our candidates are trying to match rather than a loose analogue. Measured on the four private production shapes it ran 2.01x faster in aggregate than the best TileLang candidate (42.02 ms -> 20.90 ms; per-shape 2.17x / 2.20x / 1.17x / 1.26x), with the gap concentrated on the large-q prefill shapes. Source: `reference-projects/flash-attention-for-sail`. Read for design only; do not import or call it from a candidate.",
+  "summary": "The vendor's PPU port of FlashAttention-2 and FlashAttention-3 is a public design reference for paged KV cache access, variable-length sequences, causal masking, configurable split-KV execution, and grouped-query attention. Consult its PPU-specific tiling and AIU data-movement patterns when designing compatible attention kernels. Source: `reference-projects/flash-attention-for-sail`. Read for design only; do not import or call it from a candidate.",
   "sections": [
    {
     "heading": "AIU global->shared loads",
@@ -70,7 +70,7 @@
    {
     "heading": "GQA packing",
     "anchor": "gqa-packing",
-    "gist": "`hopper/pack_gqa.h` packs the q_heads:kv_heads ratio into the M dimension. Directly relevant to the 8:1 ratio in the production contract."
+    "gist": "`hopper/pack_gqa.h` packs the q_heads:kv_heads ratio into the M dimension for grouped-query attention workloads."
    },
    {
     "heading": "Guardrail",

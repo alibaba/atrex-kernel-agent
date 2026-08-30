@@ -91,6 +91,14 @@ DEFAULT_FALLBACK_RATIO = 0.10
 DEFAULT_WEIGHT = 1.0
 DEFAULT_LIMIT = 8
 
+# The query vocabulary must describe every DSL the orchestrator can dispatch,
+# even when a particular store currently has only ``dsl:any`` records for one
+# of them.  Otherwise a supported campaign is rejected before those portable
+# records can be considered.
+SUPPORTED_DSLS = {
+    "cuda", "cutedsl", "flydsl", "gluon", "triton", "tilelang", "aiter", "any",
+}
+
 FALLBACK_NOTE = ("NOT query matches: nothing in scope matched, so this is a "
                  "random sample of the scoped pool, offered only to show what "
                  "kind of knowledge exists here. Do not treat it as advice "
@@ -240,6 +248,7 @@ def vocab(entries: list[dict]) -> dict[str, set]:
             v["symptom"].add(bn)
         for t in e["retrieval"].get("technique_tags") or []:
             v["tag"].add(t)
+    v["dsl"].update(SUPPORTED_DSLS)
     # symptoms and tags stay free-form for MATCHING -- a profiler phrase should
     # not have to be spelled the store's way -- but they must be enumerable, or
     # a caller cannot discover the tokens that retrieve well.
@@ -425,8 +434,11 @@ def scoped(entries, args) -> list[tuple[dict, str]]:
             continue
         if args.family and scope.get("operator_family") != args.family:
             continue
-        if args.operator and args.operator not in (scope.get("operators") or []):
-            continue
+        if args.operator:
+            operators = scope.get("operators") or []
+            operator_agnostic = not operators and not scope.get("operator_family")
+            if args.operator not in operators and not operator_agnostic:
+                continue
         if args.type and e["type"] != args.type:
             continue
         if args.level and e["level"] != args.level:
