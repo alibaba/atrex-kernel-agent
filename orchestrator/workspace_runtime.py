@@ -19,13 +19,14 @@ def _agent_runtime_directive(agent_cli: str) -> str:
         )
         return (
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
-            "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, `ncu-report-skill`, "
+            "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
+            "`autonomous-gpu-kernel-timeline`, `ncu-report-skill`, "
             f"`KernelWiki`, and `gen-plan`. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
-        "`ncu-report-skill`, and `KernelWiki`."
+        "`autonomous-gpu-kernel-timeline`, `ncu-report-skill`, and `KernelWiki`."
     )
 
 
@@ -132,6 +133,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     agents_src = REPO_ROOT / "agents"
     project_skills = REPO_ROOT / "skills"
     plan_skill_src = project_skills / "gen-plan"
+    timeline_skill_src = project_skills / "autonomous-gpu-kernel-timeline"
     for runtime_dir_name in (".claude", ".qoder"):
         runtime_dir = workspace / runtime_dir_name
         runtime_skills_dir = runtime_dir / "skills"
@@ -144,6 +146,9 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
         plan_skill_dst = runtime_skills_dir / "gen-plan"
         if (plan_skill_src / "SKILL.md").is_file() and not plan_skill_dst.exists():
             os.symlink(plan_skill_src, plan_skill_dst)
+        timeline_skill_dst = runtime_skills_dir / "autonomous-gpu-kernel-timeline"
+        if (timeline_skill_src / "SKILL.md").is_file() and not timeline_skill_dst.exists():
+            os.symlink(timeline_skill_src, timeline_skill_dst)
         # Claude/Qoder setup prompts can launch the baseline agent by name.
         if agents_src.exists() and not runtime_agents_dir.exists():
             os.symlink(agents_src, runtime_agents_dir)

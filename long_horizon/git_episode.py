@@ -40,6 +40,12 @@ PROTECTED_PREFIXES = (
     ".atrex_",
 )
 EPISODE_EVIDENCE_PREFIXES = ("plans/", "profiles/", ".humanize/")
+TIMELINE_PROBE_MARKERS = (
+    "cute.experimental.iket.",
+    "atrex_timeline.cuh",
+    "atrex::timeline::Recorder",
+    "ATREX_TIMELINE_ENABLED",
+)
 
 
 def _git(workspace: Path, *args: str, check: bool = True, binary: bool = False):
@@ -206,6 +212,9 @@ class EpisodeWorktree:
             return "candidate has no changes relative to incumbent", []
         if paths != ["kernel.py"]:
             return "candidate commit may change only kernel.py", paths
+        kernel_text = (self.path / "kernel.py").read_text(encoding="utf-8", errors="replace")
+        if any(marker in kernel_text for marker in TIMELINE_PROBE_MARKERS):
+            return "candidate kernel.py still contains timeline profiling probes", paths
         return "", paths
 
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:

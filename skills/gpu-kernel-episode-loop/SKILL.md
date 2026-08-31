@@ -98,6 +98,19 @@ Extract a concrete bottleneck and source-level target. Use PTX/SASS/TTGIR inspec
 lowering or instruction selection is part of the hypothesis. Do not make speculative optimization
 changes before obtaining usable evidence.
 
+When ordinary profiling has isolated one kernel but cannot distinguish a specific in-kernel timing
+hypothesis, read `skills/autonomous-gpu-kernel-timeline/SKILL.md` and run its autonomous loop. Use
+standalone CUDA/inline PTX through its CUDA backend and CuTe DSL through IKeT. Keep every attempt
+under `<PROFILE_DIR>/timeline/attempt-N`; when the remote command reads backend files, pass that
+specific skill path with sandbox `--input` and sync only the attempt output directory.
+
+Timeline instrumentation is a temporary working snapshot on this episode's single HEAD line, not a
+candidate. Preserve the clean source and each useful instrumented source or reversible patch before
+replacing it. After the evidence answers the question, restore or rewrite a probe-free `kernel.py`
+before correctness/performance validation, commit, journal finalization, and handoff. Never submit a
+profiling snapshot as `candidate_commit`; its latency and failures do not count as promotion attempts
+or framework-stall events.
+
 Escalate through the typed profile funnel instead of collecting everything at once: `--profile-level
 survey` to enumerate kernels, `sol` (the default) for the bottleneck class, and `deep --kernel-regex
 '^<exact_base_function_name>$'` for one named kernel, especially a Triton `@triton.jit` entry. Take
