@@ -232,7 +232,7 @@ Key patterns to check:
 
 ---
 
-## PPU: Asight Compute (acu) (T-Head zw890)
+## PPU: Asight Compute (acu) (T-Head zwm890p)
 
 The PPU part is CUDA-source-compatible and its runtime reports `sm_89`, but it is not NVIDIA
 silicon and Nsight Compute does not exist for it. The ncu analog is `acu` from the asight suite:

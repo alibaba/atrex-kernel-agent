@@ -43,7 +43,7 @@ from .constants import (
     SOL_SEED,
     WORKSPACE_INIT,
 )
-from .hardware import hardware_directive, kernel_is_gluon
+from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
     load_progress as load_framework_baseline_progress,
@@ -131,6 +131,8 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
     "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
 )
 _FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT = 80
+_FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT = 6
+_FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES = 1000
 _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT = 2
 _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
     ".cu",
@@ -1679,6 +1681,8 @@ class Campaign:
                 continue
         for term in (
             "attention",
+            "backward",
+            "bwd",
             "causal",
             "decode",
             "gqa",
@@ -1695,6 +1699,8 @@ class Campaign:
                 keywords.add(term)
         if self.arch.lower().startswith("sm_12"):
             keywords.update({"blackwell", "sm120"})
+        if hardware_vendor(self.platform, self.arch) == "ppu":
+            keywords.update({"ppu", "sail", "hggc", "actlize", "m890"})
         return keywords
 
     def _framework_baseline_reference_catalog(self) -> list[str]:
@@ -1720,6 +1726,8 @@ class Campaign:
                         candidates.append(path.relative_to(REPO_ROOT).as_posix())
 
         keywords = self._framework_baseline_reference_keywords()
+        targets_ppu = hardware_vendor(self.platform, self.arch) == "ppu"
+        wants_backward = bool(keywords & {"backward", "bwd"})
         ranked: list[tuple[int, str]] = []
         for raw_path in candidates:
             path = Path(raw_path)
@@ -1729,31 +1737,51 @@ class Campaign:
             except (OSError, ValueError):
                 continue
             source = REPO_ROOT / relative
+            suffix = source.suffix.lower()
             if (
-                source.suffix.lower() not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
+                suffix not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
                 or not source.is_file()
             ):
                 continue
+            if suffix != ".md":
+                try:
+                    if source.stat().st_size < _FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES:
+                        continue
+                except OSError:
+                    continue
             lowered = relative.lower().replace("-", "_")
             score = sum(10 for keyword in keywords if keyword in lowered)
             if score == 0:
                 continue
-            if relative.startswith("reference-projects/") and source.suffix.lower() != ".md":
+            if relative.startswith("reference-projects/") and suffix != ".md":
                 score += 4
             if relative.startswith("gpu-wiki/"):
                 score += 2
             if "/sources/prs/" in lowered:
                 score -= 5
+            if not wants_backward and any(
+                term in lowered for term in ("_bwd", "bwd_", "backward")
+            ):
+                score -= 15
             if any(term in lowered for term in ("paged", "varlen", "gqa", "sm120")):
+                score += 3
+            if any(term in lowered for term in ("_for_sail", "actlize", "hggc", "ppu")):
+                if not targets_ppu:
+                    continue
                 score += 3
             ranked.append((score, relative))
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return [
-            path
-            for _score, path in ranked[
-                :_FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT
-            ]
-        ]
+        per_project: dict[str, int] = {}
+        catalog: list[str] = []
+        for _score, relative in ranked:
+            if len(catalog) >= _FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT:
+                break
+            project = "/".join(relative.split("/")[:2])
+            if per_project.get(project, 0) >= _FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT:
+                continue
+            per_project[project] = per_project.get(project, 0) + 1
+            catalog.append(relative)
+        return catalog
 
     def _framework_baseline_reference_catalog_text(self) -> str:
         catalog = self._framework_baseline_reference_catalog()

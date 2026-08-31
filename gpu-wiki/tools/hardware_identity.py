@@ -52,14 +52,22 @@ HARDWARE_IDENTITIES = {
     "mi355x": {"vendor": "amd", "arch": "cdna4", "recorded": True},
     # PPU. The part is CUDA-source-compatible and its runtime reports sm_89, but it is
     # not NVIDIA silicon: giving it a distinct vendor/arch stops an Ada spec sheet from
-    # ever being served as this product's numbers.
-    "zw890": {"vendor": "ppu", "arch": "zw890", "recorded": False},
+    # ever being served as this product's numbers. The line ships one public part, so
+    # the product name doubles as the architecture address.
+    "zwm890p": {"vendor": "ppu", "arch": "zwm890p", "recorded": False},
 }
 
 PRODUCT_ARCH = {name: row["arch"] for name, row in HARDWARE_IDENTITIES.items()}
 RECORDED_PRODUCTS = frozenset(
     name for name, row in HARDWARE_IDENTITIES.items() if row["recorded"]
 )
+
+# Superseded spellings of a part that is already in the table above. These are
+# not identities of their own: they fold onto a canonical name so an older
+# spelling still resolves. ``zw890`` addressed this chip before its
+# architecture token and product name were unified, and deployed campaign
+# configs still carry it.
+LEGACY_SPELLINGS = {"zw890": "zwm890p"}
 
 
 def _compact(value: str) -> str:
@@ -68,7 +76,7 @@ def _compact(value: str) -> str:
 
 _CANONICAL = {_compact(name): name for name in HARDWARE_IDENTITIES}
 
-_PREFIXES = ("advancedmicrodevices", "nvidia", "amd", "geforce", "instinct", "ppu")
+_PREFIXES = ("advancedmicrodevices", "nvidia", "amd", "geforce", "instinct", "ppu", "thead")
 _SUFFIXES = ("accelerator", "gpu")
 
 
@@ -94,7 +102,11 @@ def extract_product_names(text: str) -> list[str]:
 
 
 def normalize_product_name(value: str) -> str:
-    """Normalize formatting without translating one hardware identity to another."""
+    """Normalize formatting, folding a superseded spelling onto its canonical name.
+
+    This never translates one part into a different part; it only reconciles
+    spellings that address the same silicon.
+    """
     token = _compact(value)
     changed = True
     while token and changed:
@@ -109,6 +121,7 @@ def normalize_product_name(value: str) -> str:
                 token = token[:-len(suffix)]
                 changed = True
                 break
+    token = LEGACY_SPELLINGS.get(token, token)
     return _CANONICAL.get(token, token)
 
 

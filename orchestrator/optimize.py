@@ -682,7 +682,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 file=sys.stderr,
                 flush=True,
             )
-    ensure_submodules()
+    ensure_submodules(args.platform, arch or "")
     frameworks = (
         (args.framework,)
         if args.framework

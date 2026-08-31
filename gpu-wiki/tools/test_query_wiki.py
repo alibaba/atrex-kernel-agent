@@ -254,6 +254,27 @@ class ScopeTests(unittest.TestCase):
         for e in served(out):
             self.assertIn(e["applies_to"]["dsl"], ("triton", "any"))
 
+    def test_supported_dsl_without_exact_records_reaches_portable_records(self):
+        code, out, err = run("--arch", "zwm890p", "--dsl", "tilelang",
+                             "--operator", "flash-attention", "--emit-json",
+                             "--limit", "50")
+        self.assertEqual(code, 0, err)
+        self.assertIn("ppu.zwm890p.any.attention.fa-sail",
+                      {record["id"] for record in records(out)})
+
+    def test_operator_filter_keeps_operator_agnostic_ppu_documents(self):
+        expected = {
+            "cuda": "ppu.zwm890p.cuda.any.hggc-sailify",
+            "triton": "ppu.zwm890p.triton.any.triton-for-sail",
+        }
+        for dsl, record_id in expected.items():
+            with self.subTest(dsl=dsl):
+                code, out, err = run("--arch", "zwm890p", "--dsl", dsl,
+                                     "--operator", "flash-attention", "--emit-json",
+                                     "--limit", "50")
+                self.assertEqual(code, 0, err)
+                self.assertIn(record_id, {record["id"] for record in records(out)})
+
     def test_type_filter_is_exclusive(self):
         code, out, _e = run("--type", "anti-strategy", "--emit-json", "--limit", "30")
         self.assertEqual(code, 0)

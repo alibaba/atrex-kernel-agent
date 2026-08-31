@@ -1,0 +1,118 @@
+{
+ "schema": "clean-1.3",
+ "id": "ppu.zwm890p.triton.any.triton-for-sail",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "zwm890p|any|any|triton-for-sail|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "ppu",
+   "arch": "zwm890p",
+   "architectures": [
+    "zwm890p"
+   ],
+   "product": "any",
+   "dsl": "triton",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "zwm890p",
+   "language": "triton",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "triton",
+   "gluon",
+   "aiu",
+   "compiler-lowering"
+  ],
+  "triggers": [
+   "a Triton or Gluon kernel is being written for T-Head PPU / ZW-M890P",
+   "a PPU Triton kernel compiles but misses the AIU fast path",
+   "it is unclear whether a Triton op lowers onto the PPU AIU"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for T-Head PPU ZW-M890P: PPU Triton compiler and AIU lowering tests (triton-for-sail)",
+  "problem": {
+   "target": "T-Head PPU ZW-M890P (HGGC, reports borrowed sm_89)",
+   "statement": "PPU Triton compiler and AIU lowering tests (triton-for-sail)"
+  },
+  "title": "PPU Triton compiler and AIU lowering tests (triton-for-sail)",
+  "summary": "The vendor's Triton fork for PPU: the compiler that actually lowers a Triton or Gluon kernel onto this part, so its passes and tests are ground truth for what lowers well versus what silently falls off the fast path. `python/test/unit/ppu/aiu/` exercises the AIU lowering op by op (`test_aiu_dot`, `test_aiu_addmm`, `test_aiu_binary`), and `python/test/unit/ppu/perf/06-fused-attention-aiu.py` is a fused attention written against the AIU path. `python/examples/gluon/01-attention-forward.py` shows the Gluon-level formulation. Source: `reference-projects/triton-for-sail`.",
+  "sections": [
+   {
+    "heading": "AIU lowering coverage",
+    "anchor": "aiu-lowering-coverage",
+    "gist": "`python/test/unit/ppu/aiu/` is the per-op contract for what the AIU path supports. An op absent here is unlikely to lower onto the AIU."
+   },
+   {
+    "heading": "Fused attention on the AIU path",
+    "anchor": "fused-attention-aiu",
+    "gist": "`python/test/unit/ppu/perf/06-fused-attention-aiu.py` versus `06-fused-attention.py` isolates exactly which changes the AIU path requires."
+   },
+   {
+    "heading": "Backend passes",
+    "anchor": "backend-passes",
+    "gist": "`third_party/` and `lib/` hold the PPU backend passes; consult them when a Triton candidate compiles but underperforms for no visible reason."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "reference-projects/triton-for-sail",
+   "seed": "vendored t-head reference-projects submodule, surveyed 2026-08-28"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-28T15:30:00",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

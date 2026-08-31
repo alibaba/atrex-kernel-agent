@@ -71,3 +71,31 @@
 [submodule "3rdparty/ncu-report-skill"]
 	path = 3rdparty/ncu-report-skill
 	url = https://github.com/mit-han-lab/ncu-report-skill
+[submodule "reference-projects/sailify"]
+	path = reference-projects/sailify
+	url = git@github.com:t-head/sailify.git
+	shallow = false
+[submodule "reference-projects/hggc-samples"]
+	path = reference-projects/hggc-samples
+	url = git@github.com:t-head/hggc-samples.git
+	shallow = false
+[submodule "reference-projects/FlashMLA-for-sail"]
+	path = reference-projects/FlashMLA-for-sail
+	url = git@github.com:t-head/FlashMLA-for-sail.git
+	shallow = false
+[submodule "reference-projects/DeepGEMM-for-sail"]
+	path = reference-projects/DeepGEMM-for-sail
+	url = git@github.com:t-head/DeepGEMM-for-sail.git
+	shallow = false
+[submodule "reference-projects/flash-attention-for-sail"]
+	path = reference-projects/flash-attention-for-sail
+	url = git@github.com:t-head/flash-attention-for-sail.git
+	shallow = false
+[submodule "reference-projects/actlize"]
+	path = reference-projects/actlize
+	url = git@github.com:t-head/actlize.git
+	shallow = false
+[submodule "reference-projects/triton-for-sail"]
+	shallow = false
+	path = reference-projects/triton-for-sail
+	url = git@github.com:t-head/triton-for-sail.git

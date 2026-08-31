@@ -1,0 +1,128 @@
+{
+ "schema": "clean-1.3",
+ "id": "ppu.zwm890p.any.attention.fa-sail",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "zwm890p|any|flash-attention|fa-sail|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "ppu",
+   "arch": "zwm890p",
+   "architectures": [
+    "zwm890p"
+   ],
+   "product": "any",
+   "dsl": "any",
+   "operator_family": "flash-attention",
+   "operators": [
+    "flash-attention",
+    "attention"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "zwm890p",
+   "language": "any",
+   "workload_family": "attention"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "flash-attention",
+   "paged-kv",
+   "varlen",
+   "gqa",
+   "aiu",
+   "split-kv"
+  ],
+  "triggers": [
+   "paged or varlen FlashAttention is being written for T-Head PPU / ZW-M890P",
+   "a PPU attention candidate needs the vendor's tiling, AIU load, or GQA packing strategy",
+   "a PPU FlashAttention candidate is far off the achievable latency and needs a reference point"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for T-Head PPU ZW-M890P: Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)",
+  "problem": {
+   "target": "T-Head PPU ZW-M890P (HGGC, reports borrowed sm_89)",
+   "statement": "Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)"
+  },
+  "title": "Vendor FlashAttention-2/3 PPU port (flash-attention-for-sail)",
+  "summary": "The vendor's PPU port of FlashAttention-2 and FlashAttention-3 is a public design reference for paged KV cache access, variable-length sequences, causal masking, configurable split-KV execution, and grouped-query attention. Consult its PPU-specific tiling and AIU data-movement patterns when designing compatible attention kernels. Source: `reference-projects/flash-attention-for-sail`. Read for design only; do not import or call it from a candidate.",
+  "sections": [
+   {
+    "heading": "AIU global->shared loads",
+    "anchor": "aiu-global-shared-loads",
+    "gist": "`hopper/paged_kv.h` selects `PPU0015_AIU_LOAD` (M890) or `PPU0010_AIU_LOAD` behind `#if defined(USE_PPU) && USE_AIU`, sized by `bits_per_aiu_KV = kBlockNPagedPerAiuLoad * kBlockKGmem * sizeof(Element) * 8`. This is the PPU replacement for TMA/`cp.async`."
+   },
+   {
+    "heading": "Paged KV gather",
+    "anchor": "paged-kv-gather",
+    "gist": "`hopper/paged_kv.h` gathers pages per AIU load instead of per element, so page_size and the AIU load width must divide cleanly."
+   },
+   {
+    "heading": "GQA packing",
+    "anchor": "gqa-packing",
+    "gist": "`hopper/pack_gqa.h` packs the q_heads:kv_heads ratio into the M dimension for grouped-query attention workloads."
+   },
+   {
+    "heading": "Guardrail",
+    "anchor": "guardrail",
+    "gist": "Vendored reference projects are design references only. Reading them to understand a strategy is in contract; executing, importing, or copying their source into a candidate is not."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "reference-projects/flash-attention-for-sail",
+   "seed": "vendored t-head reference-projects submodule, surveyed 2026-08-28"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-28T15:30:00",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}

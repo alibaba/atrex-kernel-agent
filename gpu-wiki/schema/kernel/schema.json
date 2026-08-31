@@ -83,6 +83,7 @@
               "enum": [
                 "nvidia",
                 "amd",
+                "ppu",
                 "generic"
               ]
             },
@@ -96,6 +97,7 @@
                 "cdna3",
                 "cdna4",
                 "rdna4",
+                "zwm890p",
                 "generic"
               ]
             },
@@ -113,6 +115,7 @@
                 "flydsl",
                 "gluon",
                 "triton",
+                "tilelang",
                 "aiter",
                 "any"
               ]
@@ -170,6 +173,7 @@
                 "cdna3",
                 "cdna4",
                 "rdna4",
+                "zwm890p",
                 "generic",
                 "any"
               ],
@@ -182,6 +186,7 @@
                 "flydsl",
                 "gluon",
                 "triton",
+                "tilelang",
                 "aiter",
                 "any"
               ]

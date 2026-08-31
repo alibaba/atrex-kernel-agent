@@ -1,0 +1,123 @@
+{
+ "schema": "clean-1.3",
+ "id": "ppu.zwm890p.cuda.gemm.actlize",
+ "type": "doc",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "zwm890p|any|gemm|actlize|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "ppu",
+   "arch": "zwm890p",
+   "architectures": [
+    "zwm890p"
+   ],
+   "product": "any",
+   "dsl": "cuda",
+   "operator_family": "gemm",
+   "operators": [
+    "gemm"
+   ],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "zwm890p",
+   "language": "cuda",
+   "workload_family": "gemm-projection"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemm",
+   "cute",
+   "mma",
+   "swizzle",
+   "aiu",
+   "fp8",
+   "fp4"
+  ],
+  "triggers": [
+   "a PPU GEMM or attention tiling needs the correct CuTe MMA or copy atom",
+   "shared-memory bank conflicts or swizzle layout must be reasoned about on ZW-M890P",
+   "FP8 or FP4 GEMM is being targeted on PPU M890"
+  ]
+ },
+ "payload": {
+  "goal": "Reference for T-Head PPU ZW-M890P: CUTLASS/CuTe re-engineered for PPU (actlize)",
+  "problem": {
+   "target": "T-Head PPU ZW-M890P (HGGC, reports borrowed sm_89)",
+   "statement": "CUTLASS/CuTe re-engineered for PPU (actlize)"
+  },
+  "title": "CUTLASS/CuTe re-engineered for PPU (actlize)",
+  "summary": "CUTLASS 3.6.0 re-engineered for PPU: the vendor's equivalent of CuTe plus the CUTLASS collective builders. `include/cute/arch/` carries `mma_ppu0015.hpp` and `copy_ppu0015_aiu.hpp` (plus PPU0010 variants) which are the PPU tensor-cell MMA atoms and AIU/swizzled copy atoms that replace NVIDIA's `mma.sync` and TMA atoms. PPU0015 is the M890 generation and carries the FP8/FP4 paths. Use this to learn the correct atom, layout, and swizzle vocabulary for a PPU tiling before hand-rolling one. Source: `reference-projects/actlize`.",
+  "sections": [
+   {
+    "heading": "MMA atoms",
+    "anchor": "mma-atoms",
+    "gist": "`include/cute/arch/mma_ppu0015.hpp` and `mma_ppu.hpp` define the PPU tensor-cell MMA atoms; the shapes they accept bound any tiling choice."
+   },
+   {
+    "heading": "Copy atoms and swizzle",
+    "anchor": "copy-atoms-and-swizzle",
+    "gist": "`include/cute/arch/copy_ppu0015_aiu.hpp` and `copy_ppu_aiu.hpp` define AIU loads and the `tsm ld swizzle` shared-memory layouts that avoid bank conflicts on this part."
+   },
+   {
+    "heading": "Worked examples",
+    "anchor": "worked-examples",
+    "gist": "`examples/08_ppu_basic_tensor_op_gemm`, `examples/09_ppu_gemm_with_collective_builder`, and `examples/100_ppu0015_fp8_gemm` are complete, compiling PPU GEMMs and are the fastest way in."
+   }
+  ]
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "documented"
+  },
+  "raw": {
+   "page_path": "reference-projects/actlize",
+   "seed": "vendored t-head reference-projects submodule, surveyed 2026-08-28"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.4,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.4,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-08-28T15:30:00",
+   "builder_version": "1.1"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "verified_effective": 0,
+    "verified_ineffective": 0,
+    "fallback_served": 0,
+    "first_seen_ts": null,
+    "last_used_ts": null
+   },
+   "prior": {}
+  }
+ }
+}
