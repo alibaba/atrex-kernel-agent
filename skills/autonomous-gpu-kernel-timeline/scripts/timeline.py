@@ -100,6 +100,12 @@ def evaluator_source(instrumented_source: Path) -> Path:
     return instrumented_source / "kernel.py" if instrumented_source.is_dir() else instrumented_source
 
 
+def evaluator_covers_source_snapshot(instrumented_source: Path) -> bool:
+    """The sandbox evaluator currently records only the submitted kernel.py digest."""
+
+    return instrumented_source.is_file()
+
+
 def load_evaluator_correctness(path: Path, instrumented_source: Path) -> dict[str, Any]:
     """Select the latest sandbox evaluator record for the instrumented kernel."""
 
@@ -333,7 +339,9 @@ def decode_records(
     for owner in range(header["owner_count"]):
         identity = owner_identity(owner, header, writers)
         (claim,) = struct.unpack_from("<Q", raw, claims_offset + owner * 8)
-        if claim:
+        if not claim:
+            errors.append(f"owner {owner} has no writer claim")
+        else:
             claimed_cta = ((claim >> 32) & 0xFFFFFFFF) - 1
             claimed_thread = (claim & 0xFFFFFFFF) - 1
             if claimed_cta != identity["cta_linear"]:
@@ -361,8 +369,6 @@ def decode_records(
                     errors.append(f"slot {slot} is nonzero without the committed flag")
                 saw_empty = True
                 continue
-            if claim == 0:
-                errors.append(f"owner {owner} has records but no writer claim")
             if saw_empty:
                 errors.append(f"owner {owner} has a committed record after an empty sequence slot")
             site_id = tag & 0xFFFF
@@ -934,13 +940,20 @@ def write_receipt(
         if correctness_evidence_path is not None
         else None
     )
-    verified_correctness, correctness_verified = correctness_from_evidence(
+    verified_correctness, evaluator_correctness_verified = correctness_from_evidence(
         correctness_evidence, digest(evaluator_source(instrumented_source))
     )
-    if reported_correctness is not None and correctness_verified:
+    if reported_correctness is not None and evaluator_correctness_verified:
         require(reported_correctness == verified_correctness,
                 "reported correctness contradicts evaluator evidence")
-    correctness = verified_correctness if correctness_verified else (reported_correctness or "unknown")
+    correctness = (
+        verified_correctness
+        if evaluator_correctness_verified
+        else (reported_correctness or "unknown")
+    )
+    correctness_verified = (
+        evaluator_correctness_verified and evaluator_covers_source_snapshot(instrumented_source)
+    )
     evidence_class, classification_reasons = classify_evidence(
         stage=stage,
         correctness=correctness,
@@ -1119,12 +1132,21 @@ def export_iket_command(arguments: argparse.Namespace) -> int:
         native_index_path,
         {
             "schema": IKET_NATIVE_INDEX_SCHEMA,
+            "run_dir": relative_artifact(run_dir, output_dir),
             "trace_json": [
-                {"path": str(path), "sha256": digest(path), "size_bytes": path.stat().st_size}
+                {
+                    "path": relative_artifact(path, output_dir),
+                    "sha256": digest(path),
+                    "size_bytes": path.stat().st_size,
+                }
                 for path in native_trace_paths
             ],
             "pftrace": [
-                {"path": str(path), "sha256": digest(path), "size_bytes": path.stat().st_size}
+                {
+                    "path": relative_artifact(path, output_dir),
+                    "sha256": digest(path),
+                    "size_bytes": path.stat().st_size,
+                }
                 for path in native_perfetto
             ],
         },
@@ -1136,7 +1158,11 @@ def export_iket_command(arguments: argparse.Namespace) -> int:
             {
                 "schema": BINARY_IDENTITY_SCHEMA,
                 "binaries": [
-                    {"path": str(path), "sha256": digest(path), "size_bytes": path.stat().st_size}
+                    {
+                        "path": relative_artifact(path, output_dir),
+                        "sha256": digest(path),
+                        "size_bytes": path.stat().st_size,
+                    }
                     for path in binaries
                 ],
             },
@@ -1218,6 +1244,28 @@ def verify_digest(
     require(digest(path) == hash_value, f"receipt hash mismatch for {path_field}")
 
 
+def verify_indexed_files(
+    index: dict[str, Any], index_path: Path, field: str
+) -> list[Path]:
+    entries = index.get(field)
+    require(isinstance(entries, list) and entries, f"{field} index must be non-empty")
+    paths: list[Path] = []
+    for position, entry in enumerate(entries):
+        require(isinstance(entry, dict), f"{field}[{position}] must be an object")
+        value = entry.get("path")
+        require(isinstance(value, str) and value, f"{field}[{position}] has no path")
+        path = receipt_artifact_path(index_path, value)
+        require(path.is_file(), f"indexed artifact is missing: {path}")
+        require(
+            entry.get("size_bytes") == path.stat().st_size,
+            f"indexed artifact size mismatch: {path}",
+        )
+        require(entry.get("sha256") == digest(path), f"indexed artifact hash mismatch: {path}")
+        paths.append(path)
+    require(len(set(paths)) == len(paths), f"{field} index contains duplicate paths")
+    return paths
+
+
 def verify_canonical_products(receipt: dict[str, Any], receipt_path: Path) -> None:
     def artifact(field: str) -> Path:
         value = receipt.get(field)
@@ -1245,87 +1293,84 @@ def verify_canonical_products(receipt: dict[str, Any], receipt_path: Path) -> No
         require(summary == summarize(canonical, records), "CUDA trace summary is not reproducible")
         return
 
+    native_index = load_object(raw_path, "IKeT native index")
+    require(
+        native_index.get("schema") == IKET_NATIVE_INDEX_SCHEMA,
+        "unknown IKeT native index schema",
+    )
+    trace_paths = verify_indexed_files(native_index, raw_path, "trace_json")
+    perfetto_paths = verify_indexed_files(native_index, raw_path, "pftrace")
+    run_dir_value = native_index.get("run_dir")
+    if run_dir_value is None:
+        parents = {path.parent for path in [*trace_paths, *perfetto_paths]}
+        require(len(parents) == 1, "legacy IKeT native index spans multiple run directories")
+        run_dir = parents.pop()
+    else:
+        require(isinstance(run_dir_value, str) and run_dir_value,
+                "IKeT native index run_dir is invalid")
+        run_dir = receipt_artifact_path(raw_path, run_dir_value)
+    require(run_dir.is_dir(), f"IKeT native run directory is missing: {run_dir}")
+    require(
+        set(trace_paths) == set(run_dir.glob("*.trace.json")),
+        "IKeT native trace index does not match run directory",
+    )
+    require(
+        set(perfetto_paths) == set(run_dir.glob("*.pftrace")),
+        "IKeT native Perfetto index does not match run directory",
+    )
+    native_index_value = manifest.get("native_index")
+    require(
+        isinstance(native_index_value, str)
+        and receipt_artifact_path(manifest_path, native_index_value) == raw_path,
+        "IKeT manifest does not identify the receipt native index",
+    )
+    kernel_pattern = manifest.get("kernel_regex")
+    require(isinstance(kernel_pattern, str) and kernel_pattern, "IKeT manifest has no kernel regex")
+
     adapter = iket_adapter()
     try:
-        declared = adapter.load_event_dictionary(dictionary_path)
+        canonical, metadata = adapter.normalize_run(
+            run_dir,
+            kernel_pattern=kernel_pattern,
+            dictionary_path=dictionary_path,
+        )
     except adapter.IketError as error:
         raise TimelineError(str(error)) from error
-    events = trace.get("traceEvents")
-    require(isinstance(events, list), "IKeT canonical trace has no traceEvents list")
-    origin = trace.get("otherData", {}).get("origin_ns")
-    require(isinstance(origin, int) and origin > 0, "IKeT canonical trace has no valid origin")
-    counts: dict[str, int] = defaultdict(int)
-    durations: dict[str, int] = defaultdict(int)
-    physical_sms: set[int] = set()
-    lanes: set[tuple[int, int]] = set()
-    metadata_lanes: set[tuple[int, int]] = set()
-    for index, event in enumerate(events):
-        require(isinstance(event, dict), f"IKeT trace event {index} is invalid")
-        phase = event.get("ph")
-        pid = event.get("pid")
-        tid = event.get("tid")
-        require(isinstance(pid, int) and pid > 0 and isinstance(tid, int) and tid >= 0,
-                f"IKeT trace event {index} has invalid pid/tid")
-        lane = (pid, tid)
-        if phase == "M":
-            require(event.get("name") == "thread_name", "unexpected IKeT metadata event")
-            metadata_lanes.add(lane)
-            continue
-        require(phase in {"X", "i"}, f"IKeT trace event {index} has invalid phase")
-        name = event.get("name")
-        require(isinstance(name, str) and name in declared,
-                f"IKeT trace event {index} has an undeclared name")
-        args = event.get("args")
-        require(isinstance(args, dict), f"IKeT trace event {index} has invalid args")
-        timestamp = args.get("timestamp_ns")
-        sm = args.get("physical_sm")
-        require(isinstance(timestamp, int) and timestamp >= origin,
-                f"IKeT trace event {index} has invalid timestamp")
-        require(isinstance(sm, int) and sm >= 0 and pid == sm + 1,
-                f"IKeT trace event {index} has invalid physical SM identity")
-        ts = event.get("ts")
-        require(isinstance(ts, (int, float)) and math.isfinite(float(ts)),
-                f"IKeT trace event {index} has invalid display timestamp")
-        require(math.isclose(float(ts) * 1000.0, timestamp - origin, abs_tol=1e-9),
-                f"IKeT trace event {index} timestamp is not reproducible")
-        declared_kind = declared[name].get("kind", "any")
-        observed_kind = "range" if phase == "X" else "instant"
-        require(declared_kind in {"any", observed_kind},
-                f"IKeT trace event {name!r} kind differs from dictionary")
-        counts[name] += 1
-        physical_sms.add(sm)
-        lanes.add(lane)
-        if phase == "X":
-            duration = args.get("duration_ns")
-            end = args.get("end_timestamp_ns")
-            require(isinstance(duration, int) and duration >= 0,
-                    f"IKeT range {name!r} has invalid duration")
-            require(isinstance(end, int) and end == timestamp + duration,
-                    f"IKeT range {name!r} has invalid end timestamp")
-            display_duration = event.get("dur")
-            require(
-                isinstance(display_duration, (int, float))
-                and math.isclose(float(display_duration) * 1000.0, duration, abs_tol=1e-9),
-                f"IKeT range {name!r} display duration is not reproducible",
-            )
-            durations[name] += duration
-    require(lanes <= metadata_lanes, "IKeT trace is missing lane metadata")
-    require(set(counts) == set(declared), "IKeT trace does not contain exactly the declared events")
-    launches = manifest.get("launches")
-    require(isinstance(launches, list) and launches, "IKeT manifest has no launches")
-    expected = {
-        "schema": SUMMARY_SCHEMA,
-        "backend": "iket",
-        "matched_launches": len(launches),
-        "canonical_events": sum(counts.values()),
-        "ranges": sum(event.get("ph") == "X" for event in events),
-        "instants": sum(event.get("ph") == "i" for event in events),
-        "physical_sms": sorted(physical_sms),
-        "event_count": dict(sorted(counts.items())),
-        "event_total_duration_ns": dict(sorted(durations.items())),
-        "launches": launches,
-    }
-    require(summary == expected, "IKeT trace summary is not reproducible")
+    expected_trace = adapter.make_perfetto(canonical)
+    expected_summary = {"schema": SUMMARY_SCHEMA, **adapter.summarize(canonical, metadata)}
+    require(
+        manifest.get("launches") == metadata["launches"],
+        "IKeT manifest launches differ from native evidence",
+    )
+    require(trace == expected_trace, "IKeT canonical trace differs from native evidence")
+    require(summary == expected_summary, "IKeT trace summary differs from native evidence")
+
+    binary_value = receipt.get("binary")
+    if binary_value is not None:
+        binary_path = artifact("binary")
+        identity = load_object(binary_path, "IKeT binary identity")
+        require(
+            identity.get("schema") == BINARY_IDENTITY_SCHEMA,
+            "unknown IKeT binary identity schema",
+        )
+        indexed_binaries = verify_indexed_files(identity, binary_path, "binaries")
+        try:
+            native_binaries = adapter.target_binaries(run_dir, kernel_pattern)
+        except adapter.IketError as error:
+            raise TimelineError(str(error)) from error
+        require(
+            set(indexed_binaries) == set(native_binaries),
+            "IKeT binary identity differs from native tracker evidence",
+        )
+        manifest_binary = manifest.get("binary_identity")
+        require(
+            isinstance(manifest_binary, str)
+            and receipt_artifact_path(manifest_path, manifest_binary) == binary_path,
+            "IKeT manifest does not identify the receipt binary identity",
+        )
+    else:
+        require(manifest.get("binary_identity") is None,
+                "IKeT manifest names binary identity missing from receipt")
 
 
 def validate_receipt_command(arguments: argparse.Namespace) -> int:
@@ -1355,12 +1400,15 @@ def validate_receipt_command(arguments: argparse.Namespace) -> int:
     instrumented_source = receipt_artifact_path(
         receipt_path, str(receipt.get("instrumented_source", ""))
     )
-    verified_correctness, correctness_verified = correctness_from_evidence(
+    verified_correctness, evaluator_correctness_verified = correctness_from_evidence(
         receipt.get("correctness_evidence"), digest(evaluator_source(instrumented_source))
     )
-    if correctness_verified:
+    if evaluator_correctness_verified:
         require(verified_correctness == receipt.get("correctness"),
                 "receipt correctness contradicts evaluator evidence")
+    correctness_verified = (
+        evaluator_correctness_verified and evaluator_covers_source_snapshot(instrumented_source)
+    )
     verify_canonical_products(receipt, receipt_path)
     measurement = receipt.get("measurement")
     if measurement is not None:

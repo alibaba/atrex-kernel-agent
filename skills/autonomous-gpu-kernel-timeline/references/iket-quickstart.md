@@ -103,7 +103,7 @@ separately compare an unprofiled baseline with a build enabled by `CUTE_DSL_COMP
 Ten percent is the default target, not a universal hard failure; a higher-overhead trace remains
 diagnostic and cannot justify performance differences smaller than its disturbance.
 
-The runnable backend check is `backends/cutedsl_backend/test_iket.py`. Authoritative background:
+Authoritative background:
 
 - NVIDIA CUTLASS `media/docs/pythonDSL/guides/iket_profiling.rst`
 - NVIDIA CUTLASS `examples/python/CuTeDSL/dsl_tutorials/fp16_gemm_4_iket.py`

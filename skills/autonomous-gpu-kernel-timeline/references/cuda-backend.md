@@ -50,7 +50,9 @@ the bytes below the episode profile directory. Run `scripts/timeline.py decode` 
 manifest, event dictionary, clean source, instrumented source, workload identity, and optional
 measurement artifact. For a multi-file kernel/wrapper change, point each source argument at a small
 snapshot directory containing every changed source; directory hashes include relative names and file
-contents and reject symlinks.
+contents and reject symlinks. The current sandbox evaluator binds correctness only to `kernel.py`, so
+a multi-file snapshot remains diagnostic evidence; `decision_grade` requires a single-file source
+snapshot until the evaluator records a canonical source-set digest.
 
 An exploration receipt may use `--correctness passed` as an explicit agent report. A final
 `decision_grade` receipt additionally requires `--correctness-evidence` pointing to the
