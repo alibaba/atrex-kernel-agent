@@ -25,6 +25,7 @@ from .git_episode import (
 )
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
+from .journal import normalize_accepted_ppu_diagnostics
 from .journal import sync_live_memory
 from .journal import validate_terminal
 from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
@@ -376,6 +377,92 @@ def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
         "experiment_count": len(raw_experiments),
         "recorded_experiment_count": len(experiments),
         "experiments": experiments,
+    }
+
+
+def _canonical_ppu_diagnostics(
+    journal: dict[str, Any], *, version: int
+) -> list[dict[str, Any]]:
+    """Attach stable canonical-memory references to terminal-valid PPU evidence."""
+    outcome = journal.get("outcome")
+    if not isinstance(outcome, dict):
+        return []
+    raw = outcome.get("accepted_ppu_diagnostics", [])
+    normalized, errors = normalize_accepted_ppu_diagnostics(raw)
+    if errors:
+        raise ValueError("; ".join(errors))
+    episode = journal.get("episode")
+    diagnostics: list[dict[str, Any]] = []
+    for index, item in enumerate(normalized):
+        canonical = dict(item)
+        canonical["source_memory_version"] = f"v{version}"
+        if isinstance(episode, int) and not isinstance(episode, bool):
+            canonical["source_episode"] = episode
+        canonical["evidence_ref"] = (
+            f"memory/v{version}.json#profile_evidence."
+            f"accepted_ppu_diagnostics/{index}"
+        )
+        diagnostics.append(canonical)
+    return diagnostics
+
+
+def _memory_profile_evidence(
+    journal: dict[str, Any],
+    *,
+    version: int,
+    fast_mode: bool,
+    fast_trial_count: int,
+    is_ppu: bool,
+    promoted: bool,
+) -> dict[str, Any]:
+    """Build canonical profile memory without changing non-PPU behavior."""
+    experiment_count = len(journal.get("experiments", []))
+    if fast_mode:
+        return {
+            "tool_used": "none (fast mode)",
+            "evidence_summary": f"{experiment_count} structured experiments",
+            "bottleneck_type": "not_profiled_fast_mode",
+            "evidence_chain": (
+                f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
+                "trials -> "
+                + ("best-candidate promotion" if promoted else "no promotion")
+            ),
+        }
+    if not is_ppu:
+        return {
+            "tool_used": (
+                "episode-owned profiler evidence plus supervisor ABBA"
+                if promoted
+                else "episode journal"
+            ),
+            "evidence_summary": f"{experiment_count} structured experiments",
+            "bottleneck_type": "episode-derived",
+            "evidence_chain": (
+                "episode evidence -> candidate -> independent ABBA -> promotion"
+                if promoted
+                else "episode evidence -> terminal handoff -> no promotion"
+            ),
+        }
+
+    diagnostics = _canonical_ppu_diagnostics(journal, version=version)
+    routes = list(dict.fromkeys(item["route"] for item in diagnostics))
+    return {
+        "tool_used": (
+            f"accepted PPU {' + '.join(routes)} evidence"
+            if routes
+            else "none recorded (PPU profiling is optional)"
+        ),
+        "evidence_summary": (
+            f"{experiment_count} structured experiments; "
+            f"{len(diagnostics)} terminal-reusable PPU diagnostics"
+        ),
+        "bottleneck_type": "episode-derived",
+        "evidence_chain": (
+            "terminal-valid PPU evidence -> candidate -> independent ABBA -> promotion"
+            if promoted
+            else "terminal-valid PPU evidence -> terminal handoff -> no promotion"
+        ),
+        "accepted_ppu_diagnostics": diagnostics,
     }
 
 
@@ -902,30 +989,19 @@ class LongHorizonCampaign:
                 ),
                 "risks_and_rollback": "candidate retained on isolated episode branch",
             },
-            "profile_evidence": {
-                "tool_used": (
-                    "none (fast mode)"
-                    if fast_mode
-                    else (
-                        "episode-selected PPU diagnostic evidence plus supervisor ABBA"
-                        if hardware_vendor(
-                            self.base_campaign.platform, self.base_campaign.arch
-                        )
-                        == "ppu"
-                        else "episode-owned profiler evidence plus supervisor ABBA"
+            "profile_evidence": _memory_profile_evidence(
+                journal,
+                version=version,
+                fast_mode=fast_mode,
+                fast_trial_count=fast_trial_count,
+                is_ppu=(
+                    hardware_vendor(
+                        self.base_campaign.platform, self.base_campaign.arch
                     )
+                    == "ppu"
                 ),
-                "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
-                "bottleneck_type": (
-                    "not_profiled_fast_mode" if fast_mode else "episode-derived"
-                ),
-                "evidence_chain": (
-                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
-                    "trials -> best-candidate promotion"
-                    if fast_mode
-                    else "episode evidence -> candidate -> independent ABBA -> promotion"
-                ),
-            },
+                promoted=True,
+            ),
             "experience": _memory_experience(journal),
             "correctness": {
                 "status": "PASS",
@@ -1120,19 +1196,19 @@ class LongHorizonCampaign:
                 "expected_impact": "episode exploration did not produce a promotable improvement",
                 "risks_and_rollback": "incumbent kernel was preserved",
             },
-            "profile_evidence": {
-                "tool_used": "none (fast mode)" if fast_mode else "episode journal",
-                "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
-                "bottleneck_type": (
-                    "not_profiled_fast_mode" if fast_mode else "episode-derived"
+            "profile_evidence": _memory_profile_evidence(
+                journal,
+                version=version,
+                fast_mode=fast_mode,
+                fast_trial_count=fast_trial_count,
+                is_ppu=(
+                    hardware_vendor(
+                        self.base_campaign.platform, self.base_campaign.arch
+                    )
+                    == "ppu"
                 ),
-                "evidence_chain": (
-                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
-                    "trials -> no promotion"
-                    if fast_mode
-                    else "episode evidence -> terminal handoff -> no promotion"
-                ),
-            },
+                promoted=False,
+            ),
             "experience": _memory_experience(journal),
             "correctness": {
                 "status": (

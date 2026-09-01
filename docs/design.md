@@ -355,6 +355,11 @@ from main-workspace commits; their recoverable local state remains on disk.
   when that route answers the question. Timeline writers and sites remain hypothesis-driven;
   optional joint analysis uses an independent probe-free ACU launch, and full-block lifetime
   coverage remains opt-in tail evidence.
+- A PPU terminal journal may select still-valid ACU/timeline/joint conclusions as
+  `accepted_ppu_diagnostics`. The supervisor validates their comparison identity and invalidation
+  conditions, then adds stable references and writes them to canonical `memory/v<N>.json`. A later
+  episode can therefore decide whether to reuse the bounded conclusion without loading the raw
+  `.atrex_long_horizon/episodes/` archive.
 - `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.
 - Episodes attribute wall time and token usage to profile, research, planning, implementation,
   correctness, benchmark, and recording phases when the backend emits complete markers and usage

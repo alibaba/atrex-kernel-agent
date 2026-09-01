@@ -27,7 +27,24 @@
     "tool_used": "<ncu / profile_kernel.sh>",
     "evidence_summary": "<key profile metrics>",
     "bottleneck_type": "<compute_bound / memory_bound>",
-    "evidence_chain": "<evidence -> inference -> action>"
+    "evidence_chain": "<evidence -> inference -> action>",
+    "accepted_ppu_diagnostics": [
+      {
+        "route": "<acu / timeline / joint>",
+        "question": "<the performance question answered>",
+        "kernel_specialization": "<kernel and compile-time specialization>",
+        "workload_identity": "<shape, dtype, layout, and cache policy>",
+        "device_identity": "<physical device and PPU runtime architecture>",
+        "launch_topology": "<grid, block, selected roles, and relevant occupancy facts>",
+        "control_pipeline_identity": "<pipeline stages, waits, barriers, and epilogue structure>",
+        "finding": "<bounded profiler conclusion>",
+        "decision_impact": "<how the conclusion changed the optimization decision>",
+        "invalidation_conditions": ["<condition that requires new evidence>"],
+        "source_memory_version": "v<N>",
+        "source_episode": 1,
+        "evidence_ref": "memory/v<N>.json#profile_evidence.accepted_ppu_diagnostics/0"
+      }
+    ]
   },
   "experience": {
     "experiment_count": 0,

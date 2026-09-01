@@ -23,6 +23,12 @@ structure remain comparable. Collect new evidence only when a change invalidates
 for the current decision, or when clean results expose a new ambiguity. Timeline is an escalation for
 a kernel-internal timing question, never a required per-round validation step.
 
+Across long-horizon episodes, read reusable evidence from
+`memory/vN.json.profile_evidence.accepted_ppu_diagnostics`; the raw episode archive is not a
+prerequisite. Compare every recorded identity and `invalidation_conditions` entry with the current clean
+kernel before reuse. A canonical evidence reference identifies the prior conclusion, but does not
+make it valid after specialization, workload, device, topology, or pipeline changes.
+
 ## Choose the evidence route
 
 | Route | Choose it when | What it can establish |
@@ -38,6 +44,41 @@ ACU merely because timeline ran, or invoke `merge.py` merely because both artifa
 Keep mode-specific attempts separate, for example under `<PROFILE_DIR>/acu/attempt-N`,
 `<PROFILE_DIR>/timeline/attempt-N`, and `<PROFILE_DIR>/joint/attempt-N`. Never combine events from
 different launches into one apparent execution.
+
+## Persist only terminal-reusable evidence
+
+In a long-horizon episode, add `accepted_ppu_diagnostics` to the terminal journal outcome only for
+ACU, timeline, or joint conclusions that still apply to the terminal probe-free kernel. Omit an
+invalidated intermediate capture. Each row records the question and finding, the exact comparison
+identity, how it affected the optimization decision, and the conditions that require collection of
+new evidence:
+
+```json
+{
+  "accepted_ppu_diagnostics": [
+    {
+      "route": "timeline",
+      "question": "Does the tensor wait serialize the steady-state load pipeline?",
+      "kernel_specialization": "target kernel specialization and compile-time parameters",
+      "workload_identity": "representative shape, dtype, layout, and cache policy",
+      "device_identity": "physical device and PPU runtime architecture",
+      "launch_topology": "grid, block, selected writer roles, and relevant occupancy facts",
+      "control_pipeline_identity": "mainloop stages, waits, barriers, and epilogue structure",
+      "finding": "owner-local ranges show the wait on the measured critical path",
+      "decision_impact": "next edit targets the load/tensor handoff instead of the epilogue",
+      "invalidation_conditions": [
+        "a change to the measured specialization or workload",
+        "a change to launch topology or mainloop synchronization"
+      ]
+    }
+  ]
+}
+```
+
+The supervisor validates these rows and writes stable `source_memory_version`, `source_episode`, and
+`evidence_ref` fields into canonical memory. Later agents reuse the bounded conclusion from canonical
+memory; archived raw reports remain audit material rather than inherited prompt context. An empty or
+omitted list is valid when profiling was skipped or all collected evidence was invalidated.
 
 ## Shared evidence boundaries
 

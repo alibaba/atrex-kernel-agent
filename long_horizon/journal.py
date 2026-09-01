@@ -22,6 +22,17 @@ WIKI_USAGE_DISPOSITIONS = {
 WIKI_USAGE_STATUSES = {"declared", "no_material_use", "not_queried"}
 EVALUATION_CORRECTNESS = {"pass", "fail", "unknown"}
 EVALUATION_PERFORMANCE = {"improved", "not_improved", "unknown"}
+PPU_DIAGNOSTIC_ROUTES = {"acu", "timeline", "joint"}
+PPU_DIAGNOSTIC_TEXT_FIELDS = (
+    "question",
+    "kernel_specialization",
+    "workload_identity",
+    "device_identity",
+    "launch_topology",
+    "control_pipeline_identity",
+    "finding",
+    "decision_impact",
+)
 QUERY_ID_RE = re.compile(r"wiki-query-[0-9a-f]{32}")
 WIKI_ID_RE = re.compile(
     r"(?:gpu_wiki|internal_gpu_wiki)::[A-Za-z0-9][A-Za-z0-9._:-]*"
@@ -246,6 +257,57 @@ def normalize_experiment_evaluation(raw: object) -> tuple[dict[str, Any] | None,
     }, []
 
 
+def normalize_accepted_ppu_diagnostics(
+    raw: object,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate reusable PPU evidence selected at terminal handoff."""
+    if not isinstance(raw, list):
+        return [], ["accepted_ppu_diagnostics must be a list"]
+    normalized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, row in enumerate(raw):
+        label = f"accepted_ppu_diagnostics[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        route = row.get("route")
+        if route not in PPU_DIAGNOSTIC_ROUTES:
+            errors.append(
+                f"{label}.route must be one of "
+                + ", ".join(sorted(PPU_DIAGNOSTIC_ROUTES))
+            )
+            continue
+        item: dict[str, Any] = {"route": route}
+        item_errors: list[str] = []
+        for field in PPU_DIAGNOSTIC_TEXT_FIELDS:
+            value = row.get(field)
+            if not isinstance(value, str) or not value.strip():
+                item_errors.append(f"{label}.{field} must be a non-empty string")
+            else:
+                item[field] = value.strip()
+        invalidation_conditions = row.get("invalidation_conditions")
+        if (
+            not isinstance(invalidation_conditions, list)
+            or not invalidation_conditions
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in invalidation_conditions
+            )
+        ):
+            item_errors.append(
+                f"{label}.invalidation_conditions must be a non-empty string list"
+            )
+        else:
+            item["invalidation_conditions"] = [
+                value.strip() for value in invalidation_conditions
+            ]
+        if item_errors:
+            errors.extend(item_errors)
+            continue
+        normalized.append(item)
+    return normalized, errors
+
+
 def normalize_wiki_attribution(entry: dict[str, Any]) -> None:
     """Apply the explicit use/no-use contract while preserving legacy declarations."""
     raw_usage_present = "wiki_usage" in entry
@@ -343,6 +405,7 @@ def finalize(
         raise ValueError(f"cannot change finalized state to {state}")
     if not isinstance(outcome, dict) or not str(outcome.get("summary", "")).strip():
         raise ValueError("outcome.summary must be non-empty")
+    outcome = dict(outcome)
     directions = outcome.get("next_directions", [])
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         raise ValueError("outcome.next_directions must be a list of strings")
@@ -351,6 +414,13 @@ def finalize(
         raise ValueError("a terminal journal requires at least one experiment")
     if state == "candidate_ready" and not candidate_commit.strip():
         raise ValueError("candidate_ready requires candidate_commit")
+    if "accepted_ppu_diagnostics" in outcome:
+        normalized, errors = normalize_accepted_ppu_diagnostics(
+            outcome["accepted_ppu_diagnostics"]
+        )
+        if errors:
+            raise ValueError("; ".join(errors))
+        outcome["accepted_ppu_diagnostics"] = normalized
     value["state"] = state
     value["outcome"] = outcome
     value["candidate_commit"] = candidate_commit.strip() or None
@@ -388,6 +458,12 @@ def validate_terminal(
     directions = outcome.get("next_directions", [])
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         return "episode journal next_directions is invalid"
+    if "accepted_ppu_diagnostics" in outcome:
+        _, errors = normalize_accepted_ppu_diagnostics(
+            outcome["accepted_ppu_diagnostics"]
+        )
+        if errors:
+            return "; ".join(errors)
     if not value.get("finalized_at"):
         return "episode journal is not finalized"
     if state == "candidate_ready" and value.get("candidate_commit") != candidate_commit:
