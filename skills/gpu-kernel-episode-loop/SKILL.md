@@ -54,7 +54,10 @@ steps map onto the telemetry phases above: `profile`, `research`, `planning`, `i
 Read the workspace goal, unmasked `memory/v*.json`, and prior plans/profiles. Prior-episode summaries
 are carried only by canonical memory and are not injected into the episode prompt. Identify attempted
 dead ends and open directions from those records, including each record's compact
-`experience.experiments`. Start with one falsifiable hypothesis tied to the current bottleneck.
+`experience.experiments`. For PPU, also inspect
+`profile_evidence.accepted_ppu_diagnostics` and reuse a conclusion only when its recorded identities
+remain comparable and none of its `invalidation_conditions` holds. Start with one falsifiable
+hypothesis tied to the current bottleneck.
 
 ### 2. Profile and localize
 
@@ -255,4 +258,7 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 
 Leave the loop as soon as one coherent candidate passes the full development correctness check and
 has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
-the episode prompt's terminal contract for finalizing the journal and publishing the handoff.
+the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
+PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
+`skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
+probe-free kernel. This is optional when no reusable PPU profiler evidence exists.
