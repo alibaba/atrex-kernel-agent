@@ -16,6 +16,7 @@ from threading import Event
 from typing import Any
 
 from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
+from orchestrator.hardware import hardware_vendor
 
 from . import main_adapter
 from .git_episode import (
@@ -908,7 +909,14 @@ class LongHorizonCampaign:
                 "tool_used": (
                     "none (fast mode)"
                     if fast_mode
-                    else "episode-owned profiler evidence plus supervisor ABBA"
+                    else (
+                        "episode-selected PPU diagnostic evidence plus supervisor ABBA"
+                        if hardware_vendor(
+                            self.base_campaign.platform, self.base_campaign.arch
+                        )
+                        == "ppu"
+                        else "episode-owned profiler evidence plus supervisor ABBA"
+                    )
                 ),
                 "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
                 "bottleneck_type": (
