@@ -45,6 +45,9 @@ TIMELINE_PROBE_MARKERS = (
     "atrex_timeline.cuh",
     "atrex::timeline::Recorder",
     "ATREX_TIMELINE_ENABLED",
+    "ppu_timeline.cuh",
+    "ppu_acu_profile::timeline",
+    "PPU_TIMELINE_ENABLED",
 )
 
 
