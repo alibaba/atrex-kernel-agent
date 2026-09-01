@@ -55,16 +55,16 @@ def _is_fp4_dtype(value: object) -> bool:
 
 
 def _metadata_has_fp4_dtype(metadata: object) -> bool:
-    if not isinstance(metadata, dict):
-        return False
-    if any(_is_fp4_dtype(metadata.get(field)) for field in ("dtype", "dtype_compute")):
-        return True
-    shapes = metadata.get("shapes")
-    return isinstance(shapes, dict) and any(
-        isinstance(shape, dict)
-        and any(_is_fp4_dtype(shape.get(field)) for field in ("dtype", "dtype_compute"))
-        for shape in shapes.values()
-    )
+    if isinstance(metadata, dict):
+        if any(
+            _is_fp4_dtype(metadata.get(field))
+            for field in ("dtype", "dtype_compute")
+        ):
+            return True
+        return any(_metadata_has_fp4_dtype(value) for value in metadata.values())
+    if isinstance(metadata, list):
+        return any(_metadata_has_fp4_dtype(value) for value in metadata)
+    return False
 
 
 def _fp4_correctness_max_rel_l2(workspace: Path) -> float | None:
