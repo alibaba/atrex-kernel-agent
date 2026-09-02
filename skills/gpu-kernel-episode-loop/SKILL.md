@@ -261,4 +261,5 @@ has credible performance evidence, or as soon as the direction is exhausted or b
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
 PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
 `skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
-probe-free kernel. This is optional when no reusable PPU profiler evidence exists.
+probe-free kernel. Each retained row must bind an accepted decision-grade artifact by path, SHA-256,
+schema, and evidence id. This is optional when no reusable PPU profiler evidence exists.

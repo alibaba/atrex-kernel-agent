@@ -12,16 +12,19 @@ For `--output-prefix fine.timeline`, the decoder writes:
   site fields;
 - `fine.timeline.perfetto.json`: one lane per explicitly declared owner and PPU timeline schema 4;
 - `fine.timeline.summary.json`: capture mode, topology, range distributions, and interpretation limits;
-- `fine.timeline.receipt.json`: accepted validation invariants and launch identity.
+- `fine.timeline.receipt.json`: accepted validation invariants, evidence grade/id, SHA-256 bindings
+  for raw/manifest/dictionary/correctness, source/binary/workload provenance, and every decoded
+  output.
 
 Manifest v4 declares `%globaltimer` with its documented nanosecond unit and binds the capture to an
 accepted numerical correctness artifact. A legacy conversion field, invalid timer source/unit, or
 correctness evidence for another kernel/workload/device is rejected before canonical output is
 written.
 
-The first committed record of each owner defines only that owner's local zero. Lanes are displayed
-together for inspection, but their raw starts are neither sorted nor aligned. The decoder accepts a
-sparse subset of blocks and arbitrary declared writer threads. It rejects missing or duplicate writer
+The first committed record of each owner defines only that owner's local zero. Perfetto places owners
+in sequential, non-overlapping display bands; each event preserves its true
+`owner_relative_start_ns` and display offset in args. The bands are not a shared time axis. The
+decoder accepts a sparse subset of blocks and arbitrary declared writer threads. It rejects missing or duplicate writer
 claims, claim/manifest mismatch, holes, overflow, unknown sites, owner exclusions, kind mismatch,
 decreasing timestamps, unbalanced ranges, invalid declared analysis windows, and false all-block
 coverage.
@@ -53,7 +56,9 @@ The Perfetto root carries the agent's choices rather than inferring a topology:
     "timerUnit": "ns",
     "timerContractValidation": "accepted",
     "correctnessValidation": "accepted",
-    "captureValidation": "accepted"
+    "captureValidation": "accepted",
+    "evidenceGrade": "decision",
+    "evidenceBinding": {"evidenceId": "...", "evidenceGrade": "decision"}
   },
   "traceEvents": []
 }
@@ -84,6 +89,7 @@ assuming that every kernel has the same phases:
 ```json
 {
   "schema": "ppu-critical-path-plan/v1",
+  "owner_topology": "same",
   "parent": {"site_id": 10, "name": "chunk"},
   "components": [
     {"site_id": 20, "name": "wait_and_publish"},
@@ -92,17 +98,35 @@ assuming that every kernel has the same phases:
   ],
   "clean_reference": {
     "duration_ns_samples": [2713.3, 2708.1, 2718.6],
-    "source": "probe-free synchronized harness on the same workload"
+    "source": "probe-free synchronized harness on the same workload",
+    "identity": {
+      "kernel_name": "target_kernel",
+      "workload_identity": "m=...;n=...;k=...;dtype=...",
+      "device_identity": {"physical_device": 6, "serial": "..."},
+      "runtime_identity": {"compiler": "hggc ...", "runtime": "PPU SDK ..."},
+      "grid": [148, 1, 1],
+      "block": [128, 1, 1],
+      "kernel_specialization": "compile-time specialization and architecture flags",
+      "cache_policy": "same harness cache policy",
+      "clock_configuration": "same clock and power configuration"
+    },
+    "artifact": {
+      "path": "clean-measurement.json",
+      "sha256": "lowercase SHA-256 of the exact measurement artifact"
+    }
   },
   "stability": {"material_relative_spread": 0.03}
 }
 ```
 
-`components`, `clean_reference`, and `stability` are optional. Omit components for parent-duration
+`components`, `clean_reference`, and `stability` are optional. `owner_topology` defaults to `same`;
+use `declared_variation` only when comparing intentionally different sampled owners. Omit components for parent-duration
 and owner/topology aggregation without closure. Their values come from the experiment and the
 optimization decision; the analyzer supplies no architecture-wide threshold. Pass one
-`--canonical` flag per distinct launch. The analyzer requires equal kernel, workload, device, and
-runtime identity while preserving each launch id.
+`--capture CANONICAL RECEIPT` pair per distinct launch. The analyzer verifies each canonical hash,
+requires equal kernel, specialization, workload, device, runtime, cache, clocks, grid, block, and
+capture mode, and requires identical selected-site boundary semantics and source anchors while
+preserving each launch id.
 
 When components are declared, every parent occurrence reports component sums, interval-union
 coverage, explicit overlap, uncovered time, and per-component occurrence counts. Across owners and captures it emits
@@ -133,7 +157,8 @@ Normalized all-block duration survival is optional. It is produced only when:
 
 1. the manifest declares `coverage.all_blocks: true` and a comparable range site;
 2. decode proves exactly one such range for every linear block;
-3. ACU launch data proves the grid fits the one-wave capacity used by that statistic.
+3. instrumented-binary occupancy evidence proves the grid fits the one-wave capacity used by that
+   statistic; clean ACU occupancy is not substituted.
 
 Otherwise partial sampling is accepted and the distribution is omitted. Even when emitted, it is a
 normalized duration distribution, not proof that independent owner clocks were synchronized.

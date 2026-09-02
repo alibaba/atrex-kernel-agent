@@ -60,9 +60,61 @@ start ns, a fixed64 double value, and end ns. Decode only this verified subtree,
 keep the report immutable, and preserve unknown headers, metrics, and packet
 membership.
 
-KSD/KVD hit rate is valid only when matching load/store requests are positive.
-L2 hit remains unknown without an activity denominator.
+Before extraction, write a collection descriptor beside the immutable report. Paths are resolved
+relative to this descriptor. `decision` evidence requires at least one clean source, compiled
+binary, and workload input; use `diagnostic` only when an unavailable binding makes the result
+unsuitable for joint analysis or terminal reuse.
 
-Run `python "$PPU_PROFILE_SKILL/scripts/acu_report.py"` after exporting the ACU
-raw page. The exporter produces a long-form CSV plus extraction metadata and
-leaves `.acurep` unchanged.
+Capture the producer identity in the same allocation before collection:
+
+```bash
+acu --version > acu-version.txt
+```
+
+```json
+{
+  "schema": "ppu-acu-collection/v1",
+  "producer": {"name": "acu", "version": "2.2"},
+  "producer_artifact": {
+    "path": "acu-version.txt",
+    "identity": "stdout from the ACU binary used for this collection"
+  },
+  "evidence_grade": "decision",
+  "report": "profile.acurep",
+  "kernel_name": "exact filtered kernel name",
+  "kernel_specialization": "compile-time specialization and architecture flags",
+  "workload_identity": "shape, dtype, layout, and input case",
+  "device_identity": {"physical_device": 6, "serial": "..."},
+  "runtime_identity": {"compiler": "hggc ...", "runtime": "PPU SDK ..."},
+  "cache_policy": "acu --cache-control all; harness cache state ...",
+  "clock_configuration": "locked/default clocks and observed power state",
+  "source_artifacts": [
+    {"path": "clean-source/kernel.cu", "identity": "probe-free target source"}
+  ],
+  "binary_artifacts": [
+    {"path": "build/kernel.so", "identity": "loaded probe-free binary"}
+  ],
+  "workload_inputs": [
+    {"path": "workload.json", "identity": "representative input descriptor"}
+  ]
+}
+```
+
+KSD/KVD hit rate is valid only when matching load/store requests from the same replay packet and
+exact window are positive. Duplicate sample identities are rejected. L2 hit remains unknown without
+an activity denominator. Non-finite PM values reject extraction rather than being serialized as
+JSON `NaN` or treated as numerical evidence.
+
+Run the exporter after exporting the ACU raw page:
+
+```bash
+python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
+  --raw-csv profile.raw.csv \
+  --collection profile.collection.json \
+  --csv profile.samples.csv \
+  --metadata profile.extract.json
+```
+
+The exporter verifies the captured producer output identifies ACU 2.2, hashes the report, raw page, collection
+descriptor, bound source/binary/workload files, and resulting PM CSV, and leaves `.acurep`
+unchanged. `merge.py` recomputes the raw/PM hashes before consuming the extraction metadata.

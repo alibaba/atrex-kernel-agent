@@ -15,8 +15,13 @@ profiles/episode_N/timeline/attempt-N/
 ├── events.json
 ├── manifest.json
 ├── correctness.json
+├── workload.json
 ├── harness/
-│   └── capture_ppu.py
+│   ├── capture_ppu.py
+│   ├── run_a.py
+│   ├── run_b.py
+│   └── capture_and_measure_ppu.py
+├── build/
 └── evidence/
 ```
 
@@ -32,6 +37,7 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 ATTEMPT=profiles/episode_N/timeline/attempt-N
 python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   --input skills/ppu-acu-joint-profile \
+  --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
       PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
@@ -42,6 +48,30 @@ Custom `--input` selects the sandbox's isolated dev-compatible transport. It pac
 named skill and attempt command inputs, chooses inline or OSS transport according to payload size,
 and synchronizes only the declared attempt directory. Keep raw captures below the attempt; raise
 `--max-output-file-mb` only when an expected evidence file exceeds the default bound.
+
+When the decision needs A/B perturbation, keep capture and measurement in one sandbox allocation.
+The wrapper first runs capture/decode, then invokes `timeline.py measure` with the attempt's clean and
+instrumented commands before returning:
+
+```bash
+ATTEMPT=profiles/episode_N/timeline/attempt-N
+python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
+  --input skills/ppu-acu-joint-profile \
+  --input "$ATTEMPT" \
+  --sync "$ATTEMPT" -- \
+  env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
+      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
+        --baseline-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_a.py"]' \
+        --instrumented-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_b.py"]' \
+        --output "$ATTEMPT/evidence/fine.perturbation-a-b.json"
+```
+
+`capture_and_measure_ppu.py` is attempt-specific because it must use the target project's real build
+and launch path. It must execute the equivalent of `capture_ppu.py`, fail if decode is rejected, and
+then call `scripts/timeline.py measure` in the same parent process/allocation. The helper still starts
+a fresh child process per A/B sample; physical device identity must remain identical across all
+samples. Two separate `tools/sandbox.py` invocations do not establish same-allocation evidence.
 
 If the PPU is available only through another authorized Pod executor, stage the same skill and
 attempt inputs and return the same attempt outputs. Transport may change; source snapshots, capture
@@ -65,7 +95,8 @@ The attempt harness performs these operations inside the remote environment:
    capture one identified target launch, synchronize, and save the entire raw buffer with
    `save_torch_buffer`.
 7. Write manifest v4 and the event dictionary from actual grid, block, launch, device, runtime,
-   workload, writer, source, timer, and correctness facts.
+   workload, writer, source, timer, and correctness facts. Bind the instrumented source, loaded
+   binary, workload inputs, specialization, cache policy, and clock configuration in `provenance`.
 8. Run `scripts/timeline.py decode` before the remote job exits. A rejected capture is an attempt
    failure, not evidence to interpret.
 

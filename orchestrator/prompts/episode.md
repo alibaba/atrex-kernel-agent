@@ -161,8 +161,9 @@ must pass correctness and its decision must be `promote` or `keep_as_best`.
 
 For a PPU full episode, the outcome may also include `accepted_ppu_diagnostics` following
 `skills/ppu-acu-joint-profile/SKILL.md`. Include only profiler evidence that still applies to the
-terminal probe-free kernel; omit the field or use an empty list when there is no reusable evidence.
-The supervisor writes accepted rows into canonical memory for the next episode.
+terminal probe-free kernel and bind each row to an accepted decision-grade artifact by path,
+SHA-256, schema, and evidence id. Omit the field or use an empty list when there is no reusable
+evidence. The supervisor verifies those bindings before writing rows into canonical memory.
 
 For `pivot` or `blocked`, finalize with that state and omit `--candidate-commit`. The journal must
 contain at least one structured experiment and a non-empty outcome summary.

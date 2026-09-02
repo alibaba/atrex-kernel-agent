@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import statistics
@@ -14,7 +15,8 @@ from typing import Any, Sequence
 
 PLAN_SCHEMA = "ppu-critical-path-plan/v1"
 CANONICAL_SCHEMA = "ppu-fixed-slot-canonical/v4"
-REPORT_SCHEMA = "ppu-critical-path-report/v1"
+REPORT_SCHEMA = "ppu-critical-path-report/v2"
+RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v4"
 
 
 class CriticalPathError(RuntimeError):
@@ -33,6 +35,57 @@ def _load(path: Path, label: str) -> dict[str, Any]:
         raise CriticalPathError(f"cannot read {label} {path}: {error}") from error
     _require(isinstance(value, dict), f"{label} must be a JSON object")
     return value
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _capture_receipt(path: Path, canonical_path: Path) -> dict[str, Any]:
+    receipt = _load(path, "timeline receipt")
+    _require(
+        receipt.get("schema") == RECEIPT_SCHEMA
+        and receipt.get("validation") == "accepted",
+        "canonical capture requires an accepted timeline receipt",
+    )
+    _require(
+        receipt.get("evidence_grade") in {"diagnostic", "decision"},
+        "timeline receipt has an invalid evidence grade",
+    )
+    binding_payload = receipt.get("binding_payload")
+    _require(
+        isinstance(binding_payload, dict)
+        and hashlib.sha256(_canonical_json(binding_payload)).hexdigest()
+        == receipt.get("evidence_id"),
+        "timeline receipt evidence id is invalid",
+    )
+    outputs = receipt.get("outputs")
+    _require(isinstance(outputs, dict), "timeline receipt outputs are missing")
+    descriptor = outputs.get("canonical")
+    _require(isinstance(descriptor, dict), "timeline canonical binding is missing")
+    _require(
+        descriptor.get("sha256") == _sha256(canonical_path),
+        "canonical capture content hash does not match its receipt",
+    )
+    _require(
+        descriptor.get("size_bytes") == canonical_path.stat().st_size,
+        "canonical capture size does not match its receipt",
+    )
+    return receipt
 
 
 def _positive_number(value: object, label: str) -> float:
@@ -132,6 +185,33 @@ def _plan(path: Path) -> dict[str, Any]:
             isinstance(source, str) and source.strip(),
             "clean_reference.source is required",
         )
+        identity = clean_reference.get("identity")
+        _require(
+            isinstance(identity, dict) and identity,
+            "clean_reference.identity is required",
+        )
+        artifact = clean_reference.get("artifact")
+        _require(
+            isinstance(artifact, dict), "clean_reference.artifact must be an object"
+        )
+        artifact_path = artifact.get("path")
+        artifact_sha256 = artifact.get("sha256")
+        _require(
+            isinstance(artifact_path, str) and artifact_path.strip(),
+            "clean_reference.artifact.path is required",
+        )
+        resolved_artifact = Path(artifact_path)
+        if not resolved_artifact.is_absolute():
+            resolved_artifact = path.parent / resolved_artifact
+        _require(
+            resolved_artifact.is_file(),
+            "clean_reference artifact is not a regular file",
+        )
+        _require(
+            isinstance(artifact_sha256, str)
+            and artifact_sha256 == _sha256(resolved_artifact),
+            "clean_reference artifact hash mismatch",
+        )
 
     stability = plan.get("stability")
     if stability is not None:
@@ -145,16 +225,24 @@ def _plan(path: Path) -> dict[str, Any]:
             "stability.material_relative_spread must be non-negative",
         )
 
+    owner_topology = plan.get("owner_topology", "same")
+    _require(
+        owner_topology in {"same", "declared_variation"},
+        "owner_topology must be same or declared_variation",
+    )
+
     return {
         **plan,
         "parent": parent,
         "components": components,
         "clean_samples": clean_samples,
+        "owner_topology": owner_topology,
     }
 
 
-def _canonical(path: Path) -> dict[str, Any]:
+def _canonical(path: Path, receipt_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     capture = _load(path, "canonical capture")
+    receipt = _capture_receipt(receipt_path, path)
     _require(capture.get("schema") == CANONICAL_SCHEMA, "unsupported canonical schema")
     _require(capture.get("clock_scope") == "owner_local", "owner-local clock required")
     validation = capture.get("validation")
@@ -173,6 +261,11 @@ def _canonical(path: Path) -> dict[str, Any]:
         "device_identity",
         "runtime_identity",
         "launch_id",
+        "grid",
+        "block",
+        "kernel_specialization",
+        "cache_policy",
+        "clock_configuration",
     ):
         _require(field in identity, f"capture identity needs {field}")
     timer = capture.get("timer")
@@ -183,18 +276,32 @@ def _canonical(path: Path) -> dict[str, Any]:
         "canonical timer must be globaltimer in ns",
     )
     owners = capture.get("owners")
+    sites = capture.get("sites")
     events = capture.get("events")
     _require(isinstance(owners, list) and owners, "capture owners are required")
+    _require(isinstance(sites, list) and sites, "capture sites are required")
     _require(isinstance(events, list), "capture events must be a list")
-    return capture
+    evidence = capture.get("evidence")
+    _require(
+        isinstance(evidence, dict)
+        and evidence.get("id") == receipt.get("evidence_id")
+        and evidence.get("grade") == receipt.get("evidence_grade"),
+        "canonical evidence binding does not match its receipt",
+    )
+    return capture, receipt
 
 
 def analyze(
-    plan_path: Path, canonical_paths: list[Path], output: Path
+    plan_path: Path,
+    captures_with_receipts: list[tuple[Path, Path]],
+    output: Path,
 ) -> dict[str, Any]:
     plan = _plan(plan_path)
-    _require(bool(canonical_paths), "at least one canonical capture is required")
-    captures = [(path, _canonical(path)) for path in canonical_paths]
+    _require(bool(captures_with_receipts), "at least one canonical capture is required")
+    captures = [
+        (capture_path, *_canonical(capture_path, receipt_path))
+        for capture_path, receipt_path in captures_with_receipts
+    ]
 
     reference_identity: dict[str, Any] | None = None
     launch_ids: set[int] = set()
@@ -205,8 +312,14 @@ def analyze(
     has_components = bool(components_by_id)
     all_instances: list[dict[str, Any]] = []
     capture_reports: list[dict[str, Any]] = []
+    reference_sites: dict[int, dict[str, Any]] | None = None
+    reference_owners: list[dict[str, Any]] | None = None
+    receipt_ids: list[str] = []
+    evidence_grades: list[str] = []
 
-    for capture_path, capture in captures:
+    for capture_path, capture, receipt in captures:
+        receipt_ids.append(receipt["evidence_id"])
+        evidence_grades.append(receipt["evidence_grade"])
         identity = capture["identity"]
         comparable_identity = {
             key: identity[key]
@@ -215,14 +328,63 @@ def analyze(
                 "workload_identity",
                 "device_identity",
                 "runtime_identity",
+                "grid",
+                "block",
+                "kernel_specialization",
+                "cache_policy",
+                "clock_configuration",
             )
         }
+        comparable_identity["capture_mode"] = capture["capture_mode"]
         if reference_identity is None:
             reference_identity = comparable_identity
         _require(
             comparable_identity == reference_identity,
             f"capture identity drifted in {capture_path}",
         )
+        selected_ids = {parent_id, *components_by_id}
+        sites_by_id = {
+            site.get("site_id"): site
+            for site in capture["sites"]
+            if isinstance(site, dict)
+        }
+        selected_sites: dict[int, dict[str, Any]] = {}
+        for site_id in selected_ids:
+            site = sites_by_id.get(site_id)
+            _require(site is not None, f"capture {capture_path} lacks site {site_id}")
+            plan_site = (
+                plan["parent"] if site_id == parent_id else components_by_id[site_id]
+            )
+            _require(
+                site.get("name") == plan_site["name"],
+                f"plan/capture site name mismatch for site {site_id}",
+            )
+            selected_sites[site_id] = {
+                field: site.get(field)
+                for field in (
+                    "site_id",
+                    "name",
+                    "kind",
+                    "role",
+                    "boundary_semantics",
+                    "async_domain",
+                    "source_anchor",
+                )
+            }
+        if reference_sites is None:
+            reference_sites = selected_sites
+        _require(
+            selected_sites == reference_sites,
+            f"selected site semantics drifted in {capture_path}",
+        )
+        if plan["owner_topology"] == "same":
+            if reference_owners is None:
+                reference_owners = capture["owners"]
+            _require(
+                capture["owners"] == reference_owners,
+                f"owner topology drifted in {capture_path}; declare variation "
+                "explicitly if intentional",
+            )
         launch_id = identity["launch_id"]
         _require(
             isinstance(launch_id, int) and not isinstance(launch_id, bool),
@@ -414,22 +576,37 @@ def analyze(
     report: dict[str, Any] = {
         "schema": REPORT_SCHEMA,
         "validation": "accepted",
+        "evidence_id": hashlib.sha256(
+            _canonical_json(
+                {
+                    "plan_sha256": _sha256(plan_path),
+                    "capture_evidence_ids": receipt_ids,
+                }
+            )
+        ).hexdigest(),
+        "evidence_grade": (
+            "decision" if all(grade == "decision" for grade in evidence_grades) else "diagnostic"
+        ),
         "plan": {
             "source": str(plan_path.resolve()),
             "parent": plan["parent"],
             "components": plan["components"],
+            "owner_topology": plan["owner_topology"],
         },
         "identity": reference_identity,
         "capture_count": len(capture_reports),
         "launch_ids": sorted(launch_ids),
+        "capture_evidence_ids": receipt_ids,
         "parent_duration": _summary(parent_values),
         "components": component_report,
         "captures": capture_reports,
         "instances": all_instances,
         "interpretation_limits": [
             "Durations are comparable across owners; owner-local starts are not aligned.",
-            "The component union avoids double-counting overlap; uncovered time is reported rather than assigned.",
-            "The plan declares semantic parent and component sites; the analyzer does not infer source phases.",
+            "The component union avoids double-counting overlap; uncovered time is "
+            "reported rather than assigned.",
+            "The plan declares semantic parent and component sites; the analyzer does "
+            "not infer source phases.",
         ],
     }
 
@@ -450,6 +627,15 @@ def analyze(
         }
 
     if plan["clean_samples"] is not None:
+        _require(
+            plan["clean_reference"]["identity"]
+            == {
+                key: value
+                for key, value in reference_identity.items()
+                if key != "capture_mode"
+            },
+            "clean_reference identity does not match the captures",
+        )
         clean = _summary(plan["clean_samples"])
         instrumented_median = report["parent_duration"]["median_ns"]
         report["clean_reference"] = {
@@ -479,7 +665,9 @@ def analyze(
         }
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
     return report
 
 
@@ -488,14 +676,21 @@ def _parser() -> argparse.ArgumentParser:
         description="Analyze an agent-declared PPU owner-local critical path"
     )
     parser.add_argument("--plan", type=Path, required=True)
-    parser.add_argument("--canonical", type=Path, action="append", required=True)
+    parser.add_argument(
+        "--capture",
+        type=Path,
+        nargs=2,
+        action="append",
+        metavar=("CANONICAL", "RECEIPT"),
+        required=True,
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    report = analyze(args.plan, args.canonical, args.output)
+    report = analyze(args.plan, [tuple(value) for value in args.capture], args.output)
     message = (
         "PPU critical path accepted: "
         f"{report['capture_count']} captures, "

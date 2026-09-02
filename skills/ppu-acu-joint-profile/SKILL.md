@@ -1,6 +1,6 @@
 ---
 name: ppu-acu-joint-profile
-description: Choose and run ACU-only, adaptive PPU in-kernel timeline, or optional bounded joint analysis for a CUDA-compatible PPU kernel. Use for device-level bottleneck diagnosis, kernel-internal critical-path questions, or evidence that genuinely needs both; do not require all three modes.
+description: Choose and run ACU-only, adaptive PPU in-kernel timeline, or optional bounded joint analysis for a PPU kernel. Use for device-level bottleneck diagnosis, kernel-internal critical-path questions, or evidence that genuinely needs both; do not require all three modes.
 ---
 
 # PPU Profile Routing: ACU, Timeline, or Joint
@@ -66,6 +66,12 @@ new evidence:
       "control_pipeline_identity": "mainloop stages, waits, barriers, and epilogue structure",
       "finding": "owner-local ranges show the wait on the measured critical path",
       "decision_impact": "next edit targets the load/tensor handoff instead of the epilogue",
+      "evidence": {
+        "artifact": "profiles/episode_N/timeline/attempt-N/fine.timeline.receipt.json",
+        "sha256": "lowercase SHA-256 of that exact JSON artifact",
+        "schema": "ppu-fixed-slot-receipt/v4",
+        "evidence_id": "evidence_id read from the artifact"
+      },
       "invalidation_conditions": [
         "a change to the measured specialization or workload",
         "a change to launch topology or mainloop synchronization"
@@ -75,10 +81,12 @@ new evidence:
 }
 ```
 
-The supervisor validates these rows and writes stable `source_memory_version`, `source_episode`, and
-`evidence_ref` fields into canonical memory. Later agents reuse the bounded conclusion from canonical
-memory; archived raw reports remain audit material rather than inherited prompt context. An empty or
-omitted list is valid when profiling was skipped or all collected evidence was invalidated.
+The supervisor resolves each workspace-relative artifact, recomputes its hash, and accepts only an
+`accepted`, decision-grade artifact whose schema and evidence id match the row. It writes stable
+`source_memory_version`, `source_episode`, `memory_ref`, and hash-bound `evidence_ref` fields into
+canonical memory. Diagnostic-grade or warning artifacts may guide the current investigation but
+must not enter terminal-reusable memory. An empty or omitted list is valid when profiling was
+skipped or all collected evidence was invalidated.
 
 ## Shared evidence boundaries
 
@@ -106,6 +114,7 @@ any timeline manifest or instrumented source:
 ```bash
 acu -i profile.acurep --page raw --csv --csv-file profile.raw.csv
 python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
+  --raw-csv profile.raw.csv --collection profile.collection.json \
   --csv profile.samples.csv --metadata profile.extract.json
 ```
 
@@ -206,9 +215,12 @@ python "$PPU_PROFILE_SKILL/scripts/timeline.py" decode \
   --output-prefix coarse.timeline
 ```
 
-Use only an accepted receipt. If the coarse trace answers the question, stop without fine probes,
-ACU, or merge. Read [references/timeline_contract.md](references/timeline_contract.md) when
-interpreting decoder outputs or preparing a fine capture for optional joint analysis.
+Use only an accepted receipt. A diagnostic receipt is intentionally incomplete and may answer a
+local exploratory question; a joint merge or terminal-reusable conclusion requires a decision-grade
+receipt with source, compiled-binary, and workload-input bindings. If the coarse trace answers the
+question, stop without fine probes, ACU, or merge. Read
+[references/timeline_contract.md](references/timeline_contract.md) when interpreting decoder outputs
+or preparing a fine capture for optional joint analysis.
 
 ### Refine only the unresolved region
 
@@ -242,6 +254,11 @@ python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
   --output fine.perturbation-b-c.json
 ```
 
+Every emitted sample includes positive finite `latency_ms`, `correctness: "passed"`,
+`synchronized: true`, the exact workload/warmup/iteration and physical-device identity, and a stable
+`allocation_identity` such as the authorized Pod UID plus allocation/job id. The helper rejects any
+device or allocation drift across the interleaved schedule.
+
 A/B measures end-to-end probe overhead. B/C tests whether nearby density moves common intervals. Do
 not import a universal overhead threshold from another architecture; report the measured deltas and
 repeat with fewer or moved sites when the conclusion changes materially.
@@ -255,17 +272,18 @@ the accepted canonical captures:
 ```bash
 python "$PPU_PROFILE_SKILL/scripts/critical_path.py" \
   --plan critical-path.plan.json \
-  --canonical attempt-1/fine.timeline.canonical.json \
-  --canonical attempt-2/fine.timeline.canonical.json \
+  --capture attempt-1/fine.timeline.canonical.json attempt-1/fine.timeline.receipt.json \
+  --capture attempt-2/fine.timeline.canonical.json attempt-2/fine.timeline.receipt.json \
   --output critical-path.report.json
 ```
 
-The plan, not the tool, chooses phases and any material-spread threshold. The report preserves
-launch ids, computes component interval union rather than double-counting overlap, reports
-uncovered time without assigning it to a phase, compares an optional probe-free parent reference,
-and aggregates owner/capture duration facts. Escalate representative owner to more warps or blocks
-only when the observed spread or remaining topology ambiguity can change the optimization decision.
-See [references/timeline_contract.md](references/timeline_contract.md) for the plan contract.
+The plan, not the tool, chooses phases, owner-topology comparison, and any material-spread threshold.
+The analyzer verifies each canonical hash against its receipt and rejects grid, block, capture-mode,
+identity, or selected-site semantic drift. It computes component interval union rather than
+double-counting overlap and leaves uncovered time unattributed. Escalate representative owner to
+more warps or blocks only when the observed spread or remaining topology ambiguity can change the
+optimization decision. See [references/timeline_contract.md](references/timeline_contract.md) for
+the plan contract.
 
 ## Route C: Optional joint analysis
 
@@ -277,15 +295,19 @@ and duration equivalence before interpreting the output.
 ```bash
 python "$PPU_PROFILE_SKILL/scripts/merge.py" \
   --timeline fine.timeline.perfetto.json \
+  --timeline-receipt fine.timeline.receipt.json \
   --pm-csv profile.samples.csv \
   --acu-raw-csv profile.raw.csv \
+  --acu-metadata profile.extract.json \
   --perturbation fine.perturbation-a-b.json \
   --density-sensitivity fine.perturbation-b-c.json \
   --output-prefix fine.joint
 ```
 
 The perturbation and density-sensitivity inputs are optional; pass those flags only when the
-corresponding validated artifacts exist.
+corresponding validated artifacts exist. Joint merge is fail-closed: it requires decision-grade
+timeline and ACU bindings, compares kernel specialization, workload, physical device, runtime,
+cache policy, clock configuration, grid, block, and duration, and has no duration-mismatch override.
 
 Interpret the result as four separate claims:
 

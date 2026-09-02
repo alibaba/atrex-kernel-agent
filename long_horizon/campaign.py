@@ -398,9 +398,13 @@ def _canonical_ppu_diagnostics(
         canonical["source_memory_version"] = f"v{version}"
         if isinstance(episode, int) and not isinstance(episode, bool):
             canonical["source_episode"] = episode
-        canonical["evidence_ref"] = (
+        canonical["memory_ref"] = (
             f"memory/v{version}.json#profile_evidence."
             f"accepted_ppu_diagnostics/{index}"
+        )
+        evidence = canonical["evidence"]
+        canonical["evidence_ref"] = (
+            f"{evidence['artifact']}#sha256={evidence['sha256']}"
         )
         diagnostics.append(canonical)
     return diagnostics
