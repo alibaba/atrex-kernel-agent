@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import math
+import re
 import struct
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -38,6 +41,136 @@ ACTIVITY_METRICS = {
         "kvd__requests_store_pipe_lsu.sum",
     ),
 }
+COLLECTION_SCHEMA = "ppu-acu-collection/v1"
+EXTRACTION_SCHEMA = "ppu-acu-extraction/v2"
+SUPPORTED_PRODUCER = {"name": "acu", "version": "2.2"}
+EVIDENCE_GRADES = {"diagnostic", "decision"}
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_descriptor(path: Path) -> dict:
+    if not path.is_file():
+        raise RuntimeError(f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _load_collection(path: Path, report_path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot read ACU collection descriptor {path}: {error}") from error
+    if not isinstance(value, dict) or value.get("schema") != COLLECTION_SCHEMA:
+        raise RuntimeError(f"ACU collection descriptor must use {COLLECTION_SCHEMA}")
+    if value.get("producer") != SUPPORTED_PRODUCER:
+        raise RuntimeError("ACU producer must be exactly acu 2.2")
+    producer_artifact = value.get("producer_artifact")
+    if not isinstance(producer_artifact, dict):
+        raise RuntimeError("collection.producer_artifact must be an object")
+    producer_path = producer_artifact.get("path")
+    producer_identity = producer_artifact.get("identity")
+    if not isinstance(producer_path, str) or not producer_path.strip():
+        raise RuntimeError("collection.producer_artifact.path is required")
+    if not isinstance(producer_identity, str) or not producer_identity.strip():
+        raise RuntimeError("collection.producer_artifact.identity is required")
+    resolved_producer = Path(producer_path)
+    if not resolved_producer.is_absolute():
+        resolved_producer = path.parent / resolved_producer
+    try:
+        producer_text = resolved_producer.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(f"cannot read ACU producer artifact: {error}") from error
+    if "acu" not in producer_text.lower() or not re.search(
+        r"(?<![0-9])2\.2(?:\.[0-9]+)?(?![0-9])", producer_text
+    ):
+        raise RuntimeError("producer artifact does not identify ACU 2.2")
+    grade = value.get("evidence_grade")
+    if grade not in EVIDENCE_GRADES:
+        raise RuntimeError("evidence_grade must be diagnostic or decision")
+    declared_report = value.get("report")
+    if not isinstance(declared_report, str) or not declared_report.strip():
+        raise RuntimeError("collection.report is required")
+    declared_report_path = Path(declared_report)
+    if not declared_report_path.is_absolute():
+        declared_report_path = path.parent / declared_report_path
+    if declared_report_path.resolve() != report_path.resolve():
+        raise RuntimeError("collection.report does not identify the extracted report")
+    required_text = (
+        "kernel_name",
+        "kernel_specialization",
+        "workload_identity",
+        "cache_policy",
+        "clock_configuration",
+    )
+    for field in required_text:
+        if not isinstance(value.get(field), str) or not value[field].strip():
+            raise RuntimeError(f"collection.{field} is required")
+    for field in ("device_identity", "runtime_identity"):
+        if not isinstance(value.get(field), dict) or not value[field]:
+            raise RuntimeError(f"collection.{field} is required")
+    physical_device = value["device_identity"].get("physical_device")
+    if (
+        not isinstance(physical_device, int)
+        or isinstance(physical_device, bool)
+        or physical_device < 0
+    ):
+        raise RuntimeError(
+            "collection.device_identity.physical_device must be a non-negative integer"
+        )
+
+    artifacts: dict[str, list[dict]] = {}
+    for field in ("source_artifacts", "binary_artifacts", "workload_inputs"):
+        rows = value.get(field, [])
+        if not isinstance(rows, list):
+            raise RuntimeError(f"collection.{field} must be a list")
+        if field == "source_artifacts" or grade == "decision":
+            if not rows:
+                raise RuntimeError(f"{grade} evidence requires collection.{field}")
+        descriptors = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise RuntimeError(f"collection.{field}[{index}] must be an object")
+            artifact_path = row.get("path")
+            identity = row.get("identity")
+            if not isinstance(artifact_path, str) or not artifact_path.strip():
+                raise RuntimeError(f"collection.{field}[{index}].path is required")
+            if not isinstance(identity, str) or not identity.strip():
+                raise RuntimeError(f"collection.{field}[{index}].identity is required")
+            resolved = Path(artifact_path)
+            if not resolved.is_absolute():
+                resolved = path.parent / resolved
+            descriptor = _file_descriptor(resolved)
+            descriptor["declared_path"] = artifact_path
+            descriptor["identity"] = identity.strip()
+            descriptors.append(descriptor)
+        artifacts[field] = descriptors
+    producer_descriptor = _file_descriptor(resolved_producer)
+    producer_descriptor["declared_path"] = producer_path
+    producer_descriptor["identity"] = producer_identity.strip()
+    return {
+        **value,
+        "bound_artifacts": {**artifacts, "producer": producer_descriptor},
+    }
 
 
 def _varint(data: bytes, offset: int) -> tuple[int, int]:
@@ -92,7 +225,13 @@ def _parse_sample(message: bytes) -> tuple[int, int, float]:
             value = struct.unpack("<d", raw)[0]
         elif number == 3 and wire_type == 0:
             end_ns = int(raw)
-    if start_ns is None or end_ns is None or value is None or end_ns <= start_ns:
+    if (
+        start_ns is None
+        or end_ns is None
+        or value is None
+        or not math.isfinite(value)
+        or end_ns <= start_ns
+    ):
         raise ValueError("invalid ACU PM sample")
     return start_ns, end_ns, value
 
@@ -156,7 +295,14 @@ def _metric_unit(name: str) -> str:
     return "unitless"
 
 
-def export(report_path: Path, csv_path: Path, metadata_path: Path) -> dict:
+def export(
+    report_path: Path,
+    raw_csv_path: Path,
+    collection_path: Path,
+    csv_path: Path,
+    metadata_path: Path,
+) -> dict:
+    collection = _load_collection(collection_path, report_path)
     packets = extract_pm_packets(report_path.read_bytes())
     if not packets:
         raise RuntimeError(
@@ -205,12 +351,17 @@ def export(report_path: Path, csv_path: Path, metadata_path: Path) -> dict:
             }
         )
 
-    by_window_metric = {
-        (row["window_start_ns"], row["window_end_ns"], row["metric_name"]): float(
-            row["metric_value"]
+    by_window_metric = {}
+    for row in rows:
+        key = (
+            row["packet_index"],
+            row["window_start_ns"],
+            row["window_end_ns"],
+            row["metric_name"],
         )
-        for row in rows
-    }
+        if key in by_window_metric:
+            raise RuntimeError(f"duplicate ACU PM sample identity: {key}")
+        by_window_metric[key] = float(row["metric_value"])
     for row in rows:
         if row["validity"] != "pending_activity_check":
             continue
@@ -219,7 +370,14 @@ def export(report_path: Path, csv_path: Path, metadata_path: Path) -> dict:
             row["validity"] = "unknown_no_activity_counter"
             continue
         values = [
-            by_window_metric.get((row["window_start_ns"], row["window_end_ns"], name))
+            by_window_metric.get(
+                (
+                    row["packet_index"],
+                    row["window_start_ns"],
+                    row["window_end_ns"],
+                    name,
+                )
+            )
             for name in activity_names
         ]
         available = [value for value in values if value is not None]
@@ -236,8 +394,46 @@ def export(report_path: Path, csv_path: Path, metadata_path: Path) -> dict:
         writer.writeheader()
         writer.writerows(rows)
 
+    input_artifacts = {
+        "report": _file_descriptor(report_path),
+        "raw_csv": _file_descriptor(raw_csv_path),
+        "collection": _file_descriptor(collection_path),
+    }
+    output_artifact = _file_descriptor(csv_path)
+    identity = {
+        field: collection[field]
+        for field in (
+            "kernel_name",
+            "kernel_specialization",
+            "workload_identity",
+            "device_identity",
+            "runtime_identity",
+            "cache_policy",
+            "clock_configuration",
+        )
+    }
+    evidence_payload = {
+        "producer": collection["producer"],
+        "identity": identity,
+        "inputs": input_artifacts,
+        "bound_artifacts": collection["bound_artifacts"],
+        "pm_csv": output_artifact,
+    }
+    evidence_id = hashlib.sha256(_canonical_json(evidence_payload)).hexdigest()
+    validity_counts: dict[str, int] = {}
+    for row in rows:
+        validity = row["validity"]
+        validity_counts[validity] = validity_counts.get(validity, 0) + 1
     metadata = {
-        "schema_version": 1,
+        "schema": EXTRACTION_SCHEMA,
+        "validation": "accepted",
+        "evidence_id": evidence_id,
+        "evidence_grade": collection["evidence_grade"],
+        "producer": collection["producer"],
+        "identity": identity,
+        "inputs": input_artifacts,
+        "bound_artifacts": collection["bound_artifacts"],
+        "outputs": {"pm_csv": output_artifact},
         "source": "ACU .acurep Perfetto protobuf field 88/message field 15",
         "time_semantics": "each row covers [window_start_ns, window_end_ns)",
         "alignment": "kernel-relative, no duration rescaling",
@@ -247,15 +443,20 @@ def export(report_path: Path, csv_path: Path, metadata_path: Path) -> dict:
         ),
         "packets": packet_summaries,
         "row_count": len(rows),
+        "validity_counts": validity_counts,
     }
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
     return metadata
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
+    parser.add_argument("--raw-csv", type=Path, required=True)
+    parser.add_argument("--collection", type=Path, required=True)
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--metadata", type=Path, required=True)
     return parser.parse_args(argv)
@@ -263,7 +464,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    metadata = export(args.report, args.csv, args.metadata)
+    metadata = export(
+        args.report,
+        args.raw_csv,
+        args.collection,
+        args.csv,
+        args.metadata,
+    )
     print(
         f"exported {metadata['row_count']} PM rows from "
         f"{len(metadata['packets'])} packet(s)"

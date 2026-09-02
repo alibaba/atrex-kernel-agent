@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import statistics
@@ -37,6 +38,7 @@ MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v1"
 SAMPLE_PREFIX = "__PPU_TIMELINE_SAMPLE__="
 TIMER_SOURCE = "globaltimer"
 TIMER_UNIT = "ns"
+EVIDENCE_GRADES = {"diagnostic", "decision"}
 
 
 class TimelineError(RuntimeError):
@@ -55,6 +57,125 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
         raise TimelineError(f"cannot read {label} {path}: {error}") from error
     _require(isinstance(value, dict), f"{label} must be a JSON object")
     return value
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise TimelineError(f"cannot hash artifact {path}: {error}") from error
+    return digest.hexdigest()
+
+
+def _file_descriptor(path: Path) -> dict[str, Any]:
+    _require(path.is_file(), f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _artifact(
+    base_path: Path, value: object, label: str, *, require_identity: bool = True
+) -> dict[str, Any]:
+    _require(isinstance(value, dict), f"{label} must be an object")
+    logical_path = value.get("path")
+    _require(
+        isinstance(logical_path, str) and logical_path.strip(),
+        f"{label}.path is required",
+    )
+    identity = value.get("identity")
+    if require_identity:
+        _require(
+            isinstance(identity, str) and identity.strip(),
+            f"{label}.identity is required",
+        )
+    path = Path(logical_path)
+    if not path.is_absolute():
+        path = base_path.parent / path
+    _require(path.is_file(), f"{label} is not a regular file: {path}")
+    return {
+        "path": logical_path,
+        **({"identity": identity.strip()} if require_identity else {}),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _artifact_list(
+    manifest_path: Path,
+    provenance: dict[str, Any],
+    field: str,
+    *,
+    required: bool,
+) -> list[dict[str, Any]]:
+    raw = provenance.get(field, [])
+    _require(isinstance(raw, list), f"provenance.{field} must be a list")
+    if required:
+        _require(bool(raw), f"decision evidence requires provenance.{field}")
+    return [
+        _artifact(manifest_path, value, f"provenance.{field}[{index}]")
+        for index, value in enumerate(raw)
+    ]
+
+
+def _provenance(manifest_path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    value = manifest.get("provenance")
+    _require(isinstance(value, dict), "manifest.provenance must be an object")
+    grade = value.get("evidence_grade")
+    _require(
+        grade in EVIDENCE_GRADES,
+        "provenance.evidence_grade must be diagnostic or decision",
+    )
+    result: dict[str, Any] = {"evidence_grade": grade}
+    for field in (
+        "kernel_specialization",
+        "cache_policy",
+        "clock_configuration",
+    ):
+        item = value.get(field)
+        _require(
+            isinstance(item, str) and item.strip(),
+            f"provenance.{field} is required",
+        )
+        result[field] = item.strip()
+    decision = grade == "decision"
+    result["instrumented_sources"] = _artifact_list(
+        manifest_path, value, "instrumented_sources", required=True
+    )
+    result["compiled_binaries"] = _artifact_list(
+        manifest_path, value, "compiled_binaries", required=decision
+    )
+    result["workload_inputs"] = _artifact_list(
+        manifest_path, value, "workload_inputs", required=decision
+    )
+    result["missing_decision_bindings"] = [
+        field
+        for field in ("compiled_binaries", "workload_inputs")
+        if not result[field]
+    ]
+    return result
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _identity(value: object, label: str) -> dict[str, Any]:
@@ -190,10 +311,18 @@ def _validate_manifest(
         "workload_identity is required",
     )
     device_identity = _identity(manifest.get("device_identity"), "device_identity")
+    _require(
+        isinstance(device_identity.get("physical_device"), int)
+        and not isinstance(device_identity["physical_device"], bool)
+        and device_identity["physical_device"] >= 0,
+        "device_identity.physical_device must be a non-negative integer",
+    )
     runtime_identity = _identity(manifest.get("runtime_identity"), "runtime_identity")
+    provenance = _provenance(manifest_path, manifest)
     _require(
         "timer_tick_ns" not in manifest and "timer_calibration" not in manifest,
-        "manifest v4 uses the documented globaltimer nanosecond contract; remove timer conversion fields",
+        "manifest v4 uses the documented globaltimer nanosecond contract; "
+        "remove timer conversion fields",
     )
     timer = manifest.get("timer")
     _require(isinstance(timer, dict), "manifest.timer must be an object")
@@ -380,6 +509,42 @@ def _validate_manifest(
             {owner["block"] for owner in owners} == set(range(math.prod(grid))),
             "all-block coverage requires at least one declared owner for every block",
         )
+    instrumented_launch = coverage.get("instrumented_launch")
+    if instrumented_launch is not None:
+        _require(
+            isinstance(instrumented_launch, dict),
+            "coverage.instrumented_launch must be an object",
+        )
+        cu_count = instrumented_launch.get("cu_count")
+        occupancy = instrumented_launch.get("occupancy_blocks_per_cu")
+        _require(
+            isinstance(cu_count, int)
+            and not isinstance(cu_count, bool)
+            and cu_count > 0,
+            "coverage.instrumented_launch.cu_count must be positive",
+        )
+        _require(
+            isinstance(occupancy, (int, float))
+            and not isinstance(occupancy, bool)
+            and math.isfinite(occupancy)
+            and float(occupancy).is_integer()
+            and occupancy > 0,
+            "coverage.instrumented_launch.occupancy_blocks_per_cu must be a positive integer",
+        )
+        instrumented_launch = {
+            "cu_count": cu_count,
+            "occupancy_blocks_per_cu": int(occupancy),
+            "evidence_artifact": _artifact(
+                manifest_path,
+                instrumented_launch.get("evidence_artifact"),
+                "coverage.instrumented_launch.evidence_artifact",
+            ),
+        }
+    if all_blocks:
+        _require(
+            instrumented_launch is not None,
+            "all-block coverage requires instrumented-launch occupancy evidence",
+        )
     return {
         "grid": grid,
         "block": block,
@@ -387,9 +552,14 @@ def _validate_manifest(
         "correctness_path": correctness_path,
         "correctness": correctness,
         "runtime_identity": runtime_identity,
+        "provenance": provenance,
         "owners": owners,
         "analysis": analysis,
-        "coverage": {"all_blocks": all_blocks, "range_site_id": range_site_id},
+        "coverage": {
+            "all_blocks": all_blocks,
+            "range_site_id": range_site_id,
+            "instrumented_launch": instrumented_launch,
+        },
     }
 
 
@@ -684,17 +854,39 @@ def _perfetto(
     manifest: dict[str, Any],
     manifest_info: dict[str, Any],
     events: list[dict[str, Any]],
+    evidence_binding: dict[str, Any],
 ) -> dict[str, Any]:
     owner_pid = 6
     analysis = manifest.get("analysis")
     coverage = manifest.get("coverage", {"all_blocks": False})
     sites_by_id = {event["site_id"]: event["name"] for event in events}
+    owner_spans_ns = {
+        owner["owner"]: max(
+            (
+                event["owner_relative_start_ns"]
+                + (event.get("duration_ns") or 0)
+                for event in events
+                if event["owner"] == owner["owner"]
+            ),
+            default=0,
+        )
+        for owner in manifest["owner_layout"]["owners"]
+    }
+    display_stride_ns = max(owner_spans_ns.values(), default=0) + max(
+        1, int(max(owner_spans_ns.values(), default=0) * 0.1)
+    )
+    display_offsets_ns = {
+        owner["owner"]: owner["owner"] * display_stride_ns
+        for owner in manifest["owner_layout"]["owners"]
+    }
     trace_events: list[dict[str, Any]] = [
         {
             "name": "process_name",
             "ph": "M",
             "pid": owner_pid,
-            "args": {"name": "PPU owner-local captures (lanes are unaligned)"},
+            "args": {
+                "name": "PPU owner-local captures (separated; not time-aligned)"
+            },
         }
     ]
     for owner in manifest["owner_layout"]["owners"]:
@@ -716,7 +908,11 @@ def _perfetto(
         common = {
             "name": event["name"],
             "cat": "PPU owner-local timeline",
-            "ts": event["owner_relative_start_ns"] / 1000.0,
+            "ts": (
+                event["owner_relative_start_ns"]
+                + display_offsets_ns[event["owner"]]
+            )
+            / 1000.0,
             "pid": owner_pid,
             "tid": event["owner"],
             "args": {
@@ -729,6 +925,8 @@ def _perfetto(
                 "site_id": event["site_id"],
                 "role": event["role"],
                 "clock_scope": "owner_local",
+                "owner_relative_start_ns": event["owner_relative_start_ns"],
+                "display_offset_ns": display_offsets_ns[event["owner"]],
                 "boundary_semantics": event.get("boundary_semantics"),
                 "async_domain": event.get("async_domain"),
                 "source_anchor": event.get("source_anchor"),
@@ -784,12 +982,26 @@ def _perfetto(
                 "allBlocks": coverage.get("all_blocks", False),
                 "rangeSiteId": coverage.get("range_site_id"),
                 "rangeEventName": sites_by_id.get(coverage.get("range_site_id")),
+                "instrumentedLaunch": manifest_info["coverage"].get(
+                    "instrumented_launch"
+                ),
             },
             "clockScope": "owner_local",
+            "ownerDisplayMode": "sequential_unaligned_bands",
+            "ownerDisplayOffsetsNs": display_offsets_ns,
             "launchId": manifest["launch_id"],
             "workloadIdentity": manifest.get("workload_identity"),
             "deviceIdentity": manifest.get("device_identity"),
             "runtimeIdentity": manifest.get("runtime_identity"),
+            "kernelSpecialization": manifest_info["provenance"][
+                "kernel_specialization"
+            ],
+            "cachePolicy": manifest_info["provenance"]["cache_policy"],
+            "clockConfiguration": manifest_info["provenance"][
+                "clock_configuration"
+            ],
+            "evidenceGrade": manifest_info["provenance"]["evidence_grade"],
+            "evidenceBinding": evidence_binding,
             "timerSource": manifest_info["timer"]["source"],
             "timerUnit": manifest_info["timer"]["unit"],
             "timerContractValidation": "accepted",
@@ -814,6 +1026,35 @@ def decode(
     sites = _load_sites(dictionary, manifest_info)
     records = _decode_records(raw, header, manifest_info, sites)
     events, _ = _canonicalize(records, header["owner_count"])
+    input_artifacts = {
+        "raw": _file_descriptor(raw_path),
+        "manifest": _file_descriptor(manifest_path),
+        "event_dictionary": _file_descriptor(dictionary_path),
+        "correctness": _file_descriptor(manifest_info["correctness_path"]),
+    }
+    binding_payload = {
+        "inputs": {
+            name: {"sha256": value["sha256"], "size_bytes": value["size_bytes"]}
+            for name, value in input_artifacts.items()
+        },
+        "identity": {
+            "kernel_name": manifest["kernel_name"],
+            "workload_identity": manifest["workload_identity"],
+            "device_identity": manifest["device_identity"],
+            "runtime_identity": manifest["runtime_identity"],
+            "launch_id": manifest["launch_id"],
+            "grid": manifest["grid"],
+            "block": manifest["block"],
+        },
+        "provenance": manifest_info["provenance"],
+        "instrumented_launch": manifest_info["coverage"].get(
+            "instrumented_launch"
+        ),
+    }
+    evidence_binding = {
+        "evidenceId": hashlib.sha256(_canonical_json(binding_payload)).hexdigest(),
+        "evidenceGrade": manifest_info["provenance"]["evidence_grade"],
+    }
     analysis = manifest_info["analysis"]
     if analysis is not None and analysis.get("window_site_id") is not None:
         windows = [
@@ -855,7 +1096,7 @@ def decode(
             == {block: 1 for block in range(math.prod(manifest_info["grid"]))},
             "all-block coverage requires exactly one coverage range per block",
         )
-    perfetto = _perfetto(manifest, manifest_info, events)
+    perfetto = _perfetto(manifest, manifest_info, events, evidence_binding)
 
     range_durations: dict[str, list[float]] = defaultdict(list)
     for event in events:
@@ -872,12 +1113,26 @@ def decode(
         "owners": manifest["owner_layout"]["owners"],
         "analysis": manifest.get("analysis"),
         "coverage": manifest_info["coverage"],
+        "evidence": {
+            "id": evidence_binding["evidenceId"],
+            "grade": evidence_binding["evidenceGrade"],
+            "provenance": manifest_info["provenance"],
+        },
         "identity": {
             "kernel_name": manifest["kernel_name"],
             "workload_identity": manifest["workload_identity"],
             "device_identity": manifest["device_identity"],
             "runtime_identity": manifest["runtime_identity"],
             "launch_id": manifest["launch_id"],
+            "grid": manifest["grid"],
+            "block": manifest["block"],
+            "kernel_specialization": manifest_info["provenance"][
+                "kernel_specialization"
+            ],
+            "cache_policy": manifest_info["provenance"]["cache_policy"],
+            "clock_configuration": manifest_info["provenance"][
+                "clock_configuration"
+            ],
         },
         "timer": {
             "validation": "accepted",
@@ -913,12 +1168,25 @@ def decode(
             "unit": manifest_info["timer"]["unit"],
         },
         "capture_mode": manifest["capture_mode"],
+        "evidence": {
+            "id": evidence_binding["evidenceId"],
+            "grade": evidence_binding["evidenceGrade"],
+        },
         "identity": {
             "kernel_name": manifest["kernel_name"],
             "workload_identity": manifest["workload_identity"],
             "device_identity": manifest["device_identity"],
             "runtime_identity": manifest["runtime_identity"],
             "launch_id": manifest["launch_id"],
+            "grid": manifest["grid"],
+            "block": manifest["block"],
+            "kernel_specialization": manifest_info["provenance"][
+                "kernel_specialization"
+            ],
+            "cache_policy": manifest_info["provenance"]["cache_policy"],
+            "clock_configuration": manifest_info["provenance"][
+                "clock_configuration"
+            ],
         },
         "validation": {
             "capture": "accepted",
@@ -929,6 +1197,7 @@ def decode(
         "block": manifest["block"],
         "coverage": manifest_info["coverage"],
         "owners": manifest["owner_layout"]["owners"],
+        "sites": [sites[site_id] for site_id in sorted(sites)],
         "events": events,
     }
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -938,24 +1207,17 @@ def decode(
         "summary": Path(f"{output_prefix}.summary.json"),
         "receipt": Path(f"{output_prefix}.receipt.json"),
     }
-    outputs["canonical"].write_text(
-        json.dumps(canonical, indent=2) + "\n", encoding="utf-8"
-    )
-    outputs["perfetto"].write_text(
-        json.dumps(perfetto, indent=2) + "\n", encoding="utf-8"
-    )
-    outputs["summary"].write_text(
-        json.dumps(summary, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json(outputs["canonical"], canonical)
+    _write_json(outputs["perfetto"], perfetto)
+    _write_json(outputs["summary"], summary)
     receipt = {
         "schema": RECEIPT_SCHEMA,
         "validation": "accepted",
-        "inputs": {
-            "raw": str(raw_path.resolve()),
-            "manifest": str(manifest_path.resolve()),
-            "event_dictionary": str(dictionary_path.resolve()),
-            "correctness": str(manifest_info["correctness_path"].resolve()),
-        },
+        "evidence_id": evidence_binding["evidenceId"],
+        "evidence_grade": evidence_binding["evidenceGrade"],
+        "binding_payload": binding_payload,
+        "inputs": input_artifacts,
+        "provenance": manifest_info["provenance"],
         "identity": {
             "kernel_name": manifest["kernel_name"],
             "workload": manifest.get("workload_identity"),
@@ -976,14 +1238,12 @@ def decode(
             "numerical correctness evidence matches kernel, workload, and device",
         ],
         "outputs": {
-            name: str(path.resolve())
+            name: _file_descriptor(path)
             for name, path in outputs.items()
             if name != "receipt"
         },
     }
-    outputs["receipt"].write_text(
-        json.dumps(receipt, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json(outputs["receipt"], receipt)
     return summary
 
 
@@ -1053,6 +1313,11 @@ def _run_sample(
         isinstance(sample.get("device_identity"), dict),
         f"{label} needs device_identity",
     )
+    _require(
+        isinstance(sample.get("allocation_identity"), str)
+        and sample["allocation_identity"].strip(),
+        f"{label} needs allocation_identity",
+    )
     return sample
 
 
@@ -1072,6 +1337,7 @@ def measure(
     }
     runs: list[dict[str, Any]] = []
     device_identity: dict[str, Any] | None = None
+    allocation_identity: str | None = None
     for sequence in schedule:
         _require(
             sequence and set(sequence) <= {"A", "B"},
@@ -1082,9 +1348,14 @@ def measure(
             sample = _run_sample(command, label, workload, warmup, iterations, timeout)
             if device_identity is None:
                 device_identity = sample["device_identity"]
+                allocation_identity = sample["allocation_identity"]
             _require(
                 sample["device_identity"] == device_identity,
                 "device identity drifted across samples",
+            )
+            _require(
+                sample["allocation_identity"] == allocation_identity,
+                "allocation identity drifted across samples",
             )
             runs.append(
                 {"order": len(runs), "arm": arm, "variant": label, "sample": sample}
@@ -1104,6 +1375,7 @@ def measure(
         "fresh_process_per_sample": True,
         "workload_identity": workload,
         "device_identity": device_identity,
+        "allocation_identity": allocation_identity,
         "warmup": warmup,
         "iterations": iterations,
         "runs": runs,

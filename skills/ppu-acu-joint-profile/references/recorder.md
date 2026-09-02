@@ -152,6 +152,21 @@ thread and partial grid coverage:
   "timer": {"source": "globaltimer", "unit": "ns"},
   "correctness_artifact": "correctness.json",
   "runtime_identity": {"compiler": "hggc ...", "runtime": "PPU SDK ..."},
+  "provenance": {
+    "evidence_grade": "decision",
+    "kernel_specialization": "compile-time shape, dtype, layout, and architecture flags",
+    "cache_policy": "harness cache preparation and reuse policy",
+    "clock_configuration": "locked/default clocks and observed power state",
+    "instrumented_sources": [
+      {"path": "instrumented-source/kernel.cu", "identity": "exact instrumented target source"}
+    ],
+    "compiled_binaries": [
+      {"path": "build/kernel.so", "identity": "loaded instrumented binary"}
+    ],
+    "workload_inputs": [
+      {"path": "workload.json", "identity": "representative input descriptor"}
+    ]
+  },
   "clock_scope": "owner_local",
   "owner_layout": {
     "kind": "explicit_writers",
@@ -183,15 +198,32 @@ requires a comparable range from every block, enumerate owners whose block field
 declare:
 
 ```json
-"coverage": {"all_blocks": true, "range_site_id": 1}
+"coverage": {
+  "all_blocks": true,
+  "range_site_id": 1,
+  "instrumented_launch": {
+    "cu_count": 64,
+    "occupancy_blocks_per_cu": 2,
+    "evidence_artifact": {
+      "path": "instrumented-launch-resources.json",
+      "identity": "compiler or profiler occupancy evidence for this instrumented binary"
+    }
+  }
+}
 ```
 
-The decoder then requires exactly one such range per linear block. This is an opt-in topology, not a
-baseline requirement.
+The decoder then requires exactly one such range per linear block. The occupancy evidence must come
+from the instrumented binary; clean ACU occupancy cannot prove the instrumented launch is one wave.
+This is an opt-in topology, not a baseline requirement.
 
 `kernel_duration_ns` comes from synchronized HGGC events around the single launch. The correctness
 artifact path is resolved relative to the manifest unless absolute. Keep it inside the attempt
 directory for remote capture and handoff.
+
+The decoder hashes every declared artifact. `diagnostic` evidence may omit compiled binaries or
+workload files when they are genuinely unavailable, but it cannot enter joint analysis or terminal
+memory. `decision` evidence requires all three binding classes. Do not copy a hash from an earlier
+attempt: the decoder computes hashes from the files present when it accepts the capture.
 
 ## Event dictionary v2
 
