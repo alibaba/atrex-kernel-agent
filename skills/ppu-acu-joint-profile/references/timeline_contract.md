@@ -102,7 +102,7 @@ assuming that every kernel has the same phases:
     "identity": {
       "kernel_name": "target_kernel",
       "workload_identity": "m=...;n=...;k=...;dtype=...",
-      "device_identity": {"physical_device": 6, "serial": "..."},
+      "device_identity": {"physical_device": 0, "serial": "..."},
       "runtime_identity": {"compiler": "hggc ...", "runtime": "PPU SDK ..."},
       "grid": [148, 1, 1],
       "block": [128, 1, 1],

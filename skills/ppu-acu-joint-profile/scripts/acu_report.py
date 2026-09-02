@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export time-windowed PM samples from an immutable ACU 2.2 report."""
+"""Validate and export raw launch facts and PM samples from an ACU 2.2 report."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ import json
 import math
 import re
 import struct
+from collections import defaultdict
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Any, Iterator, Sequence
 
 
 METRIC_GROUPS = {
@@ -42,9 +43,11 @@ ACTIVITY_METRICS = {
     ),
 }
 COLLECTION_SCHEMA = "ppu-acu-collection/v1"
-EXTRACTION_SCHEMA = "ppu-acu-extraction/v2"
+EXTRACTION_SCHEMA = "ppu-acu-extraction/v3"
 SUPPORTED_PRODUCER = {"name": "acu", "version": "2.2"}
 EVIDENCE_GRADES = {"diagnostic", "decision"}
+VALID_PM_STATES = {"valid", "valid_activity_positive"}
+MIN_SAMPLES = 10
 
 
 def _canonical_json(value: object) -> bytes:
@@ -137,6 +140,24 @@ def _load_collection(path: Path, report_path: Path) -> dict:
         raise RuntimeError(
             "collection.device_identity.physical_device must be a non-negative integer"
         )
+    requested_metrics = value.get("requested_metrics")
+    if requested_metrics is not None:
+        if (
+            not isinstance(requested_metrics, list)
+            or any(
+                not isinstance(metric, str) or not metric.strip()
+                for metric in requested_metrics
+            )
+        ):
+            raise RuntimeError(
+                "collection.requested_metrics must be a list of non-empty strings"
+            )
+        normalized_metrics = [metric.strip() for metric in requested_metrics]
+        if len(set(normalized_metrics)) != len(normalized_metrics):
+            raise RuntimeError(
+                "collection.requested_metrics must not contain duplicates"
+            )
+        value["requested_metrics"] = normalized_metrics
 
     artifacts: dict[str, list[dict]] = {}
     for field in ("source_artifacts", "binary_artifacts", "workload_inputs"):
@@ -295,6 +316,203 @@ def _metric_unit(name: str) -> str:
     return "unitless"
 
 
+def _parse_dims(value: str, field: str) -> list[int]:
+    try:
+        result = [int(part.strip()) for part in value.strip().strip("()").split(",")]
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError(f"ACU raw {field} is invalid") from error
+    if len(result) != 3 or any(item <= 0 for item in result):
+        raise RuntimeError(
+            f"ACU raw {field} must contain three positive integers"
+        )
+    return result
+
+
+def _finite_number(row: dict[str, str], field: str, *, positive: bool) -> float:
+    raw = row.get(field)
+    try:
+        value = float(raw) if raw not in (None, "") else math.nan
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"ACU raw {field} is not numeric") from error
+    if (
+        not math.isfinite(value)
+        or (positive and value <= 0)
+        or (not positive and value < 0)
+    ):
+        qualifier = "positive and finite" if positive else "non-negative and finite"
+        raise RuntimeError(f"ACU raw {field} must be {qualifier}")
+    return value
+
+
+def _integer_number(row: dict[str, str], field: str, *, positive: bool) -> int:
+    value = _finite_number(row, field, positive=positive)
+    if not value.is_integer():
+        raise RuntimeError(f"ACU raw {field} must be an integer")
+    return int(value)
+
+
+def _optional_number(
+    row: dict[str, str], field: str, *, integer: bool = False
+) -> int | float | None:
+    raw = row.get(field)
+    if raw in (None, ""):
+        return None
+    value = _finite_number(row, field, positive=False)
+    if integer:
+        if not value.is_integer():
+            raise RuntimeError(f"ACU raw {field} must be an integer")
+        return int(value)
+    return value
+
+
+def _read_raw_csv(
+    path: Path, collection: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    try:
+        with path.open(newline="", encoding="utf-8") as source:
+            rows = list(csv.DictReader(source))
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise RuntimeError(f"cannot read ACU raw CSV {path}: {error}") from error
+    if len(rows) != 1:
+        raise RuntimeError("ACU raw CSV must contain exactly one filtered kernel row")
+    row = rows[0]
+    required_fields = (
+        "Kernel Name",
+        "Grid Size",
+        "Block Size",
+        "Device",
+        "ppu__time_duration.sum",
+        "device__attribute_cu_count",
+        "launch__occupancy_blocks_per_cu",
+        "launch__registers_per_thread",
+        "launch__shared_mem_per_block",
+    )
+    missing = [field for field in required_fields if row.get(field) in (None, "")]
+    if missing:
+        raise RuntimeError(
+            "ACU raw CSV is missing required fields: " + ", ".join(missing)
+        )
+
+    launch = {
+        "kernel_name": row["Kernel Name"],
+        "grid": _parse_dims(row["Grid Size"], "Grid Size"),
+        "block": _parse_dims(row["Block Size"], "Block Size"),
+        "device": _integer_number(row, "Device", positive=False),
+        "duration_ns": _finite_number(
+            row, "ppu__time_duration.sum", positive=True
+        ),
+        "pm_interval_ns": _optional_number(row, "pmsampler__interval_time.max"),
+        "dropped_samples": _optional_number(
+            row, "pmsampler__dropped_samples.max", integer=True
+        ),
+        "buffer_size_bytes": _optional_number(
+            row, "pmsampler__buffer_size_bytes.max", integer=True
+        ),
+        "cu_count": _integer_number(
+            row, "device__attribute_cu_count", positive=True
+        ),
+        "occupancy_blocks_per_cu": _finite_number(
+            row, "launch__occupancy_blocks_per_cu", positive=True
+        ),
+        "registers_per_thread": _integer_number(
+            row, "launch__registers_per_thread", positive=False
+        ),
+        "shared_mem_per_block": _integer_number(
+            row, "launch__shared_mem_per_block", positive=False
+        ),
+    }
+    errors = []
+    if launch["kernel_name"] != collection["kernel_name"]:
+        errors.append("ACU raw kernel name does not match collection.kernel_name")
+    if launch["device"] != collection["device_identity"]["physical_device"]:
+        errors.append(
+            "ACU raw physical device does not match collection.device_identity"
+        )
+    return launch, errors
+
+
+def _validity_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for row in rows:
+        validity = row["validity"]
+        result[validity] = result.get(validity, 0) + 1
+    return result
+
+
+def _summarize_streams(
+    rows: list[dict[str, Any]], duration_ns: float
+) -> tuple[dict[str, dict[str, Any]], list[str], list[str], list[str]]:
+    grouped: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["packet_index"], row["metric_name"])].append(row)
+
+    summaries: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    notes: list[str] = []
+    for (packet_index, metric_name), stream in sorted(grouped.items()):
+        label = f"packet {packet_index} metric {metric_name}"
+        ordered = sorted(stream, key=lambda row: row["sample_index"])
+        if [row["sample_index"] for row in ordered] != list(range(len(ordered))):
+            errors.append(f"{label} has non-contiguous sample indices")
+        if ordered[0]["window_start_ns"] != 0:
+            errors.append(f"{label} does not start at kernel-relative zero")
+        if any(
+            left["window_end_ns"] != right["window_start_ns"]
+            for left, right in zip(ordered, ordered[1:])
+        ):
+            errors.append(f"{label} has a gap or overlap between PM windows")
+
+        coverage_end_ns = max(row["window_end_ns"] for row in ordered)
+        if coverage_end_ns > duration_ns:
+            errors.append(f"{label} extends beyond the ACU kernel duration")
+        interval_max_ns = max(row["interval_ns"] for row in ordered)
+        final_gap_ns = duration_ns - coverage_end_ns
+        if final_gap_ns > interval_max_ns:
+            warnings.append(
+                f"{label} leaves {final_gap_ns:g} ns of the kernel tail unsampled"
+            )
+        elif final_gap_ns > 0:
+            notes.append(
+                f"{label} omits a final partial interval of {final_gap_ns:g} ns"
+            )
+
+        valid_rows = [row for row in ordered if row["validity"] in VALID_PM_STATES]
+        if valid_rows and len(valid_rows) < MIN_SAMPLES:
+            warnings.append(
+                f"{label} has only {len(valid_rows)} interpretable samples"
+            )
+        valid_interval_ns = sum(row["interval_ns"] for row in valid_rows)
+        values = [row["metric_value_number"] for row in valid_rows]
+        summaries[f"packet_{packet_index}:{metric_name}"] = {
+            "packet_index": packet_index,
+            "metric_name": metric_name,
+            "logical_metric_group": ordered[0]["logical_metric_group"],
+            "scope": ordered[0]["scope"],
+            "unit": ordered[0]["metric_unit"],
+            "sample_count": len(ordered),
+            "valid_sample_count": len(valid_rows),
+            "excluded_sample_count": len(ordered) - len(valid_rows),
+            "validity_counts": _validity_counts(ordered),
+            "coverage_end_ns": coverage_end_ns,
+            "coverage_ratio": min(coverage_end_ns / duration_ns, 1.0),
+            "interval_min_ns": min(row["interval_ns"] for row in ordered),
+            "interval_max_ns": interval_max_ns,
+            "time_weighted_mean": (
+                sum(
+                    row["metric_value_number"] * row["interval_ns"]
+                    for row in valid_rows
+                )
+                / valid_interval_ns
+                if valid_interval_ns
+                else None
+            ),
+            "min": min(values) if values else None,
+            "max": max(values) if values else None,
+        }
+    return summaries, errors, warnings, notes
+
+
 def export(
     report_path: Path,
     raw_csv_path: Path,
@@ -303,6 +521,7 @@ def export(
     metadata_path: Path,
 ) -> dict:
     collection = _load_collection(collection_path, report_path)
+    launch, raw_errors = _read_raw_csv(raw_csv_path, collection)
     packets = extract_pm_packets(report_path.read_bytes())
     if not packets:
         raise RuntimeError(
@@ -313,6 +532,7 @@ def export(
     packet_summaries = []
     for packet_index, (headers, metrics) in enumerate(packets):
         for metric_name, samples in metrics:
+            known_metric = metric_name in METRIC_GROUPS
             for sample_index, (start_ns, end_ns, value) in enumerate(samples):
                 rows.append(
                     {
@@ -325,17 +545,23 @@ def export(
                         "header_field_4": headers.get(4, ""),
                         "header_field_5": headers.get(5, ""),
                         "metric_name": metric_name,
-                        "metric_unit": _metric_unit(metric_name),
+                        "metric_unit": (
+                            _metric_unit(metric_name) if known_metric else "unknown"
+                        ),
                         "sample_index": sample_index,
                         "window_start_ns": start_ns,
                         "window_end_ns": end_ns,
                         "interval_ns": end_ns - start_ns,
                         "metric_value": f"{value:.17g}",
-                        "scope": "device_global_aggregate",
+                        "metric_value_number": value,
+                        "scope": (
+                            "device_global_aggregate" if known_metric else "unknown"
+                        ),
                         "validity": (
                             "pending_activity_check"
-                            if metric_name.endswith("requests_hit_rate.pct")
-                            else "valid"
+                            if known_metric
+                            and metric_name.endswith("requests_hit_rate.pct")
+                            else ("valid" if known_metric else "unknown_semantics")
                         ),
                     }
                 )
@@ -388,11 +614,77 @@ def export(
         else:
             row["validity"] = "unknown_no_activity_counter"
 
+    stream_summaries, stream_errors, warnings, notes = _summarize_streams(
+        rows, launch["duration_ns"]
+    )
+    errors = [*raw_errors, *stream_errors]
+    dropped_samples = launch["dropped_samples"]
+    if dropped_samples is None:
+        notes.append(
+            "ACU raw page omitted dropped-sample aggregate; "
+            "PM window continuity was checked"
+        )
+    elif dropped_samples > 0:
+        warnings.append(f"ACU reported {dropped_samples} dropped PM samples")
+
+    observed_intervals = sorted({row["interval_ns"] for row in rows})
+    reported_interval = launch["pm_interval_ns"]
+    if reported_interval is not None and reported_interval != max(observed_intervals):
+        errors.append(
+            "ACU raw PM interval disagrees with the maximum exact sample window"
+        )
+    if len(observed_intervals) > 1:
+        median_interval = sorted(observed_intervals)[len(observed_intervals) // 2]
+        jitter = (max(observed_intervals) - min(observed_intervals)) / median_interval
+        message = f"PM intervals are {observed_intervals} (jitter {jitter:.3%})"
+        (warnings if jitter > 0.01 else notes).append(message)
+
+    observed_metrics = sorted({row["metric_name"] for row in rows})
+    requested_metrics = collection.get("requested_metrics")
+    missing_requested_metrics = (
+        sorted(set(requested_metrics) - set(observed_metrics))
+        if requested_metrics is not None
+        else []
+    )
+    if missing_requested_metrics:
+        warnings.append(
+            "ACU report omitted requested metrics: "
+            + ", ".join(missing_requested_metrics)
+        )
+    uninterpretable_requested_metrics = []
+    if requested_metrics is not None:
+        for metric_name in sorted(set(requested_metrics) & set(observed_metrics)):
+            metric_rows = [row for row in rows if row["metric_name"] == metric_name]
+            if not any(
+                row["validity"] in VALID_PM_STATES for row in metric_rows
+            ):
+                uninterpretable_requested_metrics.append(metric_name)
+    if uninterpretable_requested_metrics:
+        warnings.append(
+            "requested metrics lack interpretable samples: "
+            + ", ".join(uninterpretable_requested_metrics)
+        )
+    unknown_metrics = sorted(set(observed_metrics) - set(METRIC_GROUPS))
+    if unknown_metrics:
+        notes.append(
+            "unknown metrics were preserved without inferred scope or validity: "
+            + ", ".join(unknown_metrics)
+        )
+    if not any(row["validity"] in VALID_PM_STATES for row in rows):
+        warnings.append(
+            "ACU report contains no metric with validated interpretation semantics"
+        )
+
+    status = "rejected" if errors else ("warning" if warnings else "accepted")
+    csv_rows = [
+        {key: value for key, value in row.items() if key != "metric_value_number"}
+        for row in rows
+    ]
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(output, fieldnames=list(csv_rows[0]))
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(csv_rows)
 
     input_artifacts = {
         "report": _file_descriptor(report_path),
@@ -420,13 +712,14 @@ def export(
         "pm_csv": output_artifact,
     }
     evidence_id = hashlib.sha256(_canonical_json(evidence_payload)).hexdigest()
-    validity_counts: dict[str, int] = {}
-    for row in rows:
-        validity = row["validity"]
-        validity_counts[validity] = validity_counts.get(validity, 0) + 1
     metadata = {
         "schema": EXTRACTION_SCHEMA,
-        "validation": "accepted",
+        "validation": {
+            "status": status,
+            "errors": errors,
+            "warnings": warnings,
+            "notes": notes,
+        },
         "evidence_id": evidence_id,
         "evidence_grade": collection["evidence_grade"],
         "producer": collection["producer"],
@@ -437,13 +730,29 @@ def export(
         "source": "ACU .acurep Perfetto protobuf field 88/message field 15",
         "time_semantics": "each row covers [window_start_ns, window_end_ns)",
         "alignment": "kernel-relative, no duration rescaling",
-        "scope": "device/global aggregate; not attributable to one CTA or range",
+        "scope": (
+            "verified metrics are device/global aggregates; unknown metrics retain "
+            "unknown scope; neither is attributed to one CTA or source range"
+        ),
         "replay_semantics": (
             "packet headers are preserved; logical groups do not prove simultaneity"
         ),
         "packets": packet_summaries,
         "row_count": len(rows),
-        "validity_counts": validity_counts,
+        "validity_counts": _validity_counts(rows),
+        "launch": launch,
+        "sampling": {
+            "requested_metrics": requested_metrics,
+            "observed_metrics": observed_metrics,
+            "missing_requested_metrics": missing_requested_metrics,
+            "uninterpretable_requested_metrics": (
+                uninterpretable_requested_metrics
+            ),
+            "unknown_metrics": unknown_metrics,
+            "observed_intervals_ns": observed_intervals,
+            "minimum_interpretable_samples_per_metric": MIN_SAMPLES,
+        },
+        "metric_summaries": stream_summaries,
     }
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(
@@ -472,10 +781,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.metadata,
     )
     print(
-        f"exported {metadata['row_count']} PM rows from "
-        f"{len(metadata['packets'])} packet(s)"
+        f"ACU extraction {metadata['validation']['status']}: exported "
+        f"{metadata['row_count']} PM rows from {len(metadata['packets'])} packet(s)"
     )
-    return 0
+    return 2 if metadata["validation"]["status"] == "rejected" else 0
 
 
 def entrypoint() -> None:
