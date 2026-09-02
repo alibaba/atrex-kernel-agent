@@ -39,8 +39,8 @@ localhost gateway uses the same transport as a remote worker, for example
 URL resolution stay agate's responsibility (AGATE_* or ~/.atrex/config.json).
 With a standard agate gateway profile, synchronized remote files are packed once
 on the worker, transferred through OSS, integrity-checked, and extracted locally.
-Explicit gateway URLs retain the legacy stdout transport because custom gateways
-do not currently advertise OSS output capability.
+Custom endpoints selected by URL, ``AGATE_URL``, or agate config retain inline
+transport because gateways do not currently advertise OSS capability.
 """
 
 from __future__ import annotations
@@ -233,6 +233,42 @@ def _find_agate() -> str | None:
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
     return shutil.which("agate")
+
+
+def _uses_standard_oss_gateway(
+    agate_executable: str, *, url: str, profile: str | None
+) -> bool:
+    """Return whether agate resolves to one of its standard gateway profiles."""
+    if url:
+        return False
+    if profile in {"pre", "prod"}:
+        return True
+
+    def resolved_url(*options: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                [agate_executable, "config", *options],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            config = json.loads(completed.stdout) if completed.returncode == 0 else {}
+            value = config.get("url") if isinstance(config, dict) else None
+            return value.rstrip("/") if isinstance(value, str) else None
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            return None
+
+    selected = resolved_url()
+    standard = {
+        value
+        for value in (
+            resolved_url("--profile", "pre"),
+            resolved_url("--profile", "prod"),
+        )
+        if value is not None
+    }
+    return selected is not None and selected in standard
 
 
 def _walk_files(root: Path) -> Iterable[Path]:
@@ -1298,7 +1334,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Return synchronized files through the legacy stdout archive instead of "
             "agate OSS (default: use OSS with standard agate gateway profiles; "
-            "explicit gateway URLs use inline output)."
+            "custom gateway URLs and config use inline output)."
         ),
     )
     parser.add_argument(
@@ -2990,18 +3026,25 @@ def _main(argv: list[str] | None = None) -> int:
             command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = _find_agate()
     direct_http = bool(args.url and agate_executable is None)
+    standard_oss_gateway = bool(
+        agate_executable
+        and _uses_standard_oss_gateway(
+            agate_executable,
+            url=args.url,
+            profile=args.gateway_profile,
+        )
+    )
     oss_workspace = bool(
-        agate_executable and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
+        standard_oss_gateway and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
     )
     workspace_transport = (
         "oss" if oss_workspace else ("http" if direct_http else "inline")
     )
     if not sync_paths:
         output_transport = "none"
-    # Explicit URLs can target the bundled local gateway or another compatible
-    # implementation that does not publish OSS artifacts.  Since gateways do not
-    # advertise this capability yet, choose the safe transport before submission.
-    elif agate_executable and not args.inline_output and not args.url:
+    # Custom gateways do not advertise OSS capability yet, so both input and
+    # output stay inline unless agate resolves to one of its standard profiles.
+    elif standard_oss_gateway and not args.inline_output:
         output_transport = "oss"
     else:
         output_transport = "inline"
