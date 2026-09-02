@@ -37,9 +37,10 @@ localhost gateway uses the same transport as a remote worker, for example
 ``ATREX_SANDBOX_GPU=local`` plus
 ``ATREX_SANDBOX_URL=http://127.0.0.1:8000``.  Authentication and any remaining
 URL resolution stay agate's responsibility (AGATE_* or ~/.atrex/config.json).
-When the agate CLI is available, synchronized remote files are packed once on
-the worker, transferred through OSS, integrity-checked, and extracted locally.
-``--inline-output`` retains the legacy stdout transport for gateways without OSS.
+With a standard agate gateway profile, synchronized remote files are packed once
+on the worker, transferred through OSS, integrity-checked, and extracted locally.
+Explicit gateway URLs retain the legacy stdout transport because custom gateways
+do not currently advertise OSS output capability.
 """
 
 from __future__ import annotations
@@ -1296,7 +1297,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Return synchronized files through the legacy stdout archive instead of "
-            "agate OSS (default: use OSS when the agate CLI is available)."
+            "agate OSS (default: use OSS with standard agate gateway profiles; "
+            "explicit gateway URLs use inline output)."
         ),
     )
     parser.add_argument(
@@ -2996,7 +2998,10 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if not sync_paths:
         output_transport = "none"
-    elif agate_executable and not args.inline_output:
+    # Explicit URLs can target the bundled local gateway or another compatible
+    # implementation that does not publish OSS artifacts.  Since gateways do not
+    # advertise this capability yet, choose the safe transport before submission.
+    elif agate_executable and not args.inline_output and not args.url:
         output_transport = "oss"
     else:
         output_transport = "inline"
