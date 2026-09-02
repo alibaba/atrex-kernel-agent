@@ -19,7 +19,7 @@ REJECT_DELTA = 0.05
 MIN_SAMPLES = 10
 MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v1"
 TIMELINE_RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v4"
-ACU_EXTRACTION_SCHEMA = "ppu-acu-extraction/v2"
+ACU_EXTRACTION_SCHEMA = "ppu-acu-extraction/v3"
 JOINT_SUMMARY_SCHEMA = "ppu-joint-profile/v3"
 VALID_PM_STATES = {"valid", "valid_activity_positive"}
 
@@ -104,9 +104,11 @@ def _read_acu_metadata(
     path: Path, pm_path: Path, raw_path: Path
 ) -> dict[str, Any]:
     metadata = _load_json(path, "ACU extraction metadata")
+    validation = metadata.get("validation")
     if (
         metadata.get("schema") != ACU_EXTRACTION_SCHEMA
-        or metadata.get("validation") != "accepted"
+        or not isinstance(validation, dict)
+        or validation.get("status") != "accepted"
     ):
         raise RuntimeError("ACU extraction metadata is not accepted")
     if metadata.get("evidence_grade") != "decision":

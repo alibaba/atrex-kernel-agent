@@ -2,12 +2,13 @@
 
 ## Collection
 
-Precompile the workload and capture exactly one target launch. Prefer explicit
-PM metrics for FP8 Tensor, CU/IPC, DRAM, KSD/KVD request activity/hit rate, and
-L2. The validated ACU 2.2 stock section omitted FP8 Tensor utilization, and its
-`--section-folder` did not discover a local custom section.
+Precompile the workload and capture exactly one target launch. Choose the smallest PM metric set
+that can answer the current question. There is no default dtype: inspect the workload, source, or
+compiled instructions before selecting a Tensor metric, and do not collect a Tensor metric for a
+non-Tensor kernel.
 
-Recommended metric names:
+The following names are metrics whose extraction semantics were verified with ACU 2.2. They are a
+menu, not one default collection. The FP8 metric is relevant only to an FP8 question:
 
 ```text
 ce__total_cta_num.sum
@@ -26,18 +27,26 @@ kvd__requests_store_pipe_lsu.sum
 l2__requests_hit_rate.pct
 ```
 
-Pass them with the `pmsampling:` prefix, kernel replay, disabled PM warp
-sampling, and explicit physical device. The requested interval is only a hint.
+Do not request an isolated hit-rate metric for decision evidence. Pair KSD/KVD hit rates with their
+listed load/store activity metrics in the same replay packet and exact windows. No verified L2
+activity denominator is listed here, so `l2__requests_hit_rate.pct` remains raw exploratory data.
+Preserve any other ACU metric in the exported samples, but do not infer its unit, scope, or validity
+until its semantics have been verified on the target ACU/PPU version.
+
+Pass selected PM metrics with the `pmsampling:` prefix, kernel replay, and an explicit physical
+device. The requested interval is only a hint. Use `--disable-pm-warp-sampling` only for a lightweight
+PM-only capture; do not use that flag when the current question requires ACU warp-sampling evidence.
+Keep a separate attempt when changing the sampling mode.
 
 ```bash
 acu --devices <PHYSICAL_DEVICE> \
   --pm-sampling-interval 5000 \
-  --disable-pm-warp-sampling \
+  <OPTIONAL_SAMPLING_MODE_FLAGS> \
   --replay-mode kernel \
-  --cache-control all \
+  --cache-control <POLICY_MATCHING_THE_PERFORMANCE_QUESTION> \
   --kernel-name <EXACT_KERNEL_NAME> \
   --launch-count 1 \
-  --metrics <COMMA_SEPARATED_PMSAMPLING_METRICS_ABOVE> \
+  --metrics <AGENT_SELECTED_METRICS_FOR_THIS_DTYPE_AND_QUESTION> \
   --export profile.acurep --force-overwrite \
   <TARGET_COMMAND>
 ```
@@ -84,10 +93,13 @@ acu --version > acu-version.txt
   "kernel_name": "exact filtered kernel name",
   "kernel_specialization": "compile-time specialization and architecture flags",
   "workload_identity": "shape, dtype, layout, and input case",
-  "device_identity": {"physical_device": 6, "serial": "..."},
+  "device_identity": {"physical_device": 0, "serial": "..."},
   "runtime_identity": {"compiler": "hggc ...", "runtime": "PPU SDK ..."},
-  "cache_policy": "acu --cache-control all; harness cache state ...",
+  "cache_policy": "exact ACU cache-control and harness cache state",
   "clock_configuration": "locked/default clocks and observed power state",
+  "requested_metrics": [
+    "exact metric names expected in the exported PM payload"
+  ],
   "source_artifacts": [
     {"path": "clean-source/kernel.cu", "identity": "probe-free target source"}
   ],
@@ -100,10 +112,11 @@ acu --version > acu-version.txt
 }
 ```
 
-KSD/KVD hit rate is valid only when matching load/store requests from the same replay packet and
-exact window are positive. Duplicate sample identities are rejected. L2 hit remains unknown without
-an activity denominator. Non-finite PM values reject extraction rather than being serialized as
-JSON `NaN` or treated as numerical evidence.
+`requested_metrics` is optional, but include it when the exact requested list is known so a missing
+metric is visible. KSD/KVD hit rate is valid only when matching load/store requests from the same
+replay packet and exact window are positive. Duplicate sample identities are rejected. L2 hit
+remains unknown without an activity denominator. Non-finite PM values reject extraction rather than
+being serialized as JSON `NaN` or treated as numerical evidence.
 
 Run the exporter after exporting the ACU raw page:
 
@@ -115,6 +128,24 @@ python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
   --metadata profile.extract.json
 ```
 
-The exporter verifies the captured producer output identifies ACU 2.2, hashes the report, raw page, collection
-descriptor, bound source/binary/workload files, and resulting PM CSV, and leaves `.acurep`
-unchanged. `merge.py` recomputes the raw/PM hashes before consuming the extraction metadata.
+The exporter leaves `.acurep`, `profile.raw.csv`, and the decoded PM values available to the agent.
+It also validates the exact raw kernel row, physical device, launch dimensions and finite launch
+resources; checks PM window continuity, duration coverage, interval agreement, dropped samples, and
+requested metric presence; and emits per-packet/per-metric valid counts and time-weighted summaries.
+Unknown metrics remain in `profile.samples.csv` with `scope: unknown` and
+`validity: unknown_semantics`.
+
+`profile.extract.json` uses `ppu-acu-extraction/v3`. Its validation status has narrow data-quality
+semantics:
+
+- `accepted`: no detected integrity or sampling-quality issue;
+- `warning`: raw data remains available, but short coverage, few samples, dropped samples, a missing
+  requested metric, or another stated limitation prevents terminal reuse;
+- `rejected`: a kernel/device mismatch, malformed launch fact, contradictory PM windows, duration
+  overrun, or another hard integrity failure was detected.
+
+A warning never triggers collection, timeline, or retry automatically. The agent reads the compact
+metadata first, inspects only the relevant raw rows, and chooses whether the evidence is already
+enough. The exporter hashes the report, raw page, collection descriptor, bound
+source/binary/workload files, and resulting PM CSV. `merge.py` recomputes the raw/PM hashes before
+consuming only accepted decision-grade metadata.

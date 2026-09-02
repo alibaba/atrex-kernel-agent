@@ -25,7 +25,7 @@ EVALUATION_CORRECTNESS = {"pass", "fail", "unknown"}
 EVALUATION_PERFORMANCE = {"improved", "not_improved", "unknown"}
 PPU_DIAGNOSTIC_ROUTES = {"acu", "timeline", "joint"}
 PPU_EVIDENCE_SCHEMAS = {
-    "acu": {"ppu-acu-extraction/v2"},
+    "acu": {"ppu-acu-extraction/v3"},
     "timeline": {
         "ppu-fixed-slot-receipt/v4",
         "ppu-critical-path-report/v2",

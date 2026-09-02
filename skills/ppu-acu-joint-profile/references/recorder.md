@@ -189,7 +189,7 @@ thread and partial grid coverage:
   },
   "coverage": {"all_blocks": false},
   "workload_identity": "m=...;n=...;k=...;dtype=...",
-  "device_identity": {"physical_device": 6, "serial": "..."}
+  "device_identity": {"physical_device": 0, "serial": "..."}
 }
 ```
 

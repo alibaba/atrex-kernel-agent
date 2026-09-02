@@ -109,7 +109,9 @@ aid, not a reason to profile an otherwise understood kernel.
 
 Read [references/acu_collection.md](references/acu_collection.md) and collect the smallest useful
 metric set on one exact probe-free target launch. Export the raw page and PM windows without creating
-any timeline manifest or instrumented source:
+any timeline manifest or instrumented source. Do not default to FP8: select Tensor metrics only when
+they match the kernel's actual dtype, and use no Tensor metric when it is irrelevant. Treat the
+reference's verified metric list as selectable examples rather than one required bundle:
 
 ```bash
 acu -i profile.acurep --page raw --csv --csv-file profile.raw.csv
@@ -118,9 +120,13 @@ python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
   --csv profile.samples.csv --metadata profile.extract.json
 ```
 
-Use the ACU report independently to classify device-level compute, memory, cache, occupancy, or tail
-evidence. Stop here when that evidence selects or rejects the optimization hypothesis. Do not infer
-which source interval owns a device-global metric.
+Read the compact validation and metric summaries in `profile.extract.json`, then inspect the relevant
+original rows in `profile.raw.csv` and `profile.samples.csv`; the summary never replaces those raw
+artifacts. `accepted` means the extractor found no data-quality issue, not that ACU proves a root
+cause. A `warning` does not trigger a retry or timeline automatically. Use the ACU report
+independently to classify device-level compute, memory, cache, occupancy, or tail evidence, and stop
+when it selects or rejects the optimization hypothesis. Do not infer which source interval owns a
+device-global metric.
 
 If ACU reports a GPM permission or monitor conflict, disable GPM only on the target device and retry
 once:
