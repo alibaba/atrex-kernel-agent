@@ -13,7 +13,8 @@ agent in this repository to translate the task into that command and start the c
 - A sandbox execution environment containing the workload's framework and GPU stack
 - For SSH execution: OpenSSH `ssh` and `scp` on the coordinator; Bash, Python 3, `tar`, `base64`,
   Bubblewrap (`bwrap`), unprivileged user namespaces, and accessible GPU device nodes on the remote
-  host. Authentication must be non-interactive for detached recovery.
+  host. Physical NVIDIA assignment also requires `nvidia-smi`. Authentication must be
+  non-interactive for detached recovery.
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
@@ -107,6 +108,7 @@ python orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
+    --sandbox-ssh-gpu 0 \
     --sandbox-ssh-runtime-bind /opt/aka-venv \
     --sandbox-ssh-init 'source /opt/aka-venv/bin/activate' \
     --sandbox-health-command 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_capability(0))"' \
@@ -114,10 +116,20 @@ python orchestrator/optimize.py \
     --workspace /path/to/runs --max-iters 20
 ```
 
+`--sandbox-ssh-gpu` is required and selects one physical NVIDIA index. The runner resolves that index
+to its GPU UUID, exposes only its device node plus common driver control nodes, and exports UUID-based
+`CUDA_VISIBLE_DEVICES`. MIG-enabled GPUs and MIG/UUID selectors fail closed because their capability
+nodes are not assigned yet. SSH mode also requires an explicit `--framework`; automatic parallel
+framework dispatch is rejected, and multi-shape ABBA batches are serialized on the assigned card.
+
 `--sandbox-ssh-runtime-bind REMOTE_PATH[=SANDBOX_PATH]` is repeatable. A single path preserves its
 location; the `source=destination` form can mount it elsewhere. The bind is read-only. For example, a
 venv below a hidden login home can be exposed at its original path with
 `--sandbox-ssh-runtime-bind /home/gpu/aka/.venv`, or remapped when it is relocatable.
+Broad system/home roots and credential directories are rejected on the source side. A source below
+`/home` must be a conventional `.venv`/`venv` root or a direct child of a Conda `envs` directory.
+Before each execution, the remote host resolves every source symlink; the resolved target must still
+pass the same denylist and be a directory.
 
 `--sandbox-ssh-init` defaults to empty and runs inside the isolated namespace. The default health
 command imports PyTorch, checks GPU
@@ -129,7 +141,7 @@ Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sand
 runs the requested evaluator or profiler inside mandatory Bubblewrap PID/IPC/UTS/network namespaces,
 downloads only requested `--sync` artifacts, and removes the remote directory. The namespace has no
 network, host home, inherited environment, or writable host filesystem; it sees only minimal read-only
-system paths, configured runtime binds, GPU device nodes, and its writable job directory. There is no
+system paths, configured runtime binds, the assigned GPU device node, and its writable job directory. There is no
 unisolated fallback. A portable Python watchdog enforces `--sandbox-timeout` even when GNU `timeout`
 is absent.
 
@@ -343,6 +355,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
+--sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
 --sandbox-ssh-init COMMAND       Remote environment activation before jobs/probes
 --sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
 --sandbox-health-command COMMAND GPU health probe used for failure classification
@@ -377,6 +390,7 @@ python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
 python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
+  --ssh-gpu 0 \
   --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
   --no-sync -- python test_kernel.py --no-memory
 ```

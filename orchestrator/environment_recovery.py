@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +42,14 @@ def environment_state_file() -> Path | None:
 
 def environment_is_blocked() -> bool:
     path = environment_state_file()
-    return bool(path and path.is_file())
+    if path is None:
+        return False
+    if path.is_file():
+        return True
+    return (
+        os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") != "1"
+        and path.with_name("restarting.json").is_file()
+    )
 
 
 def current_recovery_context() -> RecoveryContext | None:
@@ -74,16 +82,24 @@ def _write_private_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
-def _signal_restart_ready() -> None:
-    """Tell the monitor that the restarted optimizer reached recovery setup."""
+def signal_restart_ready() -> None:
+    """Tell the monitor that campaign state is durable and execution can resume."""
     value = os.environ.pop("ATREX_ENVIRONMENT_RESTART_READY_FILE", "").strip()
     if not value:
+        os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
         return
     path = Path(value).expanduser().resolve()
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(str(os.getpid()) + "\n", encoding="utf-8")
     temporary.chmod(0o600)
     temporary.replace(path)
+    deadline = time.monotonic() + 30
+    restarting = path.with_name("restarting.json")
+    while restarting.is_file() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if restarting.is_file():
+        raise EnvironmentUnavailable("recovery monitor did not complete restart handoff")
+    os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
 
 
 def configure_recovery(
@@ -95,19 +111,55 @@ def configure_recovery(
     ssh_target: str,
     ssh_init: str,
     ssh_runtime_binds: Sequence[str],
+    ssh_gpu: int,
     health_command: str,
     poll_interval: int,
 ) -> RecoveryContext:
     """Create durable restart metadata and export the shared failure marker path."""
     inherited = environment_state_file()
     owner = os.environ.get(RECOVERY_OWNER_ENV, "1") != "0"
+    command = [
+        str(Path(sys.executable).resolve()),
+        str(optimize_script.resolve()),
+        *raw_argv,
+    ]
+    stable_metadata = {
+        "cwd": str(Path.cwd().resolve()),
+        "command": command,
+        "sandbox_hardware": sandbox_hardware,
+        "ssh_target": ssh_target,
+        "ssh_init": ssh_init,
+        "ssh_runtime_binds": list(ssh_runtime_binds),
+        "ssh_gpu": ssh_gpu,
+        "health_command": health_command,
+        "poll_interval": poll_interval,
+    }
     if inherited is not None:
         directory = inherited.parent
     else:
         identity = json.dumps(
-            [str(Path.cwd().resolve()), *raw_argv],
+            {
+                "cwd": stable_metadata["cwd"],
+                "argv": list(raw_argv),
+                "ssh": {
+                    key: stable_metadata[key]
+                    for key in (
+                        "sandbox_hardware",
+                        "ssh_target",
+                        "ssh_init",
+                        "ssh_runtime_binds",
+                        "ssh_gpu",
+                        "health_command",
+                        "poll_interval",
+                    )
+                },
+                # Separate simultaneous identical commands while a restarted child keeps
+                # using the inherited state path from its supervising monitor.
+                "invocation": uuid.uuid4().hex,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
+            sort_keys=True,
         )
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
         directory = workspace_base / ".atrex_environment" / digest
@@ -124,31 +176,40 @@ def configure_recovery(
     os.environ["ATREX_SANDBOX_SSH_RUNTIME_BINDS"] = json.dumps(
         list(ssh_runtime_binds), separators=(",", ":")
     )
+    os.environ["ATREX_SANDBOX_SSH_GPU"] = str(ssh_gpu)
     os.environ["ATREX_SANDBOX_HEALTH_COMMAND"] = health_command
     os.environ.pop("ATREX_SANDBOX_URL", None)
     os.environ.pop("ATREX_SANDBOX_PROFILE", None)
     os.environ[RECOVERY_OWNER_ENV] = "1" if owner else "0"
 
     restart_path = directory / "restart.json"
+    if restart_path.is_file():
+        try:
+            existing = json.loads(restart_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"cannot validate active recovery metadata: {exc}") from exc
+        if not isinstance(existing, dict):
+            raise RuntimeError("cannot validate active recovery metadata: expected an object")
+        mismatches = [
+            key
+            for key, expected in stable_metadata.items()
+            if existing.get(key) != expected
+        ]
+        if existing.get("environment_state_file") != str(inherited):
+            mismatches.append("environment_state_file")
+        if mismatches:
+            raise RuntimeError(
+                "refusing to reuse recovery state with different resolved configuration: "
+                + ", ".join(sorted(set(mismatches)))
+            )
     if owner or not restart_path.is_file():
         _write_private_json(
             restart_path,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "cwd": str(Path.cwd().resolve()),
-                "command": [
-                    str(Path(sys.executable).resolve()),
-                    str(optimize_script.resolve()),
-                    *raw_argv,
-                ],
                 "environment_state_file": str(inherited),
-                "sandbox_hardware": sandbox_hardware,
-                "ssh_target": ssh_target,
-                "ssh_init": ssh_init,
-                "ssh_runtime_binds": list(ssh_runtime_binds),
-                "health_command": health_command,
-                "poll_interval": poll_interval,
+                **stable_metadata,
             },
         )
         monitor = optimize_script.resolve().parent.parent / "tools" / "monitor_optimize_tasks.py"
@@ -167,7 +228,6 @@ def configure_recovery(
             encoding="utf-8",
         )
         recover.chmod(0o700)
-    _signal_restart_ready()
     return RecoveryContext(directory=directory, state_file=inherited, owner=owner)
 
 

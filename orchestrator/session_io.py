@@ -10,9 +10,11 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +33,7 @@ from .constants import (
 )
 from .hardware import hardware_vendor
 from .environment_recovery import (
+    environment_is_blocked,
     environment_state_file,
     raise_if_environment_blocked,
 )
@@ -512,15 +515,56 @@ def _sandbox_command(
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    result = subprocess.run(
+    effective_timeout = wall_timeout if wall_timeout is not None else timeout + 240
+    raise_if_environment_blocked()
+    process = subprocess.Popen(
         cmd,
         cwd=str(workspace),
         env=environment,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        # Gateway execution timeout starts only after a worker claims the job.
-        # The local wait must additionally tolerate time spent in a shared queue.
-        timeout=wall_timeout if wall_timeout is not None else timeout + 240,
+        start_new_session=True,
+    )
+
+    def stop_process_group() -> tuple[str, str]:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # allow that 15-second cleanup window to persist a retry marker.
+            return process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            return process.communicate()
+
+    deadline = time.monotonic() + effective_timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            stdout, stderr = stop_process_group()
+            raise subprocess.TimeoutExpired(
+                cmd, effective_timeout, output=stdout, stderr=stderr
+            )
+        try:
+            stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+        except subprocess.TimeoutExpired:
+            if environment_is_blocked():
+                stop_process_group()
+                raise_if_environment_blocked()
+            continue
+        break
+    result = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
     raise_if_environment_blocked()
     return result

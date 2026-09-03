@@ -5,7 +5,7 @@ import math
 import shutil
 import subprocess
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -546,10 +546,27 @@ class GatewayABBAValidator:
             raise AssertionError("unreachable ABBA batch retry loop")
 
         try:
-            with ThreadPoolExecutor(
-                max_workers=min(DEFAULT_SHAPE_BATCH_WORKERS, len(batch_specs))
-            ) as executor:
-                payloads = list(executor.map(run_batch, batch_specs))
+            # One explicitly assigned SSH GPU must never run multiple timing batches
+            # concurrently. Gateway allocations remain parallel, but cancel queued work
+            # immediately when one batch confirms an outage or otherwise fails.
+            max_workers = (
+                1
+                if self.ssh
+                else min(DEFAULT_SHAPE_BATCH_WORKERS, len(batch_specs))
+            )
+            executor = ThreadPoolExecutor(max_workers=max_workers)
+            futures = [executor.submit(run_batch, spec) for spec in batch_specs]
+            try:
+                completed, pending = wait(futures, return_when=FIRST_EXCEPTION)
+                for future in completed:
+                    future.result()
+                payloads = [future.result() for future in futures]
+            except BaseException:
+                for future in pending:
+                    future.cancel()
+                raise
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
             payload = _merge_batch_payloads(payloads, schedule, expected_shape_ids)
         except (
             subprocess.SubprocessError,

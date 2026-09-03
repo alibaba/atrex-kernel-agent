@@ -185,7 +185,11 @@ profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates 
 `/tmp/atrex-sandbox.*` directory and uploads the allowlisted bundle with `scp`, but never executes a
 candidate in the login account's ordinary shell. `tools/sandbox.py` always enters a Bubblewrap
 namespace that exposes a minimal read-only system tree, explicitly configured read-only runtime
-directories, GPU device nodes, and the one writable job directory. It unshares network, PID, IPC, and
+directories, one assigned physical NVIDIA GPU, and the one writable job directory. Runtime bind
+sources are denied when broad/sensitive, resolved on the remote host, and validated again so a
+symlink cannot restore access to credentials or a host root. The physical index is resolved to a GPU
+UUID; its device node and common driver nodes are the only GPU devices bound. MIG mode fails closed
+until capability-node assignment is available. The namespace unshares network, PID, IPC, and
 UTS namespaces, replaces `HOME` and `/tmp`, and clears the inherited environment. The remote Python
 watchdog enforces the requested command deadline without relying on GNU `timeout`.
 
@@ -199,16 +203,21 @@ SSH command failures, including status 255, pass through an independent isolated
 A healthy probe preserves the original exit status as a candidate/tool failure. A transfer exception,
 or a failed probe after a failed command, atomically transitions the optimizer to
 `environment_blocked` and records a private marker. The coding-session process guard watches that
-marker and terminates the complete Agent process group; multi-framework dispatch uses the same marker
-to stop siblings. A remote directory that could not be deleted is recorded separately and becomes a
+marker and terminates the complete Agent process group. Supervisor-owned sandbox processes poll the
+same marker, terminate their own process groups, and cancel queued ABBA futures; SSH ABBA batches run
+serially on the assigned GPU, and SSH auto-framework dispatch is rejected. A remote directory that
+could not be deleted is recorded separately and becomes a
 required recovery action rather than being forgotten.
 
 Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor takes an
 exclusive PID lock, repeats the configured health probe, removes every deferred remote workspace, and
-then replays the exact original argument array and working directory. The blocked marker remains in
-place if cleanup or `Popen` fails, so the monitor retries instead of declaring a false recovery. A
-successfully spawned optimizer waits on a short restart handoff while the monitor archives the marker.
-Existing V1 snapshots and Long Horizon active episode state provide the restart boundary. User
+then replays the exact original argument array and working directory. Recovery state is keyed by the
+resolved target, init, runtime binds, assigned GPU, health probe, and a unique invocation identity;
+existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
+`restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
+construction, and workspace resume. An early exit restores `failure.json`; only the durable campaign
+resume signal archives the marker. Existing V1 snapshots and Long Horizon active episode state provide
+the restart boundary. User
 interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
 
 ```mermaid
@@ -217,8 +226,9 @@ flowchart TD
     B --> C[Create remote temporary directory]
     C --> D[Upload with scp]
     D --> E[Enter mandatory Bubblewrap namespaces]
-    E --> F[Portable Python deadline watchdog]
-    F --> G{Remote exit status}
+    E --> F[Expose assigned GPU UUID/device only]
+    F --> G0[Portable Python deadline watchdog]
+    G0 --> G{Remote exit status}
     G -->|0| H[Download requested artifacts]
     G -->|non-zero, including 255| I[Independent isolated GPU health probe]
     I -->|healthy| J[Return original candidate status]
@@ -241,9 +251,10 @@ flowchart TD
     S -->|no| R
     S -->|yes| T{Spawn exact argv and cwd}
     T -->|Popen fails| R
-    T -->|spawned| U[Archive failure marker]
-    U --> V[Release restart handoff]
-    V --> W[Resume existing campaign/worktree state]
+    T -->|spawned| U[Retain marker as restarting.json]
+    U --> V{Durable campaign resume reached?}
+    V -->|early exit or outage| R
+    V -->|yes| W[Archive marker and continue optimization]
 ```
 
 The motivating failure mode is an unattended optimization losing a GPU host after hours of work:

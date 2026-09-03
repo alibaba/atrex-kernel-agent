@@ -106,6 +106,7 @@ try:
         environment_is_blocked,
         launch_recovery_monitor,
         raise_if_environment_blocked,
+        signal_restart_ready,
     )
     from .session_io import detect_arch, ensure_submodules
     from .operator_layout import (
@@ -155,6 +156,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         environment_is_blocked,
         launch_recovery_monitor,
         raise_if_environment_blocked,
+        signal_restart_ready,
     )
     from orchestrator.session_io import (  # type: ignore[no-redef]
         detect_arch,
@@ -487,6 +489,15 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     ap.add_argument(
+        "--sandbox-ssh-gpu",
+        default=None,
+        metavar="INDEX",
+        help=(
+            "Physical NVIDIA GPU index assigned to SSH execution (required with "
+            "--sandbox-ssh; default: ATREX_SANDBOX_SSH_GPU)."
+        ),
+    )
+    ap.add_argument(
         "--sandbox-health-command",
         default=os.environ.get(
             "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
@@ -725,6 +736,24 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     if args.sandbox_ssh and not args.sandbox_health_command.strip():
         ap.error("--sandbox-health-command must not be empty with --sandbox-ssh")
     if args.sandbox_ssh:
+        raw_ssh_gpu = (
+            args.sandbox_ssh_gpu
+            if args.sandbox_ssh_gpu is not None
+            else os.environ.get("ATREX_SANDBOX_SSH_GPU", "")
+        )
+        if not re.fullmatch(r"[0-9]+", raw_ssh_gpu):
+            ap.error(
+                "--sandbox-ssh-gpu must be a physical NVIDIA index; "
+                "MIG/UUID selectors are not yet supported"
+            )
+        args.sandbox_ssh_gpu = int(raw_ssh_gpu)
+        if args.sandbox_ssh_gpu > 31:
+            ap.error("--sandbox-ssh-gpu must be in the range 0..31")
+        if not args.framework:
+            ap.error(
+                "--sandbox-ssh requires an explicit --framework so one assigned GPU "
+                "cannot be shared by auto-dispatched campaigns"
+            )
         if args.sandbox_ssh_runtime_bind is None:
             raw_runtime_binds = os.environ.get(
                 "ATREX_SANDBOX_SSH_RUNTIME_BINDS", "[]"
@@ -744,6 +773,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
                 ap.error(f"--sandbox-ssh requires {executable} on PATH")
     elif args.sandbox_ssh_runtime_bind:
         ap.error("--sandbox-ssh-runtime-bind requires --sandbox-ssh")
+    elif args.sandbox_ssh_gpu is not None:
+        ap.error("--sandbox-ssh-gpu requires --sandbox-ssh")
     if args.environment_poll_interval <= 0:
         ap.error("--environment-poll-interval must be positive")
     if shutil.which(args.agent_cli) is None:
@@ -793,6 +824,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             ssh_target=args.sandbox_ssh,
             ssh_init=args.sandbox_ssh_init,
             ssh_runtime_binds=args.sandbox_ssh_runtime_bind,
+            ssh_gpu=args.sandbox_ssh_gpu,
             health_command=args.sandbox_health_command,
             poll_interval=args.environment_poll_interval,
         )
@@ -873,6 +905,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         sandbox_url=args.sandbox_url,
         sandbox_ssh=args.sandbox_ssh,
         sandbox_ssh_init=args.sandbox_ssh_init,
+        sandbox_ssh_gpu=args.sandbox_ssh_gpu,
         sandbox_health_command=args.sandbox_health_command,
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
@@ -918,6 +951,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             "generalized campaign baseline is incompatible with authoritative per-shape "
             f"memory: {baseline_coverage_problem}; start a fresh workspace"
         )
+    if args.sandbox_ssh:
+        # A recovery monitor may declare success only after operator resolution,
+        # architecture/submodule setup, campaign construction, and workspace resume.
+        signal_restart_ready()
     campaign.ensure_framework_baseline()
     campaign.run()
     return 0
@@ -930,7 +967,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
         context = current_recovery_context()
-        pid = launch_recovery_monitor(context) if context is not None else None
+        supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
+        pid = (
+            launch_recovery_monitor(context)
+            if context is not None and not supervised
+            else None
+        )
         if pid is not None:
             print(
                 "[orchestrator] remote GPU environment unavailable; optimization stopped; "

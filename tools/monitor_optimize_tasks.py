@@ -48,6 +48,13 @@ def _load_restart(state_dir: Path) -> dict[str, Any]:
         isinstance(item, str) for item in runtime_binds
     ):
         raise RuntimeError("restart metadata has invalid ssh_runtime_binds")
+    ssh_gpu = value.get("ssh_gpu")
+    if (
+        not isinstance(ssh_gpu, int)
+        or isinstance(ssh_gpu, bool)
+        or not 0 <= ssh_gpu <= 31
+    ):
+        raise RuntimeError("restart metadata has invalid ssh_gpu")
     return value
 
 
@@ -93,6 +100,8 @@ def _health_command(metadata: dict[str, Any]) -> list[str]:
         metadata["sandbox_hardware"],
         "--ssh",
         metadata["ssh_target"],
+        "--ssh-gpu",
+        str(metadata["ssh_gpu"]),
         "--health-command",
         metadata["health_command"],
         "--check-health",
@@ -116,7 +125,7 @@ def _archive_failure(state_dir: Path) -> Path | None:
 
 
 def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
-    """Spawn the real optimizer while preserving the marker through Popen failures."""
+    """Supervise optimizer initialization and restore the marker on early failure."""
     command = metadata["command"]
     if len(command) < 2 or not Path(command[1]).is_file():
         missing = command[1] if len(command) > 1 else ""
@@ -131,10 +140,12 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     environment["ATREX_SANDBOX_SSH_RUNTIME_BINDS"] = json.dumps(
         metadata.get("ssh_runtime_binds", []), separators=(",", ":")
     )
+    environment["ATREX_SANDBOX_SSH_GPU"] = str(metadata["ssh_gpu"])
     environment["ATREX_SANDBOX_HEALTH_COMMAND"] = metadata["health_command"]
     environment.pop("ATREX_SANDBOX_URL", None)
     environment.pop("ATREX_SANDBOX_PROFILE", None)
     environment["ATREX_ENVIRONMENT_RESTART_HANDOFF"] = "1"
+    environment["ATREX_ENVIRONMENT_RESTART_SUPERVISED"] = "1"
     ready = state_dir / "restart.ready"
     try:
         ready.unlink()
@@ -160,24 +171,75 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     except OSError:
         process.terminate()
         raise
-    deadline = time.monotonic() + 30
-    while not ready.is_file():
+    failure = Path(metadata["environment_state_file"]).expanduser().resolve()
+    expected_failure = (state_dir / "failure.json").resolve()
+    restarting = state_dir / "restarting.json"
+    if failure != expected_failure:
+        process.terminate()
+        raise RuntimeError("restart metadata state path does not match its state directory")
+    if restarting.exists():
+        process.terminate()
+        raise RuntimeError("a prior restart handoff is still active")
+    try:
+        failure.replace(restarting)
+    except OSError:
+        process.terminate()
+        raise
+
+    def restore_marker() -> None:
+        if not restarting.is_file():
+            return
+        if failure.is_file():
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            restarting.replace(state_dir / f"superseded-restart-{stamp}.json")
+        else:
+            restarting.replace(failure)
+
+    def stop_process() -> None:
         if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, 15)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             try:
-                (state_dir / "restart.pid").unlink()
-            except FileNotFoundError:
+                os.killpg(process.pid, 9)
+            except ProcessLookupError:
                 pass
-            raise RuntimeError(
-                f"optimizer exited during restart handoff with status {process.returncode}"
-            )
-        if time.monotonic() >= deadline:
-            process.terminate()
-            try:
-                (state_dir / "restart.pid").unlink()
-            except FileNotFoundError:
-                pass
-            raise RuntimeError("optimizer did not initialize recovery within 30 seconds")
-        time.sleep(0.05)
+            process.wait()
+
+    # Baseline setup can legitimately use the configured two-hour session budget.
+    # The monitor keeps ownership throughout and restores failure.json on any early exit.
+    deadline = time.monotonic() + 10_800
+    try:
+        while not ready.is_file():
+            if process.poll() is not None:
+                raise RuntimeError(
+                    "optimizer exited before durable campaign resume "
+                    f"with status {process.returncode}"
+                )
+            if failure.is_file():
+                raise RuntimeError("remote environment failed again during restart")
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "optimizer did not reach durable campaign resume within 10800 seconds"
+                )
+            time.sleep(0.1)
+        if failure.is_file():
+            raise RuntimeError("remote environment failed again during restart")
+    except BaseException:
+        stop_process()
+        restore_marker()
+        try:
+            (state_dir / "restart.pid").unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    restarting.replace(state_dir / f"recovered-{stamp}.json")
     return process.pid
 
 
@@ -261,10 +323,6 @@ def run_monitor(
                     pid: int | None = None
                     try:
                         pid = _restart(metadata, state_dir)
-                        if _archive_failure(state_dir) is None:
-                            raise RuntimeError(
-                                "blocked marker disappeared before restart"
-                            )
                         try:
                             (state_dir / "restart.ready").unlink()
                         except FileNotFoundError:

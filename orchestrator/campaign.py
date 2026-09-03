@@ -197,6 +197,7 @@ class Campaign:
     full_episode_ask_qoder: bool = True
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
+    sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
@@ -393,6 +394,8 @@ class Campaign:
         if self.sandbox_ssh:
             environment["ATREX_SANDBOX_SSH"] = self.sandbox_ssh
             environment["ATREX_SANDBOX_SSH_INIT"] = self.sandbox_ssh_init
+            if self.sandbox_ssh_gpu is not None:
+                environment["ATREX_SANDBOX_SSH_GPU"] = str(self.sandbox_ssh_gpu)
             environment.pop("ATREX_SANDBOX_URL", None)
             environment.pop("ATREX_SANDBOX_PROFILE", None)
             if self.sandbox_health_command:
