@@ -596,6 +596,45 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
+def _distributed_evaluation_world_size(metadata: object) -> int:
+    """Return the GPU count declared by a single-node evaluator contract."""
+    if not isinstance(metadata, dict):
+        return 1
+    benchmark_contract = metadata.get("benchmark_contract")
+    if not isinstance(benchmark_contract, dict):
+        return 1
+    evaluation = benchmark_contract.get("distributed_evaluation")
+    if evaluation is None:
+        return 1
+    if not isinstance(evaluation, dict):
+        raise ValueError("benchmark_contract.distributed_evaluation must be an object")
+    if evaluation.get("launcher") != "torchrun":
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.launcher must be 'torchrun'"
+        )
+    if evaluation.get("backend") != "nccl":
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.backend must be 'nccl'"
+        )
+    world_size = evaluation.get("world_size")
+    if isinstance(world_size, bool) or not isinstance(world_size, int):
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.world_size must be an integer"
+        )
+    if world_size != 2:
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.world_size must be 2"
+        )
+    return world_size
+
+
+def _workspace_num_gpus(workspace: Path) -> int:
+    metadata = _json_object(
+        _evaluator_input_path(workspace, "metadata.json", required=False)
+    )
+    return _distributed_evaluation_world_size(metadata)
+
+
 def _is_fp4_dtype(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -925,12 +964,16 @@ def _typed_request(
                     value["num_shapes"] = len(requested_shape_ids)
             reference[field] = value
 
+    spec: dict[str, Any] = {
+        "languages": [str(value) for value in languages],
+        "target_hardware": [hardware],
+    }
+    num_gpus = _distributed_evaluation_world_size(reference.get("metadata"))
+    if num_gpus > 1:
+        spec["num_gpus"] = num_gpus
     request: dict[str, Any] = {
         "name": f"{workspace.name}_{kind}",
-        "spec": {
-            "languages": [str(value) for value in languages],
-            "target_hardware": [hardware],
-        },
+        "spec": spec,
         "candidate": (workspace / "kernel.py").read_text(encoding="utf-8"),
         "reference": reference,
         "options": {
@@ -1527,19 +1570,23 @@ def _run_direct_gateway(
     env_items: list[str],
     files: dict[str, Path],
     command: str,
+    num_gpus: int = 1,
 ) -> subprocess.CompletedProcess[str]:
     """Use the public dev-job HTTP API when the optional agate CLI is absent."""
     try:
         env_vars = _parse_env_items(env_items)
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
+    spec: dict[str, Any] = {"target_hardware": [hardware]}
+    if num_gpus > 1:
+        spec["num_gpus"] = num_gpus
     return _run_direct_job(
         url=url,
         kind="dev",
         timeout=timeout,
         queue_wait_grace=queue_wait_grace,
         payload={
-            "spec": {"target_hardware": [hardware]},
+            "spec": spec,
             "command": command,
             "timeout_s": timeout,
             "env_vars": env_vars,
@@ -1891,9 +1938,11 @@ def _typed_agate_command(
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
     reference_dir = reference_dir or _private_reference_dir(workspace) or workspace
+    command += ["--gpu", args.hardware]
+    num_gpus = request.get("spec", {}).get("num_gpus", 1)
+    if num_gpus > 1:
+        command += ["--num-gpus", str(num_gpus)]
     command += [
-        "--gpu",
-        args.hardware,
         "--candidate",
         str(workspace / "kernel.py"),
         "--reference-dir",
@@ -2679,6 +2728,7 @@ def _run_typed_gateway(
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
                     "kind": kind,
+                    "num_gpus": request.get("spec", {}).get("num_gpus", 1),
                     "fallback_kind": "dev",
                     "candidate_bytes": len(request["candidate"].encode("utf-8")),
                     "shape_count": (
@@ -2919,6 +2969,10 @@ def _main(argv: list[str] | None = None) -> int:
         )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
+    try:
+        num_gpus = _workspace_num_gpus(workspace)
+    except ValueError as exc:
+        raise SystemExit(f"sandbox: invalid distributed evaluator contract: {exc}") from exc
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
     profile_command = _is_profile_command(args.command)
@@ -3072,6 +3126,7 @@ def _main(argv: list[str] | None = None) -> int:
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
                     "kind": "dev",
+                    "num_gpus": num_gpus,
                     "requested_kind": args.kind,
                     "typed_fallback_reason": typed_limitation,
                     "files": file_count,
@@ -3149,9 +3204,10 @@ def _main(argv: list[str] | None = None) -> int:
             agate += ["--url", args.url]
         elif args.gateway_profile:
             agate += ["--profile", args.gateway_profile]
+        agate += ["--gpu", args.hardware]
+        if num_gpus > 1:
+            agate += ["--num-gpus", str(num_gpus)]
         agate += [
-            "--gpu",
-            args.hardware,
             "--dev-timeout",
             str(args.timeout),
             "--http-timeout",
@@ -3234,6 +3290,7 @@ def _main(argv: list[str] | None = None) -> int:
                     env_items=gateway_environment,
                     files=direct_files,
                     command="bash __atrex_runner.sh",
+                    num_gpus=num_gpus,
                 )
             except (OSError, RuntimeError, TimeoutError) as exc:
                 raise SystemExit(
