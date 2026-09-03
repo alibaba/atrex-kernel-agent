@@ -584,6 +584,7 @@ if spec is None or spec.loader is None:
 run_eval = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = run_eval
 spec.loader.exec_module(run_eval)
+run_eval = sys.modules.get(spec.name, run_eval)
 
 if args.shape_id is not None:
     result = run_eval.check_correctness(
