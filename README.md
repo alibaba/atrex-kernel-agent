@@ -75,6 +75,8 @@ GPU is visible; MIG execution fails closed until capability-node assignment is s
 If the remote environment fails its GPU health probe, AKA stops, preserves the active worktree, and
 starts a detached monitor that resumes the original command after the server recovers. See
 [Quick Start: Isolated OpenSSH GPU host](docs/quickstart.md#isolated-openssh-gpu-host).
+The generated `stop-recovery.sh` also stops a recovered optimizer and leaves automatic recovery
+disabled until the generated `recover.sh` is run explicitly.
 
 ## Acknowledgements
 

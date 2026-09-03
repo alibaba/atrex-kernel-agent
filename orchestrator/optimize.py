@@ -117,7 +117,6 @@ try:
         validate_private_shapes,
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
-    from .recovery_processes import recovery_pass_fds, register_recovery_process
     from .session_io import detect_arch, ensure_submodules
     from .workspace_state import (
         latest_version,
@@ -167,10 +166,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     )
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
-    )
-    from orchestrator.recovery_processes import (  # type: ignore[no-redef]
-        recovery_pass_fds,
-        register_recovery_process,
     )
     from orchestrator.session_io import (  # type: ignore[no-redef]
         detect_arch,
@@ -320,20 +315,7 @@ def dispatch_framework_campaigns(
                 start_new_session=True,
                 text=True,
                 env=child_environment,
-                close_fds=True,
-                pass_fds=recovery_pass_fds(child_environment),
             )
-            try:
-                register_recovery_process(
-                    proc.pid, f"framework-{framework}", child_environment
-                )
-            except (OSError, ValueError):
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-                raise
             children.append((framework, workspace_suffix, proc))
             print(
                 f"[orchestrator] dispatched framework={framework} pid={proc.pid} "

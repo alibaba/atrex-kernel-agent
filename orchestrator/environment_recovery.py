@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .recovery_processes import HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV
+from .recovery_processes import ACTIVE_MARKER, HANDOFF_ID_ENV
 
 ENVIRONMENT_STATE_ENV = "ATREX_ENVIRONMENT_STATE_FILE"
 RECOVERY_OWNER_ENV = "ATREX_ENVIRONMENT_RECOVERY_OWNER"
@@ -88,7 +88,6 @@ def signal_restart_ready() -> None:
     value = os.environ.pop("ATREX_ENVIRONMENT_RESTART_READY_FILE", "").strip()
     if not value:
         os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
-        _release_handoff_ownership()
         return
     path = Path(value).expanduser().resolve()
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -101,23 +100,19 @@ def signal_restart_ready() -> None:
         time.sleep(0.05)
     if restarting.is_file():
         raise EnvironmentUnavailable("recovery monitor did not complete restart handoff")
+    handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
+    active = path.with_name(ACTIVE_MARKER)
+    try:
+        active_handoff_id = json.loads(active.read_text(encoding="utf-8"))[
+            "restart_handoff"
+        ]["id"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise EnvironmentUnavailable(
+            "recovery monitor did not retain active restart ownership"
+        ) from exc
+    if not handoff_id or active_handoff_id != handoff_id:
+        raise EnvironmentUnavailable("recovery monitor activated a different handoff")
     os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
-    _release_handoff_ownership()
-
-
-def _release_handoff_ownership() -> None:
-    raw = os.environ.pop(HANDOFF_LOCK_FD_ENV, "")
-    os.environ.pop(HANDOFF_ID_ENV, None)
-    try:
-        descriptor = int(raw)
-    except ValueError:
-        return
-    if descriptor <= 2:
-        return
-    try:
-        os.close(descriptor)
-    except OSError:
-        pass
 
 
 def configure_recovery(
@@ -240,6 +235,7 @@ def configure_recovery(
                     _shell_quote(str(monitor)),
                     "--state-dir",
                     _shell_quote(str(directory)),
+                    "--resume",
                 ]
             )
             + "\n",

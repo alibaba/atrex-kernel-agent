@@ -24,19 +24,19 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from orchestrator.recovery_processes import (  # noqa: E402
+    ACTIVE_MARKER,
     HANDOFF_ID_ENV,
     HANDOFF_LOCK_FD_ENV,
+    STOP_MARKER,
     clear_process_registry,
     matching_processes,
     process_identity_matches,
-    record_process_tree,
-    register_process,
+    spawn_owned_session,
     terminate_processes,
 )
 
 RESTART_HANDOFF_TIMEOUT = 10_800
 STOP_WAIT_TIMEOUT = 120
-PROCESS_TREE_REFRESH_INTERVAL = 1.0
 HANDOFF_MARKER_KEY = "restart_handoff"
 _STOP_SIGNALLED = False
 
@@ -213,9 +213,7 @@ def _begin_handoff(
     failure.replace(restarting)
 
 
-def _ensure_handoff_metadata(
-    state_dir: Path, restarting: Path, pid: int | None
-) -> tuple[str, float]:
+def _ensure_handoff_metadata(restarting: Path) -> tuple[str, float]:
     metadata = _handoff_metadata(restarting)
     if metadata is None:
         # Migrate a handoff created by the previous release. Starting the timeout
@@ -223,14 +221,15 @@ def _ensure_handoff_metadata(
         # optimizer initialization.
         metadata = uuid.uuid4().hex, time.time()
         _write_handoff_metadata(restarting, *metadata)
-    handoff_id, started_at = metadata
-    if pid is not None and process_identity_matches(state_dir, handoff_id, pid):
-        record_process_tree(state_dir, handoff_id, pid)
-    return handoff_id, started_at
+    return metadata
 
 
 def _stop_requested(state_dir: Path) -> bool:
-    return _STOP_SIGNALLED or (state_dir / "stop.request").is_file()
+    return (
+        _STOP_SIGNALLED
+        or (state_dir / STOP_MARKER).is_file()
+        or (state_dir / "stop.request").is_file()
+    )
 
 
 def _raise_if_stop_requested(state_dir: Path) -> None:
@@ -245,15 +244,14 @@ def _interruptible_sleep(state_dir: Path, seconds: float) -> None:
         time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
 
-def _restore_restarting_marker(state_dir: Path) -> None:
-    restarting = state_dir / "restarting.json"
+def _restore_handoff_marker(state_dir: Path, marker: Path) -> None:
     failure = state_dir / "failure.json"
-    if restarting.is_file():
+    if marker.is_file():
         if failure.is_file():
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            restarting.replace(state_dir / f"superseded-restart-{stamp}.json")
+            marker.replace(state_dir / f"superseded-{marker.stem}-{stamp}.json")
         else:
-            restarting.replace(failure)
+            marker.replace(failure)
     for name in ("restart.ready", "restart.pid"):
         try:
             (state_dir / name).unlink()
@@ -261,25 +259,34 @@ def _restore_restarting_marker(state_dir: Path) -> None:
             pass
 
 
-def _archive_restarting_marker(state_dir: Path, handoff_id: str) -> Path:
+def _restore_restarting_marker(state_dir: Path) -> None:
+    _restore_handoff_marker(state_dir, state_dir / "restarting.json")
+
+
+def _activate_restarting_marker(state_dir: Path) -> Path:
     restarting = state_dir / "restarting.json"
+    active = state_dir / ACTIVE_MARKER
+    if active.exists():
+        raise RuntimeError(f"active recovery marker already exists: {active}")
+    restarting.replace(active)
+    return active
+
+
+def _archive_marker(marker: Path, prefix: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    archived = state_dir / f"recovered-{stamp}.json"
-    restarting.replace(archived)
-    clear_process_registry(state_dir, handoff_id)
+    archived = marker.with_name(f"{prefix}-{stamp}.json")
+    marker.replace(archived)
     return archived
 
 
 def _terminate_handoff_processes(
     state_dir: Path,
     handoff_id: str,
-    pid: int | None,
 ) -> None:
     """Terminate every identity-owned session before permitting another restart."""
     result = terminate_processes(
         state_dir,
         handoff_id,
-        root_pid=pid,
         require_registered_owner=_handoff_lock_active(state_dir),
     )
     lock_still_active = _handoff_lock_active(state_dir)
@@ -302,7 +309,7 @@ def _reconcile_interrupted_handoff(state_dir: Path) -> int | None:
     if not restarting.is_file():
         return None
     pid = _read_pid(state_dir / "restart.pid")
-    handoff_id, started_at = _ensure_handoff_metadata(state_dir, restarting, pid)
+    handoff_id, started_at = _ensure_handoff_metadata(restarting)
     active = _handoff_lock_active(state_dir)
     root_alive = pid is not None and process_identity_matches(
         state_dir, handoff_id, pid
@@ -310,7 +317,7 @@ def _reconcile_interrupted_handoff(state_dir: Path) -> int | None:
     if not active or not root_alive:
         owned = matching_processes(state_dir, handoff_id)
         if owned or active:
-            _terminate_handoff_processes(state_dir, handoff_id, pid)
+            _terminate_handoff_processes(state_dir, handoff_id)
         _restore_restarting_marker(state_dir)
         clear_process_registry(state_dir, handoff_id)
         print(
@@ -328,25 +335,60 @@ def _reconcile_interrupted_handoff(state_dir: Path) -> int | None:
     failure = state_dir / "failure.json"
     while True:
         _raise_if_stop_requested(state_dir)
-        record_process_tree(state_dir, handoff_id, pid)
         active = _handoff_lock_active(state_dir)
         root_alive = process_identity_matches(state_dir, handoff_id, pid)
         if ready.is_file() and not failure.is_file():
-            _archive_restarting_marker(state_dir, handoff_id)
+            _activate_restarting_marker(state_dir)
             ready.unlink(missing_ok=True)
-            _remove_matching_pid(state_dir / "restart.pid", pid)
             return pid
         if not active or not root_alive:
-            _terminate_handoff_processes(state_dir, handoff_id, pid)
+            _terminate_handoff_processes(state_dir, handoff_id)
             _restore_restarting_marker(state_dir)
             clear_process_registry(state_dir, handoff_id)
             return None
         if failure.is_file() or time.time() - started_at >= RESTART_HANDOFF_TIMEOUT:
-            _terminate_handoff_processes(state_dir, handoff_id, pid)
+            _terminate_handoff_processes(state_dir, handoff_id)
             _restore_restarting_marker(state_dir)
             clear_process_registry(state_dir, handoff_id)
             return None
-        _interruptible_sleep(state_dir, PROCESS_TREE_REFRESH_INTERVAL)
+        _interruptible_sleep(state_dir, 0.1)
+
+
+def _reconcile_active_run(state_dir: Path) -> tuple[bool, int | None]:
+    """Reconcile a ready optimizer before allowing another recovery cycle."""
+    active_marker = state_dir / ACTIVE_MARKER
+    if not active_marker.is_file():
+        return True, None
+    metadata = _handoff_metadata(active_marker)
+    if metadata is None:
+        raise RuntimeError(f"active recovery marker is invalid: {active_marker}")
+    handoff_id, _started_at = metadata
+    pid = _read_pid(state_dir / "restart.pid")
+    lock_active = _handoff_lock_active(state_dir)
+    owned = matching_processes(state_dir, handoff_id)
+    root_alive = pid is not None and any(record.pid == pid for record in owned)
+    failure = state_dir / "failure.json"
+
+    if failure.is_file():
+        if lock_active or owned:
+            _terminate_handoff_processes(state_dir, handoff_id)
+        if active_marker.is_file():
+            _archive_marker(active_marker, "superseded-active")
+        clear_process_registry(state_dir, handoff_id)
+        if pid is not None:
+            _remove_matching_pid(state_dir / "restart.pid", pid)
+        return True, None
+
+    if lock_active and root_alive:
+        return False, pid
+    if lock_active or owned:
+        _terminate_handoff_processes(state_dir, handoff_id)
+    if active_marker.is_file():
+        _archive_marker(active_marker, "recovered")
+    clear_process_registry(state_dir, handoff_id)
+    if pid is not None:
+        _remove_matching_pid(state_dir / "restart.pid", pid)
+    return False, None
 
 
 def _health_command(metadata: dict[str, Any]) -> list[str]:
@@ -434,58 +476,42 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
         pass
     environment["ATREX_ENVIRONMENT_RESTART_READY_FILE"] = str(ready)
     log_path = state_dir / "restart.log"
+
+    def persist_handoff(process: subprocess.Popen[Any]) -> None:
+        (state_dir / "restart.pid").write_text(
+            str(process.pid) + "\n", encoding="utf-8"
+        )
+        _begin_handoff(failure, restarting, handoff_id, started_at)
+
     try:
         with log_path.open("a", encoding="utf-8") as log:
-            process = subprocess.Popen(
+            process = spawn_owned_session(
                 command,
+                role="optimizer-root",
+                environment=environment,
+                finalize_handoff=True,
+                registered_callback=persist_handoff,
                 cwd=metadata["cwd"],
-                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
-                close_fds=True,
-                pass_fds=(handoff_lock,),
             )
+    except BaseException:
+        _restore_restarting_marker(state_dir)
+        (state_dir / "restart.pid").unlink(missing_ok=True)
+        clear_process_registry(state_dir, handoff_id)
+        raise
     finally:
         # Popen duplicated this locked descriptor into the optimizer. Closing the
         # monitor's copy makes lock ownership exactly track the child lifetime.
         os.close(handoff_lock)
 
-    try:
-        register_process(state_dir, handoff_id, process.pid, "optimizer-root")
-        record_process_tree(state_dir, handoff_id, process.pid)
-    except (OSError, ProcessLookupError, ValueError):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        clear_process_registry(state_dir, handoff_id)
-        raise
-
     def stop_process() -> None:
-        _terminate_handoff_processes(state_dir, handoff_id, process.pid)
+        _terminate_handoff_processes(state_dir, handoff_id)
         try:
             process.wait(timeout=0)
         except subprocess.TimeoutExpired:
             pass
-
-    try:
-        (state_dir / "restart.pid").write_text(
-            str(process.pid) + "\n", encoding="utf-8"
-        )
-    except OSError:
-        stop_process()
-        clear_process_registry(state_dir, handoff_id)
-        raise
-    try:
-        _begin_handoff(failure, restarting, handoff_id, started_at)
-    except (OSError, RuntimeError):
-        stop_process()
-        clear_process_registry(state_dir, handoff_id)
-        _remove_matching_pid(state_dir / "restart.pid", process.pid)
-        raise
 
     # Baseline setup can legitimately use the configured two-hour session budget.
     # The monitor keeps ownership throughout and restores failure.json on any early exit.
@@ -493,7 +519,6 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     try:
         while not ready.is_file():
             _raise_if_stop_requested(state_dir)
-            record_process_tree(state_dir, handoff_id, process.pid)
             if process.poll() is not None:
                 raise RuntimeError(
                     "optimizer exited before durable campaign resume "
@@ -505,7 +530,7 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
                 raise RuntimeError(
                     "optimizer did not reach durable campaign resume within 10800 seconds"
                 )
-            _interruptible_sleep(state_dir, PROCESS_TREE_REFRESH_INTERVAL)
+            _interruptible_sleep(state_dir, 0.1)
         if failure.is_file():
             raise RuntimeError("remote environment failed again during restart")
     except BaseException:
@@ -516,9 +541,8 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
         _restore_restarting_marker(state_dir)
         clear_process_registry(state_dir, handoff_id)
         raise
-    _archive_restarting_marker(state_dir, handoff_id)
+    _activate_restarting_marker(state_dir)
     ready.unlink(missing_ok=True)
-    _remove_matching_pid(state_dir / "restart.pid", process.pid)
     return process.pid
 
 
@@ -586,12 +610,18 @@ def _registry_handoff_ids(state_dir: Path) -> list[str]:
 
 def _cancel_active_handoff(state_dir: Path) -> str | None:
     restarting = state_dir / "restarting.json"
+    active_marker = state_dir / ACTIVE_MARKER
     failure = state_dir / "failure.json"
-    pid = _read_pid(state_dir / "restart.pid")
-    marker = restarting if restarting.is_file() else failure
+    marker = (
+        active_marker
+        if active_marker.is_file()
+        else restarting
+        if restarting.is_file()
+        else failure
+    )
     metadata = _handoff_metadata(marker) if marker.is_file() else None
     if restarting.is_file() and metadata is None:
-        metadata = _ensure_handoff_metadata(state_dir, restarting, pid)
+        metadata = _ensure_handoff_metadata(restarting)
     if metadata is None:
         registered_ids = _registry_handoff_ids(state_dir)
         if len(registered_ids) == 1:
@@ -602,19 +632,19 @@ def _cancel_active_handoff(state_dir: Path) -> str | None:
     active = _handoff_lock_active(state_dir)
     if metadata is not None:
         handoff_id, _started_at = metadata
-        if pid is not None and process_identity_matches(state_dir, handoff_id, pid):
-            record_process_tree(state_dir, handoff_id, pid)
         if active or matching_processes(state_dir, handoff_id):
             try:
-                _terminate_handoff_processes(state_dir, handoff_id, pid)
+                _terminate_handoff_processes(state_dir, handoff_id)
             except RuntimeError as exc:
                 return str(exc)
         clear_process_registry(state_dir, handoff_id)
     elif active:
         return "handoff lock is active but no durable process identity is available"
 
-    if restarting.is_file():
-        _restore_restarting_marker(state_dir)
+    if active_marker.is_file():
+        _restore_handoff_marker(state_dir, active_marker)
+    elif restarting.is_file():
+        _restore_handoff_marker(state_dir, restarting)
     else:
         for name in ("restart.ready", "restart.pid"):
             (state_dir / name).unlink(missing_ok=True)
@@ -625,9 +655,13 @@ def stop_recovery(state_dir: Path) -> int:
     """Request verified rollback and wait until the monitor and process tree stop."""
     state_dir = state_dir.expanduser().resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
-    request = state_dir / "stop.request"
+    try:
+        state_dir.chmod(0o700)
+    except OSError:
+        pass
+    stopped = state_dir / STOP_MARKER
     _write_private_json(
-        request,
+        stopped,
         {
             "schema_version": 1,
             "requested_at": datetime.now(timezone.utc).isoformat(),
@@ -642,6 +676,12 @@ def stop_recovery(state_dir: Path) -> int:
             try:
                 error = _cancel_active_handoff(state_dir)
                 if error is not None:
+                    if error == (
+                        "handoff lock is active but no durable process identity "
+                        "is available"
+                    ):
+                        time.sleep(0.1)
+                        continue
                     print(
                         f"[environment-monitor] rollback incomplete: {error}",
                         file=sys.stderr,
@@ -649,10 +689,9 @@ def stop_recovery(state_dir: Path) -> int:
                     )
                     return 1
                 (state_dir / "monitor.pid").unlink(missing_ok=True)
-                request.unlink(missing_ok=True)
                 print(
-                    "[environment-monitor] rollback stop completed; no owned "
-                    "process remains",
+                    "[environment-monitor] rollback stop completed; recovery "
+                    "remains disabled by stopped.json",
                     flush=True,
                 )
                 return 0
@@ -683,12 +722,15 @@ def stop_recovery(state_dir: Path) -> int:
 
 
 def run_monitor(
-    state_dir: Path, *, once: bool = False, no_restart: bool = False
+    state_dir: Path,
+    *,
+    once: bool = False,
+    no_restart: bool = False,
+    resume: bool = False,
 ) -> int:
     global _STOP_SIGNALLED
 
     state_dir = state_dir.expanduser().resolve()
-    metadata = _load_restart(state_dir)
     lock = _acquire_lock(state_dir)
     if lock is None:
         print("[environment-monitor] another monitor is already active", flush=True)
@@ -710,12 +752,39 @@ def run_monitor(
         except ValueError:
             previous_handlers.pop(handled_signal, None)
     try:
+        if resume:
+            (state_dir / STOP_MARKER).unlink(missing_ok=True)
+            (state_dir / "stop.request").unlink(missing_ok=True)
+        elif _stop_requested(state_dir):
+            print(
+                "[environment-monitor] recovery is disabled by stopped.json; "
+                "run recover.sh or pass --resume to re-enable it",
+                flush=True,
+            )
+            return 0
+
+        metadata = _load_restart(state_dir)
         monitor_pid.write_text(str(os.getpid()) + "\n", encoding="utf-8")
         _raise_if_stop_requested(state_dir)
+        continue_recovery, active_pid = _reconcile_active_run(state_dir)
+        if not continue_recovery:
+            if active_pid is not None:
+                print(
+                    f"[environment-monitor] recovered optimizer is already active "
+                    f"pid={active_pid}",
+                    flush=True,
+                )
+            return 0
         adopted_pid = _reconcile_interrupted_handoff(state_dir)
         if adopted_pid is not None:
             print(
                 f"[environment-monitor] optimization restart handoff adopted pid={adopted_pid}",
+                flush=True,
+            )
+            return 0
+        if not (state_dir / "failure.json").is_file():
+            print(
+                "[environment-monitor] no blocked environment remains to recover",
                 flush=True,
             )
             return 0
@@ -798,17 +867,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-restart", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="clear a persistent recovery stop while holding the monitor lock",
+    )
+    parser.add_argument(
         "--stop",
         action="store_true",
         help="stop recovery and its verified process tree before transport rollback",
     )
     args = parser.parse_args(argv)
     if args.stop:
-        if args.once or args.no_restart:
-            parser.error("--stop cannot be combined with --once or --no-restart")
+        if args.once or args.no_restart or args.resume:
+            parser.error(
+                "--stop cannot be combined with --once, --no-restart, or --resume"
+            )
         return stop_recovery(Path(args.state_dir))
     return run_monitor(
-        Path(args.state_dir), once=args.once, no_restart=args.no_restart
+        Path(args.state_dir),
+        once=args.once,
+        no_restart=args.no_restart,
+        resume=args.resume,
     )
 
 

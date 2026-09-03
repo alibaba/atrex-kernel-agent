@@ -37,7 +37,7 @@ from .environment_recovery import (
     raise_if_environment_blocked,
 )
 from .hardware import hardware_vendor
-from .recovery_processes import recovery_pass_fds, register_recovery_process
+from .recovery_processes import spawn_owned_session
 from .workspace_state import speedup_vs_reference
 
 
@@ -518,26 +518,15 @@ def _sandbox_command(
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     effective_timeout = wall_timeout if wall_timeout is not None else timeout + 240
     raise_if_environment_blocked()
-    process = subprocess.Popen(
+    process = spawn_owned_session(
         cmd,
+        role="sandbox",
+        environment=environment,
         cwd=str(workspace),
-        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=True,
-        close_fds=True,
-        pass_fds=recovery_pass_fds(environment),
     )
-    try:
-        register_recovery_process(process.pid, "sandbox", environment)
-    except (OSError, ValueError):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        raise
 
     def stop_process_group() -> tuple[str, str]:
         if process.poll() is None:

@@ -216,12 +216,15 @@ resolved target, init, runtime binds, assigned GPU, health probe, and a unique i
 existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
 `restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
 construction, and workspace resume. An early exit restores `failure.json`; only the durable campaign
-resume signal archives the marker. The marker records a fresh handoff ID and explicit start time, so
+resume signal transitions the marker to `active.json`, which remains owned until the full recovered
+optimizer exits. The marker records a fresh handoff ID and explicit start time, so
 the initialization timeout is independent of the older outage marker mtime. A second advisory lock is
-inherited by the restart process tree. The root and each controlled independent session also write a
-kernel-start-time-qualified identity to the handoff registry. A replacement monitor can therefore
-adopt a live interrupted handoff, or terminate all registered sessions before restoring a dead one,
-without trusting a reused raw PID or assuming all descendants share the root process group. Resolved
+inherited by the restart process tree. The root and each controlled independent session start behind
+a stable wrapper; the wrapper writes its kernel-start-time-qualified identity to the handoff registry
+before allowing the actual command to run, and remains until its same-group descendants exit. A
+replacement monitor can therefore adopt a live interrupted handoff, or place a private termination
+request that each registered wrapper services for its own group before restoring a dead one, without
+signalling a reused raw PID or depending on periodic descendant snapshots. Resolved
 environment-only recovery options are replayed, and `monitor.pid` is removed by its matching lock
 owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
 boundary. User
@@ -251,7 +254,7 @@ flowchart TD
     O --> P[Detached monitor acquires OS advisory lock]
     P -. operator rollback .-> X[Run verified stop-recovery control]
     X --> X1{Monitor or stopper owns advisory lock?}
-    X1 --> X2[Terminate identity-verified handoff groups]
+    X1 --> X2[Persist stop and ask registered session owners to terminate]
     X2 --> X3[Confirm empty tree and restore failure marker]
     X3 --> X4[Select gateway transport]
     P --> Q{Health probe succeeds?}
@@ -266,7 +269,10 @@ flowchart TD
     U0 --> V{Durable campaign resume reached?}
     V -->|early exit or outage| Z[Terminate registered groups and restore failure marker]
     Z --> R
-    V -->|yes| W[Archive marker and continue optimization]
+    V -->|yes| W[Move marker to active and retain ownership]
+    W --> W1{Recovered optimizer and sessions exit?}
+    W1 -->|yes| W2[Archive active marker and release ownership]
+    W1 -->|operator stop| X
     U0 -. monitor replaced .-> Y{Tree lock and registered identity still live?}
     Y -->|yes| V
     Y -->|no| Z
@@ -284,12 +290,14 @@ Rollback is configuration-only: run `.atrex_environment/<command-id>/stop-recove
 its verified zero status, archive that private directory for diagnosis, and relaunch the same command
 with `--sandbox-url` or `--sandbox-profile` instead of `--sandbox-ssh`. The stop request is handled by
 the live monitor, or by a replacement that first acquires the monitor lock; it succeeds only after the
-identity-owned process tree is empty and marker state is consistent. `monitor.pid` is diagnostic and
-must not be signalled as a rollback mechanism. No candidate Git commit or canonical memory needs to
-be reverted. If automatic restart is undesired but SSH should remain enabled, use the same verified
-stop path and then run
-`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart` after cleaning any
-listed remote workspaces.
+identity-owned process tree is empty and marker state is consistent. The persistent `stopped.json`
+tombstone also blocks a detached monitor that had not reached the lock when stop was requested.
+`monitor.pid` is diagnostic and must not be signalled as a rollback mechanism. No candidate Git
+commit or canonical memory needs to be reverted. Run the generated `recover.sh` (or pass `--resume`
+while starting the monitor) to clear the tombstone under the monitor lock. If automatic restart is
+undesired but SSH should remain enabled, use the same verified stop path and then run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+cleaning any listed remote workspaces.
 
 ### Full-workload optimization
 

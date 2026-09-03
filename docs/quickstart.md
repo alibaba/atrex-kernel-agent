@@ -157,17 +157,24 @@ active Agent/framework process groups without treating the failure as a bad cand
 - `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
 - `restart-child.lock`, `restart.pid`, and `restart.log`: exact child identity/status during the
   supervised resume handoff;
+- `restarting.json` and `active.json`: initialization and ready-but-still-running ownership states;
+- `stopped.json`: a persistent operator stop that prevents a delayed monitor from restarting work;
 - `restart-processes/<handoff-id>/*.json`: PID-reuse-safe identities for the optimizer and every
-  controlled independent process session it starts;
-- `recover.sh`: an idempotent manual way to start the same single-instance poller;
+  controlled independent process session owner it starts;
+- `recover.sh`: an idempotent manual way to clear `stopped.json` and start the same single-instance
+  poller;
 - `stop-recovery.sh`: the verified stop path for rollback.
 
 The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
 all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
-and only then archives the failure marker. Cleanup or spawn failures retain the marker and retry.
+and moves the failure marker through `restarting.json`. The durable campaign resume signal changes
+that marker to `active.json`; ownership remains live until the recovered optimizer and all of its
+registered independent sessions exit. Cleanup or spawn failures retain the marker and retry.
 If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
-and the persistent process identities to adopt a live handoff or terminate its complete registered
-process tree before atomically restoring `failure.json`. The handoff timeout starts from the explicit
+and the persistent session-owner identities to adopt a live handoff or request that every registered
+owner terminate its own process group before atomically restoring `failure.json`. Each owner is
+registered before its actual command can start, so a short-lived parent cannot leave an unowned
+same-group child between process snapshots. The handoff timeout starts from the explicit
 `restart_handoff.started_at` value in the marker, never from a failure marker's older filesystem
 timestamp. Resolved environment-only settings, including the polling interval, are replayed into the
 child. PID files are diagnostic, removed by their matching owner, and never used as the lock or
@@ -180,13 +187,15 @@ To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
 `python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --stop`) and require a zero exit status
 before changing transport. This asks a live monitor to stop, or takes over through its advisory lock
 if the monitor already died; it terminates every identity-verified recovery process group, restores a
-durable failure marker when needed, and reports success only after no owned process remains. Do not
+durable failure marker when needed, leaves the persistent `stopped.json` tombstone in place, and
+reports success only after no owned process remains. This includes an optimizer that has already
+reached `active.json`. Do not
 signal the diagnostic PID from `monitor.pid` directly. Preserve the private recovery directory for
 diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
-state and canonical memory are transport-independent and require no rollback. To clear a recovered
-marker without restarting, run
-`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart` after verifying any
-deferred remote cleanup.
+state and canonical memory are transport-independent and require no rollback. Run `STATE_DIR/recover.sh`
+to re-enable automatic recovery. To clear a recovered marker without restarting, run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+verifying any deferred remote cleanup.
 
 ### What happens after launch
 

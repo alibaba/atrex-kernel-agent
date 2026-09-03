@@ -111,35 +111,40 @@ def _kill_group(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _recovery_pass_fds(environment: dict[str, str]) -> tuple[int, ...]:
-    raw = environment.get("ATREX_ENVIRONMENT_RESTART_LOCK_FD", "")
-    try:
-        descriptor = int(raw)
-    except ValueError:
-        return ()
-    if descriptor <= 2:
-        return ()
-    try:
-        os.fstat(descriptor)
-    except OSError:
-        return ()
-    return (descriptor,)
-
-
-def _register_recovery_process(pid: int, environment: dict[str, str]) -> None:
-    """Register the independent bridge session when running inside AKA recovery."""
+def _start_bridge_process(
+    command: list[str], cwd: Path, environment: dict[str, str]
+) -> subprocess.Popen:
+    options = {
+        "cwd": str(cwd),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "errors": "replace",
+    }
     if not environment.get("ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"):
-        return
+        return subprocess.Popen(
+            command,
+            env=environment,
+            start_new_session=True,
+            close_fds=True,
+            **options,
+        )
     repository = Path(__file__).resolve().parents[2]
     if str(repository) not in sys.path:
         sys.path.insert(0, str(repository))
     try:
-        from orchestrator.recovery_processes import register_recovery_process
+        from orchestrator.recovery_processes import spawn_owned_session
     except ImportError as exc:
         raise LaunchError(
             "recovery process registration is unavailable during restart handoff"
         ) from exc
-    register_recovery_process(pid, "wiki-bridge-agent", environment)
+    return spawn_owned_session(
+        command,
+        role="wiki-bridge-agent",
+        environment=environment,
+        **options,
+    )
 
 
 def _run_command(command: list[str], cwd: Path, timeout: int,
@@ -147,21 +152,12 @@ def _run_command(command: list[str], cwd: Path, timeout: int,
     cli = Path(command[0]).name if command else ""
     environment = bridge_environment(cli, env)
     try:
-        proc = subprocess.Popen(
-            command, cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            errors="replace", start_new_session=True,
-            close_fds=True, pass_fds=_recovery_pass_fds(environment),
-        )
+        proc = _start_bridge_process(command, cwd, environment)
     except FileNotFoundError as exc:
         missing = command[0] if command else "<empty-command>"
         raise LaunchError(f"bridge cli not on PATH: {missing} ({exc})") from exc
-    try:
-        _register_recovery_process(proc.pid, environment)
-    except (OSError, ValueError) as exc:
-        _kill_group(proc)
-        proc.wait()
-        raise LaunchError(f"cannot register recovery bridge process: {exc}") from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise LaunchError(f"cannot start recovery bridge process: {exc}") from exc
 
     timed_out = False
     try:

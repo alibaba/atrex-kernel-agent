@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
-from ..recovery_processes import recovery_pass_fds, register_recovery_process
+from ..recovery_processes import spawn_owned_session
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
@@ -409,27 +409,16 @@ def run_bounded(
     env: dict | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    proc = subprocess.Popen(
+    proc = spawn_owned_session(
         command,
+        role="coding-agent",
+        environment=env,
         cwd=str(cwd),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=True,
-        env=env,
-        close_fds=True,
-        pass_fds=recovery_pass_fds(env),
     )
-    try:
-        register_recovery_process(proc.pid, "coding-agent", env)
-    except (OSError, ValueError):
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
-        raise
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
