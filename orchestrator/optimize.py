@@ -465,8 +465,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         default=None,
         metavar="[USER@]HOST",
         help=(
-            "Run all GPU work directly on a standard OpenSSH target. Reuses "
-            "~/.ssh/config and is mutually exclusive with gateway endpoint options."
+            "Run GPU work in a mandatory Bubblewrap namespace reached through "
+            "OpenSSH. Reuses ~/.ssh/config and is mutually exclusive with gateway "
+            "endpoint options."
         ),
     )
     ap.add_argument(
@@ -474,6 +475,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         default=os.environ.get("ATREX_SANDBOX_SSH_INIT", ""),
         metavar="COMMAND",
         help="Remote runtime activation command run before every SSH job and probe.",
+    )
+    ap.add_argument(
+        "--sandbox-ssh-runtime-bind",
+        action="append",
+        default=None,
+        metavar="REMOTE_PATH[=SANDBOX_PATH]",
+        help=(
+            "Read-only runtime directory exposed inside the mandatory SSH Bubblewrap "
+            "sandbox (repeatable)."
+        ),
     )
     ap.add_argument(
         "--sandbox-health-command",
@@ -714,9 +725,25 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     if args.sandbox_ssh and not args.sandbox_health_command.strip():
         ap.error("--sandbox-health-command must not be empty with --sandbox-ssh")
     if args.sandbox_ssh:
+        if args.sandbox_ssh_runtime_bind is None:
+            raw_runtime_binds = os.environ.get(
+                "ATREX_SANDBOX_SSH_RUNTIME_BINDS", "[]"
+            )
+            try:
+                args.sandbox_ssh_runtime_bind = json.loads(raw_runtime_binds)
+            except json.JSONDecodeError as exc:
+                ap.error(f"ATREX_SANDBOX_SSH_RUNTIME_BINDS is invalid JSON: {exc}")
+            if not isinstance(args.sandbox_ssh_runtime_bind, list) or not all(
+                isinstance(item, str) for item in args.sandbox_ssh_runtime_bind
+            ):
+                ap.error(
+                    "ATREX_SANDBOX_SSH_RUNTIME_BINDS must be a JSON array of strings"
+                )
         for executable in ("ssh", "scp"):
             if shutil.which(executable) is None:
                 ap.error(f"--sandbox-ssh requires {executable} on PATH")
+    elif args.sandbox_ssh_runtime_bind:
+        ap.error("--sandbox-ssh-runtime-bind requires --sandbox-ssh")
     if args.environment_poll_interval <= 0:
         ap.error("--environment-poll-interval must be positive")
     if shutil.which(args.agent_cli) is None:
@@ -765,6 +792,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             sandbox_hardware=sandbox_hardware,
             ssh_target=args.sandbox_ssh,
             ssh_init=args.sandbox_ssh_init,
+            ssh_runtime_binds=args.sandbox_ssh_runtime_bind,
             health_command=args.sandbox_health_command,
             poll_interval=args.environment_poll_interval,
         )

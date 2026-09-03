@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +56,10 @@ def current_recovery_context() -> RecoveryContext | None:
 
 
 def raise_if_environment_blocked() -> None:
+    if os.environ.pop("ATREX_ENVIRONMENT_RESTART_HANDOFF", "") == "1":
+        deadline = time.monotonic() + 30
+        while environment_is_blocked() and time.monotonic() < deadline:
+            time.sleep(0.05)
     if environment_is_blocked():
         raise EnvironmentUnavailable("remote GPU environment is unavailable")
 
@@ -69,6 +74,18 @@ def _write_private_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
+def _signal_restart_ready() -> None:
+    """Tell the monitor that the restarted optimizer reached recovery setup."""
+    value = os.environ.pop("ATREX_ENVIRONMENT_RESTART_READY_FILE", "").strip()
+    if not value:
+        return
+    path = Path(value).expanduser().resolve()
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
 def configure_recovery(
     *,
     workspace_base: Path,
@@ -77,6 +94,7 @@ def configure_recovery(
     sandbox_hardware: str,
     ssh_target: str,
     ssh_init: str,
+    ssh_runtime_binds: Sequence[str],
     health_command: str,
     poll_interval: int,
 ) -> RecoveryContext:
@@ -103,7 +121,12 @@ def configure_recovery(
 
     os.environ["ATREX_SANDBOX_SSH"] = ssh_target
     os.environ["ATREX_SANDBOX_SSH_INIT"] = ssh_init
+    os.environ["ATREX_SANDBOX_SSH_RUNTIME_BINDS"] = json.dumps(
+        list(ssh_runtime_binds), separators=(",", ":")
+    )
     os.environ["ATREX_SANDBOX_HEALTH_COMMAND"] = health_command
+    os.environ.pop("ATREX_SANDBOX_URL", None)
+    os.environ.pop("ATREX_SANDBOX_PROFILE", None)
     os.environ[RECOVERY_OWNER_ENV] = "1" if owner else "0"
 
     restart_path = directory / "restart.json"
@@ -123,6 +146,7 @@ def configure_recovery(
                 "sandbox_hardware": sandbox_hardware,
                 "ssh_target": ssh_target,
                 "ssh_init": ssh_init,
+                "ssh_runtime_binds": list(ssh_runtime_binds),
                 "health_command": health_command,
                 "poll_interval": poll_interval,
             },
@@ -143,6 +167,7 @@ def configure_recovery(
             encoding="utf-8",
         )
         recover.chmod(0o700)
+    _signal_restart_ready()
     return RecoveryContext(directory=directory, state_file=inherited, owner=owner)
 
 

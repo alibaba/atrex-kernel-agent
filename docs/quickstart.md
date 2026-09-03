@@ -11,8 +11,9 @@ agent in this repository to translate the task into that command and start the c
 - Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - A sandbox execution environment containing the workload's framework and GPU stack
-- For direct SSH execution: OpenSSH `ssh` and `scp` on the coordinator, plus Bash, Python 3,
-  `tar`, and `base64` on the remote GPU host
+- For SSH execution: OpenSSH `ssh` and `scp` on the coordinator; Bash, Python 3, `tar`, `base64`,
+  Bubblewrap (`bwrap`), unprivileged user namespaces, and accessible GPU device nodes on the remote
+  host. Authentication must be non-interactive for detached recovery.
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
@@ -94,30 +95,43 @@ python orchestrator/optimize.py \
     --max-iters 20 --token-budget 8000000 --target-util 90
 ```
 
-### Direct OpenSSH GPU host
+### Isolated OpenSSH GPU host
 
-Use a normal OpenSSH target or an alias from `~/.ssh/config`. Authentication, ports, jump hosts,
-and host-key policy remain OpenSSH's responsibility:
+Use a dedicated, low-privilege OpenSSH account or an alias from `~/.ssh/config`. Authentication,
+ports, jump hosts, and host-key policy remain OpenSSH's responsibility. The account needs permission
+to run `bwrap` and access only the intended GPU devices; do not attach cloud credentials or shared
+service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
 python orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
-    --sandbox-ssh-init 'source /opt/conda/etc/profile.d/conda.sh && conda activate aka' \
+    --sandbox-ssh-runtime-bind /opt/aka-venv \
+    --sandbox-ssh-init 'source /opt/aka-venv/bin/activate' \
     --sandbox-health-command 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_capability(0))"' \
     --environment-poll-interval 60 \
     --workspace /path/to/runs --max-iters 20
 ```
 
-`--sandbox-ssh-init` defaults to empty. The default health command imports PyTorch, checks GPU
+`--sandbox-ssh-runtime-bind REMOTE_PATH[=SANDBOX_PATH]` is repeatable. A single path preserves its
+location; the `source=destination` form can mount it elsewhere. The bind is read-only. For example, a
+venv below a hidden login home can be exposed at its original path with
+`--sandbox-ssh-runtime-bind /home/gpu/aka/.venv`, or remapped when it is relocatable.
+
+`--sandbox-ssh-init` defaults to empty and runs inside the isolated namespace. The default health
+command imports PyTorch, checks GPU
 availability, and reads device properties; override it when the remote stack uses a different
 runtime. Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
 with `--sandbox-url` and `--sandbox-profile`.
 
 Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sandbox.*` directory,
-runs the requested evaluator or profiler after the initialization command, downloads only requested
-`--sync` artifacts, and removes the remote directory. Remote filesystem persistence is never assumed.
+runs the requested evaluator or profiler inside mandatory Bubblewrap PID/IPC/UTS/network namespaces,
+downloads only requested `--sync` artifacts, and removes the remote directory. The namespace has no
+network, host home, inherited environment, or writable host filesystem; it sees only minimal read-only
+system paths, configured runtime binds, GPU device nodes, and its writable job directory. There is no
+unisolated fallback. A portable Python watchdog enforces `--sandbox-timeout` even when GNU `timeout`
+is absent.
 
 When SSH transport fails, or a failed GPU command is followed by a failed health probe, the sandbox
 writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
@@ -126,15 +140,25 @@ active Agent/framework process groups without treating the failure as a bad cand
 `<workspace>/.atrex_environment/<command-id>/`:
 
 - `failure.json`: the current failure stage and bounded diagnostic;
+- `cleanup-*.json`: remote workspaces that must be removed before restart;
 - `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
 - `monitor.pid` and `monitor.log`: detached poller status;
 - `restart.pid` and `restart.log`: the resumed optimization process;
 - `recover.sh`: an idempotent manual way to start the same single-instance poller.
 
-The monitor probes every 60 seconds by default. One successful explicit GPU health check archives the
-failure marker and restarts the original optimizer argv in the original working directory. The normal
-campaign resume path reuses its interrupted worktree and journal. Candidate compilation, correctness,
-or performance failures do not trigger this path when the health probe succeeds.
+The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
+all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
+and only then archives the failure marker. Cleanup or spawn failures retain the marker and retry.
+The normal campaign resume path reuses its interrupted worktree and journal. Candidate compilation,
+correctness, timeout (status 124), and even explicit status 255 do not trigger this path when the
+independent health probe succeeds.
+
+To roll back the SSH transport, stop the PID recorded in `monitor.pid`, preserve the private recovery
+directory for diagnosis, and relaunch the same command with `--sandbox-url` or `--sandbox-profile`.
+Candidate Git state and canonical memory are transport-independent and require no rollback. To clear a
+recovered marker without restarting, run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart` after verifying any
+deferred remote cleanup.
 
 ### What happens after launch
 
@@ -320,6 +344,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
 --sandbox-ssh-init COMMAND       Remote environment activation before jobs/probes
+--sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
 --sandbox-health-command COMMAND GPU health probe used for failure classification
 --environment-poll-interval S    Recovery probe interval (default: 60)
 --sandbox-timeout S              Remote command timeout, at most 600 seconds
@@ -352,7 +377,7 @@ python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
 python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
-  --ssh-init 'source /opt/conda/etc/profile.d/conda.sh && conda activate aka' \
+  --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
   --no-sync -- python test_kernel.py --no-memory
 ```
 

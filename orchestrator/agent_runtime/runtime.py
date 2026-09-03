@@ -154,6 +154,13 @@ class CliAgentRuntime:
         )
         environment = build_session_environment(self.id)
         environment["IS_SANDBOX"] = "1"
+        if request.extra_environment:
+            environment.update(
+                {
+                    str(key): str(value)
+                    for key, value in request.extra_environment.items()
+                }
+            )
         if request.sandbox_hardware:
             environment["ATREX_SANDBOX_GPU"] = request.sandbox_hardware
         if request.sandbox_ssh:
@@ -179,13 +186,6 @@ class CliAgentRuntime:
                 request.environment_state_file
             )
         environment["ATREX_SANDBOX_TIMEOUT"] = str(request.sandbox_timeout_s)
-        if request.extra_environment:
-            environment.update(
-                {
-                    str(key): str(value)
-                    for key, value in request.extra_environment.items()
-                }
-            )
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id

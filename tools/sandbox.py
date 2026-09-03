@@ -46,8 +46,10 @@ transport because gateways do not currently advertise OSS capability.
 
 ``ATREX_SANDBOX_SSH`` selects a standard OpenSSH target (including aliases from
 ``~/.ssh/config``). ``ATREX_SANDBOX_SSH_INIT`` optionally activates the remote
-runtime before each command and health probe. SSH, gateway profile, and gateway
-URL transports are mutually exclusive.
+runtime before each command and health probe. SSH jobs are always executed in a
+Bubblewrap namespace with no network, no host home, and only explicitly bound
+runtime paths. SSH, gateway profile, and gateway URL transports are mutually
+exclusive.
 """
 
 from __future__ import annotations
@@ -153,12 +155,34 @@ MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
+SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 DEFAULT_SSH_HEALTH_COMMAND = (
     "python -c \"import torch; "
     "assert torch.cuda.is_available(); "
     "p=torch.cuda.get_device_properties(0); "
     "print(getattr(p, 'gcnArchName', '') or torch.cuda.get_device_capability(0))\""
 )
+SSH_WATCHDOG_SOURCE = r"""
+import os
+import signal
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    status = process.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    print(f"[sandbox] remote command timed out after {timeout}s", file=sys.stderr)
+    status = 124
+raise SystemExit(status)
+""".strip()
 AGATE_WAIT_SLICE_SECONDS = 300
 RUNTIME_CHUNK_BYTES = 20 * 1024
 # Small inline workspace bundles stay below Linux MAX_ARG_STRLEN; larger
@@ -1320,9 +1344,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="[USER@]HOST",
         help=(
-            "OpenSSH target for direct remote GPU execution (default: "
-            "ATREX_SANDBOX_SSH). Reuses ~/.ssh/config and is mutually exclusive "
-            "with gateway endpoint options."
+            "OpenSSH target for Bubblewrap-isolated remote GPU execution "
+            "(default: ATREX_SANDBOX_SSH). Reuses ~/.ssh/config and is "
+            "mutually exclusive with gateway endpoint options."
         ),
     )
     parser.add_argument(
@@ -1332,6 +1356,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Remote shell initialization run before commands and probes, e.g. a "
             "Conda activation (default: ATREX_SANDBOX_SSH_INIT)."
+        ),
+    )
+    parser.add_argument(
+        "--ssh-runtime-bind",
+        action="append",
+        default=None,
+        metavar="REMOTE_PATH[=SANDBOX_PATH]",
+        help=(
+            "Read-only runtime directory exposed inside the SSH Bubblewrap sandbox "
+            "(repeatable; default: ATREX_SANDBOX_SSH_RUNTIME_BINDS JSON array)."
         ),
     )
     parser.add_argument(
@@ -1482,6 +1516,153 @@ def _validate_ssh_target(target: str) -> str:
     return value
 
 
+def _environment_ssh_runtime_binds() -> list[str]:
+    raw = os.environ.get(SSH_RUNTIME_BINDS_ENV, "").strip()
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{SSH_RUNTIME_BINDS_ENV} must be a JSON array") from exc
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{SSH_RUNTIME_BINDS_ENV} must be a JSON array of strings")
+    return value
+
+
+def _ssh_runtime_bind(value: str) -> tuple[str, str]:
+    source, separator, destination = value.partition("=")
+    if not separator:
+        destination = source
+    paths = []
+    for label, raw in (("source", source), ("destination", destination)):
+        path = PurePosixPath(raw)
+        if not raw or not path.is_absolute() or ".." in path.parts:
+            raise ValueError(
+                f"SSH runtime bind {label} must be an absolute path without '..': {raw!r}"
+            )
+        paths.append(path.as_posix())
+    forbidden = {
+        "/",
+        "/atrex",
+        "/bin",
+        "/dev",
+        "/etc",
+        "/lib",
+        "/lib64",
+        "/proc",
+        "/sbin",
+        "/sys",
+        "/tmp",
+        "/usr",
+        "/home",
+        "/root",
+    }
+    reserved_trees = {
+        "bin",
+        "dev",
+        "etc",
+        "lib",
+        "lib64",
+        "proc",
+        "sbin",
+        "sys",
+        "tmp",
+        "usr",
+    }
+    destination_parts = PurePosixPath(paths[1]).parts
+    if paths[1] in forbidden or (
+        len(destination_parts) > 1 and destination_parts[1] in reserved_trees
+    ):
+        raise ValueError(f"SSH runtime bind destination is reserved: {paths[1]!r}")
+    return paths[0], paths[1]
+
+
+def _ssh_bwrap_command(
+    runtime_binds: list[str], command: list[str], *, remote_dir: str | None = None
+) -> str:
+    """Build the only remote execution path: a restricted Bubblewrap namespace."""
+    binds = [_ssh_runtime_bind(value) for value in runtime_binds]
+    args = [
+        "bwrap",
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind-try",
+        "/bin",
+        "/bin",
+        "--ro-bind-try",
+        "/sbin",
+        "/sbin",
+        "--ro-bind-try",
+        "/lib",
+        "/lib",
+        "--ro-bind-try",
+        "/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--ro-bind-try",
+        "/sys",
+        "/sys",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/dev/shm",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/tmp/atrex-home",
+    ]
+    for device in (
+        "/dev/kfd",
+        "/dev/dri",
+        "/dev/nvidiactl",
+        "/dev/nvidia-uvm",
+        "/dev/nvidia-uvm-tools",
+        "/dev/nvidia-modeset",
+        *(f"/dev/nvidia{index}" for index in range(32)),
+    ):
+        args.extend(("--dev-bind-try", device, device))
+
+    created: set[str] = set()
+    for source, destination in binds:
+        parent = PurePosixPath(destination).parent
+        parents = list(reversed(parent.parents)) + [parent]
+        for directory in parents:
+            rendered = directory.as_posix()
+            if rendered == "/" or rendered in created:
+                continue
+            args.extend(("--dir", rendered))
+            created.add(rendered)
+        args.extend(("--ro-bind", source, destination))
+    if remote_dir is not None:
+        if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
+            raise ValueError("unsafe SSH workspace path")
+        args.extend(
+            ("--dir", "/atrex", "--bind", remote_dir, "/atrex", "--chdir", "/atrex")
+        )
+    args.extend(
+        (
+            "env",
+            "-i",
+            "HOME=/tmp/atrex-home",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG=C.UTF-8",
+            *command,
+        )
+    )
+    return shlex.join(args)
+
+
 def _ssh_base(executable: str, target: str) -> list[str]:
     return [
         executable,
@@ -1503,6 +1684,7 @@ def _run_ssh_health(
     target: str,
     init_command: str,
     health_command: str,
+    runtime_binds: list[str],
     *,
     timeout: int = 60,
 ) -> subprocess.CompletedProcess[str]:
@@ -1510,13 +1692,27 @@ def _run_ssh_health(
     if ssh is None:
         raise SSHTransportError("ssh executable not found on PATH")
     script = _ssh_shell_script(init_command, health_command)
-    remote_command = "bash -lc " + shlex.quote(script)
+    try:
+        remote_command = _ssh_bwrap_command(
+            runtime_binds,
+            [
+                "python3",
+                "-c",
+                SSH_WATCHDOG_SOURCE,
+                str(timeout),
+                "bash",
+                "-lc",
+                script,
+            ],
+        )
+    except ValueError as exc:
+        raise SSHTransportError(str(exc)) from exc
     try:
         return subprocess.run(
             [*_ssh_base(ssh, target), remote_command],
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=timeout + SSH_CONNECT_TIMEOUT + 10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"SSH health probe failed: {exc}") from exc
@@ -1529,11 +1725,11 @@ def _remote_temp_dir(stdout: str) -> str:
     return value
 
 
-def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> None:
+def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
-        return
+        return False
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
                 *_ssh_base(ssh, target),
                 "rm -rf -- " + shlex.quote(remote_dir),
@@ -1543,13 +1739,15 @@ def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> None:
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
-        pass
+        return False
+    return result.returncode == 0
 
 
 def _run_ssh_job(
     *,
     target: str,
     init_command: str,
+    runtime_binds: list[str],
     timeout: int,
     env_items: list[str],
     upload_paths: list[Path],
@@ -1574,17 +1772,24 @@ def _run_ssh_job(
     entry_lines.append('cd "$1"')
     for key, value in environment.items():
         entry_lines.append(f"export {key}={shlex.quote(value)}")
-    entry_lines.extend(
-        [
-            "if command -v timeout >/dev/null 2>&1; then",
-            f"  exec timeout --signal=TERM --kill-after=5s {timeout}s bash __atrex_runner.sh",
-            "fi",
-            "exec bash __atrex_runner.sh",
-        ]
+    entry_lines.append(
+        "exec "
+        + shlex.join(
+            [
+                "python3",
+                "-c",
+                SSH_WATCHDOG_SOURCE,
+                str(timeout),
+                "bash",
+                "__atrex_runner.sh",
+            ]
+        )
     )
     entry_path = temp / "ssh_entry.sh"
     entry_path.write_text("\n".join(entry_lines) + "\n", encoding="utf-8")
 
+    result: subprocess.CompletedProcess[str] | None = None
+    cleanup_succeeded = False
     try:
         create = subprocess.run(
             [
@@ -1618,9 +1823,14 @@ def _run_ssh_job(
             detail = (transfer.stderr or transfer.stdout).strip()[-1000:]
             raise SSHTransportError(f"cannot upload sandbox inputs: {detail}")
 
-        remote_command = "bash " + shlex.join(
-            [f"{remote_dir}/ssh_entry.sh", remote_dir]
-        )
+        try:
+            remote_command = _ssh_bwrap_command(
+                runtime_binds,
+                ["bash", "/atrex/ssh_entry.sh", "/atrex"],
+                remote_dir=remote_dir,
+            )
+        except ValueError as exc:
+            raise SSHTransportError(str(exc)) from exc
         try:
             result = subprocess.run(
                 [*_ssh_base(ssh, target), remote_command],
@@ -1647,25 +1857,75 @@ def _run_ssh_job(
             if download.returncode != 0:
                 detail = (download.stderr or download.stdout).strip()[-1000:]
                 execution_detail = (result.stderr or result.stdout).strip()[-1000:]
-                raise SSHTransportError(
-                    "cannot download sandbox outputs: "
-                    f"{detail}; remote_exit={result.returncode}; "
-                    f"remote_output={execution_detail}"
+                if result.returncode == 0:
+                    raise SSHTransportError(
+                        "cannot download sandbox outputs: "
+                        f"{detail}; remote_exit={result.returncode}; "
+                        f"remote_output={execution_detail}"
+                    )
+                warning = (
+                    "[sandbox] output archive unavailable after failed command: "
+                    f"{detail}"
                 )
-            try:
-                _extract_output_archive(local_archive, workspace)
-            except (OSError, RuntimeError, tarfile.TarError) as exc:
-                raise SSHTransportError(f"cannot extract sandbox outputs: {exc}") from exc
-        return result
+                result = subprocess.CompletedProcess(
+                    args=result.args,
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr="\n".join(
+                        part for part in (result.stderr, warning) if part
+                    ),
+                )
+            else:
+                try:
+                    _extract_output_archive(local_archive, workspace)
+                except (OSError, RuntimeError, tarfile.TarError) as exc:
+                    raise SSHTransportError(
+                        f"cannot extract sandbox outputs: {exc}"
+                    ) from exc
     except OSError as exc:
         raise SSHTransportError(str(exc)) from exc
     finally:
-        _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        if not cleanup_succeeded:
+            _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
+    if not cleanup_succeeded:
+        raise SSHTransportError(
+            f"remote workspace cleanup failed and was queued for recovery: {remote_dir}"
+        )
+    if result is None:
+        raise SSHTransportError("SSH job produced no result")
+    return result
 
 
 def _environment_failure_path() -> Path | None:
     value = os.environ.get("ATREX_ENVIRONMENT_STATE_FILE", "").strip()
     return Path(value).expanduser().resolve() if value else None
+
+
+def _record_pending_ssh_cleanup(*, target: str, remote_dir: str) -> None:
+    state_file = _environment_failure_path()
+    if state_file is None:
+        print(
+            f"[sandbox] WARNING: remote workspace cleanup failed: {target}:{remote_dir}",
+            file=sys.stderr,
+        )
+        return
+    digest = hashlib.sha256(f"{target}\0{remote_dir}".encode("utf-8")).hexdigest()[:16]
+    path = state_file.parent / f"cleanup-{digest}.json"
+    payload = {
+        "schema_version": 1,
+        "transport": "ssh",
+        "target": target,
+        "remote_dir": remote_dir,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    temporary.chmod(0o600)
+    temporary.replace(path)
 
 
 def _record_environment_failure(
@@ -3175,10 +3435,16 @@ def _main(argv: list[str] | None = None) -> int:
     if args.ssh:
         try:
             args.ssh = _validate_ssh_target(args.ssh)
+            if args.ssh_runtime_bind is None:
+                args.ssh_runtime_bind = _environment_ssh_runtime_binds()
+            for runtime_bind in args.ssh_runtime_bind:
+                _ssh_runtime_bind(runtime_bind)
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
         if not args.health_command.strip():
             raise SystemExit("sandbox: --health-command must not be empty with --ssh")
+    elif args.ssh_runtime_bind:
+        raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
         raise SystemExit(
             "sandbox: --timeout must be in the gateway-supported range "
@@ -3205,7 +3471,10 @@ def _main(argv: list[str] | None = None) -> int:
             raise SystemExit("sandbox: --check-health requires --ssh")
         try:
             health = _run_ssh_health(
-                args.ssh, args.ssh_init, args.health_command
+                args.ssh,
+                args.ssh_init,
+                args.health_command,
+                args.ssh_runtime_bind,
             )
         except SSHTransportError as exc:
             print(f"sandbox: {exc}", file=sys.stderr)
@@ -3281,7 +3550,7 @@ def _main(argv: list[str] | None = None) -> int:
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
         if args.ssh:
             print(
-                f"[sandbox] {gateway_kind} kind uses the portable OpenSSH runner",
+                f"[sandbox] {gateway_kind} kind uses the isolated OpenSSH runner",
                 file=sys.stderr,
             )
         else:
@@ -3398,6 +3667,8 @@ def _main(argv: list[str] | None = None) -> int:
                     "hardware": args.hardware,
                     "ssh": args.ssh or None,
                     "ssh_init": bool(args.ssh_init),
+                    "ssh_isolation": "bubblewrap" if args.ssh else None,
+                    "ssh_runtime_binds": args.ssh_runtime_bind or [],
                     "url": args.url or None,
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
@@ -3560,6 +3831,7 @@ def _main(argv: list[str] | None = None) -> int:
                 ssh_result = _run_ssh_job(
                     target=args.ssh,
                     init_command=args.ssh_init,
+                    runtime_binds=args.ssh_runtime_bind,
                     timeout=args.timeout,
                     env_items=gateway_environment,
                     upload_paths=upload_paths,
@@ -3576,22 +3848,12 @@ def _main(argv: list[str] | None = None) -> int:
                 print(f"sandbox: SSH environment unavailable: {exc}", file=sys.stderr)
                 return ENVIRONMENT_TEMPFAIL
             if ssh_result.returncode != 0:
-                if ssh_result.returncode == 255:
-                    detail = (ssh_result.stderr or ssh_result.stdout or "SSH failed")[-2000:]
-                    _record_environment_failure(
-                        target=args.ssh,
-                        stage="execution-transport",
-                        detail=detail,
-                    )
-                    print(
-                        "sandbox: SSH transport failed while running the remote command; "
-                        "optimization recovery requested",
-                        file=sys.stderr,
-                    )
-                    return ENVIRONMENT_TEMPFAIL
                 try:
                     health = _run_ssh_health(
-                        args.ssh, args.ssh_init, args.health_command
+                        args.ssh,
+                        args.ssh_init,
+                        args.health_command,
+                        args.ssh_runtime_bind,
                     )
                 except SSHTransportError as exc:
                     health = subprocess.CompletedProcess(

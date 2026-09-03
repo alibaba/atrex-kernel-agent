@@ -28,7 +28,7 @@ AKA supports:
 
 - SOL-ExecBench and native Atrex-Bench operator layouts;
 - NVIDIA, AMD, and T-Head PPU (zwm890p) targets through isolated sandbox execution;
-- gateway and direct OpenSSH GPU execution, with automatic environment recovery;
+- gateway and Bubblewrap-isolated OpenSSH GPU execution, with automatic environment recovery;
 - Triton, CuteDSL, CUDA, FlyDSL, and TileLang campaigns;
 - Claude, Qoder, Codex, and Pi coding-agent backends;
 - leaderboard and fail-closed production modes;
@@ -64,12 +64,14 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 
-For a GPU server reachable through normal OpenSSH configuration, pass
+For a GPU server reachable through OpenSSH, use a dedicated low-privilege account and pass
 `--sandbox-ssh user@gpu-host`. AKA keeps Agent, Git, memory, and episode state local, transfers only
-the sandbox allowlist to a fresh remote temporary directory, and copies back requested artifacts.
+the sandbox allowlist to a fresh remote temporary directory, and runs it in a mandatory networkless
+Bubblewrap namespace before copying back requested artifacts. Use `--sandbox-ssh-runtime-bind` for
+read-only venv or toolchain trees outside the minimal system mounts.
 If the remote environment fails its GPU health probe, AKA stops, preserves the active worktree, and
 starts a detached monitor that resumes the original command after the server recovers. See
-[Quick Start: Direct OpenSSH GPU host](docs/quickstart.md#direct-openssh-gpu-host).
+[Quick Start: Isolated OpenSSH GPU host](docs/quickstart.md#isolated-openssh-gpu-host).
 
 ## Acknowledgements
 

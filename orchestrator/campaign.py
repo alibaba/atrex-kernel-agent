@@ -393,6 +393,8 @@ class Campaign:
         if self.sandbox_ssh:
             environment["ATREX_SANDBOX_SSH"] = self.sandbox_ssh
             environment["ATREX_SANDBOX_SSH_INIT"] = self.sandbox_ssh_init
+            environment.pop("ATREX_SANDBOX_URL", None)
+            environment.pop("ATREX_SANDBOX_PROFILE", None)
             if self.sandbox_health_command:
                 environment["ATREX_SANDBOX_HEALTH_COMMAND"] = (
                     self.sandbox_health_command

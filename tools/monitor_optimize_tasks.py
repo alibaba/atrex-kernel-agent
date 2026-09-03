@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -40,6 +43,11 @@ def _load_restart(state_dir: Path) -> dict[str, Any]:
     interval = value.get("poll_interval")
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0:
         raise RuntimeError("restart metadata has invalid poll_interval")
+    runtime_binds = value.get("ssh_runtime_binds", [])
+    if not isinstance(runtime_binds, list) or not all(
+        isinstance(item, str) for item in runtime_binds
+    ):
+        raise RuntimeError("restart metadata has invalid ssh_runtime_binds")
     return value
 
 
@@ -92,18 +100,27 @@ def _health_command(metadata: dict[str, Any]) -> list[str]:
     ssh_init = metadata.get("ssh_init")
     if isinstance(ssh_init, str) and ssh_init:
         command += ["--ssh-init", ssh_init]
+    for runtime_bind in metadata.get("ssh_runtime_binds", []):
+        command += ["--ssh-runtime-bind", runtime_bind]
     return command
 
 
-def _archive_failure(state_dir: Path) -> None:
+def _archive_failure(state_dir: Path) -> Path | None:
     failure = state_dir / "failure.json"
     if not failure.is_file():
-        return
+        return None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    failure.replace(state_dir / f"recovered-{stamp}.json")
+    archived = state_dir / f"recovered-{stamp}.json"
+    failure.replace(archived)
+    return archived
 
 
 def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
+    """Spawn the real optimizer while preserving the marker through Popen failures."""
+    command = metadata["command"]
+    if len(command) < 2 or not Path(command[1]).is_file():
+        missing = command[1] if len(command) > 1 else ""
+        raise FileNotFoundError(f"optimizer script is missing: {missing}")
     environment = os.environ.copy()
     environment["ATREX_ENVIRONMENT_STATE_FILE"] = metadata[
         "environment_state_file"
@@ -111,11 +128,23 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "1"
     environment["ATREX_SANDBOX_SSH"] = metadata["ssh_target"]
     environment["ATREX_SANDBOX_SSH_INIT"] = str(metadata.get("ssh_init") or "")
+    environment["ATREX_SANDBOX_SSH_RUNTIME_BINDS"] = json.dumps(
+        metadata.get("ssh_runtime_binds", []), separators=(",", ":")
+    )
     environment["ATREX_SANDBOX_HEALTH_COMMAND"] = metadata["health_command"]
+    environment.pop("ATREX_SANDBOX_URL", None)
+    environment.pop("ATREX_SANDBOX_PROFILE", None)
+    environment["ATREX_ENVIRONMENT_RESTART_HANDOFF"] = "1"
+    ready = state_dir / "restart.ready"
+    try:
+        ready.unlink()
+    except FileNotFoundError:
+        pass
+    environment["ATREX_ENVIRONMENT_RESTART_READY_FILE"] = str(ready)
     log_path = state_dir / "restart.log"
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(
-            metadata["command"],
+            command,
             cwd=metadata["cwd"],
             env=environment,
             stdin=subprocess.DEVNULL,
@@ -124,13 +153,85 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
             start_new_session=True,
             close_fds=True,
         )
-    (state_dir / "restart.pid").write_text(
-        str(process.pid) + "\n", encoding="utf-8"
-    )
+    try:
+        (state_dir / "restart.pid").write_text(
+            str(process.pid) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        process.terminate()
+        raise
+    deadline = time.monotonic() + 30
+    while not ready.is_file():
+        if process.poll() is not None:
+            try:
+                (state_dir / "restart.pid").unlink()
+            except FileNotFoundError:
+                pass
+            raise RuntimeError(
+                f"optimizer exited during restart handoff with status {process.returncode}"
+            )
+        if time.monotonic() >= deadline:
+            process.terminate()
+            try:
+                (state_dir / "restart.pid").unlink()
+            except FileNotFoundError:
+                pass
+            raise RuntimeError("optimizer did not initialize recovery within 30 seconds")
+        time.sleep(0.05)
     return process.pid
 
 
-def run_monitor(state_dir: Path, *, once: bool = False, no_restart: bool = False) -> int:
+def _retry_remote_cleanups(metadata: dict[str, Any], state_dir: Path) -> bool:
+    ssh = shutil.which("ssh")
+    if ssh is None:
+        print("[environment-monitor] ssh executable not found for cleanup", flush=True)
+        return False
+    target = metadata["ssh_target"]
+    for path in sorted(state_dir.glob("cleanup-*.json")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            remote_dir = value["remote_dir"]
+            if value.get("target") != target or not isinstance(remote_dir, str):
+                raise ValueError("target or remote_dir mismatch")
+            if not re.fullmatch(
+                r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir
+            ):
+                raise ValueError("unsafe remote_dir")
+        except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            print(
+                f"[environment-monitor] invalid cleanup marker {path}: {exc}",
+                flush=True,
+            )
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    ssh,
+                    "-o",
+                    "ConnectTimeout=15",
+                    target,
+                    "rm -rf -- " + shlex.quote(remote_dir),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(
+                f"[environment-monitor] deferred cleanup failed: {exc}", flush=True
+            )
+            return False
+        if result.returncode != 0:
+            detail = " ".join((result.stderr or result.stdout).split())[-1000:]
+            print(f"[environment-monitor] deferred cleanup failed: {detail}", flush=True)
+            return False
+        path.unlink()
+    return True
+
+
+def run_monitor(
+    state_dir: Path, *, once: bool = False, no_restart: bool = False
+) -> int:
     state_dir = state_dir.expanduser().resolve()
     metadata = _load_restart(state_dir)
     lock = _acquire_lock(state_dir)
@@ -151,14 +252,52 @@ def run_monitor(state_dir: Path, *, once: bool = False, no_restart: bool = False
                     f"[environment-monitor] environment recovered at {checked_at}",
                     flush=True,
                 )
-                _archive_failure(state_dir)
-                if not no_restart:
-                    pid = _restart(metadata, state_dir)
-                    print(
-                        f"[environment-monitor] optimization restarted pid={pid}",
-                        flush=True,
-                    )
-                return 0
+                if not _retry_remote_cleanups(metadata, state_dir):
+                    detail = "deferred remote workspace cleanup is still pending"
+                elif no_restart:
+                    _archive_failure(state_dir)
+                    return 0
+                else:
+                    pid: int | None = None
+                    try:
+                        pid = _restart(metadata, state_dir)
+                        if _archive_failure(state_dir) is None:
+                            raise RuntimeError(
+                                "blocked marker disappeared before restart"
+                            )
+                        try:
+                            (state_dir / "restart.ready").unlink()
+                        except FileNotFoundError:
+                            pass
+                    except (
+                        OSError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                    ) as exc:
+                        if pid is not None:
+                            try:
+                                os.kill(pid, 15)
+                            except ProcessLookupError:
+                                pass
+                            try:
+                                (state_dir / "restart.pid").unlink()
+                            except FileNotFoundError:
+                                pass
+                        detail = f"optimizer restart failed: {exc}"
+                    else:
+                        print(
+                            f"[environment-monitor] optimization restarted pid={pid}",
+                            flush=True,
+                        )
+                        return 0
+                print(
+                    f"[environment-monitor] recovery incomplete at {checked_at}: {detail}",
+                    flush=True,
+                )
+                if once:
+                    return 1
+                time.sleep(metadata["poll_interval"])
+                continue
             detail = " ".join((result.stderr or result.stdout).split())[-1000:]
             print(
                 f"[environment-monitor] still unavailable at {checked_at}: {detail}",
