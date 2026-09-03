@@ -365,25 +365,92 @@ def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None
 
 def terminate_process_group(process_group: int) -> None:
     """Stop descendants that outlive the guarded coding-session process."""
-    signal_process_groups({process_group}, signal.SIGTERM)
+    terminate_process_groups({process_group})
+
+
+def terminate_process_groups(process_groups: set[int]) -> None:
+    """Stop all process groups observed inside one guarded coding session."""
+    remaining = set(process_groups)
+    signal_process_groups(remaining, signal.SIGTERM)
     deadline = time.monotonic() + PROCESS_GROUP_SHUTDOWN_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process_group, 0)
-        except ProcessLookupError:
+    while remaining and time.monotonic() < deadline:
+        for process_group in tuple(remaining):
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                remaining.discard(process_group)
+            except PermissionError:
+                remaining.discard(process_group)
+        if not remaining:
             return
-        except PermissionError:
-            break
         time.sleep(0.05)
-    signal_process_groups({process_group}, signal.SIGKILL)
+    signal_process_groups(remaining, signal.SIGKILL)
+
+
+def process_groups_in_directory_tree(root: Path) -> set[int]:
+    """Find detached helpers whose current directory is the guarded worktree."""
+    root = root.resolve()
+    pids: set[int] = set()
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                current = (entry / "cwd").resolve(strict=True)
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            if current == root or root in current.parents:
+                pids.add(int(entry.name))
+    else:
+        try:
+            output = subprocess.run(
+                ["lsof", "-a", "-d", "cwd", "-Fpn"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+        except OSError:
+            return set()
+        pid: int | None = None
+        for line in output.splitlines():
+            if line.startswith("p"):
+                try:
+                    pid = int(line[1:])
+                except ValueError:
+                    pid = None
+            elif pid is not None and line.startswith("n"):
+                current = Path(line[1:]).resolve()
+                if current == root or root in current.parents:
+                    pids.add(pid)
+
+    caller_group = os.getpgrp()
+    process_groups: set[int] = set()
+    for pid in pids:
+        try:
+            process_group = os.getpgid(pid)
+        except ProcessLookupError:
+            continue
+        if process_group != caller_group:
+            process_groups.add(process_group)
+    return process_groups
 
 
 def dependency_guard(
-    proc: subprocess.Popen[str], stop: threading.Event, violations: list[str]
+    proc: subprocess.Popen[str],
+    stop: threading.Event,
+    violations: list[str],
+    cwd: Path,
 ) -> None:
     """Kill a coding session as soon as it starts a forbidden dependency job."""
     while not stop.wait(DEPENDENCY_GUARD_POLL_SECONDS):
         if proc.poll() is not None:
+            # Detached helpers can keep stdout/stderr inherited from the coding
+            # CLI open after that direct process exits. Reap every group seen
+            # while the process tree was live so communicate() can reach EOF.
+            terminate_process_groups(
+                {proc.pid} | process_groups_in_directory_tree(cwd)
+            )
             return
         for pid, argv in descendant_process_commands(proc.pid):
             reason = dependency_process_violation(argv)
@@ -426,7 +493,12 @@ def run_bounded(
     dependency_violations: list[str] = []
     guard = threading.Thread(
         target=dependency_guard,
-        args=(proc, guard_stop, dependency_violations),
+        args=(
+            proc,
+            guard_stop,
+            dependency_violations,
+            cwd,
+        ),
         name=f"dependency-guard-{proc.pid}",
         daemon=True,
     )
@@ -451,7 +523,9 @@ def run_bounded(
     finally:
         guard_stop.set()
         guard.join(timeout=1)
-        terminate_process_group(session_process_group)
+        terminate_process_groups(
+            {session_process_group} | process_groups_in_directory_tree(cwd)
+        )
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (
