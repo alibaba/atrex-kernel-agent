@@ -13,6 +13,7 @@ from typing import Protocol
 
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
+PROCESS_GROUP_SHUTDOWN_SECONDS = 1.0
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
 
@@ -362,6 +363,21 @@ def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None
             pass
 
 
+def terminate_process_group(process_group: int) -> None:
+    """Stop descendants that outlive the guarded coding-session process."""
+    signal_process_groups({process_group}, signal.SIGTERM)
+    deadline = time.monotonic() + PROCESS_GROUP_SHUTDOWN_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            break
+        time.sleep(0.05)
+    signal_process_groups({process_group}, signal.SIGKILL)
+
+
 def dependency_guard(
     proc: subprocess.Popen[str], stop: threading.Event, violations: list[str]
 ) -> None:
@@ -402,6 +418,10 @@ def run_bounded(
         start_new_session=True,
         env=env,
     )
+    # start_new_session makes this stable even after the direct CLI process exits.
+    # Retaining it lets us reap background evaluator/profile commands before their
+    # episode worktree is archived or removed.
+    session_process_group = proc.pid
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     guard = threading.Thread(
@@ -431,6 +451,7 @@ def run_bounded(
     finally:
         guard_stop.set()
         guard.join(timeout=1)
+        terminate_process_group(session_process_group)
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (
