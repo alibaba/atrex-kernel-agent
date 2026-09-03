@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import uuid
 from pathlib import Path
-
 
 SUPPORTED = ("claude", "qodercli")
 DEFAULT_CLI = "claude"
@@ -33,6 +33,8 @@ COMMON_ENVIRONMENT = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+    "ATREX_ENVIRONMENT_STATE_FILE", "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID",
+    "ATREX_ENVIRONMENT_RESTART_LOCK_FD",
 )
 AUTH_ENVIRONMENT = {
     "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
@@ -109,6 +111,37 @@ def _kill_group(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+def _recovery_pass_fds(environment: dict[str, str]) -> tuple[int, ...]:
+    raw = environment.get("ATREX_ENVIRONMENT_RESTART_LOCK_FD", "")
+    try:
+        descriptor = int(raw)
+    except ValueError:
+        return ()
+    if descriptor <= 2:
+        return ()
+    try:
+        os.fstat(descriptor)
+    except OSError:
+        return ()
+    return (descriptor,)
+
+
+def _register_recovery_process(pid: int, environment: dict[str, str]) -> None:
+    """Register the independent bridge session when running inside AKA recovery."""
+    if not environment.get("ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"):
+        return
+    repository = Path(__file__).resolve().parents[2]
+    if str(repository) not in sys.path:
+        sys.path.insert(0, str(repository))
+    try:
+        from orchestrator.recovery_processes import register_recovery_process
+    except ImportError as exc:
+        raise LaunchError(
+            "recovery process registration is unavailable during restart handoff"
+        ) from exc
+    register_recovery_process(pid, "wiki-bridge-agent", environment)
+
+
 def _run_command(command: list[str], cwd: Path, timeout: int,
                  env: dict[str, str] | None) -> tuple[str, str, int, bool]:
     cli = Path(command[0]).name if command else ""
@@ -118,10 +151,17 @@ def _run_command(command: list[str], cwd: Path, timeout: int,
             command, cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             errors="replace", start_new_session=True,
+            close_fds=True, pass_fds=_recovery_pass_fds(environment),
         )
     except FileNotFoundError as exc:
         missing = command[0] if command else "<empty-command>"
         raise LaunchError(f"bridge cli not on PATH: {missing} ({exc})") from exc
+    try:
+        _register_recovery_process(proc.pid, environment)
+    except (OSError, ValueError) as exc:
+        _kill_group(proc)
+        proc.wait()
+        raise LaunchError(f"cannot register recovery bridge process: {exc}") from exc
 
     timed_out = False
     try:

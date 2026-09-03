@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from ..recovery_processes import recovery_pass_fds, register_recovery_process
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
@@ -417,7 +418,18 @@ def run_bounded(
         text=True,
         start_new_session=True,
         env=env,
+        close_fds=True,
+        pass_fds=recovery_pass_fds(env),
     )
+    try:
+        register_recovery_process(proc.pid, "coding-agent", env)
+    except (OSError, ValueError):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        raise
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []

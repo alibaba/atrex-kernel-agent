@@ -157,23 +157,34 @@ active Agent/framework process groups without treating the failure as a bad cand
 - `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
 - `restart-child.lock`, `restart.pid`, and `restart.log`: exact child identity/status during the
   supervised resume handoff;
-- `recover.sh`: an idempotent manual way to start the same single-instance poller.
+- `restart-processes/<handoff-id>/*.json`: PID-reuse-safe identities for the optimizer and every
+  controlled independent process session it starts;
+- `recover.sh`: an idempotent manual way to start the same single-instance poller;
+- `stop-recovery.sh`: the verified stop path for rollback.
 
 The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
 all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
 and only then archives the failure marker. Cleanup or spawn failures retain the marker and retry.
 If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
-to adopt a live handoff or atomically restores `failure.json` before another health check. Resolved
-environment-only settings, including the polling interval, are replayed into the child. PID files are
-diagnostic, removed by their matching owner, and never used as the lock authority.
+and the persistent process identities to adopt a live handoff or terminate its complete registered
+process tree before atomically restoring `failure.json`. The handoff timeout starts from the explicit
+`restart_handoff.started_at` value in the marker, never from a failure marker's older filesystem
+timestamp. Resolved environment-only settings, including the polling interval, are replayed into the
+child. PID files are diagnostic, removed by their matching owner, and never used as the lock or
+process-identity authority.
 The normal campaign resume path reuses its interrupted worktree and journal. Candidate compilation,
 correctness, timeout (status 124), and even explicit status 255 do not trigger this path when the
 independent health probe succeeds.
 
-To roll back the SSH transport, stop the PID recorded in `monitor.pid`, preserve the private recovery
-directory for diagnosis, and relaunch the same command with `--sandbox-url` or `--sandbox-profile`.
-Candidate Git state and canonical memory are transport-independent and require no rollback. To clear a
-recovered marker without restarting, run
+To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --stop`) and require a zero exit status
+before changing transport. This asks a live monitor to stop, or takes over through its advisory lock
+if the monitor already died; it terminates every identity-verified recovery process group, restores a
+durable failure marker when needed, and reports success only after no owned process remains. Do not
+signal the diagnostic PID from `monitor.pid` directly. Preserve the private recovery directory for
+diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
+state and canonical memory are transport-independent and require no rollback. To clear a recovered
+marker without restarting, run
 `python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart` after verifying any
 deferred remote cleanup.
 

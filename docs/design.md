@@ -216,11 +216,15 @@ resolved target, init, runtime binds, assigned GPU, health probe, and a unique i
 existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
 `restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
 construction, and workspace resume. An early exit restores `failure.json`; only the durable campaign
-resume signal archives the marker. A second advisory lock is inherited by the exact restart child, so
-a replacement monitor can adopt a live interrupted handoff or restore a dead one without trusting a
-reused raw PID. Resolved environment-only recovery options are replayed, and `monitor.pid` is removed
-by its matching lock owner on exit. Existing V1 snapshots and Long Horizon active episode state provide
-the restart boundary. User
+resume signal archives the marker. The marker records a fresh handoff ID and explicit start time, so
+the initialization timeout is independent of the older outage marker mtime. A second advisory lock is
+inherited by the restart process tree. The root and each controlled independent session also write a
+kernel-start-time-qualified identity to the handoff registry. A replacement monitor can therefore
+adopt a live interrupted handoff, or terminate all registered sessions before restoring a dead one,
+without trusting a reused raw PID or assuming all descendants share the root process group. Resolved
+environment-only recovery options are replayed, and `monitor.pid` is removed by its matching lock
+owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
+boundary. User
 interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
 
 ```mermaid
@@ -245,8 +249,11 @@ flowchart TD
     N --> K
     K --> O[Terminate Agent and sibling process groups]
     O --> P[Detached monitor acquires OS advisory lock]
-    P -. operator rollback .-> X[Stop monitor and select gateway transport]
-    X --> W
+    P -. operator rollback .-> X[Run verified stop-recovery control]
+    X --> X1{Monitor or stopper owns advisory lock?}
+    X1 --> X2[Terminate identity-verified handoff groups]
+    X2 --> X3[Confirm empty tree and restore failure marker]
+    X3 --> X4[Select gateway transport]
     P --> Q{Health probe succeeds?}
     Q -->|no| R[Sleep and retry]
     R --> Q
@@ -254,13 +261,15 @@ flowchart TD
     S -->|no| R
     S -->|yes| T{Spawn exact argv and cwd}
     T -->|Popen fails| R
-    T -->|spawned| U[Retain marker and child-owned advisory lock]
-    U --> V{Durable campaign resume reached?}
-    V -->|early exit or outage| R
+    T -->|spawned| U[Record handoff ID, explicit start time, and process identities]
+    U --> U0[Retain marker and process-tree-owned advisory lock]
+    U0 --> V{Durable campaign resume reached?}
+    V -->|early exit or outage| Z[Terminate registered groups and restore failure marker]
+    Z --> R
     V -->|yes| W[Archive marker and continue optimization]
-    U -. monitor replaced .-> Y{Child lock still held?}
+    U0 -. monitor replaced .-> Y{Tree lock and registered identity still live?}
     Y -->|yes| V
-    Y -->|no| R
+    Y -->|no| Z
 ```
 
 The motivating failure mode is an unattended optimization losing a GPU host after hours of work:
@@ -271,12 +280,16 @@ runs, and the exact command resumes automatically. The tradeoffs are an addition
 namespace startup cost, a Bubblewrap requirement, no network inside candidate jobs, and explicit
 read-only binds for runtimes outside the minimal system tree.
 
-Rollback is configuration-only: stop the monitor recorded in `monitor.pid`, archive the private
-`.atrex_environment/<command-id>/` directory for diagnosis, and relaunch the same command with
-`--sandbox-url` or `--sandbox-profile` instead of `--sandbox-ssh`. No candidate Git commit or canonical
-memory needs to be reverted. If automatic restart is undesired but SSH should remain enabled, stop the
-monitor and run `python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart`
-after cleaning any listed remote workspaces.
+Rollback is configuration-only: run `.atrex_environment/<command-id>/stop-recovery.sh` and require
+its verified zero status, archive that private directory for diagnosis, and relaunch the same command
+with `--sandbox-url` or `--sandbox-profile` instead of `--sandbox-ssh`. The stop request is handled by
+the live monitor, or by a replacement that first acquires the monitor lock; it succeeds only after the
+identity-owned process tree is empty and marker state is consistent. `monitor.pid` is diagnostic and
+must not be signalled as a rollback mechanism. No candidate Git commit or canonical memory needs to
+be reverted. If automatic restart is undesired but SSH should remain enabled, use the same verified
+stop path and then run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --once --no-restart` after cleaning any
+listed remote workspaces.
 
 ### Full-workload optimization
 

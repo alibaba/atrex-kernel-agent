@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from .recovery_processes import HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV
 
 ENVIRONMENT_STATE_ENV = "ATREX_ENVIRONMENT_STATE_FILE"
 RECOVERY_OWNER_ENV = "ATREX_ENVIRONMENT_RECOVERY_OWNER"
@@ -87,6 +88,7 @@ def signal_restart_ready() -> None:
     value = os.environ.pop("ATREX_ENVIRONMENT_RESTART_READY_FILE", "").strip()
     if not value:
         os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
+        _release_handoff_ownership()
         return
     path = Path(value).expanduser().resolve()
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -100,6 +102,22 @@ def signal_restart_ready() -> None:
     if restarting.is_file():
         raise EnvironmentUnavailable("recovery monitor did not complete restart handoff")
     os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
+    _release_handoff_ownership()
+
+
+def _release_handoff_ownership() -> None:
+    raw = os.environ.pop(HANDOFF_LOCK_FD_ENV, "")
+    os.environ.pop(HANDOFF_ID_ENV, None)
+    try:
+        descriptor = int(raw)
+    except ValueError:
+        return
+    if descriptor <= 2:
+        return
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
 
 
 def configure_recovery(
@@ -228,6 +246,22 @@ def configure_recovery(
             encoding="utf-8",
         )
         recover.chmod(0o700)
+        stop_recovery = directory / "stop-recovery.sh"
+        stop_recovery.write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\nexec "
+            + " ".join(
+                [
+                    _shell_quote(str(Path(sys.executable).resolve())),
+                    _shell_quote(str(monitor)),
+                    "--state-dir",
+                    _shell_quote(str(directory)),
+                    "--stop",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        stop_recovery.chmod(0o700)
     return RecoveryContext(directory=directory, state_file=inherited, owner=owner)
 
 

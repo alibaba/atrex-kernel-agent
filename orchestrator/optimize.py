@@ -54,8 +54,8 @@ import argparse
 import json
 import os
 import re
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -91,12 +91,6 @@ try:
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
-    from .hardware import (
-        _workspace_slug,
-        framework_workspace_suffix,
-        supported_frameworks,
-    )
-    from .optimization_policy import OPTIMIZATION_MODE_CHOICES
     from .environment_recovery import (
         DEFAULT_SSH_HEALTH_COMMAND,
         ENVIRONMENT_TEMPFAIL,
@@ -108,7 +102,11 @@ try:
         raise_if_environment_blocked,
         signal_restart_ready,
     )
-    from .session_io import detect_arch, ensure_submodules
+    from .hardware import (
+        _workspace_slug,
+        framework_workspace_suffix,
+        supported_frameworks,
+    )
     from .operator_layout import (
         AGENT_PROBLEM_FILENAME,
         find_atrex_bench_root,
@@ -118,6 +116,9 @@ try:
         validate_agent_problem,
         validate_private_shapes,
     )
+    from .optimization_policy import OPTIMIZATION_MODE_CHOICES
+    from .recovery_processes import recovery_pass_fds, register_recovery_process
+    from .session_io import detect_arch, ensure_submodules
     from .workspace_state import (
         latest_version,
         read_memory,
@@ -139,14 +140,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
-    from orchestrator.hardware import (  # type: ignore[no-redef]
-        _workspace_slug,
-        framework_workspace_suffix,
-        supported_frameworks,
-    )
-    from orchestrator.optimization_policy import (  # type: ignore[no-redef]
-        OPTIMIZATION_MODE_CHOICES,
-    )
     from orchestrator.environment_recovery import (  # type: ignore[no-redef]
         DEFAULT_SSH_HEALTH_COMMAND,
         ENVIRONMENT_TEMPFAIL,
@@ -158,9 +151,10 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         raise_if_environment_blocked,
         signal_restart_ready,
     )
-    from orchestrator.session_io import (  # type: ignore[no-redef]
-        detect_arch,
-        ensure_submodules,
+    from orchestrator.hardware import (  # type: ignore[no-redef]
+        _workspace_slug,
+        framework_workspace_suffix,
+        supported_frameworks,
     )
     from orchestrator.operator_layout import (  # type: ignore[no-redef]
         AGENT_PROBLEM_FILENAME,
@@ -170,6 +164,17 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         should_use_generalized_problem,
         validate_agent_problem,
         validate_private_shapes,
+    )
+    from orchestrator.optimization_policy import (  # type: ignore[no-redef]
+        OPTIMIZATION_MODE_CHOICES,
+    )
+    from orchestrator.recovery_processes import (  # type: ignore[no-redef]
+        recovery_pass_fds,
+        register_recovery_process,
+    )
+    from orchestrator.session_io import (  # type: ignore[no-redef]
+        detect_arch,
+        ensure_submodules,
     )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
@@ -315,7 +320,20 @@ def dispatch_framework_campaigns(
                 start_new_session=True,
                 text=True,
                 env=child_environment,
+                close_fds=True,
+                pass_fds=recovery_pass_fds(child_environment),
             )
+            try:
+                register_recovery_process(
+                    proc.pid, f"framework-{framework}", child_environment
+                )
+            except (OSError, ValueError):
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+                raise
             children.append((framework, workspace_suffix, proc))
             print(
                 f"[orchestrator] dispatched framework={framework} pid={proc.pid} "

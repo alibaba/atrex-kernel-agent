@@ -31,12 +31,13 @@ from .constants import (
     SANDBOX_TOOL,
     TEST_RESULT_PREFIX,
 )
-from .hardware import hardware_vendor
 from .environment_recovery import (
     environment_is_blocked,
     environment_state_file,
     raise_if_environment_blocked,
 )
+from .hardware import hardware_vendor
+from .recovery_processes import recovery_pass_fds, register_recovery_process
 from .workspace_state import speedup_vs_reference
 
 
@@ -525,7 +526,18 @@ def _sandbox_command(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        close_fds=True,
+        pass_fds=recovery_pass_fds(environment),
     )
+    try:
+        register_recovery_process(process.pid, "sandbox", environment)
+    except (OSError, ValueError):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
 
     def stop_process_group() -> tuple[str, str]:
         if process.poll() is None:
