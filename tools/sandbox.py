@@ -2969,10 +2969,6 @@ def _main(argv: list[str] | None = None) -> int:
         )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
-    try:
-        num_gpus = _workspace_num_gpus(workspace)
-    except ValueError as exc:
-        raise SystemExit(f"sandbox: invalid distributed evaluator contract: {exc}") from exc
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
     profile_command = _is_profile_command(args.command)
@@ -2982,7 +2978,14 @@ def _main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
+    num_gpus = 1
     if gateway_kind in TYPED_KINDS:
+        try:
+            num_gpus = _workspace_num_gpus(workspace)
+        except ValueError as exc:
+            raise SystemExit(
+                f"sandbox: invalid distributed evaluator contract: {exc}"
+            ) from exc
         if (
             gateway_kind == "profile"
             and args.profile_level == "deep"
