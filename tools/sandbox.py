@@ -37,6 +37,10 @@ localhost gateway uses the same transport as a remote worker, for example
 ``ATREX_SANDBOX_GPU=local`` plus
 ``ATREX_SANDBOX_URL=http://127.0.0.1:8000``.  Authentication and any remaining
 URL resolution stay agate's responsibility (AGATE_* or ~/.atrex/config.json).
+With a standard agate gateway profile, synchronized remote files are packed once
+on the worker, transferred through OSS, integrity-checked, and extracted locally.
+Custom endpoints selected by URL, ``AGATE_URL``, or agate config retain inline
+transport because gateways do not currently advertise OSS capability.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -144,6 +149,7 @@ RUNTIME_CHUNK_BYTES = 20 * 1024
 # bundles use agate's OSS attachment transport.
 WORKSPACE_CHUNK_BYTES = 20 * 1024
 OSS_WORKSPACE_THRESHOLD_BYTES = 120 * 1024
+OSS_OUTPUT_ARCHIVE = "__atrex_outputs.tar.gz"
 SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
 ACTIVE_AGATE_JOBS: dict[str, tuple[str, str, str | None]] = {}
 ACTIVE_AGATE_JOBS_LOCK = Lock()
@@ -227,6 +233,42 @@ def _find_agate() -> str | None:
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
     return shutil.which("agate")
+
+
+def _uses_standard_oss_gateway(
+    agate_executable: str, *, url: str, profile: str | None
+) -> bool:
+    """Return whether agate resolves to one of its standard gateway profiles."""
+    if url:
+        return False
+    if profile in {"pre", "prod"}:
+        return True
+
+    def resolved_url(*options: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                [agate_executable, "config", *options],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            config = json.loads(completed.stdout) if completed.returncode == 0 else {}
+            value = config.get("url") if isinstance(config, dict) else None
+            return value.rstrip("/") if isinstance(value, str) else None
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            return None
+
+    selected = resolved_url()
+    standard = {
+        value
+        for value in (
+            resolved_url("--profile", "pre"),
+            resolved_url("--profile", "prod"),
+        )
+        if value is not None
+    }
+    return selected is not None and selected in standard
 
 
 def _walk_files(root: Path) -> Iterable[Path]:
@@ -1003,8 +1045,8 @@ RAW = {".ncu-rep", ".att", ".pftrace", ".otf2"}
 root = Path(sys.argv[1]).resolve()
 cfg = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 max_bytes = int(cfg["max_file_bytes"])
-include_raw = bool(cfg["include_raw_profile"])
-archive = io.BytesIO()
+transport = cfg.get("transport", "inline")
+include_raw = bool(cfg["include_raw_profile"]) or transport == "oss"
 skipped = []
 seen = set()
 
@@ -1023,7 +1065,7 @@ def add_file(tf, path):
     tf.add(path, arcname=rel, recursive=False)
     seen.add(rel)
 
-with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+def collect(tf):
     for value in cfg["paths"]:
         if not safe(value):
             continue
@@ -1034,11 +1076,20 @@ with tarfile.open(fileobj=archive, mode="w:gz") as tf:
             for child in path.rglob("*"):
                 add_file(tf, child)
 
+if transport == "oss":
+    with tarfile.open(Path(sys.argv[3]), mode="w:gz") as tf:
+        collect(tf)
+elif transport == "inline":
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+        collect(tf)
+    print(BEGIN)
+    print(base64.b64encode(archive.getvalue()).decode("ascii"))
+    print(END)
+elif transport != "none":
+    raise ValueError(f"unsupported output transport: {transport!r}")
 if skipped:
     print("[sandbox] artifacts not returned: " + ", ".join(skipped), file=sys.stderr)
-print(BEGIN)
-print(base64.b64encode(archive.getvalue()).decode("ascii"))
-print(END)
 """
 
 
@@ -1070,7 +1121,7 @@ set +e
 bash ../__atrex_command.sh
 command_status=$?
 cd ..
-python __atrex_collect.py workspace __atrex_outputs.json
+python __atrex_collect.py workspace __atrex_outputs.json __atrex_outputs.tar.gz
 collect_status=$?
 if [[ $collect_status -ne 0 ]]; then
     exit 98
@@ -1079,8 +1130,49 @@ exit $command_status
 """
 
 
+def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> None:
+    """Safely extract a sandbox-owned output archive into ``workspace``."""
+    workspace_root = workspace.resolve()
+    for member in tf.getmembers():
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts:
+            raise RuntimeError(
+                f"unsafe artifact path returned by sandbox: {member.name!r}"
+            )
+        if member.issym() or member.islnk():
+            raise RuntimeError(
+                f"sandbox artifact links are not accepted: {member.name!r}"
+            )
+        target = workspace_root / path.as_posix()
+        try:
+            target.resolve(strict=False).relative_to(workspace_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"sandbox artifact resolves outside workspace: {member.name!r}"
+            ) from exc
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not member.isfile():
+            continue
+        source = tf.extractfile(member)
+        if source is None:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read())
+        try:
+            target.chmod(member.mode & 0o777)
+        except OSError:
+            pass
+
+
+def _extract_output_archive(archive: Path, workspace: Path) -> None:
+    with tarfile.open(archive, mode="r:gz") as tf:
+        _extract_output_tar(tf, workspace)
+
+
 def _extract_outputs(stdout: str, workspace: Path) -> str:
-    """Extract the returned archive and return command stdout without framing."""
+    """Extract a legacy inline archive and return stdout without framing."""
     if OUTPUT_BEGIN not in stdout or OUTPUT_END not in stdout:
         raise RuntimeError("sandbox response did not contain an artifact frame")
     command_stdout, framed = stdout.rsplit(OUTPUT_BEGIN, 1)
@@ -1089,32 +1181,76 @@ def _extract_outputs(stdout: str, workspace: Path) -> str:
         command_stdout += trailing
     payload = base64.b64decode("".join(encoded.split()), validate=True)
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
-        for member in tf.getmembers():
-            path = PurePosixPath(member.name)
-            if path.is_absolute() or ".." in path.parts:
-                raise RuntimeError(
-                    f"unsafe artifact path returned by sandbox: {member.name!r}"
-                )
-            if member.issym() or member.islnk():
-                raise RuntimeError(
-                    f"sandbox artifact links are not accepted: {member.name!r}"
-                )
-            target = workspace / path.as_posix()
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-                continue
-            if not member.isfile():
-                continue
-            source = tf.extractfile(member)
-            if source is None:
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(source.read())
-            try:
-                target.chmod(member.mode & 0o777)
-            except OSError:
-                pass
+        _extract_output_tar(tf, workspace)
     return command_stdout.rstrip("\n")
+
+
+def _oss_artifact(job: dict[str, Any], name: str) -> dict[str, Any]:
+    artifacts = (job.get("result") or {}).get("artifacts") or []
+    for artifact in artifacts:
+        if isinstance(artifact, dict) and artifact.get("name") == name:
+            return artifact
+    raise RuntimeError(f"gateway returned no OSS artifact named {name!r}")
+
+
+def _download_oss_artifact(artifact: dict[str, Any], destination: Path) -> None:
+    """Download one presigned OSS artifact and verify gateway metadata."""
+    name = str(artifact.get("name") or "artifact")
+    url = artifact.get("url")
+    if not isinstance(url, str):
+        raise RuntimeError(f"OSS artifact {name!r} has no download URL")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError(f"OSS artifact {name!r} has an invalid download URL")
+
+    expected_bytes = artifact.get("bytes")
+    expected_sha256 = artifact.get("sha256")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".part",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            digest = hashlib.sha256()
+            downloaded = 0
+            with urllib.request.urlopen(
+                url, timeout=MAX_HTTP_REQUEST_TIMEOUT
+            ) as response:
+                final_url = urllib.parse.urlsplit(response.geturl())
+                if final_url.scheme not in {"http", "https"} or not final_url.hostname:
+                    raise RuntimeError(
+                        f"OSS artifact {name!r} redirected to an invalid URL"
+                    )
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+        if (
+            isinstance(expected_bytes, int)
+            and not isinstance(expected_bytes, bool)
+            and downloaded != expected_bytes
+        ):
+            raise RuntimeError(
+                f"OSS artifact {name!r} size mismatch: "
+                f"expected {expected_bytes}, received {downloaded}"
+            )
+        if (
+            isinstance(expected_sha256, str)
+            and expected_sha256
+            and digest.hexdigest() != expected_sha256.casefold()
+        ):
+            raise RuntimeError(f"OSS artifact {name!r} sha256 mismatch")
+        os.replace(temporary, destination)
+        temporary = None
+    except (OSError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"failed to download OSS artifact {name!r}: {exc}") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _command_text(parts: list[str]) -> str:
@@ -1193,9 +1329,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-sync", action="store_true", help="Do not copy any files back."
     )
     parser.add_argument(
+        "--inline-output",
+        action="store_true",
+        help=(
+            "Return synchronized files through the legacy stdout archive instead of "
+            "agate OSS (default: use OSS with standard agate gateway profiles; "
+            "custom gateway URLs and config use inline output)."
+        ),
+    )
+    parser.add_argument(
         "--include-raw-profile",
         action="store_true",
-        help="Return raw .ncu-rep/ATT artifacts (can make the gateway response very large).",
+        help=(
+            "Include raw .ncu-rep/ATT artifacts with legacy inline output "
+            "(OSS output includes them by default)."
+        ),
     )
     parser.add_argument(
         "--profile-level",
@@ -1247,8 +1395,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-output-file-mb",
         type=int,
-        default=8,
-        help="Skip individual returned artifacts larger than this (default: 8 MiB).",
+        default=512,
+        help="Skip individual returned artifacts larger than this (default: 512 MiB).",
     )
     parser.add_argument("-e", "--env", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument(
@@ -2464,11 +2612,20 @@ def _record_profile_job(
         path = PurePosixPath(relative)
         if not path.parts or path.parts[0] != "profiles":
             continue
-        target = workspace / path.as_posix() / "gateway_profile.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
+        output_dir = workspace / path.as_posix()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        target = output_dir / "gateway_profile.json"
         target.write_text(
             json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
+        for artifact in (job.get("result") or {}).get("artifacts") or []:
+            if not isinstance(artifact, dict):
+                continue
+            try:
+                artifact_name = _safe_relative(str(artifact.get("name") or ""))
+            except ValueError as exc:
+                raise RuntimeError(f"invalid profile artifact name: {exc}") from exc
+            _download_oss_artifact(artifact, output_dir / artifact_name)
 
 
 def _run_typed_gateway(
@@ -2869,12 +3026,28 @@ def _main(argv: list[str] | None = None) -> int:
             command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = _find_agate()
     direct_http = bool(args.url and agate_executable is None)
+    standard_oss_gateway = bool(
+        agate_executable
+        and _uses_standard_oss_gateway(
+            agate_executable,
+            url=args.url,
+            profile=args.gateway_profile,
+        )
+    )
     oss_workspace = bool(
-        agate_executable and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
+        standard_oss_gateway and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
     )
     workspace_transport = (
         "oss" if oss_workspace else ("http" if direct_http else "inline")
     )
+    if not sync_paths:
+        output_transport = "none"
+    # Custom gateways do not advertise OSS capability yet, so both input and
+    # output stay inline unless agate resolves to one of its standard profiles.
+    elif standard_oss_gateway and not args.inline_output:
+        output_transport = "oss"
+    else:
+        output_transport = "inline"
     if direct_http and bundle_bytes > 20 * 1024 * 1024:
         raise SystemExit(
             f"sandbox: packaged payload is {bundle_bytes / 1024:.1f} KiB, "
@@ -2883,7 +3056,8 @@ def _main(argv: list[str] | None = None) -> int:
     print(
         f"[sandbox] gateway_kind=dev hardware={args.hardware} files={file_count} "
         f"payload={bundle_bytes / 1024:.1f} KiB "
-        f"transport={workspace_transport} "
+        f"input_transport={workspace_transport} "
+        f"output_transport={output_transport} "
         f"atrex_runtime={runtime_bundle_bytes / 1024:.1f} KiB command={command!r}",
         file=sys.stderr,
     )
@@ -2903,6 +3077,7 @@ def _main(argv: list[str] | None = None) -> int:
                     "files": file_count,
                     "payload_bytes": bundle_bytes,
                     "workspace_transport": workspace_transport,
+                    "output_transport": output_transport,
                     "atrex_runtime_payload_bytes": runtime_bundle_bytes,
                     "sync": sync_paths,
                     "command": command,
@@ -2916,6 +3091,7 @@ def _main(argv: list[str] | None = None) -> int:
         "paths": sync_paths,
         "max_file_bytes": args.max_output_file_mb * 1024 * 1024,
         "include_raw_profile": args.include_raw_profile,
+        "transport": output_transport,
     }
     with tempfile.TemporaryDirectory(prefix="atrex-sandbox-") as temp_dir:
         temp = Path(temp_dir)
@@ -3014,6 +3190,8 @@ def _main(argv: list[str] | None = None) -> int:
             agate += ["--env-var", item]
         if args.keep_pod:
             agate.append("--no-recycle")
+        if output_transport == "oss":
+            agate += ["--oss-output", OSS_OUTPUT_ARCHIVE]
         agate.append("bash __atrex_runner.sh")
 
         # The runner is uploaded separately after the command has been assembled.
@@ -3096,7 +3274,17 @@ def _main(argv: list[str] | None = None) -> int:
     remote_stdout = str(result.get("stdout") or "")
     remote_stderr = str(result.get("stderr") or "")
     try:
-        command_stdout = _extract_outputs(remote_stdout, workspace)
+        if output_transport == "oss":
+            artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
+            with tempfile.TemporaryDirectory(prefix="atrex-oss-output-") as temp_dir:
+                archive = Path(temp_dir) / OSS_OUTPUT_ARCHIVE
+                _download_oss_artifact(artifact, archive)
+                _extract_output_archive(archive, workspace)
+            command_stdout = remote_stdout.rstrip("\n")
+        elif output_transport == "inline":
+            command_stdout = _extract_outputs(remote_stdout, workspace)
+        else:
+            command_stdout = remote_stdout.rstrip("\n")
     except (RuntimeError, ValueError, tarfile.TarError) as exc:
         if remote_stdout and not hide_evaluator_details:
             print(remote_stdout.rstrip())
