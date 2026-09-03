@@ -209,14 +209,17 @@ serially on the assigned GPU, and SSH auto-framework dispatch is rejected. A rem
 could not be deleted is recorded separately and becomes a
 required recovery action rather than being forgotten.
 
-Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor takes an
-exclusive PID lock, repeats the configured health probe, removes every deferred remote workspace, and
+Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor holds an
+OS advisory lock, repeats the configured health probe, removes every deferred remote workspace, and
 then replays the exact original argument array and working directory. Recovery state is keyed by the
 resolved target, init, runtime binds, assigned GPU, health probe, and a unique invocation identity;
 existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
 `restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
 construction, and workspace resume. An early exit restores `failure.json`; only the durable campaign
-resume signal archives the marker. Existing V1 snapshots and Long Horizon active episode state provide
+resume signal archives the marker. A second advisory lock is inherited by the exact restart child, so
+a replacement monitor can adopt a live interrupted handoff or restore a dead one without trusting a
+reused raw PID. Resolved environment-only recovery options are replayed, and `monitor.pid` is removed
+by its matching lock owner on exit. Existing V1 snapshots and Long Horizon active episode state provide
 the restart boundary. User
 interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
 
@@ -241,7 +244,7 @@ flowchart TD
     L -->|no| N[Persist cleanup marker]
     N --> K
     K --> O[Terminate Agent and sibling process groups]
-    O --> P[Detached monitor acquires exclusive PID lock]
+    O --> P[Detached monitor acquires OS advisory lock]
     P -. operator rollback .-> X[Stop monitor and select gateway transport]
     X --> W
     P --> Q{Health probe succeeds?}
@@ -251,10 +254,13 @@ flowchart TD
     S -->|no| R
     S -->|yes| T{Spawn exact argv and cwd}
     T -->|Popen fails| R
-    T -->|spawned| U[Retain marker as restarting.json]
+    T -->|spawned| U[Retain marker and child-owned advisory lock]
     U --> V{Durable campaign resume reached?}
     V -->|early exit or outage| R
     V -->|yes| W[Archive marker and continue optimization]
+    U -. monitor replaced .-> Y{Child lock still held?}
+    Y -->|yes| V
+    Y -->|no| R
 ```
 
 The motivating failure mode is an unattended optimization losing a GPU host after hours of work:

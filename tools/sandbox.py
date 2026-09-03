@@ -1570,6 +1570,7 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
         "/root",
     }
     reserved_trees = {
+        "atrex",
         "bin",
         "dev",
         "etc",

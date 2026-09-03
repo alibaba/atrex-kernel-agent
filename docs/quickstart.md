@@ -154,13 +154,18 @@ active Agent/framework process groups without treating the failure as a bad cand
 - `failure.json`: the current failure stage and bounded diagnostic;
 - `cleanup-*.json`: remote workspaces that must be removed before restart;
 - `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
-- `monitor.pid` and `monitor.log`: detached poller status;
-- `restart.pid` and `restart.log`: the resumed optimization process;
+- `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
+- `restart-child.lock`, `restart.pid`, and `restart.log`: exact child identity/status during the
+  supervised resume handoff;
 - `recover.sh`: an idempotent manual way to start the same single-instance poller.
 
 The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
 all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
 and only then archives the failure marker. Cleanup or spawn failures retain the marker and retry.
+If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
+to adopt a live handoff or atomically restores `failure.json` before another health check. Resolved
+environment-only settings, including the polling interval, are replayed into the child. PID files are
+diagnostic, removed by their matching owner, and never used as the lock authority.
 The normal campaign resume path reuses its interrupted worktree and journal. Candidate compilation,
 correctness, timeout (status 124), and even explicit status 255 do not trigger this path when the
 independent health probe succeeds.

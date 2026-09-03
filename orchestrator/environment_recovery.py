@@ -258,7 +258,4 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
             start_new_session=True,
             close_fds=True,
         )
-    (context.directory / "monitor.pid").write_text(
-        str(process.pid) + "\n", encoding="utf-8"
-    )
     return process.pid

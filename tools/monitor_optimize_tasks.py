@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
+
+RESTART_HANDOFF_TIMEOUT = 10_800
 
 
 def _load_restart(state_dir: Path) -> dict[str, Any]:
@@ -58,37 +62,153 @@ def _load_restart(state_dir: Path) -> dict[str, Any]:
     return value
 
 
-def _pid_is_alive(pid: int) -> bool:
+def _acquire_lock(state_dir: Path) -> TextIO | None:
+    """Hold an OS-owned advisory lock; file contents are diagnostic only."""
+    path = state_dir / "monitor.lock"
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.fchmod(descriptor, 0o600)
+    handle = os.fdopen(descriptor, "r+", encoding="utf-8")
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()) + "\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+    return handle
 
 
-def _acquire_lock(state_dir: Path) -> Path | None:
-    lock = state_dir / "monitor.lock"
-    for _attempt in range(2):
+def _handoff_lock_active(state_dir: Path) -> bool:
+    """Return whether the exact optimizer spawned for a restart still owns its lock."""
+    descriptor = os.open(
+        state_dir / "restart-child.lock", os.O_RDWR | os.O_CREAT, 0o600
+    )
+    os.fchmod(descriptor, 0o600)
+    try:
         try:
-            descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            try:
-                pid = int(lock.read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                pid = -1
-            if pid > 0 and _pid_is_alive(pid):
-                return None
-            try:
-                lock.unlink()
-            except FileNotFoundError:
-                pass
-            continue
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()) + "\n")
-        return lock
-    return None
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def _acquire_handoff_lock(state_dir: Path) -> int | None:
+    descriptor = os.open(
+        state_dir / "restart-child.lock", os.O_RDWR | os.O_CREAT, 0o600
+    )
+    os.fchmod(descriptor, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    os.set_inheritable(descriptor, True)
+    return descriptor
+
+
+def _read_pid(path: Path) -> int | None:
+    try:
+        pid = int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _remove_matching_pid(path: Path, pid: int) -> None:
+    if _read_pid(path) != pid:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _restore_restarting_marker(state_dir: Path) -> None:
+    restarting = state_dir / "restarting.json"
+    failure = state_dir / "failure.json"
+    if restarting.is_file():
+        if failure.is_file():
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            restarting.replace(state_dir / f"superseded-restart-{stamp}.json")
+        else:
+            restarting.replace(failure)
+    for name in ("restart.ready", "restart.pid"):
+        try:
+            (state_dir / name).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _archive_restarting_marker(state_dir: Path) -> Path:
+    restarting = state_dir / "restarting.json"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    archived = state_dir / f"recovered-{stamp}.json"
+    restarting.replace(archived)
+    return archived
+
+
+def _terminate_handoff_process(state_dir: Path, pid: int) -> None:
+    """Terminate only while the handoff lock proves the recorded child still exists."""
+    if not _handoff_lock_active(state_dir):
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 5
+    while _handoff_lock_active(state_dir) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if not _handoff_lock_active(state_dir):
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _reconcile_interrupted_handoff(state_dir: Path) -> int | None:
+    """Adopt a live restart child or restore a marker left by a dead monitor."""
+    restarting = state_dir / "restarting.json"
+    if not restarting.is_file():
+        return None
+    if not _handoff_lock_active(state_dir):
+        _restore_restarting_marker(state_dir)
+        print(
+            "[environment-monitor] restored interrupted restart marker with no live child",
+            flush=True,
+        )
+        return None
+    pid = _read_pid(state_dir / "restart.pid")
+    if pid is None:
+        raise RuntimeError("live restart handoff has no valid restart.pid")
+    print(
+        f"[environment-monitor] adopting interrupted restart handoff pid={pid}",
+        flush=True,
+    )
+    ready = state_dir / "restart.ready"
+    failure = state_dir / "failure.json"
+    started_at = restarting.stat().st_mtime
+    while True:
+        active = _handoff_lock_active(state_dir)
+        if ready.is_file() and active and not failure.is_file():
+            _archive_restarting_marker(state_dir)
+            ready.unlink(missing_ok=True)
+            _remove_matching_pid(state_dir / "restart.pid", pid)
+            return pid
+        if not active:
+            _restore_restarting_marker(state_dir)
+            return None
+        if failure.is_file() or time.time() - started_at >= RESTART_HANDOFF_TIMEOUT:
+            _terminate_handoff_process(state_dir, pid)
+            _restore_restarting_marker(state_dir)
+            return None
+        time.sleep(0.1)
 
 
 def _health_command(metadata: dict[str, Any]) -> list[str]:
@@ -130,6 +250,24 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     if len(command) < 2 or not Path(command[1]).is_file():
         missing = command[1] if len(command) > 1 else ""
         raise FileNotFoundError(f"optimizer script is missing: {missing}")
+    failure = Path(metadata["environment_state_file"]).expanduser().resolve()
+    expected_failure = (state_dir / "failure.json").resolve()
+    restarting = state_dir / "restarting.json"
+    if failure != expected_failure:
+        raise RuntimeError("restart metadata state path does not match its state directory")
+    if restarting.exists():
+        adopted_pid = _reconcile_interrupted_handoff(state_dir)
+        if adopted_pid is not None:
+            return adopted_pid
+        raise RuntimeError(
+            "interrupted restart handoff was restored; health must be checked again"
+        )
+    if not failure.is_file():
+        raise RuntimeError("blocked marker disappeared before restart")
+    handoff_lock = _acquire_handoff_lock(state_dir)
+    if handoff_lock is None:
+        raise RuntimeError("another optimizer restart child is still active")
+
     environment = os.environ.copy()
     environment["ATREX_ENVIRONMENT_STATE_FILE"] = metadata[
         "environment_state_file"
@@ -142,6 +280,7 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     )
     environment["ATREX_SANDBOX_SSH_GPU"] = str(metadata["ssh_gpu"])
     environment["ATREX_SANDBOX_HEALTH_COMMAND"] = metadata["health_command"]
+    environment["ATREX_ENVIRONMENT_POLL_INTERVAL"] = str(metadata["poll_interval"])
     environment.pop("ATREX_SANDBOX_URL", None)
     environment.pop("ATREX_SANDBOX_PROFILE", None)
     environment["ATREX_ENVIRONMENT_RESTART_HANDOFF"] = "1"
@@ -153,67 +292,57 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
         pass
     environment["ATREX_ENVIRONMENT_RESTART_READY_FILE"] = str(ready)
     log_path = state_dir / "restart.log"
-    with log_path.open("a", encoding="utf-8") as log:
-        process = subprocess.Popen(
-            command,
-            cwd=metadata["cwd"],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True,
-        )
     try:
-        (state_dir / "restart.pid").write_text(
-            str(process.pid) + "\n", encoding="utf-8"
-        )
-    except OSError:
-        process.terminate()
-        raise
-    failure = Path(metadata["environment_state_file"]).expanduser().resolve()
-    expected_failure = (state_dir / "failure.json").resolve()
-    restarting = state_dir / "restarting.json"
-    if failure != expected_failure:
-        process.terminate()
-        raise RuntimeError("restart metadata state path does not match its state directory")
-    if restarting.exists():
-        process.terminate()
-        raise RuntimeError("a prior restart handoff is still active")
-    try:
-        failure.replace(restarting)
-    except OSError:
-        process.terminate()
-        raise
-
-    def restore_marker() -> None:
-        if not restarting.is_file():
-            return
-        if failure.is_file():
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            restarting.replace(state_dir / f"superseded-restart-{stamp}.json")
-        else:
-            restarting.replace(failure)
+        with log_path.open("a", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                command,
+                cwd=metadata["cwd"],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+                pass_fds=(handoff_lock,),
+            )
+    finally:
+        # Popen duplicated this locked descriptor into the optimizer. Closing the
+        # monitor's copy makes lock ownership exactly track the child lifetime.
+        os.close(handoff_lock)
 
     def stop_process() -> None:
         if process.poll() is not None:
             return
         try:
-            os.killpg(process.pid, 15)
+            os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(process.pid, 9)
+                os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             process.wait()
 
+    try:
+        (state_dir / "restart.pid").write_text(
+            str(process.pid) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        stop_process()
+        raise
+    try:
+        failure.replace(restarting)
+    except OSError:
+        stop_process()
+        _remove_matching_pid(state_dir / "restart.pid", process.pid)
+        raise
+
     # Baseline setup can legitimately use the configured two-hour session budget.
     # The monitor keeps ownership throughout and restores failure.json on any early exit.
-    deadline = time.monotonic() + 10_800
+    deadline = time.monotonic() + RESTART_HANDOFF_TIMEOUT
     try:
         while not ready.is_file():
             if process.poll() is not None:
@@ -232,14 +361,11 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
             raise RuntimeError("remote environment failed again during restart")
     except BaseException:
         stop_process()
-        restore_marker()
-        try:
-            (state_dir / "restart.pid").unlink()
-        except FileNotFoundError:
-            pass
+        _restore_restarting_marker(state_dir)
         raise
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    restarting.replace(state_dir / f"recovered-{stamp}.json")
+    _archive_restarting_marker(state_dir)
+    ready.unlink(missing_ok=True)
+    _remove_matching_pid(state_dir / "restart.pid", process.pid)
     return process.pid
 
 
@@ -300,7 +426,16 @@ def run_monitor(
     if lock is None:
         print("[environment-monitor] another monitor is already active", flush=True)
         return 0
+    monitor_pid = state_dir / "monitor.pid"
     try:
+        monitor_pid.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+        adopted_pid = _reconcile_interrupted_handoff(state_dir)
+        if adopted_pid is not None:
+            print(
+                f"[environment-monitor] optimization restart handoff adopted pid={adopted_pid}",
+                flush=True,
+            )
+            return 0
         while True:
             checked_at = datetime.now(timezone.utc).isoformat()
             result = subprocess.run(
@@ -320,27 +455,13 @@ def run_monitor(
                     _archive_failure(state_dir)
                     return 0
                 else:
-                    pid: int | None = None
                     try:
                         pid = _restart(metadata, state_dir)
-                        try:
-                            (state_dir / "restart.ready").unlink()
-                        except FileNotFoundError:
-                            pass
                     except (
                         OSError,
                         RuntimeError,
                         subprocess.SubprocessError,
                     ) as exc:
-                        if pid is not None:
-                            try:
-                                os.kill(pid, 15)
-                            except ProcessLookupError:
-                                pass
-                            try:
-                                (state_dir / "restart.pid").unlink()
-                            except FileNotFoundError:
-                                pass
                         detail = f"optimizer restart failed: {exc}"
                     else:
                         print(
@@ -365,10 +486,9 @@ def run_monitor(
                 return 1
             time.sleep(metadata["poll_interval"])
     finally:
-        try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+        _remove_matching_pid(monitor_pid, os.getpid())
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 
 def main(argv: list[str] | None = None) -> int:
