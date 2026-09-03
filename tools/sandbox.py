@@ -539,13 +539,110 @@ def _command_input_paths(
     return frozenset(selected)
 
 
-def _is_test_kernel_command(parts: list[str]) -> bool:
+def _test_kernel_script_index(
+    parts: list[str], *, typed_launcher: bool = False
+) -> int | None:
+    """Locate the evaluator; optionally require a prefix typed run may omit."""
     command = _command_parts(parts)
-    return (
-        len(command) >= 2
-        and re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[0]).name) is not None
-        and Path(command[1]).name == "test_kernel.py"
-    )
+    if not command:
+        return None
+
+    index = 0
+    if command[index] in {"env", "/usr/bin/env"}:
+        index += 1
+        while index < len(command):
+            option = command[index]
+            if option == "--":
+                index += 1
+                break
+            if option == "-" or option == "--ignore-environment" or option == "--debug":
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if re.fullmatch(r"-[iv]+", option):
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if option in {"-u", "--unset"}:
+                if index + 1 >= len(command):
+                    return None
+                if typed_launcher:
+                    return None
+                index += 2
+                continue
+            if (option.startswith("-u") and len(option) > 2) or (
+                option.startswith("--unset=") and len(option) > len("--unset=")
+            ):
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if option.startswith("-"):
+                return None
+            break
+        while index < len(command):
+            name, separator, _ = command[index].partition("=")
+            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+                break
+            if typed_launcher and name not in {
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONUNBUFFERED",
+            }:
+                return None
+            index += 1
+
+    if (
+        index >= len(command)
+        or re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[index]).name) is None
+    ):
+        return None
+    index += 1
+    while index < len(command):
+        option = command[index]
+        if option == "--":
+            index += 1
+            break
+        if re.fullmatch(r"-[bBdEiIOPqRsSuvx]+", option):
+            if typed_launcher and re.fullmatch(r"-[Bu]+", option) is None:
+                return None
+            index += 1
+            continue
+        if option in {"-W", "-X"}:
+            if index + 1 >= len(command):
+                return None
+            if typed_launcher:
+                return None
+            index += 2
+            continue
+        if len(option) > 2 and option.startswith(("-W", "-X")):
+            if typed_launcher:
+                return None
+            index += 1
+            continue
+        if option == "--check-hash-based-pycs":
+            if index + 1 >= len(command) or command[index + 1] not in {
+                "always",
+                "default",
+                "never",
+            }:
+                return None
+            if typed_launcher:
+                return None
+            index += 2
+            continue
+        if option.startswith("-"):
+            return None
+        break
+
+    if index < len(command) and Path(command[index]).name == "test_kernel.py":
+        return index
+    return None
+
+
+def _is_test_kernel_command(parts: list[str]) -> bool:
+    return _test_kernel_script_index(parts) is not None
 
 
 def _is_profile_command(parts: list[str]) -> bool:
@@ -770,6 +867,12 @@ def _typed_workspace_limitation(
         _evaluator_input_path(workspace, "shapes.json", required=True)
     except ValueError as exc:
         return str(exc)
+    if (
+        kind == "run"
+        and _is_test_kernel_command(command)
+        and _test_kernel_script_index(command, typed_launcher=True) is None
+    ):
+        return "evaluator launcher semantics require the dev route"
     if kind == "profile" and _is_generalized_workspace(workspace):
         return "generalized tasks inject one private real shape through the dev profile route"
     if (workspace / "workload.jsonl").is_file():
