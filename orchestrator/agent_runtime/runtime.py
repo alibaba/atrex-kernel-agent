@@ -156,12 +156,28 @@ class CliAgentRuntime:
         environment["IS_SANDBOX"] = "1"
         if request.sandbox_hardware:
             environment["ATREX_SANDBOX_GPU"] = request.sandbox_hardware
-        if request.sandbox_url:
+        if request.sandbox_ssh:
+            environment["ATREX_SANDBOX_SSH"] = request.sandbox_ssh
+            environment.pop("ATREX_SANDBOX_URL", None)
+            environment.pop("ATREX_SANDBOX_PROFILE", None)
+        elif request.sandbox_url:
             environment["ATREX_SANDBOX_URL"] = request.sandbox_url
+            environment.pop("ATREX_SANDBOX_SSH", None)
             environment.pop("ATREX_SANDBOX_PROFILE", None)
         elif request.sandbox_profile:
             environment["ATREX_SANDBOX_PROFILE"] = request.sandbox_profile
+            environment.pop("ATREX_SANDBOX_SSH", None)
             environment.pop("ATREX_SANDBOX_URL", None)
+        if request.sandbox_ssh_init:
+            environment["ATREX_SANDBOX_SSH_INIT"] = request.sandbox_ssh_init
+        if request.sandbox_health_command:
+            environment["ATREX_SANDBOX_HEALTH_COMMAND"] = (
+                request.sandbox_health_command
+            )
+        if request.environment_state_file:
+            environment["ATREX_ENVIRONMENT_STATE_FILE"] = (
+                request.environment_state_file
+            )
         environment["ATREX_SANDBOX_TIMEOUT"] = str(request.sandbox_timeout_s)
         if request.extra_environment:
             environment.update(

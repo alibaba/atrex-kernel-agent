@@ -20,6 +20,7 @@ from orchestrator.agent_runtime.model import (
 )
 
 from . import main_adapter
+from orchestrator.environment_recovery import raise_if_environment_blocked
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
 
@@ -202,6 +203,7 @@ class LongSessionRunner:
             stdout, stderr, exit_status, turn_timed_out = self.executor(
                 command, workspace, None, environment
             )
+            raise_if_environment_blocked()
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
             observed_session_id = main_adapter.session_id_from_stream(

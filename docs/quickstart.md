@@ -11,6 +11,8 @@ agent in this repository to translate the task into that command and start the c
 - Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - A sandbox execution environment containing the workload's framework and GPU stack
+- For direct SSH execution: OpenSSH `ssh` and `scp` on the coordinator, plus Bash, Python 3,
+  `tar`, and `base64` on the remote GPU host
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
@@ -91,6 +93,48 @@ python orchestrator/optimize.py \
     --agent-cli qodercli \
     --max-iters 20 --token-budget 8000000 --target-util 90
 ```
+
+### Direct OpenSSH GPU host
+
+Use a normal OpenSSH target or an alias from `~/.ssh/config`. Authentication, ports, jump hosts,
+and host-key policy remain OpenSSH's responsibility:
+
+```bash
+python orchestrator/optimize.py \
+    --op-dir /path/to/sol-execbench/op \
+    --platform H20 --sandbox-hardware H20 --framework Triton \
+    --sandbox-ssh user@gpu-host \
+    --sandbox-ssh-init 'source /opt/conda/etc/profile.d/conda.sh && conda activate aka' \
+    --sandbox-health-command 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_capability(0))"' \
+    --environment-poll-interval 60 \
+    --workspace /path/to/runs --max-iters 20
+```
+
+`--sandbox-ssh-init` defaults to empty. The default health command imports PyTorch, checks GPU
+availability, and reads device properties; override it when the remote stack uses a different
+runtime. Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
+with `--sandbox-url` and `--sandbox-profile`.
+
+Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sandbox.*` directory,
+runs the requested evaluator or profiler after the initialization command, downloads only requested
+`--sync` artifacts, and removes the remote directory. Remote filesystem persistence is never assumed.
+
+When SSH transport fails, or a failed GPU command is followed by a failed health probe, the sandbox
+writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
+active Agent/framework process groups without treating the failure as a bad candidate. It then starts
+`tools/monitor_optimize_tasks.py` detached. Recovery state is stored below
+`<workspace>/.atrex_environment/<command-id>/`:
+
+- `failure.json`: the current failure stage and bounded diagnostic;
+- `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
+- `monitor.pid` and `monitor.log`: detached poller status;
+- `restart.pid` and `restart.log`: the resumed optimization process;
+- `recover.sh`: an idempotent manual way to start the same single-instance poller.
+
+The monitor probes every 60 seconds by default. One successful explicit GPU health check archives the
+failure marker and restarts the original optimizer argv in the original working directory. The normal
+campaign resume path reuses its interrupted worktree and journal. Candidate compilation, correctness,
+or performance failures do not trigger this path when the health probe succeeds.
 
 ### What happens after launch
 
@@ -274,6 +318,10 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
+--sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
+--sandbox-ssh-init COMMAND       Remote environment activation before jobs/probes
+--sandbox-health-command COMMAND GPU health probe used for failure classification
+--environment-poll-interval S    Recovery probe interval (default: 60)
 --sandbox-timeout S              Remote command timeout, at most 600 seconds
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
@@ -303,6 +351,9 @@ The sandbox boundary can also be used directly for validation and profiling:
 python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
+  --ssh-init 'source /opt/conda/etc/profile.d/conda.sh && conda activate aka' \
+  --no-sync -- python test_kernel.py --no-memory
 ```
 
 Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,

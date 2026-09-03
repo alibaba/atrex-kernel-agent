@@ -180,6 +180,28 @@ submits evaluator or profiler work to the configured remote executor, and synchr
 requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
 the coordinator.
 
+The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
+profiler requests plus their existing HTTP/OSS transports. OpenSSH mode uses the same portable runner
+as the gateway compatibility path: it creates a fresh `/tmp/atrex-sandbox.*` directory, uploads the
+allowlisted bundle with `scp`, applies the configured environment initialization, runs the command,
+downloads the requested output archive, and removes the allocation. SSH aliases, keys, ports, and
+jump hosts are resolved by the user's standard OpenSSH configuration. These modes are mutually
+exclusive, and neither makes remote filesystem state authoritative.
+
+### Environment failure recovery
+
+SSH command failures pass through an independent GPU health probe. A healthy probe preserves the
+original exit status as a candidate/tool failure. Transport failure, or a failed probe after a failed
+command, atomically transitions the optimizer to `environment_blocked` and records a private marker.
+The coding-session process guard watches that marker and terminates the complete Agent process group;
+multi-framework dispatch uses the same marker to stop siblings.
+
+Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor takes an
+exclusive PID lock, repeats the configured health probe, then archives the failure and replays the
+exact original argument array and working directory. Existing V1 snapshots and Long Horizon active
+episode state provide the restart boundary. User interrupts, budget termination, and failures followed
+by a healthy probe never create a monitor.
+
 ### Full-workload optimization
 
 SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every

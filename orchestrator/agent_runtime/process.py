@@ -13,6 +13,7 @@ from typing import Protocol
 
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
+ENVIRONMENT_TEMPFAIL = 75
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
 
@@ -363,11 +364,26 @@ def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None
 
 
 def dependency_guard(
-    proc: subprocess.Popen[str], stop: threading.Event, violations: list[str]
+    proc: subprocess.Popen[str],
+    stop: threading.Event,
+    violations: list[str],
+    environment_state_file: str = "",
+    environment_failures: list[str] | None = None,
 ) -> None:
-    """Kill a coding session as soon as it starts a forbidden dependency job."""
+    """Kill a coding session on a policy violation or environment failure."""
     while not stop.wait(DEPENDENCY_GUARD_POLL_SECONDS):
         if proc.poll() is not None:
+            return
+        if environment_state_file and Path(environment_state_file).is_file():
+            if environment_failures is not None:
+                environment_failures.append(environment_state_file)
+            process_groups = descendant_process_groups(proc.pid)
+            signal_process_groups(process_groups, signal.SIGTERM)
+            deadline = time.monotonic() + 1.0
+            while proc.poll() is None and time.monotonic() < deadline:
+                if stop.wait(0.05):
+                    return
+            signal_process_groups(process_groups, signal.SIGKILL)
             return
         for pid, argv in descendant_process_commands(proc.pid):
             reason = dependency_process_violation(argv)
@@ -404,9 +420,20 @@ def run_bounded(
     )
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
+    environment_failures: list[str] = []
+    environment_values = os.environ if env is None else env
+    environment_state_file = str(
+        environment_values.get("ATREX_ENVIRONMENT_STATE_FILE", "")
+    )
     guard = threading.Thread(
         target=dependency_guard,
-        args=(proc, guard_stop, dependency_violations),
+        args=(
+            proc,
+            guard_stop,
+            dependency_violations,
+            environment_state_file,
+            environment_failures,
+        ),
         name=f"dependency-guard-{proc.pid}",
         daemon=True,
     )
@@ -440,4 +467,11 @@ def run_bounded(
         stderr = (stderr or "") + ("\n" if stderr else "") + policy_message + "\n"
         if returncode == 0:
             returncode = 126
+    if environment_failures:
+        environment_message = (
+            "[orchestrator] remote GPU environment became unavailable; "
+            "terminated coding session for durable recovery"
+        )
+        stderr = (stderr or "") + ("\n" if stderr else "") + environment_message + "\n"
+        returncode = ENVIRONMENT_TEMPFAIL
     return stdout or "", stderr or "", returncode, timed_out

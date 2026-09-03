@@ -152,6 +152,10 @@ class AgentRunRequest:
     sandbox_timeout_s: int = 600
     session_id: str | None = None
     extra_environment: Mapping[str, str] | None = None
+    sandbox_ssh: str = ""
+    sandbox_ssh_init: str = ""
+    sandbox_health_command: str = ""
+    environment_state_file: str = ""
 
 
 @dataclass(frozen=True)

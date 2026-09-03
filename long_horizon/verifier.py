@@ -416,6 +416,9 @@ class GatewayABBAValidator:
         hardware: str,
         profile: str = "",
         url: str = "",
+        ssh: str = "",
+        ssh_init: str = "",
+        health_command: str = "",
         timeout: int = 600,
         repeats: int = 2,
         per_run_timeout: int = 120,
@@ -427,6 +430,9 @@ class GatewayABBAValidator:
         self.hardware = hardware
         self.profile = profile
         self.url = url
+        self.ssh = ssh
+        self.ssh_init = ssh_init
+        self.health_command = health_command
         self.timeout = timeout
         self.repeats = max(1, repeats)
         self.per_run_timeout = per_run_timeout
@@ -512,6 +518,9 @@ class GatewayABBAValidator:
                         request_relative,
                         result_relative,
                     ],
+                    ssh=self.ssh,
+                    ssh_init=self.ssh_init,
+                    health_command=self.health_command,
                     sync=(),
                     wall_timeout=self.timeout + self.queue_wait_grace + 120,
                     gateway_kind="dev",

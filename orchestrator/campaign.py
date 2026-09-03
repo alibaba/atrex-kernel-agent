@@ -44,6 +44,10 @@ from .constants import (
     WORKSPACE_INIT,
 )
 from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
+from .environment_recovery import (
+    EnvironmentUnavailable,
+    environment_state_file,
+)
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
     load_progress as load_framework_baseline_progress,
@@ -191,6 +195,9 @@ class Campaign:
     fast_episode_ask_qoder: bool = False
     full_episode_ask_codex: bool = True
     full_episode_ask_qoder: bool = True
+    sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
+    sandbox_ssh_init: str = ""  # remote environment activation command
+    sandbox_health_command: str = ""  # remote GPU readiness probe
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -203,6 +210,13 @@ class Campaign:
     )
 
     def __post_init__(self) -> None:
+        if sum(
+            bool(value)
+            for value in (self.sandbox_ssh, self.sandbox_url, self.sandbox_profile)
+        ) > 1:
+            raise ValueError(
+                "sandbox_ssh, sandbox_url, and sandbox_profile are mutually exclusive"
+            )
         if self.long_reviewer_session and self.long_reviewer_session not in (
             _LONG_REVIEWER_SESSION_ENV
         ):
@@ -376,6 +390,16 @@ class Campaign:
             environment[env_name] = str(state_file.resolve())
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
+        if self.sandbox_ssh:
+            environment["ATREX_SANDBOX_SSH"] = self.sandbox_ssh
+            environment["ATREX_SANDBOX_SSH_INIT"] = self.sandbox_ssh_init
+            if self.sandbox_health_command:
+                environment["ATREX_SANDBOX_HEALTH_COMMAND"] = (
+                    self.sandbox_health_command
+                )
+        state_file = environment_state_file()
+        if state_file is not None:
+            environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
         return environment
 
     def ensure_plan_reviewer_availability(self, *, episode_mode: str) -> None:
@@ -782,12 +806,18 @@ class Campaign:
 
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
-            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
+            self.sandbox_hardware,
+            self.sandbox_profile,
+            self.sandbox_url,
+            self.sandbox_ssh,
         )
 
     def _fast_sandbox_directive(self) -> str:
         return fast_sandbox_directive(
-            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
+            self.sandbox_hardware,
+            self.sandbox_profile,
+            self.sandbox_url,
+            self.sandbox_ssh,
         )
 
     def _mode_directive(self) -> str:
@@ -861,6 +891,9 @@ class Campaign:
             sandbox_hardware=self.sandbox_hardware,
             sandbox_profile=self.sandbox_profile,
             sandbox_url=self.sandbox_url,
+            sandbox_ssh=self.sandbox_ssh,
+            sandbox_ssh_init=self.sandbox_ssh_init,
+            sandbox_health_command=self.sandbox_health_command,
             sandbox_timeout=self.sandbox_timeout,
             reasoning_effort="high",
             extra_environment=self.agent_environment(),
@@ -915,6 +948,9 @@ class Campaign:
                 sandbox_hardware=self.sandbox_hardware,
                 sandbox_profile=self.sandbox_profile,
                 sandbox_url=self.sandbox_url,
+                sandbox_ssh=self.sandbox_ssh,
+                sandbox_ssh_init=self.sandbox_ssh_init,
+                sandbox_health_command=self.sandbox_health_command,
                 sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="high",
                 extra_environment=self.agent_environment(),
@@ -1014,6 +1050,9 @@ class Campaign:
             self.sandbox_url,
             self.sandbox_timeout,
             ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+            ssh=self.sandbox_ssh,
+            ssh_init=self.sandbox_ssh_init,
+            health_command=self.sandbox_health_command,
             gateway_kind="run",
             private_reference_dir=self.private_reference_dir,
         )
@@ -2269,10 +2308,27 @@ class Campaign:
                 sandbox_hardware=self.sandbox_hardware,
                 sandbox_profile=self.sandbox_profile,
                 sandbox_url=self.sandbox_url,
+                sandbox_ssh=self.sandbox_ssh,
+                sandbox_ssh_init=self.sandbox_ssh_init,
+                sandbox_health_command=self.sandbox_health_command,
                 sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="max",
                 extra_environment=self.agent_environment(),
             )
+        except EnvironmentUnavailable:
+            capture_framework_baseline_exit(
+                self.workspace,
+                agent_cli=self.agent_cli,
+                exit_status=75,
+                timed_out=False,
+                tokens=0,
+                session_id="",
+                stdout_tail="",
+                stderr_tail="remote GPU environment unavailable",
+                error="EnvironmentUnavailable",
+                supervisor_order=self._framework_baseline_supervisor_order(),
+            )
+            raise
         except KeyboardInterrupt:
             # Respect an intentional user stop: preserve a mechanical snapshot, but do not
             # immediately launch another Agent after Ctrl-C.
@@ -2419,7 +2475,9 @@ class Campaign:
         command = ["python", "tools/sandbox.py", "--kind", "run"]
         if self.sandbox_hardware:
             command += ["--hardware", self.sandbox_hardware]
-        if self.sandbox_url:
+        if self.sandbox_ssh:
+            command += ["--ssh", self.sandbox_ssh]
+        elif self.sandbox_url:
             command += ["--url", self.sandbox_url]
         elif self.sandbox_profile:
             command += ["--gateway-profile", self.sandbox_profile]
@@ -2455,7 +2513,12 @@ class Campaign:
 
     def _framework_baseline_sandbox_directive(self) -> str:
         """Concise V1-specific boundary without generic repeated full-evaluator examples."""
-        endpoint = self.sandbox_url or self.sandbox_profile or "agate configuration"
+        endpoint = (
+            self.sandbox_ssh
+            or self.sandbox_url
+            or self.sandbox_profile
+            or "agate configuration"
+        )
         hardware = self.sandbox_hardware or "the configured remote GPU"
         return (
             "## V1 GPU sandbox boundary\n\n"
@@ -2467,7 +2530,7 @@ class Campaign:
             "- Keep `--no-memory`: the supervisor parses evaluator output and owns canonical "
             "memory. Sandbox uploads are allowlist-only; declare inputs for any custom smoke "
             "helper, and never upload optimizer memory or private evaluator inputs.\n"
-            "- The gateway is shared supervisor-owned infrastructure. Do not start, stop, "
+            "- The remote executor is supervisor-owned infrastructure. Do not start, stop, "
             "restart, signal, reconfigure, or cancel its jobs. Report an infrastructure "
             "failure and exit.\n"
         )
@@ -2617,6 +2680,9 @@ class Campaign:
                 self.sandbox_url,
                 self.sandbox_timeout,
                 command,
+                ssh=self.sandbox_ssh,
+                ssh_init=self.sandbox_ssh_init,
+                health_command=self.sandbox_health_command,
                 gateway_kind="run",
                 private_reference_dir=self.private_reference_dir,
             )
@@ -2877,6 +2943,9 @@ class Campaign:
             hardware=self.sandbox_hardware,
             profile=self.sandbox_profile,
             url=self.sandbox_url,
+            ssh=self.sandbox_ssh,
+            ssh_init=self.sandbox_ssh_init,
+            health_command=self.sandbox_health_command,
             timeout=self.sandbox_timeout,
             repeats=self.verify_repeats,
             per_run_timeout=self.verify_run_timeout,

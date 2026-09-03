@@ -439,7 +439,9 @@ class LongHorizonCampaign:
         command = ["python", "tools/sandbox.py", "--kind", "run"]
         if self.base_campaign.sandbox_hardware:
             command += ["--hardware", self.base_campaign.sandbox_hardware]
-        if self.base_campaign.sandbox_url:
+        if self.base_campaign.sandbox_ssh:
+            command += ["--ssh", self.base_campaign.sandbox_ssh]
+        elif self.base_campaign.sandbox_url:
             command += ["--url", self.base_campaign.sandbox_url]
         elif self.base_campaign.sandbox_profile:
             command += ["--gateway-profile", self.base_campaign.sandbox_profile]
@@ -1826,6 +1828,9 @@ class LongHorizonCampaign:
             hardware=self.base_campaign.sandbox_hardware,
             profile=self.base_campaign.sandbox_profile,
             url=self.base_campaign.sandbox_url,
+            ssh=self.base_campaign.sandbox_ssh,
+            ssh_init=self.base_campaign.sandbox_ssh_init,
+            health_command=self.base_campaign.sandbox_health_command,
             timeout=self.base_campaign.sandbox_timeout,
             private_reference_dir=self.base_campaign.private_reference_dir,
         )
