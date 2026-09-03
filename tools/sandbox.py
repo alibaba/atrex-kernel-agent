@@ -543,7 +543,7 @@ def _is_test_kernel_command(parts: list[str]) -> bool:
     command = _command_parts(parts)
     return (
         len(command) >= 2
-        and Path(command[0]).name in {"python", "python3", "python3.10", "python3.12"}
+        and re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[0]).name) is not None
         and Path(command[1]).name == "test_kernel.py"
     )
 
@@ -2971,6 +2971,7 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
+    evaluator_command = _is_test_kernel_command(args.command)
     profile_command = _is_profile_command(args.command)
     if profile_command:
         try:
@@ -2979,13 +2980,14 @@ def _main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
     num_gpus = 1
-    if gateway_kind in TYPED_KINDS:
+    if gateway_kind in TYPED_KINDS or evaluator_command:
         try:
             num_gpus = _workspace_num_gpus(workspace)
         except ValueError as exc:
             raise SystemExit(
                 f"sandbox: invalid distributed evaluator contract: {exc}"
             ) from exc
+    if gateway_kind in TYPED_KINDS:
         if (
             gateway_kind == "profile"
             and args.profile_level == "deep"
@@ -3025,7 +3027,6 @@ def _main(argv: list[str] | None = None) -> int:
         )
         gateway_kind = "dev"
 
-    evaluator_command = _is_test_kernel_command(args.command)
     if evaluator_command:
         selected = set(_evaluation_input_paths(workspace, args.command))
         try:
