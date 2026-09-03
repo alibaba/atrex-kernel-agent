@@ -571,6 +571,35 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).",
     )
     ap.add_argument(
+        "--max-staged-episodes",
+        type=int,
+        default=4,
+        help=(
+            "Allow up to N consecutive full-episode staged architectural checkpoints "
+            "that carry kernel.py forward without production promotion (default: 4; "
+            "0 disables)."
+        ),
+    )
+    ap.add_argument(
+        "--staged-after-episodes",
+        type=int,
+        default=40,
+        help=(
+            "Allow a new staged architectural initiative only after N completed "
+            "optimization episodes (default: 40; first eligible episode is 41)."
+        ),
+    )
+    ap.add_argument(
+        "--staged-after-stall",
+        type=int,
+        default=8,
+        help=(
+            "Allow a new staged architectural initiative after N consecutive episodes "
+            "without production promotion, even before --staged-after-episodes "
+            "(default: 8; 0 disables the drought trigger)."
+        ),
+    )
+    ap.add_argument(
         "--convert-after",
         type=int,
         default=DEFAULT_CONVERT_AFTER,
@@ -608,6 +637,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
+    if args.max_staged_episodes < 0:
+        ap.error("--max-staged-episodes must be non-negative")
+    if args.staged_after_episodes < 0:
+        ap.error("--staged-after-episodes must be non-negative")
+    if args.staged_after_stall < 0:
+        ap.error("--staged-after-stall must be non-negative")
     if args.fast_episodes < 0:
         ap.error("--fast-episodes must be non-negative")
     if args.fast_trials <= 0:
@@ -746,6 +781,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         target_util=args.target_util,
         setup_timeout=args.setup_timeout,
         max_stall=args.max_stall,
+        max_staged_episodes=args.max_staged_episodes,
+        staged_after_episodes=args.staged_after_episodes,
+        staged_after_stall=args.staged_after_stall,
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
         handoff_resumes=args.handoff_resumes,

@@ -144,6 +144,7 @@ MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 AGATE_WAIT_SLICE_SECONDS = 300
+AGATE_WAIT_PROCESS_GRACE_SECONDS = 30
 RUNTIME_CHUNK_BYTES = 20 * 1024
 # Small inline workspace bundles stay below Linux MAX_ARG_STRLEN; larger
 # bundles use agate's OSS attachment transport.
@@ -229,6 +230,9 @@ def _safe_relative(value: str) -> str:
 
 def _find_agate() -> str | None:
     """Find agate beside the active Python before consulting the shell PATH."""
+    configured = os.environ.get("ATREX_AGATE_EXECUTABLE")
+    if configured:
+        return configured
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
@@ -1711,21 +1715,31 @@ def _resume_interrupted_agate_wait(
     deadline = time.monotonic() + remaining
     resumed = initial
     while (remaining := int(deadline - time.monotonic())) > 0:
-        resumed = subprocess.run(
-            [
-                *get_command,
-                "--http-timeout",
-                str(MAX_HTTP_REQUEST_TIMEOUT),
-                "--wait-timeout",
-                str(min(AGATE_WAIT_SLICE_SECONDS, remaining)),
-                "--job-timeout",
-                str(command_timeout),
-                "--wait",
-                job_id,
-            ],
-            capture_output=True,
-            text=True,
-        )
+        wait_slice = min(AGATE_WAIT_SLICE_SECONDS, remaining)
+        poll_command = [
+            *get_command,
+            "--http-timeout",
+            str(MAX_HTTP_REQUEST_TIMEOUT),
+            "--wait-timeout",
+            str(wait_slice),
+            "--job-timeout",
+            str(command_timeout),
+            "--wait",
+            job_id,
+        ]
+        try:
+            resumed = subprocess.run(
+                poll_command,
+                capture_output=True,
+                text=True,
+                timeout=min(remaining, wait_slice + AGATE_WAIT_PROCESS_GRACE_SECONDS),
+            )
+        except subprocess.TimeoutExpired:
+            stderr_parts.append(
+                f"[sandbox] agate get exceeded its {wait_slice}s wait slice; "
+                f"retrying job_id={job_id}"
+            )
+            continue
         if resumed.stderr:
             stderr_parts.append(resumed.stderr.rstrip())
         job = _job_response(resumed.stdout or "")

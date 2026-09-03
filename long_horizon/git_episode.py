@@ -153,6 +153,42 @@ class EpisodeWorktree:
         )
         CampaignStore.ensure_excluded(self.path)
 
+    def bootstrap_staged_kernel(
+        self, kernel: bytes, *, initiative_id: str, stage: int
+    ) -> str:
+        """Restore a non-promoted initiative checkpoint onto the new episode branch."""
+        path = self.path / "kernel.py"
+        if path.read_bytes() == kernel:
+            return git_head(self.path)
+        path.write_bytes(kernel)
+        subprocess.run(
+            ["git", "add", "--", "kernel.py"],
+            cwd=str(self.path),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=atrex-long-horizon",
+                "-c",
+                "user.email=atrex-long-horizon@local",
+                "commit",
+                "--only",
+                "-m",
+                f"resume staged initiative {initiative_id} stage {stage}",
+                "--",
+                "kernel.py",
+            ],
+            cwd=str(self.path),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return git_head(self.path)
+
     @classmethod
     def create(
         cls,

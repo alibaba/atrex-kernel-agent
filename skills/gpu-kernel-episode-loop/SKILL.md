@@ -184,13 +184,21 @@ backend-native plan generator `<PLAN_GENERATOR>`.
 
 The episode may contain multiple related experiments, but they must advance one coherent engineering
 direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
-the whole direction.
+the whole direction. When the episode prompt explicitly enables multi-episode architectural
+initiatives, a coherent prerequisite state may be handed off as `staged_ready`: it must compile and
+prove a declared stage-specific architectural advancement, even though it may be neutral or
+temporarily slower. The initiative must name the incumbent limitation it escapes, the material
+architectural delta, a measurable final success criterion, and a falsifiable abort criterion. Keep
+that escape contract stable across continuation stages. A compile-only refactor, parameter sweep, or
+renamed incumbent path is not an advancement. This is a continuation checkpoint, not a production
+candidate.
 
 ### 5. Implement and repair
 
 Modify only candidate source/metadata files allowed by policy. Compile and probe through the sandbox.
 On compile or correctness failure, diagnose and repair while the direction remains viable. Do not
-publish an intermediate checkpoint as a candidate.
+publish an intermediate checkpoint as `candidate_ready`; use `staged_ready` only when the episode
+prompt enables it and the bounded stage gate is complete.
 
 Land one optimization category per edit — vectorized load, swizzle, double buffering, tiling change,
 and so on — and attribute each edit as `evidence -> inference -> action`. Do not mix unrelated
@@ -237,5 +245,6 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 ## Leaving the loop
 
 Leave the loop as soon as one coherent candidate passes the full development correctness check and
-has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
+has credible performance evidence, when an enabled architectural initiative has completed a valid
+stage but requires another episode, or as soon as the direction is exhausted or blocked. Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff.

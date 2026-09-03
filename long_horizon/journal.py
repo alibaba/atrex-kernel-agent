@@ -93,7 +93,9 @@ def sync_live_memory(
         "latest_experiment": experiments[-1] if experiments else None,
         "outcome": value.get("outcome"),
         "candidate_commit": value.get("candidate_commit"),
+        "checkpoint_commit": value.get("checkpoint_commit"),
         "base_commit": value.get("base_commit"),
+        "development_base_commit": value.get("development_base_commit"),
         "episode_branch": value.get("episode_branch"),
         "created_at": value.get("created_at"),
         "updated_at": utc_now(),
@@ -141,6 +143,7 @@ def initialize(
     episode: int,
     base_commit: str,
     branch: str,
+    development_base_commit: str = "",
     memory_version: int | None = None,
     live_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -149,6 +152,7 @@ def initialize(
         "episode": episode,
         "memory_version": memory_version,
         "base_commit": base_commit,
+        "development_base_commit": development_base_commit or base_commit,
         "episode_branch": branch,
         "state": "in_progress",
         "experiments": [],
@@ -334,11 +338,14 @@ def finalize(
     state: str,
     outcome: dict[str, Any],
     candidate_commit: str = "",
+    checkpoint_commit: str = "",
     live_path: Path | None = None,
 ) -> dict[str, Any]:
     value = load(path)
     if state not in TERMINAL_STATUSES:
-        raise ValueError("state must be candidate_ready, pivot, or blocked")
+        raise ValueError(
+            "state must be candidate_ready, staged_ready, pivot, or blocked"
+        )
     if value.get("state") not in {"in_progress", state}:
         raise ValueError(f"cannot change finalized state to {state}")
     if not isinstance(outcome, dict) or not str(outcome.get("summary", "")).strip():
@@ -351,9 +358,43 @@ def finalize(
         raise ValueError("a terminal journal requires at least one experiment")
     if state == "candidate_ready" and not candidate_commit.strip():
         raise ValueError("candidate_ready requires candidate_commit")
+    if state == "staged_ready":
+        if not checkpoint_commit.strip():
+            raise ValueError("staged_ready requires checkpoint_commit")
+        initiative_id = outcome.get("initiative_id")
+        stage = outcome.get("stage")
+        next_stage = outcome.get("next_stage")
+        if not isinstance(initiative_id, str) or not initiative_id.strip():
+            raise ValueError("staged_ready requires outcome.initiative_id")
+        if isinstance(stage, bool) or not isinstance(stage, int) or stage < 1:
+            raise ValueError("staged_ready requires a positive integer outcome.stage")
+        if not isinstance(next_stage, str) or not next_stage.strip():
+            raise ValueError("staged_ready requires outcome.next_stage")
+        for field in (
+            "escape_hypothesis",
+            "architectural_delta",
+            "final_success_criterion",
+            "abort_criterion",
+        ):
+            if not isinstance(outcome.get(field), str) or not outcome[field].strip():
+                raise ValueError(f"staged_ready requires outcome.{field}")
+        stage_gate = outcome.get("stage_gate")
+        if not isinstance(stage_gate, dict):
+            raise ValueError("staged_ready requires outcome.stage_gate")
+        if stage_gate.get("compile") != "pass":
+            raise ValueError("staged_ready requires outcome.stage_gate.compile=pass")
+        if stage_gate.get("advancement") != "pass":
+            raise ValueError(
+                "staged_ready requires outcome.stage_gate.advancement=pass"
+            )
+        if not str(stage_gate.get("scope", "")).strip():
+            raise ValueError("staged_ready requires outcome.stage_gate.scope")
+        if not str(stage_gate.get("evidence", "")).strip():
+            raise ValueError("staged_ready requires outcome.stage_gate.evidence")
     value["state"] = state
     value["outcome"] = outcome
     value["candidate_commit"] = candidate_commit.strip() or None
+    value["checkpoint_commit"] = checkpoint_commit.strip() or None
     value["finalized_at"] = utc_now()
     atomic_write_json(path, value)
     _sync_live_best_effort(path, value, live_path)
@@ -368,6 +409,7 @@ def validate_terminal(
     branch: str,
     state: str,
     candidate_commit: str = "",
+    checkpoint_commit: str = "",
 ) -> str:
     try:
         value = load(path)
@@ -392,6 +434,37 @@ def validate_terminal(
         return "episode journal is not finalized"
     if state == "candidate_ready" and value.get("candidate_commit") != candidate_commit:
         return "episode journal candidate_commit does not match handoff"
+    if state == "staged_ready":
+        if value.get("checkpoint_commit") != checkpoint_commit:
+            return "episode journal checkpoint_commit does not match handoff"
+        initiative_id = outcome.get("initiative_id")
+        stage = outcome.get("stage")
+        next_stage = outcome.get("next_stage")
+        if not isinstance(initiative_id, str) or not initiative_id.strip():
+            return "staged_ready outcome has no initiative_id"
+        if isinstance(stage, bool) or not isinstance(stage, int) or stage < 1:
+            return "staged_ready outcome stage is invalid"
+        if not isinstance(next_stage, str) or not next_stage.strip():
+            return "staged_ready outcome has no next_stage"
+        for field in (
+            "escape_hypothesis",
+            "architectural_delta",
+            "final_success_criterion",
+            "abort_criterion",
+        ):
+            if not isinstance(outcome.get(field), str) or not outcome[field].strip():
+                return f"staged_ready outcome has no {field}"
+        stage_gate = outcome.get("stage_gate")
+        if not isinstance(stage_gate, dict):
+            return "staged_ready outcome has no stage_gate"
+        if stage_gate.get("compile") != "pass":
+            return "staged_ready stage_gate compile did not pass"
+        if stage_gate.get("advancement") != "pass":
+            return "staged_ready stage_gate advancement did not pass"
+        if not str(stage_gate.get("scope", "")).strip():
+            return "staged_ready stage_gate scope is empty"
+        if not str(stage_gate.get("evidence", "")).strip():
+            return "staged_ready stage_gate evidence is empty"
     return ""
 
 
@@ -418,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     finish.add_argument("--state", choices=sorted(TERMINAL_STATUSES), required=True)
     finish.add_argument("--outcome-json", required=True)
     finish.add_argument("--candidate-commit", default="")
+    finish.add_argument("--checkpoint-commit", default="")
     args = parser.parse_args(argv)
     try:
         if args.command == "append":
@@ -432,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
                 state=args.state,
                 outcome=_json_object(args.outcome_json, "--outcome-json"),
                 candidate_commit=args.candidate_commit,
+                checkpoint_commit=args.checkpoint_commit,
                 live_path=Path(args.live_path) if args.live_path else None,
             )
     except (OSError, ValueError, json.JSONDecodeError) as exc:

@@ -5,20 +5,31 @@ This package implements the native optimization engine used by
 
 Each canonical optimization version is explored in an isolated Git branch and worktree. A coding
 agent may run multiple related profile/research/edit/validate cycles, preserve private checkpoint
-commits, and finally publish one structured handoff: `candidate_ready`, `pivot`, or `blocked`.
+commits, and finally publish one structured handoff: `candidate_ready`, `staged_ready`, `pivot`, or
+`blocked`.
 
 The supervisor validates the journal and candidate commit, checks production policy, and evaluates
 incumbent and candidate in an exact same-allocation ABBA schedule. A strict correctness-passing
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
+After 40 completed optimization episodes or 8 consecutive episodes without a promotion by default,
+full episodes may start an architectural escape initiative and persist up to four stages under
+`.atrex_long_horizon/staged_checkpoint/`. Each checkpoint must compile and prove a bounded material
+advance toward one stable, falsifiable escape contract; compilation alone is not progress. The
+supervisor restores that exact kernel into the next isolated worktree while leaving the incumbent
+untouched. `--staged-after-episodes`, `--staged-after-stall`, and `--max-staged-episodes` configure or
+disable the flow. Only a real production promotion resets the promotion drought. Staged checkpoints
+never bypass the normal final policy, correctness, or strict performance gates.
+
 An episode candidate commit contains only `kernel.py`. Plans, profiles, planner discussions,
 journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
 worktree is removed.
 
 Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
-such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
-`--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
+such as `--handoff-resumes`, `--staged-after-episodes`, `--staged-after-stall`,
+`--max-staged-episodes`, `--verify-repeats`, `--verify-run-timeout`, and `--min-improvement-pct` are
+parsed directly by `orchestrator/optimize.py`.
 
 Each active episode also exposes ignored `memory/live.json`. It is initialized immediately and
 atomically refreshed after every journal append, but it never participates in version selection or
