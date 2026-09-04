@@ -24,6 +24,9 @@ REGISTRY_DIRECTORY = "restart-processes"
 ACTIVE_MARKER = "active.json"
 STOP_MARKER = "stopped.json"
 TERMINATE_REQUEST = "terminate.request"
+RESTART_PRIMARY_PID = "restart.primary.pid"
+RESTART_EXIT = "restart.exit.json"
+RESTART_COMPLETE = "restart.complete.json"
 _HANDOFF_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 
 
@@ -35,6 +38,7 @@ class ProcessRecord:
     start_token: str
     role: str
     owner_kind: str = ""
+    owner_pid: int = 0
 
 
 @dataclass(frozen=True)
@@ -224,6 +228,9 @@ def _record_process(
     handoff_id: str,
     record: ProcessRecord,
     role: str,
+    *,
+    owner_kind: str,
+    owner_pid: int = 0,
 ) -> Path:
     directory = _registry_path(state_dir, handoff_id)
     digest = hashlib.sha256(record.start_token.encode()).hexdigest()[:16]
@@ -234,14 +241,15 @@ def _record_process(
     _write_private_json(
         path,
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "handoff_id": handoff_id,
             "pid": record.pid,
             "ppid": record.ppid,
             "pgid": record.pgid,
             "start_token": record.start_token,
             "role": safe_role,
-            "owner_kind": "session-wrapper",
+            "owner_kind": owner_kind,
+            "owner_pid": owner_pid,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -266,6 +274,31 @@ def _register_session_owner(
         handoff_id,
         record,
         role,
+        owner_kind="session-wrapper",
+    )
+
+
+def _register_session_primary(
+    pid: int,
+    role: str,
+    owner_pid: int,
+    environment: Mapping[str, str] | None = None,
+) -> Path | None:
+    values = _values(environment)
+    handoff_id = values.get(HANDOFF_ID_ENV, "")
+    state_file = values.get(STATE_FILE_ENV, "")
+    if not handoff_id or not state_file:
+        return None
+    record = _current_process(pid)
+    if record is None:
+        raise ProcessLookupError(pid)
+    return _record_process(
+        Path(state_file).expanduser().resolve().parent,
+        handoff_id,
+        record,
+        role,
+        owner_kind="session-primary",
+        owner_pid=owner_pid,
     )
 
 
@@ -282,7 +315,7 @@ def _load_records(
             value = json.loads(path.read_text(encoding="utf-8"))
             if (
                 not isinstance(value, dict)
-                or value.get("schema_version") not in {1, 2}
+                or value.get("schema_version") not in {1, 2, 3}
                 or value.get("handoff_id") != handoff_id
             ):
                 raise ValueError("schema or handoff id mismatch")
@@ -292,6 +325,7 @@ def _load_records(
             start_token = value["start_token"]
             role = value["role"]
             owner_kind = value.get("owner_kind", "legacy-identity")
+            owner_pid = value.get("owner_pid", 0)
             if (
                 not all(isinstance(item, int) and item > 0 for item in (pid, pgid))
                 or not isinstance(ppid, int)
@@ -300,13 +334,15 @@ def _load_records(
                 or not start_token
                 or not isinstance(role, str)
                 or not isinstance(owner_kind, str)
+                or not isinstance(owner_pid, int)
+                or owner_pid < 0
             ):
                 raise ValueError("invalid process identity")
         except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"{path.name}: {exc}")
             continue
         records.append(
-            ProcessRecord(pid, ppid, pgid, start_token, role, owner_kind)
+            ProcessRecord(pid, ppid, pgid, start_token, role, owner_kind, owner_pid)
         )
     return records, errors
 
@@ -325,6 +361,7 @@ def matching_processes(state_dir: Path, handoff_id: str) -> tuple[ProcessRecord,
                     current.start_token,
                     record.role,
                     record.owner_kind,
+                    record.owner_pid,
                 )
             )
     return tuple(matches)
@@ -360,6 +397,7 @@ def terminate_processes(
                     current.start_token,
                     record.role,
                     record.owner_kind,
+                    record.owner_pid,
                 )
             )
     if require_registered_owner and not matches:
@@ -367,7 +405,11 @@ def terminate_processes(
             False,
             errors=("handoff ownership is active but no registered process identity matches",),
         )
-    legacy = [record.pid for record in matches if record.owner_kind != "session-wrapper"]
+    legacy = [
+        record.pid
+        for record in matches
+        if record.owner_kind not in {"session-wrapper", "session-primary"}
+    ]
     if legacy:
         error = (
             "live handoff records predate stable session ownership; "
@@ -378,7 +420,8 @@ def terminate_processes(
             remaining_pids=tuple(sorted(legacy)),
             errors=(error,),
         )
-    if matches:
+    wrappers = [record for record in matches if record.owner_kind == "session-wrapper"]
+    if wrappers:
         _write_private_json(
             _registry_path(state_dir, handoff_id) / TERMINATE_REQUEST,
             {
@@ -388,12 +431,49 @@ def terminate_processes(
                 "requested_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    deadline = time.monotonic() + max(0.0, grace_seconds) + 5.0
+    deadline = time.monotonic() + (max(0.0, grace_seconds) if wrappers else 0.0)
     while time.monotonic() < deadline:
         remaining = matching_processes(state_dir, handoff_id)
         if not remaining:
             break
         time.sleep(0.05)
+
+    remaining = matching_processes(state_dir, handoff_id)
+    # A wrapper is cooperative, but it is not the only durable ownership anchor.
+    # If it was killed or failed to service the request, every registered session
+    # identity is revalidated immediately before its current group is signalled.
+    owned_groups = {
+        record.pgid
+        for record in remaining
+        if record.owner_kind in {"session-wrapper", "session-primary"}
+    }
+    for pgid in owned_groups:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    force_deadline = time.monotonic() + 5.0
+    while owned_groups and time.monotonic() < force_deadline:
+        remaining = matching_processes(state_dir, handoff_id)
+        owned_groups = {
+            record.pgid
+            for record in remaining
+            if record.owner_kind in {"session-wrapper", "session-primary"}
+        }
+        if owned_groups:
+            time.sleep(0.05)
+    for pgid in owned_groups:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if owned_groups:
+        kill_deadline = time.monotonic() + 5.0
+        while time.monotonic() < kill_deadline:
+            remaining = matching_processes(state_dir, handoff_id)
+            if not remaining:
+                break
+            time.sleep(0.05)
 
     remaining = matching_processes(state_dir, handoff_id)
     errors = ()
@@ -460,6 +540,7 @@ def spawn_owned_session(
         "--owned-session",
         str(start_read),
         "1" if finalize_handoff else "0",
+        role,
         "--",
         *argv,
     ]
@@ -524,24 +605,6 @@ def _signal_group_members(pgid: int, sig: signal.Signals) -> None:
             pass
 
 
-def _marker_matches_handoff(path: Path, handoff_id: str) -> bool:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        marker_id = value["restart_handoff"]["id"]
-    except (OSError, KeyError, TypeError, json.JSONDecodeError):
-        return False
-    return marker_id == handoff_id
-
-
-def _remove_matching_pid(path: Path, pid: int) -> None:
-    try:
-        recorded = int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return
-    if recorded == pid:
-        path.unlink(missing_ok=True)
-
-
 def _close_handoff_lock() -> None:
     raw = os.environ.pop(HANDOFF_LOCK_FD_ENV, "")
     try:
@@ -579,49 +642,126 @@ def _termination_grace_seconds(handoff_id: str) -> float | None:
     return float(grace_seconds)
 
 
-def _finalize_active_root(handoff_id: str) -> None:
+def _root_state_dir() -> Path | None:
     state_file = os.environ.get(STATE_FILE_ENV, "")
     if not state_file:
-        return
-    state_dir = Path(state_file).expanduser().resolve().parent
-    stopped = state_dir / STOP_MARKER
-    legacy_stop = state_dir / "stop.request"
-    while not stopped.is_file() and not legacy_stop.is_file():
-        records, errors = _load_records(state_dir, handoff_id)
-        if errors:
-            print(
-                "[recovery-owner] cannot finalize corrupt process registry: "
-                + "; ".join(errors),
-                file=sys.stderr,
-                flush=True,
-            )
-            return
-        live_others = []
-        for record in records:
-            if record.pid == os.getpid():
-                continue
-            current = _current_process(record.pid)
-            if current is not None and current.start_token == record.start_token:
-                live_others.append(record.pid)
-        if not live_others:
-            break
-        time.sleep(0.1)
+        return None
+    return Path(state_file).expanduser().resolve().parent
 
-    _close_handoff_lock()
-    if stopped.is_file() or legacy_stop.is_file():
+
+def _write_root_event(
+    name: str, handoff_id: str, primary_pid: int, returncode: int
+) -> None:
+    state_dir = _root_state_dir()
+    if state_dir is None:
         return
-    active = state_dir / ACTIVE_MARKER
-    if not active.is_file() or not _marker_matches_handoff(active, handoff_id):
-        return
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    prefix = "superseded-active" if (state_dir / "failure.json").is_file() else "recovered"
-    active.replace(state_dir / f"{prefix}-{stamp}.json")
-    clear_process_registry(state_dir, handoff_id)
-    _remove_matching_pid(state_dir / "restart.pid", os.getpid())
+    _write_private_json(
+        state_dir / name,
+        {
+            "schema_version": 1,
+            "handoff_id": handoff_id,
+            "wrapper_pid": os.getpid(),
+            "primary_pid": primary_pid,
+            "returncode": returncode,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _cleanup_owned_group(pgid: int, grace_seconds: float) -> bool:
+    members = _live_group_members(pgid, exclude={os.getpid()})
+    if not members:
+        return True
+    _signal_group_members(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while time.monotonic() < deadline:
+        if not _live_group_members(pgid, exclude={os.getpid()}):
+            return True
+        time.sleep(0.05)
+    _signal_group_members(pgid, signal.SIGKILL)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not _live_group_members(pgid, exclude={os.getpid()}):
+            return True
+        time.sleep(0.05)
+    return not _live_group_members(pgid, exclude={os.getpid()})
+
+
+def _request_other_sessions_stop(handoff_id: str, grace_seconds: float) -> bool:
+    state_dir = _root_state_dir()
+    if state_dir is None:
+        return True
+    _records, errors = _load_records(state_dir, handoff_id)
+    if errors:
+        print(
+            "[recovery-owner] cannot complete corrupt process registry: "
+            + "; ".join(errors),
+            file=sys.stderr,
+            flush=True,
+        )
+        return False
+    live_others = [
+        record
+        for record in matching_processes(state_dir, handoff_id)
+        if record.pid != os.getpid()
+    ]
+    if not live_others:
+        return True
+    _write_private_json(
+        _registry_path(state_dir, handoff_id) / TERMINATE_REQUEST,
+        {
+            "schema_version": 1,
+            "handoff_id": handoff_id,
+            "grace_seconds": max(0.0, grace_seconds),
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    deadline = time.monotonic() + max(0.0, grace_seconds) + 5.0
+    while time.monotonic() < deadline:
+        if not [
+            record
+            for record in matching_processes(state_dir, handoff_id)
+            if record.pid != os.getpid()
+        ]:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _owned_command_entry(argv: list[str]) -> int:
+    if len(argv) < 4 or argv[0] != "--owned-command" or argv[2] != "--":
+        return 125
+    try:
+        start_fd = int(argv[1])
+    except ValueError:
+        return 125
+    command = argv[3:]
+    if start_fd <= 2 or not command:
+        return 125
+    try:
+        permitted = os.read(start_fd, 1)
+    except OSError:
+        return 125
+    finally:
+        try:
+            os.close(start_fd)
+        except OSError:
+            pass
+    if permitted != b"1":
+        return 125
+    try:
+        os.execvpe(command[0], command, os.environ)
+    except OSError as exc:
+        print(
+            f"[recovery-primary] cannot exec command: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 127
 
 
 def _owned_session_entry(argv: list[str]) -> int:
-    if len(argv) < 5 or argv[0] != "--owned-session" or argv[3] != "--":
+    if len(argv) < 6 or argv[0] != "--owned-session" or argv[4] != "--":
         print("invalid recovery owner invocation", file=sys.stderr, flush=True)
         return 125
     try:
@@ -629,7 +769,8 @@ def _owned_session_entry(argv: list[str]) -> int:
     except ValueError:
         return 125
     finalize_handoff = argv[2] == "1"
-    command = argv[4:]
+    role = argv[3]
+    command = argv[5:]
     if start_fd <= 2 or not command:
         return 125
     try:
@@ -653,24 +794,51 @@ def _owned_session_entry(argv: list[str]) -> int:
 
     for handled in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(handled, request_stop)
+    primary_read, primary_write = os.pipe()
+    os.set_inheritable(primary_read, True)
+    primary_command = [
+        str(Path(sys.executable).resolve()),
+        str(Path(__file__).resolve()),
+        "--owned-command",
+        str(primary_read),
+        "--",
+        *command,
+    ]
+    child: subprocess.Popen[Any] | None = None
     try:
         child = subprocess.Popen(
-            command,
+            primary_command,
             close_fds=True,
-            pass_fds=recovery_pass_fds(),
+            pass_fds=(*recovery_pass_fds(), primary_read),
         )
+        _register_session_primary(child.pid, f"{role}-primary", os.getpid())
+        state_dir = _root_state_dir()
+        if finalize_handoff and state_dir is not None:
+            (state_dir / RESTART_PRIMARY_PID).write_text(
+                str(child.pid) + "\n", encoding="utf-8"
+            )
+        os.write(primary_write, b"1")
     except OSError as exc:
-        print(f"[recovery-owner] cannot start command: {exc}", file=sys.stderr, flush=True)
+        print(
+            f"[recovery-owner] cannot start command: {exc}", file=sys.stderr, flush=True
+        )
         _close_handoff_lock()
         return 127
+    except BaseException:
+        if child is not None:
+            _signal_group_members(os.getpgrp(), signal.SIGKILL)
+            child.wait()
+        _close_handoff_lock()
+        raise
+    finally:
+        os.close(primary_read)
+        os.close(primary_write)
 
     group = os.getpgrp()
     forwarded_signal = 0
     termination_deadline: float | None = None
     while child.poll() is None:
-        requested_grace = _termination_grace_seconds(
-            os.environ.get(HANDOFF_ID_ENV, "")
-        )
+        requested_grace = _termination_grace_seconds(os.environ.get(HANDOFF_ID_ENV, ""))
         requested_signal = stop_signal or (
             signal.SIGTERM if requested_grace is not None else 0
         )
@@ -680,33 +848,29 @@ def _owned_session_entry(argv: list[str]) -> int:
             termination_deadline = time.monotonic() + (
                 requested_grace if requested_grace is not None else 5.0
             )
-        if termination_deadline is not None and time.monotonic() >= termination_deadline:
+        if (
+            termination_deadline is not None
+            and time.monotonic() >= termination_deadline
+        ):
             _signal_group_members(group, signal.SIGKILL)
         time.sleep(0.05)
-    while _live_group_members(group, exclude={os.getpid()}):
-        requested_grace = _termination_grace_seconds(
-            os.environ.get(HANDOFF_ID_ENV, "")
-        )
-        requested_signal = stop_signal or (
-            signal.SIGTERM if requested_grace is not None else 0
-        )
-        if requested_signal and forwarded_signal != requested_signal:
-            _signal_group_members(group, signal.Signals(requested_signal))
-            forwarded_signal = requested_signal
-            termination_deadline = time.monotonic() + (
-                requested_grace if requested_grace is not None else 5.0
-            )
-        if termination_deadline is not None and time.monotonic() >= termination_deadline:
-            _signal_group_members(group, signal.SIGKILL)
-        time.sleep(0.05)
-
     handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
     if finalize_handoff and _HANDOFF_ID_PATTERN.fullmatch(handoff_id):
-        _finalize_active_root(handoff_id)
-    else:
-        _close_handoff_lock()
+        _write_root_event(RESTART_EXIT, handoff_id, child.pid, child.returncode)
+    requested_grace = _termination_grace_seconds(handoff_id)
+    grace_seconds = requested_grace if requested_grace is not None else 5.0
+    group_clean = _cleanup_owned_group(group, grace_seconds)
+    sessions_clean = True
+    if finalize_handoff and _HANDOFF_ID_PATTERN.fullmatch(handoff_id):
+        sessions_clean = _request_other_sessions_stop(handoff_id, grace_seconds)
+        if group_clean and sessions_clean:
+            _write_root_event(RESTART_COMPLETE, handoff_id, child.pid, child.returncode)
+    _close_handoff_lock()
     return child.returncode if child.returncode >= 0 else 128 - child.returncode
 
 
 if __name__ == "__main__":
-    raise SystemExit(_owned_session_entry(sys.argv[1:]))
+    entry = sys.argv[1:]
+    if entry and entry[0] == "--owned-command":
+        raise SystemExit(_owned_command_entry(entry))
+    raise SystemExit(_owned_session_entry(entry))

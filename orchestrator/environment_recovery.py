@@ -90,17 +90,22 @@ def signal_restart_ready() -> None:
         os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
         return
     path = Path(value).expanduser().resolve()
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(str(os.getpid()) + "\n", encoding="utf-8")
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
+    if not handoff_id:
+        raise EnvironmentUnavailable("recovery restart handoff identity is missing")
+    event = {
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "primary_pid": os.getpid(),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_private_json(path, event)
     deadline = time.monotonic() + 30
     restarting = path.with_name("restarting.json")
     while restarting.is_file() and time.monotonic() < deadline:
         time.sleep(0.05)
     if restarting.is_file():
         raise EnvironmentUnavailable("recovery monitor did not complete restart handoff")
-    handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
     active = path.with_name(ACTIVE_MARKER)
     try:
         active_handoff_id = json.loads(active.read_text(encoding="utf-8"))[
@@ -112,7 +117,10 @@ def signal_restart_ready() -> None:
         ) from exc
     if not handoff_id or active_handoff_id != handoff_id:
         raise EnvironmentUnavailable("recovery monitor activated a different handoff")
-    os.environ.pop("ATREX_ENVIRONMENT_RESTART_SUPERVISED", None)
+    # The second durable event is the child's acknowledgement that it observed
+    # activation and is still the registered primary. The monitor must not bless
+    # restart.ready alone because the process may exit between these two states.
+    _write_private_json(path.with_name("restart.ack"), event)
 
 
 def configure_recovery(

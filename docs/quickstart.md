@@ -155,26 +155,36 @@ active Agent/framework process groups without treating the failure as a bad cand
 - `cleanup-*.json`: remote workspaces that must be removed before restart;
 - `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
 - `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
-- `restart-child.lock`, `restart.pid`, and `restart.log`: exact child identity/status during the
-  supervised resume handoff;
+- `restart-child.lock`, `restart.pid`, `restart.primary.pid`, and `restart.log`: diagnostic wrapper
+  and primary status during the supervised resume handoff; durable registry identities remain the
+  process authority;
+- `restart.ready` and `restart.ack`: the two-phase resume handshake; activation is accepted only
+  after the primary observes its matching `active.json` and acknowledges it;
+- `restart.exit.json` and `restart.complete.json`: the primary result and the later confirmation that
+  its process group and registered sessions were cleaned up;
 - `restarting.json` and `active.json`: initialization and ready-but-still-running ownership states;
-- `stopped.json`: a persistent operator stop that prevents a delayed monitor from restarting work;
-- `restart-processes/<handoff-id>/*.json`: PID-reuse-safe identities for the optimizer and every
-  controlled independent process session owner it starts;
+- `stopped.json` and `stop-requests/*.json`: a persistent operator stop plus immutable concurrent
+  requests that prevent an earlier resume from erasing a later stop;
+- `restart-processes/<handoff-id>/*.json`: PID-reuse-safe wrapper and primary identities for the
+  optimizer and every controlled independent process session it starts;
 - `recover.sh`: an idempotent manual way to clear `stopped.json` and start the same single-instance
   poller;
 - `stop-recovery.sh`: the verified stop path for rollback.
 
 The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
 all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
-and moves the failure marker through `restarting.json`. The durable campaign resume signal changes
-that marker to `active.json`; ownership remains live until the recovered optimizer and all of its
-registered independent sessions exit. Cleanup or spawn failures retain the marker and retry.
+and moves the failure marker through `restarting.json`. The campaign first publishes readiness; the
+monitor changes the marker to `active.json`, and the primary must then acknowledge that exact handoff.
+The monitor keeps supervising the active run until a durable exit and cleanup result arrives. A clean
+zero exit archives recovery; an unexpected exit, missing owner, or interrupted cleanup restores a
+retryable failure and returns to health polling. Cleanup or spawn failures likewise retain the marker
+and retry.
 If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
 and the persistent session-owner identities to adopt a live handoff or request that every registered
 owner terminate its own process group before atomically restoring `failure.json`. Each owner is
-registered before its actual command can start, so a short-lived parent cannot leave an unowned
-same-group child between process snapshots. The handoff timeout starts from the explicit
+wrapper and gated primary are both registered before the actual command can start. The primary
+identity remains a verified cleanup handle if its wrapper dies, and the wrapper reports the primary
+status before cleaning same-group leftovers. The handoff timeout starts from the explicit
 `restart_handoff.started_at` value in the marker, never from a failure marker's older filesystem
 timestamp. Resolved environment-only settings, including the polling interval, are replayed into the
 child. PID files are diagnostic, removed by their matching owner, and never used as the lock or
@@ -185,12 +195,14 @@ independent health probe succeeds.
 
 To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
 `python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --stop`) and require a zero exit status
-before changing transport. This asks a live monitor to stop, or takes over through its advisory lock
-if the monitor already died; it terminates every identity-verified recovery process group, restores a
+before changing transport. Stop first publishes an immutable request; the live monitor observes it
+without signalling its diagnostic PID, or the stopper takes over through the advisory lock after the
+monitor exits. It terminates every identity-verified recovery process group, restores a
 durable failure marker when needed, leaves the persistent `stopped.json` tombstone in place, and
 reports success only after no owned process remains. This includes an optimizer that has already
-reached `active.json`. Do not
-signal the diagnostic PID from `monitor.pid` directly. Preserve the private recovery directory for
+reached `active.json`. Resume waits for the lock whenever stop state is present and returns zero only
+after clearing its locked snapshot; a later stop request always wins. Do not signal the diagnostic PID
+from `monitor.pid` directly. Preserve the private recovery directory for
 diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
 state and canonical memory are transport-independent and require no rollback. Run `STATE_DIR/recover.sh`
 to re-enable automatic recovery. To clear a recovered marker without restarting, run
