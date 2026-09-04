@@ -882,9 +882,11 @@ def _cleanup_guardian_entry(argv: list[str]) -> int:
         requested_grace = _termination_grace_seconds(handoff_id)
         grace_seconds = requested_grace if requested_grace is not None else 5.0
         group_clean = _cleanup_owned_group(target_pgid, grace_seconds)
-        sessions_clean = _request_other_sessions_stop(
-            handoff_id, grace_seconds, exclude_pids={os.getpid()}
-        )
+        sessions_clean = True
+        if finalize_handoff:
+            sessions_clean = _request_other_sessions_stop(
+                handoff_id, grace_seconds, exclude_pids={os.getpid()}
+            )
         state_dir = _root_state_dir()
         if finalize_handoff and group_clean and sessions_clean and state_dir is not None:
             exit_event = _read_root_event(state_dir / RESTART_EXIT, handoff_id)

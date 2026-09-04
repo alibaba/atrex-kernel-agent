@@ -20,8 +20,8 @@ from typing import Optional
 from . import agent_runtime as _agent_runtime
 from .constants import (
     AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_PRIVATE_REFERENCE_ENV,
     ATREX_BENCH_HARNESS,
+    ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_CONVERT_AFTER,
     DEFAULT_FAST_EPISODES,
     DEFAULT_FAST_TRIALS,
@@ -43,18 +43,37 @@ from .constants import (
     SOL_SEED,
     WORKSPACE_INIT,
 )
-from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
 from .environment_recovery import (
     EnvironmentUnavailable,
     environment_state_file,
 )
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
+)
+from .framework_baseline_progress import (
     load_progress as load_framework_baseline_progress,
+)
+from .framework_baseline_progress import (
     mark_accepted as mark_framework_baseline_accepted,
+)
+from .framework_baseline_progress import (
     progress_path as framework_baseline_progress_path,
+)
+from .framework_baseline_progress import (
     restore_latest_candidate as restore_latest_framework_baseline_candidate,
+)
+from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
+)
+from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
+from .operator_layout import (
+    AGENT_PROBLEM_FILENAME,
+    agent_visible_operator_files,
+    has_agent_problem,
+    is_sol_op,
+    validate_agent_problem,
+    validate_generated_agent_problem,
+    validate_private_shapes,
 )
 from .optimization_policy import (
     install_workspace_policy,
@@ -80,15 +99,6 @@ from .session_io import (
     run_session,
     sandbox_directive,
 )
-from .operator_layout import (
-    AGENT_PROBLEM_FILENAME,
-    agent_visible_operator_files,
-    has_agent_problem,
-    is_sol_op,
-    validate_agent_problem,
-    validate_generated_agent_problem,
-    validate_private_shapes,
-)
 from .workspace_runtime import (
     _agent_runtime_directive,
     _baseline_driver_directive,
@@ -106,7 +116,6 @@ from .workspace_state import (
     v0_baseline_commit,
     write_stall,
 )
-
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",

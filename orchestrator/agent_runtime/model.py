@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
 PhaseMarkerAction = Literal["start", "end"]

@@ -15,7 +15,6 @@ from .models import VerificationResult, VerificationRun
 from .protocol import atomic_write_json
 from .store import VERIFY_DIR
 
-
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 DEFAULT_SHAPE_BATCH_SIZE = 4
 DEFAULT_SHAPE_BATCH_WORKERS = 4
