@@ -547,8 +547,25 @@ def _test_kernel_script_index(
     if not command:
         return None
 
-    index = 0
-    if command[index] in {"env", "/usr/bin/env"}:
+    def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
+        while start < len(command):
+            name, separator, _ = command[start].partition("=")
+            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+                break
+            if shell_prefix and shlex.quote(command[start]) != command[start]:
+                break
+            if typed_launcher and name not in {
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONUNBUFFERED",
+            }:
+                return None
+            start += 1
+        return start
+
+    index = assignment_end(0, shell_prefix=True)
+    if index is None:
+        return None
+    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
         index += 1
         while index < len(command):
             option = command[index]
@@ -582,16 +599,9 @@ def _test_kernel_script_index(
             if option.startswith("-"):
                 return None
             break
-        while index < len(command):
-            name, separator, _ = command[index].partition("=")
-            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
-                break
-            if typed_launcher and name not in {
-                "PYTHONDONTWRITEBYTECODE",
-                "PYTHONUNBUFFERED",
-            }:
-                return None
-            index += 1
+        index = assignment_end(index)
+        if index is None:
+            return None
 
     if (
         index >= len(command)
@@ -3124,6 +3134,11 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
+        if gateway_kind == "profile" and num_gpus > 1:
+            raise SystemExit(
+                "sandbox: distributed profile cannot fall back to dev "
+                f"({typed_limitation}); the dev route does not launch ranks"
+            )
         print(
             f"[sandbox] {gateway_kind} interface unsupported ({typed_limitation}); using dev",
             file=sys.stderr,
