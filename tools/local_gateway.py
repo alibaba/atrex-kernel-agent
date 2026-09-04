@@ -357,6 +357,11 @@ def _validate_target(payload: dict[str, Any]) -> None:
     targets = spec.get("target_hardware") if isinstance(spec, dict) else None
     if not isinstance(targets, list) or not targets or not all(isinstance(v, str) for v in targets):
         raise ValueError("spec.target_hardware must be a non-empty string array")
+    num_gpus = spec.get("num_gpus", 1)
+    if isinstance(num_gpus, bool) or not isinstance(num_gpus, int) or num_gpus < 1:
+        raise ValueError("spec.num_gpus must be a positive integer")
+    if num_gpus > 1:
+        raise ValueError("localhost scheduler does not support spec.num_gpus greater than 1")
 
 
 def _validate_timeout(value: Any, field: str) -> int:

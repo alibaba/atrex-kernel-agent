@@ -430,8 +430,22 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     raise ValueError(f"sandbox input does not exist: {value!r}")
 
 
+def _parsed_command_parts(parts: list[str]) -> tuple[list[str], bool]:
+    """Return command words and whether a single shell string stayed opaque."""
+    command = parts[1:] if parts and parts[0] == "--" else list(parts)
+    if len(command) != 1:
+        return command, False
+    try:
+        parsed = shlex.split(command[0])
+    except ValueError:
+        return command, True
+    if shlex.join(parsed) == command[0]:
+        return parsed, False
+    return command, True
+
+
 def _command_parts(parts: list[str]) -> list[str]:
-    return parts[1:] if parts and parts[0] == "--" else list(parts)
+    return _parsed_command_parts(parts)[0]
 
 
 def _python_inline_imports(parts: list[str]) -> set[str]:
@@ -539,22 +553,396 @@ def _command_input_paths(
     return frozenset(selected)
 
 
-def _is_test_kernel_command(parts: list[str]) -> bool:
-    command = _command_parts(parts)
-    return (
-        len(command) >= 2
-        and Path(command[0]).name in {"python", "python3", "python3.10", "python3.12"}
-        and Path(command[1]).name == "test_kernel.py"
+def _standard_command_name(value: str, names: set[str]) -> str | None:
+    """Return a command name only for PATH lookup or a conventional system path."""
+    name = Path(value).name
+    if name in names and value in {name, f"/bin/{name}", f"/usr/bin/{name}"}:
+        return name
+    return None
+
+
+def _command_executable_index(
+    command: list[str], *, typed_launcher: bool = False
+) -> int | None:
+    """Skip supported shell assignments, env, and execution wrappers."""
+    def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
+        while start < len(command):
+            name, separator, _ = command[start].partition("=")
+            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+                break
+            if shell_prefix and shlex.quote(command[start]) != command[start]:
+                break
+            if typed_launcher and name not in {
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONUNBUFFERED",
+            }:
+                return None
+            start += 1
+        return start
+
+    index = assignment_end(0, shell_prefix=True)
+    if index is None:
+        return None
+    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
+        index += 1
+        while index < len(command):
+            option = command[index]
+            if option == "--":
+                index += 1
+                break
+            if option == "-" or option == "--ignore-environment" or option == "--debug":
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if re.fullmatch(r"-[iv]+", option):
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if option in {"-C", "--chdir", "-u", "--unset"}:
+                if index + 1 >= len(command):
+                    return None
+                if typed_launcher:
+                    return None
+                index += 2
+                continue
+            if (option.startswith(("-C", "-u")) and len(option) > 2) or (
+                option.startswith(("--chdir=", "--unset="))
+                and option.partition("=")[2]
+            ):
+                if typed_launcher:
+                    return None
+                index += 1
+                continue
+            if option.startswith("-"):
+                return None
+            break
+        index = assignment_end(index)
+        if index is None:
+            return None
+    while index < len(command):
+        launcher = command[index]
+        wrapper = _standard_command_name(
+            launcher,
+            {"command", "exec", "nice", "nohup", "stdbuf", "time", "timeout"},
+        )
+        if wrapper is None:
+            break
+        if typed_launcher:
+            return None
+        index += 1
+
+        if wrapper == "command":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option == "-p":
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "exec":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option == "-a":
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if re.fullmatch(r"-[cl]+", option):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "nice":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-n", "--adjustment"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-(?:n)?\d+", option)
+                    or option.startswith("--adjustment=")
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "time":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-f", "--format", "-o", "--output"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-[fo].+", option)
+                    or option.startswith("--format=")
+                    or option.startswith("--output=")
+                    or re.fullmatch(r"-[apqv]+", option)
+                    or option in {"--append", "--portability", "--quiet", "--verbose"}
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "timeout":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-k", "--kill-after", "-s", "--signal"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-[ks].+", option)
+                    or option.startswith(("--kill-after=", "--signal="))
+                    or option in {"--foreground", "--preserve-status", "--verbose"}
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+            if index >= len(command):
+                return None
+            index += 1
+        elif wrapper == "stdbuf":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-e", "--error", "-i", "--input", "-o", "--output"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if re.fullmatch(r"-[eio].+", option) or option.startswith(
+                    ("--error=", "--input=", "--output=")
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        else:
+            if index < len(command) and command[index] == "--":
+                index += 1
+            elif index < len(command) and command[index].startswith("-"):
+                return None
+    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
+        nested = _command_executable_index(
+            command[index:], typed_launcher=typed_launcher
+        )
+        return index + nested if nested is not None else None
+    return index if index < len(command) else None
+
+
+def _python_script_index(
+    parts: list[str], script_name: str, *, typed_launcher: bool = False
+) -> int | None:
+    """Locate a Python script; optionally require a prefix typed run may omit."""
+    command, opaque = _parsed_command_parts(parts)
+    if opaque:
+        return None
+    index = _command_executable_index(command, typed_launcher=typed_launcher)
+
+    if (
+        index is None
+        or re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[index]).name) is None
+    ):
+        return None
+    index += 1
+    while index < len(command):
+        option = command[index]
+        if option == "--":
+            index += 1
+            break
+        if re.fullmatch(r"-[bBdEiIOPqRsSuvx]+", option):
+            if typed_launcher and re.fullmatch(r"-[Bu]+", option) is None:
+                return None
+            index += 1
+            continue
+        if option in {"-W", "-X"}:
+            if index + 1 >= len(command):
+                return None
+            if typed_launcher:
+                return None
+            index += 2
+            continue
+        if len(option) > 2 and option.startswith(("-W", "-X")):
+            if typed_launcher:
+                return None
+            index += 1
+            continue
+        if option == "--check-hash-based-pycs":
+            if index + 1 >= len(command) or command[index + 1] not in {
+                "always",
+                "default",
+                "never",
+            }:
+                return None
+            if typed_launcher:
+                return None
+            index += 2
+            continue
+        if option.startswith("-"):
+            return None
+        break
+
+    if index < len(command) and Path(command[index]).name == script_name:
+        return index
+    return None
+
+
+def _test_kernel_script_index(
+    parts: list[str], *, typed_launcher: bool = False
+) -> int | None:
+    return _python_script_index(
+        parts, "test_kernel.py", typed_launcher=typed_launcher
     )
+
+
+def _is_test_kernel_command(parts: list[str]) -> bool:
+    return _test_kernel_script_index(parts) is not None
+
+
+def _shell_command_operand(
+    command: list[str], executable_index: int
+) -> tuple[str, int] | None:
+    """Locate a shell script or the command string consumed by ``-c``."""
+    shell = _standard_command_name(command[executable_index], {"bash", "sh"})
+    if shell is None:
+        return None
+    index = executable_index + 1
+    while index < len(command):
+        option = command[index]
+        if option == "--":
+            index += 1
+            break
+        if shell == "bash" and option in {"--init-file", "--rcfile"}:
+            if index + 1 >= len(command):
+                return None
+            index += 2
+            continue
+        if shell == "bash" and (
+            option.startswith("--init-file=") or option.startswith("--rcfile=")
+        ):
+            index += 1
+            continue
+        if shell == "bash" and option in {
+            "--debug",
+            "--debugger",
+            "--login",
+            "--noediting",
+            "--noprofile",
+            "--norc",
+            "--posix",
+            "--protected",
+            "--restricted",
+            "--verbose",
+        }:
+            index += 1
+            continue
+        if shell == "bash" and option in {
+            "--dump-po-strings",
+            "--dump-strings",
+            "--help",
+            "--version",
+            "--wordexp",
+        }:
+            return None
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*c", option):
+            return ("command", index + 1) if index + 1 < len(command) else None
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*[oO]", option):
+            if index + 1 >= len(command):
+                return None
+            index += 2
+            continue
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]+", option):
+            index += 1
+            continue
+        if option.startswith("-"):
+            return None
+        break
+    return ("script", index) if index < len(command) else None
 
 
 def _is_profile_command(parts: list[str]) -> bool:
     """Return whether argv invokes one of the repository profiler wrappers."""
-    return any(
-        Path(token).name
-        in {"profile_nvidia.sh", "profile_kernel.sh", "profile_driver.py"}
-        for token in _command_parts(parts)
+    command, opaque = _parsed_command_parts(parts)
+    if opaque:
+        return False
+    if _python_script_index(command, "profile_driver.py") is not None:
+        return True
+    index = _command_executable_index(command)
+    if index is None:
+        return False
+    frontend = _standard_command_name(command[index], {"ncu", "nsys", "rocprofv3"})
+    if frontend is not None and (
+        frontend != "nsys"
+        or (index + 1 < len(command) and command[index + 1] == "profile")
+    ):
+        for nested_index in range(index + 1, len(command)):
+            if (
+                _python_script_index(
+                    command[nested_index:], "profile_driver.py"
+                )
+                is not None
+            ):
+                return True
+    wrappers = {"tools/profile_nvidia.sh", "tools/profile_kernel.sh"}
+    executable = PurePosixPath(command[index]).as_posix()
+    if Path(executable).name == "profile_driver.py" or executable in wrappers:
+        return True
+    operand = _shell_command_operand(command, index)
+    return bool(
+        operand
+        and operand[0] == "script"
+        and PurePosixPath(command[operand[1]]).as_posix() in wrappers
     )
+
+
+def _mentions_evaluator_target(value: str) -> bool:
+    """Find target names in shell text without pretending to parse shell grammar."""
+    unquoted = value.translate(str.maketrans("", "", "\\'\""))
+    return re.search(
+        r"(?<![A-Za-z0-9_.-])"
+        r"(?:test_kernel\.py|profile_driver\.py|profile_nvidia\.sh|profile_kernel\.sh)"
+        r"(?![A-Za-z0-9_.-])",
+        unquoted,
+    ) is not None
+
+
+def _is_unsafe_target_command(parts: list[str]) -> bool:
+    """Reject target-bearing commands outside the supported launcher grammar."""
+    command, _ = _parsed_command_parts(parts)
+    if _is_test_kernel_command(command) or _is_profile_command(command):
+        return False
+    return any(_mentions_evaluator_target(token) for token in command)
 
 
 def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
@@ -594,6 +982,45 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return value
+
+
+def _distributed_evaluation_world_size(metadata: object) -> int:
+    """Return the GPU count declared by a single-node evaluator contract."""
+    if not isinstance(metadata, dict):
+        return 1
+    benchmark_contract = metadata.get("benchmark_contract")
+    if not isinstance(benchmark_contract, dict):
+        return 1
+    evaluation = benchmark_contract.get("distributed_evaluation")
+    if evaluation is None:
+        return 1
+    if not isinstance(evaluation, dict):
+        raise ValueError("benchmark_contract.distributed_evaluation must be an object")
+    if evaluation.get("launcher") != "torchrun":
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.launcher must be 'torchrun'"
+        )
+    if evaluation.get("backend") != "nccl":
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.backend must be 'nccl'"
+        )
+    world_size = evaluation.get("world_size")
+    if isinstance(world_size, bool) or not isinstance(world_size, int):
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.world_size must be an integer"
+        )
+    if world_size != 2:
+        raise ValueError(
+            "benchmark_contract.distributed_evaluation.world_size must be 2"
+        )
+    return world_size
+
+
+def _workspace_num_gpus(workspace: Path) -> int:
+    metadata = _json_object(
+        _evaluator_input_path(workspace, "metadata.json", required=False)
+    )
+    return _distributed_evaluation_world_size(metadata)
 
 
 def _is_fp4_dtype(value: object) -> bool:
@@ -731,6 +1158,12 @@ def _typed_workspace_limitation(
         _evaluator_input_path(workspace, "shapes.json", required=True)
     except ValueError as exc:
         return str(exc)
+    if (
+        kind == "run"
+        and _is_test_kernel_command(command)
+        and _test_kernel_script_index(command, typed_launcher=True) is None
+    ):
+        return "evaluator launcher semantics require the dev route"
     if kind == "profile" and _is_generalized_workspace(workspace):
         return "generalized tasks inject one private real shape through the dev profile route"
     if (workspace / "workload.jsonl").is_file():
@@ -925,12 +1358,16 @@ def _typed_request(
                     value["num_shapes"] = len(requested_shape_ids)
             reference[field] = value
 
+    spec: dict[str, Any] = {
+        "languages": [str(value) for value in languages],
+        "target_hardware": [hardware],
+    }
+    num_gpus = _distributed_evaluation_world_size(reference.get("metadata"))
+    if num_gpus > 1:
+        spec["num_gpus"] = num_gpus
     request: dict[str, Any] = {
         "name": f"{workspace.name}_{kind}",
-        "spec": {
-            "languages": [str(value) for value in languages],
-            "target_hardware": [hardware],
-        },
+        "spec": spec,
         "candidate": (workspace / "kernel.py").read_text(encoding="utf-8"),
         "reference": reference,
         "options": {
@@ -1527,19 +1964,23 @@ def _run_direct_gateway(
     env_items: list[str],
     files: dict[str, Path],
     command: str,
+    num_gpus: int = 1,
 ) -> subprocess.CompletedProcess[str]:
     """Use the public dev-job HTTP API when the optional agate CLI is absent."""
     try:
         env_vars = _parse_env_items(env_items)
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
+    spec: dict[str, Any] = {"target_hardware": [hardware]}
+    if num_gpus > 1:
+        spec["num_gpus"] = num_gpus
     return _run_direct_job(
         url=url,
         kind="dev",
         timeout=timeout,
         queue_wait_grace=queue_wait_grace,
         payload={
-            "spec": {"target_hardware": [hardware]},
+            "spec": spec,
             "command": command,
             "timeout_s": timeout,
             "env_vars": env_vars,
@@ -1891,9 +2332,11 @@ def _typed_agate_command(
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
     reference_dir = reference_dir or _private_reference_dir(workspace) or workspace
+    command += ["--gpu", args.hardware]
+    num_gpus = request.get("spec", {}).get("num_gpus", 1)
+    if num_gpus > 1:
+        command += ["--num-gpus", str(num_gpus)]
     command += [
-        "--gpu",
-        args.hardware,
         "--candidate",
         str(workspace / "kernel.py"),
         "--reference-dir",
@@ -2679,6 +3122,7 @@ def _run_typed_gateway(
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
                     "kind": kind,
+                    "num_gpus": request.get("spec", {}).get("num_gpus", 1),
                     "fallback_kind": "dev",
                     "candidate_bytes": len(request["candidate"].encode("utf-8")),
                     "shape_count": (
@@ -2919,15 +3363,31 @@ def _main(argv: list[str] | None = None) -> int:
         )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
+    if _is_unsafe_target_command(args.command):
+        raise SystemExit(
+            "sandbox: evaluator and profile targets must use a supported launcher "
+            "with separate arguments after --"
+        )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
+    evaluator_command = _is_test_kernel_command(args.command)
     profile_command = _is_profile_command(args.command)
+    profile_request = gateway_kind == "profile" or profile_command
     if profile_command:
         try:
             args.env = _with_inherited_profile_environment(args.env)
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
+    typed_fallback_kind: str | None = None
+    num_gpus = 1
+    if gateway_kind in TYPED_KINDS or evaluator_command or profile_request:
+        try:
+            num_gpus = _workspace_num_gpus(workspace)
+        except ValueError as exc:
+            raise SystemExit(
+                f"sandbox: invalid distributed evaluator contract: {exc}"
+            ) from exc
     if gateway_kind in TYPED_KINDS:
         if (
             gateway_kind == "profile"
@@ -2962,13 +3422,22 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
-        print(
-            f"[sandbox] {gateway_kind} interface unsupported ({typed_limitation}); using dev",
-            file=sys.stderr,
-        )
+        typed_fallback_kind = gateway_kind
         gateway_kind = "dev"
 
-    evaluator_command = _is_test_kernel_command(args.command)
+    if gateway_kind == "dev" and profile_request and num_gpus > 1:
+        limitation = f" ({typed_limitation})" if typed_limitation else ""
+        raise SystemExit(
+            "sandbox: distributed profile commands require the typed profile route"
+            f"{limitation}; "
+            "the dev route does not launch ranks"
+        )
+    if typed_fallback_kind is not None:
+        print(
+            f"[sandbox] {typed_fallback_kind} interface unsupported ({typed_limitation}); using dev",
+            file=sys.stderr,
+        )
+
     if evaluator_command:
         selected = set(_evaluation_input_paths(workspace, args.command))
         try:
@@ -3072,6 +3541,7 @@ def _main(argv: list[str] | None = None) -> int:
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
                     "kind": "dev",
+                    "num_gpus": num_gpus,
                     "requested_kind": args.kind,
                     "typed_fallback_reason": typed_limitation,
                     "files": file_count,
@@ -3149,9 +3619,10 @@ def _main(argv: list[str] | None = None) -> int:
             agate += ["--url", args.url]
         elif args.gateway_profile:
             agate += ["--profile", args.gateway_profile]
+        agate += ["--gpu", args.hardware]
+        if num_gpus > 1:
+            agate += ["--num-gpus", str(num_gpus)]
         agate += [
-            "--gpu",
-            args.hardware,
             "--dev-timeout",
             str(args.timeout),
             "--http-timeout",
@@ -3234,6 +3705,7 @@ def _main(argv: list[str] | None = None) -> int:
                     env_items=gateway_environment,
                     files=direct_files,
                     command="bash __atrex_runner.sh",
+                    num_gpus=num_gpus,
                 )
             except (OSError, RuntimeError, TimeoutError) as exc:
                 raise SystemExit(
