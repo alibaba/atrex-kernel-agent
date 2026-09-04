@@ -62,6 +62,7 @@ FAST_POLICY_REVIEW_REQUEST_PATH = Path(
 )
 FAST_REASONING_EFFORT = "max"
 FULL_REASONING_EFFORT = "max"
+STAGED_STALLED_RETRY_THRESHOLD = 3
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -457,6 +458,28 @@ class LongHorizonCampaign:
     ) -> bool:
         return bool(self._staged_trigger(state, fast_mode=fast_mode))
 
+    @staticmethod
+    def _staged_blocked_retries(
+        state: SupervisorState,
+        staged_checkpoint: dict[str, Any] | None,
+    ) -> int:
+        """Count blocked landing attempts since the current stage was created."""
+        if not staged_checkpoint:
+            return 0
+        initiative_id = str(staged_checkpoint.get("initiative_id", "")).strip()
+        source_episode = staged_checkpoint.get("source_episode", 0)
+        if not initiative_id or not isinstance(source_episode, int):
+            return 0
+        return sum(
+            1
+            for attempt in state.attempts
+            if attempt.get("status") == "blocked"
+            and not attempt.get("violation")
+            and attempt.get("initiative_id") == initiative_id
+            and isinstance(attempt.get("episode"), int)
+            and int(attempt["episode"]) > source_episode
+        )
+
     def _staged_rewrite_directive(
         self,
         *,
@@ -465,6 +488,7 @@ class LongHorizonCampaign:
         completed_episodes: int,
         promotion_drought: int,
         staged_trigger: str,
+        staged_blocked_retries: int,
         fast_mode: bool,
     ) -> str:
         if self.max_staged_episodes <= 0:
@@ -510,7 +534,7 @@ class LongHorizonCampaign:
                 "produce a final candidate, pivot, or report a real blocker."
             )
         if staged_checkpoint:
-            return (
+            directive = (
                 "This worktree was bootstrapped from a non-production staged checkpoint for "
                 f"initiative `{staged_checkpoint.get('initiative_id')}`, stage "
                 f"{staged_checkpoint.get('stage')}. Continue its declared next stage: "
@@ -524,6 +548,22 @@ class LongHorizonCampaign:
                 "checkpoint if a coherent enabling stage is complete but the full initiative is "
                 "not yet promotion-ready."
             )
+            if staged_blocked_retries >= STAGED_STALLED_RETRY_THRESHOLD:
+                directive += (
+                    f" This checkpoint has already consumed {staged_blocked_retries} valid "
+                    "blocked continuation episodes since its last stage advancement, so treat "
+                    "the evidence plan as stalled. Do not replay the same measurement budget "
+                    "unchanged. Before another expensive campaign, pre-register a materially "
+                    "different, variance-aware sequential stopping rule using same-allocation "
+                    "paired evidence and explicit success and abort bounds; keep the final "
+                    "production correctness, policy, and performance gates unchanged. If no new "
+                    "falsifiable evidence plan or architectural advancement can resolve the "
+                    "final criterion, pivot so another initiative can explore the search space. "
+                    "A genuine external blocker may still finish as `blocked` and preserve the "
+                    "checkpoint, but unchanged bytes or another identical retry must not be "
+                    "reported as stage advancement."
+                )
+            return directive
         if staged_trigger == "promotion_drought":
             return (
                 f"This campaign has gone {promotion_drought} consecutive episodes without a "
@@ -709,6 +749,7 @@ class LongHorizonCampaign:
         completed_episodes: int = 0,
         promotion_drought: int = 0,
         staged_trigger: str = "",
+        staged_blocked_retries: int = 0,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign, version)
         fast_trial_count = fast_trials or self.fast_trials
@@ -771,6 +812,7 @@ class LongHorizonCampaign:
                     completed_episodes=completed_episodes,
                     promotion_drought=promotion_drought,
                     staged_trigger=staged_trigger,
+                    staged_blocked_retries=staged_blocked_retries,
                     fast_mode=fast_mode,
                 ),
             },
@@ -2276,6 +2318,19 @@ class LongHorizonCampaign:
                         + ", ".join(unexpected)
                     )
             self._restore_staged_checkpoint(store, worktree, active)
+            staged_checkpoint = (
+                active.get("staged_checkpoint")
+                if isinstance(active.get("staged_checkpoint"), dict)
+                else None
+            )
+            staged_blocked_retries = self._staged_blocked_retries(
+                state, staged_checkpoint
+            )
+            active["staged_blocked_retries"] = staged_blocked_retries
+            active["staged_stall_review"] = (
+                staged_blocked_retries >= STAGED_STALLED_RETRY_THRESHOLD
+            )
+            store.save_active(active)
             fast_trial_count = self._active_fast_trials(
                 active, fast_mode=fast_mode
             )
@@ -2310,14 +2365,11 @@ class LongHorizonCampaign:
                 fast_trials=fast_trial_count,
                 resumed=resumed,
                 staged_allowed=staged_allowed,
-                staged_checkpoint=(
-                    active.get("staged_checkpoint")
-                    if isinstance(active.get("staged_checkpoint"), dict)
-                    else None
-                ),
+                staged_checkpoint=staged_checkpoint,
                 completed_episodes=state.episodes,
                 promotion_drought=state.consecutive_without_promotion,
                 staged_trigger=str(active.get("staged_trigger", "")),
+                staged_blocked_retries=staged_blocked_retries,
             )
             store.write_brief(episode, prompt)
             telemetry_environment = {
