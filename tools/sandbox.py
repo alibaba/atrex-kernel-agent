@@ -205,7 +205,6 @@ TYPED_FALLBACK_REASONS = (
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
 MODE_STATE_FILENAME = ".orchestrator_mode.json"
 PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
-PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 PROFILE_ENVIRONMENT_KEYS = (
@@ -289,7 +288,6 @@ def _make_input_bundle(
     workspace: Path,
     max_file_bytes: int,
     input_paths: Iterable[str] = (),
-    injected_inputs: dict[str, Path] | None = None,
     injected_payloads: dict[str, bytes] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing only explicitly selected inputs."""
@@ -343,10 +341,6 @@ def _make_input_bundle(
         count += 1
 
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
-        # Evaluator-only inputs are added before the public workspace tree so a candidate-created
-        # file with the same name cannot shadow the orchestrator-owned private test set.
-        for arcname, path in (injected_inputs or {}).items():
-            add_file(tf, path, arcname)
         for arcname, payload in (injected_payloads or {}).items():
             add_payload(tf, payload, arcname)
         add_tree(tf, workspace)
@@ -553,6 +547,14 @@ def _command_input_paths(
     return frozenset(selected)
 
 
+def _standard_command_name(value: str, names: set[str]) -> str | None:
+    """Return a command name only for PATH lookup or a conventional system path."""
+    name = Path(value).name
+    if name in names and value in {name, f"/bin/{name}", f"/usr/bin/{name}"}:
+        return name
+    return None
+
+
 def _command_executable_index(
     command: list[str], *, typed_launcher: bool = False
 ) -> int | None:
@@ -592,15 +594,16 @@ def _command_executable_index(
                     return None
                 index += 1
                 continue
-            if option in {"-u", "--unset"}:
+            if option in {"-C", "--chdir", "-u", "--unset"}:
                 if index + 1 >= len(command):
                     return None
                 if typed_launcher:
                     return None
                 index += 2
                 continue
-            if (option.startswith("-u") and len(option) > 2) or (
-                option.startswith("--unset=") and len(option) > len("--unset=")
+            if (option.startswith(("-C", "-u")) and len(option) > 2) or (
+                option.startswith(("--chdir=", "--unset="))
+                and option.partition("=")[2]
             ):
                 if typed_launcher:
                     return None
@@ -613,8 +616,12 @@ def _command_executable_index(
         if index is None:
             return None
     while index < len(command):
-        wrapper = Path(command[index]).name
-        if wrapper not in {"command", "exec", "nice", "time"}:
+        launcher = command[index]
+        wrapper = _standard_command_name(
+            launcher,
+            {"command", "exec", "nice", "nohup", "stdbuf", "time", "timeout"},
+        )
+        if wrapper is None:
             break
         if typed_launcher:
             return None
@@ -669,7 +676,7 @@ def _command_executable_index(
                 if option.startswith("-"):
                     return None
                 break
-        else:
+        elif wrapper == "time":
             while index < len(command):
                 option = command[index]
                 if option == "--":
@@ -692,6 +699,59 @@ def _command_executable_index(
                 if option.startswith("-"):
                     return None
                 break
+        elif wrapper == "timeout":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-k", "--kill-after", "-s", "--signal"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-[ks].+", option)
+                    or option.startswith(("--kill-after=", "--signal="))
+                    or option in {"--foreground", "--preserve-status", "--verbose"}
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+            if index >= len(command):
+                return None
+            index += 1
+        elif wrapper == "stdbuf":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-e", "--error", "-i", "--input", "-o", "--output"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if re.fullmatch(r"-[eio].+", option) or option.startswith(
+                    ("--error=", "--input=", "--output=")
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        else:
+            if index < len(command) and command[index] == "--":
+                index += 1
+            elif index < len(command) and command[index].startswith("-"):
+                return None
+    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
+        nested = _command_executable_index(
+            command[index:], typed_launcher=typed_launcher
+        )
+        return index + nested if nested is not None else None
     return index if index < len(command) else None
 
 
@@ -768,8 +828,8 @@ def _shell_command_operand(
     command: list[str], executable_index: int
 ) -> tuple[str, int] | None:
     """Locate a shell script or the command string consumed by ``-c``."""
-    shell = Path(command[executable_index]).name
-    if shell not in {"bash", "sh"}:
+    shell = _standard_command_name(command[executable_index], {"bash", "sh"})
+    if shell is None:
         return None
     index = executable_index + 1
     while index < len(command):
@@ -835,108 +895,48 @@ def _is_profile_command(parts: list[str]) -> bool:
     index = _command_executable_index(command)
     if index is None:
         return False
-    wrappers = {"profile_nvidia.sh", "profile_kernel.sh"}
-    executable = Path(command[index]).name
-    if executable == "profile_driver.py" or executable in wrappers:
+    frontend = _standard_command_name(command[index], {"ncu", "nsys", "rocprofv3"})
+    if frontend is not None and (
+        frontend != "nsys"
+        or (index + 1 < len(command) and command[index + 1] == "profile")
+    ):
+        for nested_index in range(index + 1, len(command)):
+            if (
+                _python_script_index(
+                    command[nested_index:], "profile_driver.py"
+                )
+                is not None
+            ):
+                return True
+    wrappers = {"tools/profile_nvidia.sh", "tools/profile_kernel.sh"}
+    executable = PurePosixPath(command[index]).as_posix()
+    if Path(executable).name == "profile_driver.py" or executable in wrappers:
         return True
     operand = _shell_command_operand(command, index)
     return bool(
         operand
         and operand[0] == "script"
-        and Path(command[operand[1]]).name in wrappers
+        and PurePosixPath(command[operand[1]]).as_posix() in wrappers
     )
 
 
-def _shell_text_tokens(command: str) -> list[str]:
-    """Tokenize one simple shell command for rejection-only inspection."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    parsed: list[str] = []
-    try:
-        while (token := lexer.get_token()) is not None:
-            parsed.append(token)
-    except ValueError:
-        pass
-    if not parsed:
-        return []
-    name, separator, _ = parsed[0].partition("=")
-    if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-        if re.match(rf"^\s*{re.escape(name)}=", command) is None:
-            return []
-        for index, token in enumerate(parsed):
-            assignment, separator, _ = token.partition("=")
-            if not separator or re.fullmatch(
-                r"[A-Za-z_][A-Za-z0-9_]*", assignment
-            ) is None:
-                break
-            parsed[index] = f"{assignment}=x"
-    elif any(character.isspace() for character in parsed[0]):
-        return []
-    return parsed
+def _mentions_evaluator_target(value: str) -> bool:
+    """Find target names in shell text without pretending to parse shell grammar."""
+    unquoted = value.translate(str.maketrans("", "", "\\'\""))
+    return re.search(
+        r"(?<![A-Za-z0-9_.-])"
+        r"(?:test_kernel\.py|profile_driver\.py|profile_nvidia\.sh|profile_kernel\.sh)"
+        r"(?![A-Za-z0-9_.-])",
+        unquoted,
+    ) is not None
 
 
-def _shell_command_segments(command: str) -> list[str]:
-    """Split on unquoted shell control operators without executing the command."""
-    segments: list[str] = []
-    start = 0
-    quote: str | None = None
-    escaped = False
-    for index, character in enumerate(command):
-        if escaped:
-            escaped = False
-            continue
-        if character == "\\" and quote != "'":
-            escaped = True
-            continue
-        if quote is not None:
-            if character == quote:
-                quote = None
-            continue
-        if character in {"'", '"'}:
-            quote = character
-            continue
-        if character in "&|;()<>\n{}":
-            segment = command[start:index].strip()
-            if segment:
-                segments.append(segment)
-            start = index + 1
-    segment = command[start:].strip()
-    if segment:
-        segments.append(segment)
-    return segments
-
-
-def _nested_shell_command(command: list[str]) -> str | None:
-    executable_index = _command_executable_index(command)
-    if executable_index is None:
-        return None
-    operand = _shell_command_operand(command, executable_index)
-    if operand and operand[0] == "command":
-        return command[operand[1]]
-    return None
-
-
-def _shell_text_has_target(command: str) -> bool:
-    for segment in _shell_command_segments(command):
-        parsed = _shell_text_tokens(segment)
-        if not parsed:
-            continue
-        if _is_test_kernel_command(parsed) or _is_profile_command(parsed):
-            return True
-        nested = _nested_shell_command(parsed)
-        if nested is not None and _shell_text_has_target(nested):
-            return True
-    return False
-
-
-def _is_opaque_target_command(parts: list[str]) -> bool:
-    """Reject evaluator or profiler invocations hidden inside shell syntax."""
-    command, opaque = _parsed_command_parts(parts)
-    if opaque:
-        return len(command) == 1 and _shell_text_has_target(command[0])
-    nested = _nested_shell_command(command)
-    return nested is not None and _shell_text_has_target(nested)
+def _is_unsafe_target_command(parts: list[str]) -> bool:
+    """Reject target-bearing commands outside the supported launcher grammar."""
+    command, _ = _parsed_command_parts(parts)
+    if _is_test_kernel_command(command) or _is_profile_command(command):
+        return False
+    return any(_mentions_evaluator_target(token) for token in command)
 
 
 def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
@@ -1091,20 +1091,6 @@ def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> 
     if required and not path.is_file():
         raise ValueError(f"required evaluator input is missing: {filename}")
     return path
-
-
-def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
-    private_dir = _private_reference_dir(workspace)
-    if private_dir is None:
-        return {}
-    inputs: dict[str, Path] = {}
-    for filename in PRIVATE_EVALUATOR_FILENAMES:
-        path = private_dir / filename
-        if filename in {"shapes.json", "metadata.json"} and not path.is_file():
-            raise ValueError(f"required private evaluator input is missing: {filename}")
-        if path.is_file():
-            inputs[filename] = path
-    return inputs
 
 
 def _sort_shape_id(shape_id: str) -> tuple[int, object]:
@@ -3357,10 +3343,10 @@ def _main(argv: list[str] | None = None) -> int:
         )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
-    if _is_opaque_target_command(args.command):
+    if _is_unsafe_target_command(args.command):
         raise SystemExit(
-            "sandbox: evaluator and profile commands cannot be passed as opaque "
-            "shell strings; pass the command as separate arguments after --"
+            "sandbox: evaluator and profile targets must use a supported launcher "
+            "with separate arguments after --"
         )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
@@ -3419,6 +3405,16 @@ def _main(argv: list[str] | None = None) -> int:
         typed_fallback_kind = gateway_kind
         gateway_kind = "dev"
 
+    if (
+        gateway_kind == "dev"
+        and evaluator_command
+        and _is_generalized_workspace(workspace)
+    ):
+        limitation = f" ({typed_limitation})" if typed_limitation else ""
+        raise SystemExit(
+            "sandbox: generalized evaluator commands require the typed run route"
+            f"{limitation}; private evaluator inputs are never injected into dev commands"
+        )
     if gateway_kind == "dev" and profile_request and num_gpus > 1:
         limitation = f" ({typed_limitation})" if typed_limitation else ""
         raise SystemExit(
@@ -3450,9 +3446,6 @@ def _main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
     try:
-        injected_inputs = (
-            _private_evaluator_inputs(workspace) if evaluator_command else {}
-        )
         injected_payloads: dict[str, bytes] = {}
         if profile_command and _is_generalized_workspace(workspace):
             profile_case = _private_profile_case(workspace, args.env)
@@ -3464,7 +3457,6 @@ def _main(argv: list[str] | None = None) -> int:
             workspace,
             args.max_input_file_mb * 1024 * 1024,
             selected_inputs,
-            injected_inputs,
             injected_payloads,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
