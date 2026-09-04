@@ -205,6 +205,7 @@ TYPED_FALLBACK_REASONS = (
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
 MODE_STATE_FILENAME = ".orchestrator_mode.json"
 PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
+PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 PROFILE_ENVIRONMENT_KEYS = (
@@ -288,6 +289,7 @@ def _make_input_bundle(
     workspace: Path,
     max_file_bytes: int,
     input_paths: Iterable[str] = (),
+    injected_inputs: dict[str, Path] | None = None,
     injected_payloads: dict[str, bytes] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing only explicitly selected inputs."""
@@ -341,6 +343,10 @@ def _make_input_bundle(
         count += 1
 
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+        # Evaluator-only inputs are added before the public workspace tree so a candidate-created
+        # file with the same name cannot shadow the orchestrator-owned private test set.
+        for arcname, path in (injected_inputs or {}).items():
+            add_file(tf, path, arcname)
         for arcname, payload in (injected_payloads or {}).items():
             add_payload(tf, payload, arcname)
         add_tree(tf, workspace)
@@ -1091,6 +1097,20 @@ def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> 
     if required and not path.is_file():
         raise ValueError(f"required evaluator input is missing: {filename}")
     return path
+
+
+def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
+    private_dir = _private_reference_dir(workspace)
+    if private_dir is None:
+        return {}
+    inputs: dict[str, Path] = {}
+    for filename in PRIVATE_EVALUATOR_FILENAMES:
+        path = private_dir / filename
+        if filename in {"shapes.json", "metadata.json"} and not path.is_file():
+            raise ValueError(f"required private evaluator input is missing: {filename}")
+        if path.is_file():
+            inputs[filename] = path
+    return inputs
 
 
 def _sort_shape_id(shape_id: str) -> tuple[int, object]:
@@ -3405,16 +3425,6 @@ def _main(argv: list[str] | None = None) -> int:
         typed_fallback_kind = gateway_kind
         gateway_kind = "dev"
 
-    if (
-        gateway_kind == "dev"
-        and evaluator_command
-        and _is_generalized_workspace(workspace)
-    ):
-        limitation = f" ({typed_limitation})" if typed_limitation else ""
-        raise SystemExit(
-            "sandbox: generalized evaluator commands require the typed run route"
-            f"{limitation}; private evaluator inputs are never injected into dev commands"
-        )
     if gateway_kind == "dev" and profile_request and num_gpus > 1:
         limitation = f" ({typed_limitation})" if typed_limitation else ""
         raise SystemExit(
@@ -3446,6 +3456,9 @@ def _main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
     try:
+        injected_inputs = (
+            _private_evaluator_inputs(workspace) if evaluator_command else {}
+        )
         injected_payloads: dict[str, bytes] = {}
         if profile_command and _is_generalized_workspace(workspace):
             profile_case = _private_profile_case(workspace, args.env)
@@ -3457,6 +3470,7 @@ def _main(argv: list[str] | None = None) -> int:
             workspace,
             args.max_input_file_mb * 1024 * 1024,
             selected_inputs,
+            injected_inputs,
             injected_payloads,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
