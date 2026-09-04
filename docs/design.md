@@ -219,14 +219,17 @@ construction, and workspace resume. An early exit restores `failure.json`; the d
 resume signal begins a two-phase transition: the monitor moves the marker to `active.json`, then the
 same registered primary must observe that marker and persist an acknowledgement. The monitor remains
 alive until the recovered optimizer exits. The marker records a fresh handoff ID and explicit start
-time, so the initialization timeout is independent of the older outage marker mtime. A second advisory lock is
-inherited by the restart process tree. The root and each controlled independent session start behind
-a stable wrapper and gated primary; both kernel-start-time-qualified identities are written to the
-handoff registry before the actual command can run. The wrapper persists the primary result
-immediately, cleans same-group descendants, and only then persists completion. A replacement monitor
-can therefore adopt a live interrupted handoff, clean through the primary identity after wrapper
-death, and distinguish durable success from ownerless interruption without signalling a reused raw
-diagnostic PID or depending on periodic descendant snapshots. Resolved
+time, so the initialization timeout is independent of the older outage marker mtime. A second advisory
+lock is inherited by the restart process tree. The root and each controlled independent session start
+behind a stable wrapper, gated primary, and cleanup guardian in a separate session. All three
+kernel-start-time-qualified identities are written to the handoff registry before the actual command
+can run. The wrapper persists the primary result immediately, cleans same-group descendants, and only
+then persists completion. If the wrapper dies after recording the result, the guardian retains the
+lock, cleans the target group, and commits the same completion record. Every protocol write fsyncs its
+temporary file before replacement, and every critical replace or unlink fsyncs the affected directory.
+A replacement monitor can therefore adopt a live interrupted handoff and distinguish proven cleanup
+from an ownerless interruption without signalling a reused raw diagnostic PID or depending on periodic
+descendant snapshots. Resolved
 environment-only recovery options are replayed, and `monitor.pid` is removed by its matching lock
 owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
 boundary. User

@@ -64,9 +64,9 @@ import json
 import math
 import os
 import re
-import signal
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -82,8 +82,12 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from orchestrator.durable_state import durable_write_json  # noqa: E402
+
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
     ".git",
@@ -2131,13 +2135,7 @@ def _record_pending_ssh_cleanup(*, target: str, remote_dir: str) -> None:
         "remote_dir": remote_dir,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    durable_write_json(path, payload, indent=2, ensure_ascii=False)
 
 
 def _record_environment_failure(
@@ -2157,13 +2155,7 @@ def _record_environment_failure(
         "detected_at": datetime.now(timezone.utc).isoformat(),
         "pid": os.getpid(),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    durable_write_json(path, payload, indent=2, ensure_ascii=False)
 
 
 def _auth_headers() -> dict[str, str]:

@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from .durable_state import (
+    durable_write_json,
+    durable_write_text,
+    ensure_private_directory,
+)
 from .recovery_processes import ACTIVE_MARKER, HANDOFF_ID_ENV
 
 ENVIRONMENT_STATE_ENV = "ATREX_ENVIRONMENT_STATE_FILE"
@@ -74,13 +79,7 @@ def raise_if_environment_blocked() -> None:
 
 
 def _write_private_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    durable_write_json(path, value, indent=2, ensure_ascii=False)
 
 
 def signal_restart_ready() -> None:
@@ -186,11 +185,7 @@ def configure_recovery(
         directory = workspace_base / ".atrex_environment" / digest
         inherited = directory / "failure.json"
         os.environ[ENVIRONMENT_STATE_ENV] = str(inherited)
-    directory.mkdir(parents=True, exist_ok=True)
-    try:
-        directory.chmod(0o700)
-    except OSError:
-        pass
+    ensure_private_directory(directory)
 
     os.environ["ATREX_SANDBOX_SSH"] = ssh_target
     os.environ["ATREX_SANDBOX_SSH_INIT"] = ssh_init
@@ -235,7 +230,8 @@ def configure_recovery(
         )
         monitor = optimize_script.resolve().parent.parent / "tools" / "monitor_optimize_tasks.py"
         recover = directory / "recover.sh"
-        recover.write_text(
+        durable_write_text(
+            recover,
             "#!/usr/bin/env bash\nset -euo pipefail\nexec "
             + " ".join(
                 [
@@ -247,11 +243,11 @@ def configure_recovery(
                 ]
             )
             + "\n",
-            encoding="utf-8",
+            mode=0o700,
         )
-        recover.chmod(0o700)
         stop_recovery = directory / "stop-recovery.sh"
-        stop_recovery.write_text(
+        durable_write_text(
+            stop_recovery,
             "#!/usr/bin/env bash\nset -euo pipefail\nexec "
             + " ".join(
                 [
@@ -263,9 +259,8 @@ def configure_recovery(
                 ]
             )
             + "\n",
-            encoding="utf-8",
+            mode=0o700,
         )
-        stop_recovery.chmod(0o700)
     return RecoveryContext(directory=directory, state_file=inherited, owner=owner)
 
 

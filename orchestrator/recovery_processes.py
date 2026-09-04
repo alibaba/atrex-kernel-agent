@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
@@ -16,6 +17,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from orchestrator.durable_state import (  # noqa: E402
+    durable_rmdir,
+    durable_unlink,
+    durable_write_json,
+    durable_write_text,
+)
 
 HANDOFF_ID_ENV = "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"
 HANDOFF_LOCK_FD_ENV = "ATREX_ENVIRONMENT_RESTART_LOCK_FD"
@@ -200,11 +212,6 @@ def _current_process(pid: int) -> ProcessRecord | None:
     return _process_table().get(pid)
 
 
-def process_start_token(pid: int) -> str | None:
-    record = _current_process(pid)
-    return record.start_token if record is not None else None
-
-
 def _registry_path(state_dir: Path, handoff_id: str) -> Path:
     if _HANDOFF_ID_PATTERN.fullmatch(handoff_id) is None:
         raise ValueError("invalid recovery handoff id")
@@ -212,15 +219,7 @@ def _registry_path(state_dir: Path, handoff_id: str) -> Path:
 
 
 def _write_private_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    durable_write_json(path, value)
 
 
 def _record_process(
@@ -298,6 +297,30 @@ def _register_session_primary(
         record,
         role,
         owner_kind="session-primary",
+        owner_pid=owner_pid,
+    )
+
+
+def _register_session_guardian(
+    pid: int,
+    role: str,
+    owner_pid: int,
+    environment: Mapping[str, str] | None = None,
+) -> Path | None:
+    values = _values(environment)
+    handoff_id = values.get(HANDOFF_ID_ENV, "")
+    state_file = values.get(STATE_FILE_ENV, "")
+    if not handoff_id or not state_file:
+        return None
+    record = _current_process(pid)
+    if record is None:
+        raise ProcessLookupError(pid)
+    return _record_process(
+        Path(state_file).expanduser().resolve().parent,
+        handoff_id,
+        record,
+        role,
+        owner_kind="session-guardian",
         owner_pid=owner_pid,
     )
 
@@ -405,10 +428,15 @@ def terminate_processes(
             False,
             errors=("handoff ownership is active but no registered process identity matches",),
         )
+    stable_owner_kinds = {
+        "session-wrapper",
+        "session-primary",
+        "session-guardian",
+    }
     legacy = [
         record.pid
         for record in matches
-        if record.owner_kind not in {"session-wrapper", "session-primary"}
+        if record.owner_kind not in stable_owner_kinds
     ]
     if legacy:
         error = (
@@ -420,8 +448,12 @@ def terminate_processes(
             remaining_pids=tuple(sorted(legacy)),
             errors=(error,),
         )
-    wrappers = [record for record in matches if record.owner_kind == "session-wrapper"]
-    if wrappers:
+    cooperative_owners = [
+        record
+        for record in matches
+        if record.owner_kind in {"session-wrapper", "session-guardian"}
+    ]
+    if cooperative_owners:
         _write_private_json(
             _registry_path(state_dir, handoff_id) / TERMINATE_REQUEST,
             {
@@ -431,7 +463,9 @@ def terminate_processes(
                 "requested_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    deadline = time.monotonic() + (max(0.0, grace_seconds) if wrappers else 0.0)
+    deadline = time.monotonic() + (
+        max(0.0, grace_seconds) if cooperative_owners else 0.0
+    )
     while time.monotonic() < deadline:
         remaining = matching_processes(state_dir, handoff_id)
         if not remaining:
@@ -439,9 +473,9 @@ def terminate_processes(
         time.sleep(0.05)
 
     remaining = matching_processes(state_dir, handoff_id)
-    # A wrapper is cooperative, but it is not the only durable ownership anchor.
-    # If it was killed or failed to service the request, every registered session
-    # identity is revalidated immediately before its current group is signalled.
+    # Guardians live outside the target groups and retain cleanup ownership if a
+    # wrapper dies. Force only wrapper/primary groups here so a guardian can still
+    # observe controller death, clean the target group, and commit completion.
     owned_groups = {
         record.pgid
         for record in remaining
@@ -475,7 +509,11 @@ def terminate_processes(
                 break
             time.sleep(0.05)
 
+    guardian_deadline = time.monotonic() + max(0.0, grace_seconds) + 10.0
     remaining = matching_processes(state_dir, handoff_id)
+    while remaining and time.monotonic() < guardian_deadline:
+        time.sleep(0.05)
+        remaining = matching_processes(state_dir, handoff_id)
     errors = ()
     if remaining:
         errors = (
@@ -574,14 +612,14 @@ def clear_process_registry(state_dir: Path, handoff_id: str) -> None:
         return
     for path in directory.iterdir():
         if path.is_file():
-            path.unlink()
+            durable_unlink(path)
     try:
-        directory.rmdir()
+        durable_rmdir(directory)
     except OSError:
         return
     parent = directory.parent
     try:
-        parent.rmdir()
+        durable_rmdir(parent)
     except OSError:
         pass
 
@@ -650,22 +688,49 @@ def _root_state_dir() -> Path | None:
 
 
 def _write_root_event(
-    name: str, handoff_id: str, primary_pid: int, returncode: int
+    name: str,
+    handoff_id: str,
+    primary_pid: int,
+    returncode: int,
+    *,
+    wrapper_pid: int | None = None,
+    completed_by: int | None = None,
 ) -> None:
     state_dir = _root_state_dir()
     if state_dir is None:
         return
-    _write_private_json(
-        state_dir / name,
-        {
-            "schema_version": 1,
-            "handoff_id": handoff_id,
-            "wrapper_pid": os.getpid(),
-            "primary_pid": primary_pid,
-            "returncode": returncode,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    event = {
+        "schema_version": 1,
+        "handoff_id": handoff_id,
+        "wrapper_pid": wrapper_pid or os.getpid(),
+        "primary_pid": primary_pid,
+        "returncode": returncode,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if completed_by is not None:
+        event["completed_by"] = completed_by
+    _write_private_json(state_dir / name, event)
+
+
+def _read_root_event(path: Path, handoff_id: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != 1
+        or value.get("handoff_id") != handoff_id
+        or not isinstance(value.get("primary_pid"), int)
+        or isinstance(value.get("primary_pid"), bool)
+        or value["primary_pid"] <= 0
+        or not isinstance(value.get("returncode"), int)
+        or isinstance(value.get("returncode"), bool)
+    ):
+        return None
+    return value
 
 
 def _cleanup_owned_group(pgid: int, grace_seconds: float) -> bool:
@@ -687,7 +752,12 @@ def _cleanup_owned_group(pgid: int, grace_seconds: float) -> bool:
     return not _live_group_members(pgid, exclude={os.getpid()})
 
 
-def _request_other_sessions_stop(handoff_id: str, grace_seconds: float) -> bool:
+def _request_other_sessions_stop(
+    handoff_id: str,
+    grace_seconds: float,
+    *,
+    exclude_pids: set[int] | None = None,
+) -> bool:
     state_dir = _root_state_dir()
     if state_dir is None:
         return True
@@ -700,10 +770,12 @@ def _request_other_sessions_stop(handoff_id: str, grace_seconds: float) -> bool:
             flush=True,
         )
         return False
+    excluded = {os.getpid()} if exclude_pids is None else set(exclude_pids)
+    excluded.add(os.getpid())
     live_others = [
         record
         for record in matching_processes(state_dir, handoff_id)
-        if record.pid != os.getpid()
+        if record.pid not in excluded
     ]
     if not live_others:
         return True
@@ -721,7 +793,7 @@ def _request_other_sessions_stop(handoff_id: str, grace_seconds: float) -> bool:
         if not [
             record
             for record in matching_processes(state_dir, handoff_id)
-            if record.pid != os.getpid()
+            if record.pid not in excluded
         ]:
             return True
         time.sleep(0.05)
@@ -760,6 +832,80 @@ def _owned_command_entry(argv: list[str]) -> int:
         return 127
 
 
+def _cleanup_guardian_entry(argv: list[str]) -> int:
+    if (
+        len(argv) != 5
+        or argv[0] != "--cleanup-guardian"
+        or argv[4] not in {"0", "1"}
+    ):
+        return 125
+    try:
+        control_fd = int(argv[1])
+        wrapper_pid = int(argv[2])
+        target_pgid = int(argv[3])
+        finalize_handoff = argv[4] == "1"
+    except ValueError:
+        return 125
+    if control_fd <= 2 or wrapper_pid <= 0 or target_pgid <= 0:
+        return 125
+    try:
+        permitted = os.read(control_fd, 1)
+        if permitted != b"1":
+            return 125
+        while True:
+            readable, _writable, _errors = select.select([control_fd], [], [], 0.1)
+            if not readable:
+                continue
+            message = os.read(control_fd, 1)
+            if message == b"A":
+                return 0
+            if message == b"C":
+                if not finalize_handoff:
+                    return 0
+                state_dir = _root_state_dir()
+                handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
+                if (
+                    state_dir is not None
+                    and _HANDOFF_ID_PATTERN.fullmatch(handoff_id)
+                    and _read_root_event(state_dir / RESTART_COMPLETE, handoff_id)
+                    is not None
+                ):
+                    return 0
+                break
+            if not message:
+                break
+            return 125
+
+        handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
+        if _HANDOFF_ID_PATTERN.fullmatch(handoff_id) is None:
+            return 125
+        requested_grace = _termination_grace_seconds(handoff_id)
+        grace_seconds = requested_grace if requested_grace is not None else 5.0
+        group_clean = _cleanup_owned_group(target_pgid, grace_seconds)
+        sessions_clean = _request_other_sessions_stop(
+            handoff_id, grace_seconds, exclude_pids={os.getpid()}
+        )
+        state_dir = _root_state_dir()
+        if finalize_handoff and group_clean and sessions_clean and state_dir is not None:
+            exit_event = _read_root_event(state_dir / RESTART_EXIT, handoff_id)
+            if exit_event is not None:
+                _write_root_event(
+                    RESTART_COMPLETE,
+                    handoff_id,
+                    exit_event["primary_pid"],
+                    exit_event["returncode"],
+                    wrapper_pid=wrapper_pid,
+                    completed_by=os.getpid(),
+                )
+        return 0 if group_clean and sessions_clean else 1
+    finally:
+        try:
+            os.close(control_fd)
+        except OSError:
+            pass
+        _close_handoff_lock()
+
+
 def _owned_session_entry(argv: list[str]) -> int:
     if len(argv) < 6 or argv[0] != "--owned-session" or argv[4] != "--":
         print("invalid recovery owner invocation", file=sys.stderr, flush=True)
@@ -794,6 +940,68 @@ def _owned_session_entry(argv: list[str]) -> int:
 
     for handled in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(handled, request_stop)
+
+    group = os.getpgrp()
+    handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
+    guardian_read, guardian_write = os.pipe()
+    os.set_inheritable(guardian_read, True)
+    guardian_command = [
+        str(Path(sys.executable).resolve()),
+        str(Path(__file__).resolve()),
+        "--cleanup-guardian",
+        str(guardian_read),
+        str(os.getpid()),
+        str(group),
+        "1" if finalize_handoff else "0",
+    ]
+    guardian: subprocess.Popen[Any] | None = None
+    try:
+        guardian = subprocess.Popen(
+            guardian_command,
+            start_new_session=True,
+            close_fds=True,
+            pass_fds=(*recovery_pass_fds(), guardian_read),
+        )
+        _register_session_guardian(
+            guardian.pid, f"{role}-cleanup", os.getpid()
+        )
+        os.write(guardian_write, b"1")
+    except OSError as exc:
+        print(
+            f"[recovery-owner] cannot start cleanup guardian: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        if guardian is not None:
+            try:
+                os.killpg(guardian.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            guardian.wait()
+        os.close(guardian_read)
+        os.close(guardian_write)
+        _close_handoff_lock()
+        return 127
+    finally:
+        try:
+            os.close(guardian_read)
+        except OSError:
+            pass
+
+    def release_guardian(message: bytes | None) -> None:
+        nonlocal guardian_write
+
+        if guardian_write <= 2:
+            return
+        try:
+            if message is not None:
+                os.write(guardian_write, message)
+        except OSError:
+            pass
+        finally:
+            os.close(guardian_write)
+            guardian_write = -1
+
     primary_read, primary_write = os.pipe()
     os.set_inheritable(primary_read, True)
     primary_command = [
@@ -814,27 +1022,33 @@ def _owned_session_entry(argv: list[str]) -> int:
         _register_session_primary(child.pid, f"{role}-primary", os.getpid())
         state_dir = _root_state_dir()
         if finalize_handoff and state_dir is not None:
-            (state_dir / RESTART_PRIMARY_PID).write_text(
-                str(child.pid) + "\n", encoding="utf-8"
-            )
+            durable_write_text(state_dir / RESTART_PRIMARY_PID, str(child.pid) + "\n")
         os.write(primary_write, b"1")
     except OSError as exc:
         print(
             f"[recovery-owner] cannot start command: {exc}", file=sys.stderr, flush=True
         )
+        if child is not None:
+            _signal_group_members(group, signal.SIGKILL)
+            child.wait()
+        release_guardian(b"A")
+        if guardian is not None:
+            guardian.wait()
         _close_handoff_lock()
         return 127
     except BaseException:
         if child is not None:
-            _signal_group_members(os.getpgrp(), signal.SIGKILL)
+            _signal_group_members(group, signal.SIGKILL)
             child.wait()
+        release_guardian(b"A")
+        if guardian is not None:
+            guardian.wait()
         _close_handoff_lock()
         raise
     finally:
         os.close(primary_read)
         os.close(primary_write)
 
-    group = os.getpgrp()
     forwarded_signal = 0
     termination_deadline: float | None = None
     while child.poll() is None:
@@ -854,7 +1068,6 @@ def _owned_session_entry(argv: list[str]) -> int:
         ):
             _signal_group_members(group, signal.SIGKILL)
         time.sleep(0.05)
-    handoff_id = os.environ.get(HANDOFF_ID_ENV, "")
     if finalize_handoff and _HANDOFF_ID_PATTERN.fullmatch(handoff_id):
         _write_root_event(RESTART_EXIT, handoff_id, child.pid, child.returncode)
     requested_grace = _termination_grace_seconds(handoff_id)
@@ -862,9 +1075,20 @@ def _owned_session_entry(argv: list[str]) -> int:
     group_clean = _cleanup_owned_group(group, grace_seconds)
     sessions_clean = True
     if finalize_handoff and _HANDOFF_ID_PATTERN.fullmatch(handoff_id):
-        sessions_clean = _request_other_sessions_stop(handoff_id, grace_seconds)
+        sessions_clean = _request_other_sessions_stop(
+            handoff_id,
+            grace_seconds,
+            exclude_pids={os.getpid(), guardian.pid},
+        )
         if group_clean and sessions_clean:
             _write_root_event(RESTART_COMPLETE, handoff_id, child.pid, child.returncode)
+    cleanup_committed = group_clean and sessions_clean
+    release_guardian(b"C" if cleanup_committed else None)
+    if guardian is not None:
+        try:
+            guardian.wait(timeout=max(0.0, grace_seconds) + 15.0)
+        except subprocess.TimeoutExpired:
+            pass
     _close_handoff_lock()
     return child.returncode if child.returncode >= 0 else 128 - child.returncode
 
@@ -873,4 +1097,6 @@ if __name__ == "__main__":
     entry = sys.argv[1:]
     if entry and entry[0] == "--owned-command":
         raise SystemExit(_owned_command_entry(entry))
+    if entry and entry[0] == "--cleanup-guardian":
+        raise SystemExit(_cleanup_guardian_entry(entry))
     raise SystemExit(_owned_session_entry(entry))
