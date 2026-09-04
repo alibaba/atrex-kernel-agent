@@ -562,7 +562,9 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
-        directives = main_adapter.episode_directives(self.base_campaign, version)
+        directives = main_adapter.episode_directives(
+            self.base_campaign, version, fast=fast_mode
+        )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
             f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "

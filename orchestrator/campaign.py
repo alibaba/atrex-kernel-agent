@@ -72,6 +72,7 @@ from .session_io import (
     _sandbox_command,
     _test_result_from_stdout,
     _validate_production_review,
+    fast_sandbox_directive,
     run_session,
     sandbox_directive,
 )
@@ -781,6 +782,11 @@ class Campaign:
 
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
+            self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
+        )
+
+    def _fast_sandbox_directive(self) -> str:
+        return fast_sandbox_directive(
             self.sandbox_hardware, self.sandbox_profile, self.sandbox_url
         )
 

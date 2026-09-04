@@ -39,6 +39,8 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 
 {{HARDWARE}}
 
+{{SANDBOX}}
+
 ## Fast-mode boundaries
 
 - Do not profile. Never use `--kind profile`, `ncu`, `rocprofv3`, a profile wrapper, or create
@@ -49,7 +51,8 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
   contract, prior trial journal evidence, and canonical `memory/v*.json`.
 - Do not run multi-seed validation and do not run or simulate incumbent/candidate ABBA.
 - Never run GPU/JIT code on the host. Static source inspection is allowed; the official evaluator
-  command below is the only GPU execution route and must run once per trial.
+  command below is the only GPU execution route and must run once per trial. Do not route
+  import/API probes or additional benchmarks through `tools/sandbox.py`.
 - Never install or build dependencies. Never start, stop, restart, signal, replace, or mutate the
   shared gateway service or its jobs. Treat infrastructure failure as `blocked`.
 
