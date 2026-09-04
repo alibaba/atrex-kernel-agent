@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import signal
 import uuid
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Callable
 
 from orchestrator.agent_runtime.codex_ledger import (
@@ -18,11 +18,11 @@ from orchestrator.agent_runtime.model import (
     subtract_token_usage,
     token_usage_exceeds,
 )
+from orchestrator.environment_recovery import raise_if_environment_blocked
 
 from . import main_adapter
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
-
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 CommandExecutor = Callable[
@@ -202,6 +202,7 @@ class LongSessionRunner:
             stdout, stderr, exit_status, turn_timed_out = self.executor(
                 command, workspace, None, environment
             )
+            raise_if_environment_blocked()
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
             observed_session_id = main_adapter.session_id_from_stream(

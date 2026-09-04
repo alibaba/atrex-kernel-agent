@@ -10,9 +10,11 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,7 +31,13 @@ from .constants import (
     SANDBOX_TOOL,
     TEST_RESULT_PREFIX,
 )
+from .environment_recovery import (
+    environment_is_blocked,
+    environment_state_file,
+    raise_if_environment_blocked,
+)
 from .hardware import hardware_vendor
+from .recovery_processes import spawn_owned_session
 from .workspace_state import speedup_vs_reference
 
 
@@ -150,6 +158,9 @@ def run_session(
     reasoning_effort: str = "max",
     extra_environment: Optional[dict[str, str]] = None,
     agent_plugins: bool = True,
+    sandbox_ssh: str = "",
+    sandbox_ssh_init: str = "",
+    sandbox_health_command: str = "",
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
@@ -169,11 +180,16 @@ def run_session(
             sandbox_hardware=sandbox_hardware,
             sandbox_profile=sandbox_profile,
             sandbox_url=sandbox_url,
+            sandbox_ssh=sandbox_ssh,
+            sandbox_ssh_init=sandbox_ssh_init,
+            sandbox_health_command=sandbox_health_command,
             sandbox_timeout_s=sandbox_timeout,
+            environment_state_file=str(environment_state_file() or ""),
             session_id=session_id,
             extra_environment=extra_environment,
         )
     )
+    raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,
         timed_out=result.timed_out,
@@ -403,8 +419,10 @@ def _validate_production_review(
     return rejected, summary.strip()
 
 
-def _sandbox_endpoint(profile: str = "", url: str = "") -> str:
-    """Render the gateway endpoint clause shared by sandbox directives."""
+def _sandbox_endpoint(profile: str = "", url: str = "", ssh: str = "") -> str:
+    """Render the endpoint clause shared by sandbox directives."""
+    if ssh:
+        return f" using OpenSSH target `{ssh}`"
     if url:
         return f" using gateway URL `{url}`"
     if profile:
@@ -412,9 +430,14 @@ def _sandbox_endpoint(profile: str = "", url: str = "") -> str:
     return " using agate's configured gateway"
 
 
-def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
+def sandbox_directive(
+    hardware: str,
+    profile: str = "",
+    url: str = "",
+    ssh: str = "",
+) -> str:
     """Mandatory safety boundary plus full-mode workflow for full episodes."""
-    endpoint = _sandbox_endpoint(profile, url)
+    endpoint = _sandbox_endpoint(profile, url, ssh)
     safety = _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
     )
@@ -424,14 +447,19 @@ def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
     return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
 
 
-def fast_sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
+def fast_sandbox_directive(
+    hardware: str,
+    profile: str = "",
+    url: str = "",
+    ssh: str = "",
+) -> str:
     """Mandatory safety boundary for fast episodes.
 
     The fast episode prompt already describes the fast-specific execution
     contract (single evaluator, no multi-seed, no profile, supervisor-owned
     memory), so only the invariant safety boundary is injected here.
     """
-    endpoint = _sandbox_endpoint(profile, url)
+    endpoint = _sandbox_endpoint(profile, url, ssh)
     return _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
     )
@@ -445,12 +473,17 @@ def _sandbox_command(
     timeout: int,
     command: list[str],
     *,
+    ssh: str = "",
+    ssh_init: str = "",
+    health_command: str = "",
     sync: tuple[str, ...] = (),
     wall_timeout: Optional[int] = None,
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
+    if sum(bool(value) for value in (ssh, url, profile)) > 1:
+        raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
     cmd = [
         sys.executable,
         str(SANDBOX_TOOL),
@@ -467,6 +500,12 @@ def _sandbox_command(
         cmd += ["--url", url]
     elif profile:
         cmd += ["--gateway-profile", profile]
+    elif ssh:
+        cmd += ["--ssh", ssh]
+    if ssh_init:
+        cmd += ["--ssh-init", ssh_init]
+    if health_command:
+        cmd += ["--health-command", health_command]
     if sync:
         for path in sync:
             cmd += ["--sync", path]
@@ -477,16 +516,59 @@ def _sandbox_command(
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    return subprocess.run(
+    effective_timeout = wall_timeout if wall_timeout is not None else timeout + 240
+    raise_if_environment_blocked()
+    process = spawn_owned_session(
         cmd,
+        role="sandbox",
+        environment=environment,
         cwd=str(workspace),
-        env=environment,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        # Gateway execution timeout starts only after a worker claims the job.
-        # The local wait must additionally tolerate time spent in a shared queue.
-        timeout=wall_timeout if wall_timeout is not None else timeout + 240,
     )
+
+    def stop_process_group() -> tuple[str, str]:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # allow that 15-second cleanup window to persist a retry marker.
+            return process.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            return process.communicate()
+
+    deadline = time.monotonic() + effective_timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            stdout, stderr = stop_process_group()
+            raise subprocess.TimeoutExpired(
+                cmd, effective_timeout, output=stdout, stderr=stderr
+            )
+        try:
+            stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+        except subprocess.TimeoutExpired:
+            if environment_is_blocked():
+                stop_process_group()
+                raise_if_environment_blocked()
+            continue
+        break
+    result = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+    raise_if_environment_blocked()
+    return result
 
 
 def _test_result_from_stdout(stdout: str) -> dict:
@@ -558,6 +640,9 @@ def detect_arch(
     sandbox_hardware: str = "",
     sandbox_profile: str = "",
     sandbox_url: str = "",
+    sandbox_ssh: str = "",
+    sandbox_ssh_init: str = "",
+    sandbox_health_command: str = "",
 ) -> str:
     """Return the real runtime GPU architecture token (vendor-neutral), or '' if undetectable.
 
@@ -584,6 +669,9 @@ def detect_arch(
                     sandbox_url,
                     120,
                     ["python", "-c", code],
+                    ssh=sandbox_ssh,
+                    ssh_init=sandbox_ssh_init,
+                    health_command=sandbox_health_command,
                 )
             if result.returncode == 0:
                 for line in reversed(result.stdout.splitlines()):

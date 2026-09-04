@@ -13,15 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run optimizer GPU work through the matching atrex-gpu-gateway interface.
+"""Run optimizer GPU work through a gateway or an OpenSSH GPU host.
 
-Native Atrex-Bench correctness/performance commands use ``agate run`` and profiling
-commands use ``profile``.  ``dev`` remains the compatibility escape hatch for
-workloads those typed interfaces cannot represent (for example SOL-ExecBench,
-source-correlated custom profiling or a
-community gateway that explicitly returns ``kind_not_supported``).  A new pod
-may be selected for every invocation; callers must not rely on remote filesystem
-persistence.
+In gateway mode, native Atrex-Bench correctness/performance commands use
+``agate run`` and profiling commands use ``profile``. ``dev`` remains the
+compatibility escape hatch for workloads those typed interfaces cannot represent
+(for example SOL-ExecBench, source-correlated custom profiling, or a community
+gateway that explicitly returns ``kind_not_supported``). OpenSSH mode executes
+the same allowlisted command bundle through a portable remote runner. Every
+invocation is stateless; callers must not rely on remote filesystem persistence.
 
 Examples::
 
@@ -30,9 +30,12 @@ Examples::
         bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
     python tools/sandbox.py --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
         bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v1
+    python tools/sandbox.py --kind run --hardware H20 --ssh gpu-host --no-sync -- \
+        python test_kernel.py --no-memory
 
-``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``, and
-``ATREX_SANDBOX_TIMEOUT`` provide defaults for the corresponding flags.  A
+``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``,
+``ATREX_SANDBOX_SSH_GPU``, and ``ATREX_SANDBOX_TIMEOUT`` provide defaults for
+the corresponding flags.  A
 localhost gateway uses the same transport as a remote worker, for example
 ``ATREX_SANDBOX_GPU=local`` plus
 ``ATREX_SANDBOX_URL=http://127.0.0.1:8000``.  Authentication and any remaining
@@ -41,6 +44,13 @@ With a standard agate gateway profile, synchronized remote files are packed once
 on the worker, transferred through OSS, integrity-checked, and extracted locally.
 Custom endpoints selected by URL, ``AGATE_URL``, or agate config retain inline
 transport because gateways do not currently advertise OSS capability.
+
+``ATREX_SANDBOX_SSH`` selects a standard OpenSSH target (including aliases from
+``~/.ssh/config``). ``ATREX_SANDBOX_SSH_INIT`` optionally activates the remote
+runtime before each command and health probe. SSH jobs are always executed in a
+Bubblewrap namespace with no network, no host home, and only explicitly bound
+runtime paths and one explicitly assigned physical NVIDIA GPU. SSH, gateway
+profile, and gateway URL transports are mutually exclusive.
 """
 
 from __future__ import annotations
@@ -54,9 +64,9 @@ import json
 import math
 import os
 import re
-import signal
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -72,8 +82,12 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from orchestrator.durable_state import durable_write_json  # noqa: E402
+
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
     ".git",
@@ -81,6 +95,7 @@ INPUT_SKIP_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".atrex_environment",
     # Memory is optimizer state owned and updated by the local agent.  The pod
     # receives only code/harness inputs and returns test output/profile files.
     "memory",
@@ -143,6 +158,37 @@ DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
+SSH_CONNECT_TIMEOUT = 15
+ENVIRONMENT_TEMPFAIL = 75
+SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
+SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
+DEFAULT_SSH_HEALTH_COMMAND = (
+    "python -c \"import torch; "
+    "assert torch.cuda.is_available(); "
+    "p=torch.cuda.get_device_properties(0); "
+    "print(getattr(p, 'gcnArchName', '') or torch.cuda.get_device_capability(0))\""
+)
+SSH_WATCHDOG_SOURCE = r"""
+import os
+import signal
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    status = process.wait(timeout=timeout)
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    print(f"[sandbox] remote command timed out after {timeout}s", file=sys.stderr)
+    status = 124
+raise SystemExit(status)
+""".strip()
 AGATE_WAIT_SLICE_SECONDS = 300
 RUNTIME_CHUNK_BYTES = 20 * 1024
 # Small inline workspace bundles stay below Linux MAX_ARG_STRLEN; larger
@@ -819,6 +865,8 @@ def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
         if "=" not in item or item.startswith("="):
             raise ValueError(f"invalid --env {item!r}; expected KEY=VALUE")
         key, value = item.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError(f"invalid --env key {key!r}")
         env_vars[key] = value
     return env_vars
 
@@ -1086,6 +1134,9 @@ elif transport == "inline":
     print(BEGIN)
     print(base64.b64encode(archive.getvalue()).decode("ascii"))
     print(END)
+elif transport == "ssh":
+    with tarfile.open(Path(sys.argv[3]), mode="w:gz") as tf:
+        collect(tf)
 elif transport != "none":
     raise ValueError(f"unsupported output transport: {transport!r}")
 if skipped:
@@ -1264,14 +1315,14 @@ def _command_text(parts: list[str]) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run correctness, performance, or profile commands in an agate GPU sandbox.",
+        description="Run correctness, performance, or profile commands on a remote GPU sandbox.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument(
         "--hardware",
         default=os.environ.get("ATREX_SANDBOX_GPU", ""),
-        help="Gateway GPU hardware token, e.g. REMOTE_GPU (default: ATREX_SANDBOX_GPU).",
+        help="Remote GPU hardware token, e.g. REMOTE_GPU (default: ATREX_SANDBOX_GPU).",
     )
     parser.add_argument(
         "--kind",
@@ -1293,6 +1344,61 @@ def build_parser() -> argparse.ArgumentParser:
         "--url",
         default=None,
         help="Explicit gateway URL (default: ATREX_SANDBOX_URL; overrides environment profile/config).",
+    )
+    parser.add_argument(
+        "--ssh",
+        default=None,
+        metavar="[USER@]HOST",
+        help=(
+            "OpenSSH target for Bubblewrap-isolated remote GPU execution "
+            "(default: ATREX_SANDBOX_SSH). Reuses ~/.ssh/config and is "
+            "mutually exclusive with gateway endpoint options."
+        ),
+    )
+    parser.add_argument(
+        "--ssh-init",
+        default=os.environ.get("ATREX_SANDBOX_SSH_INIT", ""),
+        metavar="COMMAND",
+        help=(
+            "Remote shell initialization run before commands and probes, e.g. a "
+            "Conda activation (default: ATREX_SANDBOX_SSH_INIT)."
+        ),
+    )
+    parser.add_argument(
+        "--ssh-runtime-bind",
+        action="append",
+        default=None,
+        metavar="REMOTE_PATH[=SANDBOX_PATH]",
+        help=(
+            "Read-only runtime directory exposed inside the SSH Bubblewrap sandbox "
+            "(repeatable; default: ATREX_SANDBOX_SSH_RUNTIME_BINDS JSON array)."
+        ),
+    )
+    parser.add_argument(
+        "--ssh-gpu",
+        default=None,
+        metavar="INDEX",
+        help=(
+            "Physical NVIDIA GPU index exposed to an SSH job (required with --ssh; "
+            f"default: {SSH_GPU_ENV}). MIG selectors are rejected until capability-node "
+            "assignment is implemented."
+        ),
+    )
+    parser.add_argument(
+        "--health-command",
+        default=os.environ.get(
+            "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
+        ),
+        metavar="COMMAND",
+        help=(
+            "Remote GPU health probe used to distinguish candidate failures from "
+            "environment failures (default: ATREX_SANDBOX_HEALTH_COMMAND)."
+        ),
+    )
+    parser.add_argument(
+        "--check-health",
+        action="store_true",
+        help="Run only the configured SSH health probe; do not upload a workspace.",
     )
     parser.add_argument(
         "--workspace", default=".", help="Local workspace to upload (default: cwd)."
@@ -1411,6 +1517,645 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command after --.")
     return parser
+
+
+class SSHTransportError(RuntimeError):
+    """A failure to connect to or transfer data through OpenSSH."""
+
+
+def _validate_ssh_target(target: str) -> str:
+    value = target.strip()
+    if not value or value.startswith("-"):
+        raise ValueError("SSH target must be a non-option host or [user@]host")
+    if any(character.isspace() or ord(character) < 32 for character in value):
+        raise ValueError("SSH target must not contain whitespace or control characters")
+    return value
+
+
+def _environment_ssh_runtime_binds() -> list[str]:
+    raw = os.environ.get(SSH_RUNTIME_BINDS_ENV, "").strip()
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{SSH_RUNTIME_BINDS_ENV} must be a JSON array") from exc
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{SSH_RUNTIME_BINDS_ENV} must be a JSON array of strings")
+    return value
+
+
+def _ssh_runtime_bind(value: str) -> tuple[str, str]:
+    source, separator, destination = value.partition("=")
+    if not separator:
+        destination = source
+    paths = []
+    for label, raw in (("source", source), ("destination", destination)):
+        path = PurePosixPath(raw)
+        if not raw or not path.is_absolute() or ".." in path.parts:
+            raise ValueError(
+                f"SSH runtime bind {label} must be an absolute path without '..': {raw!r}"
+            )
+        paths.append(path.as_posix())
+    forbidden = {
+        "/",
+        "/atrex",
+        "/bin",
+        "/dev",
+        "/etc",
+        "/lib",
+        "/lib64",
+        "/proc",
+        "/sbin",
+        "/sys",
+        "/tmp",
+        "/usr",
+        "/home",
+        "/root",
+    }
+    reserved_trees = {
+        "atrex",
+        "bin",
+        "dev",
+        "etc",
+        "lib",
+        "lib64",
+        "proc",
+        "sbin",
+        "sys",
+        "tmp",
+        "usr",
+    }
+    source_path = PurePosixPath(paths[0])
+    source_parts = source_path.parts
+    source_forbidden_trees = {
+        "/dev",
+        "/etc",
+        "/proc",
+        "/root",
+        "/sys",
+        "/var/lib",
+        "/var/log",
+        "/var/run",
+    }
+    broad_source_roots = {
+        "/",
+        "/atrex",
+        "/bin",
+        "/home",
+        "/lib",
+        "/lib64",
+        "/opt",
+        "/sbin",
+        "/srv",
+        "/tmp",
+        "/usr",
+        "/var",
+    }
+    sensitive_components = {".aws", ".config", ".docker", ".gnupg", ".kube", ".ssh"}
+    if paths[0] in broad_source_roots or any(
+        paths[0] == root or paths[0].startswith(root + "/")
+        for root in source_forbidden_trees
+    ):
+        raise ValueError(f"SSH runtime bind source is sensitive or too broad: {paths[0]!r}")
+    if any(part in sensitive_components for part in source_parts):
+        raise ValueError(f"SSH runtime bind source contains a sensitive directory: {paths[0]!r}")
+    # Home-directory binds are limited to conventional virtual-environment roots;
+    # arbitrary project/home subtrees are not runtime allowlists.
+    if (
+        len(source_parts) > 1
+        and source_parts[1] == "home"
+        and source_path.name not in {".venv", "venv"}
+        and source_path.parent.name != "envs"
+    ):
+        raise ValueError(
+            "SSH runtime bind source below /home must be a .venv/venv or a direct "
+            f"Conda envs child: {paths[0]!r}"
+        )
+
+    destination_parts = PurePosixPath(paths[1]).parts
+    if paths[1] in forbidden or (
+        len(destination_parts) > 1 and destination_parts[1] in reserved_trees
+    ):
+        raise ValueError(f"SSH runtime bind destination is reserved: {paths[1]!r}")
+    return paths[0], paths[1]
+
+
+SSH_RUNTIME_RESOLVER_SOURCE = r"""
+import json
+import os
+import sys
+
+resolved = []
+for source in sys.argv[1:]:
+    real = os.path.realpath(source)
+    if not os.path.isdir(real):
+        print(f"runtime bind is not a directory: {source}", file=sys.stderr)
+        raise SystemExit(2)
+    resolved.append(real)
+print(json.dumps(resolved, separators=(",", ":")))
+""".strip()
+
+
+def _resolve_ssh_runtime_binds(
+    ssh: str, target: str, runtime_binds: list[str]
+) -> list[str]:
+    """Resolve remote symlinks and re-apply the source denylist to their targets."""
+    parsed = [_ssh_runtime_bind(value) for value in runtime_binds]
+    if not parsed:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                *_ssh_base(ssh, target),
+                shlex.join(
+                    [
+                        "python3",
+                        "-c",
+                        SSH_RUNTIME_RESOLVER_SOURCE,
+                        *[source for source, _destination in parsed],
+                    ]
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SSH_CONNECT_TIMEOUT + 15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SSHTransportError(f"cannot resolve SSH runtime binds: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[-1000:]
+        raise SSHTransportError(f"cannot resolve SSH runtime binds: {detail}")
+    try:
+        payload = result.stdout.strip().splitlines()[-1]
+        resolved = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SSHTransportError("SSH runtime bind resolver returned invalid JSON") from exc
+    except IndexError as exc:
+        raise SSHTransportError("SSH runtime bind resolver returned no paths") from exc
+    if not isinstance(resolved, list) or len(resolved) != len(parsed) or not all(
+        isinstance(item, str) for item in resolved
+    ):
+        raise SSHTransportError("SSH runtime bind resolver returned an invalid path list")
+    validated: list[str] = []
+    for source, (_declared_source, destination) in zip(resolved, parsed):
+        try:
+            validated_source, validated_destination = _ssh_runtime_bind(
+                f"{source}={destination}"
+            )
+        except ValueError as exc:
+            raise SSHTransportError(
+                f"resolved SSH runtime bind is unsafe: {source!r}: {exc}"
+            ) from exc
+        validated.append(f"{validated_source}={validated_destination}")
+    return validated
+
+
+SSH_GPU_RESOLVER_SOURCE = r"""
+import subprocess
+import sys
+
+index = int(sys.argv[1])
+result = subprocess.run(
+    [
+        "nvidia-smi",
+        "--query-gpu=index,uuid,mig.mode.current",
+        "--format=csv,noheader,nounits",
+    ],
+    capture_output=True,
+    text=True,
+)
+if result.returncode:
+    sys.stderr.write(result.stderr or result.stdout)
+    raise SystemExit(result.returncode)
+for line in result.stdout.splitlines():
+    fields = [field.strip() for field in line.split(",", 2)]
+    if len(fields) != 3 or fields[0] != str(index):
+        continue
+    if fields[2].lower() == "enabled":
+        print("MIG-enabled GPUs are unsupported without capability-node assignment", file=sys.stderr)
+        raise SystemExit(2)
+    if fields[1].startswith("GPU-"):
+        print(fields[1])
+        raise SystemExit(0)
+print(f"physical NVIDIA GPU index {index} was not found", file=sys.stderr)
+raise SystemExit(2)
+""".strip()
+
+
+def _ssh_gpu_index(value: str) -> int:
+    if not re.fullmatch(r"[0-9]+", value.strip()):
+        raise ValueError(
+            "SSH GPU must be a physical NVIDIA index; MIG/UUID selectors are not yet supported"
+        )
+    index = int(value)
+    if index > 31:
+        raise ValueError("SSH GPU index must be in the range 0..31")
+    return index
+
+
+def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> str:
+    """Resolve an assigned physical index to a stable CUDA visibility UUID."""
+    try:
+        result = subprocess.run(
+            [
+                *_ssh_base(ssh, target),
+                shlex.join(
+                    ["python3", "-c", SSH_GPU_RESOLVER_SOURCE, str(gpu_index)]
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SSH_CONNECT_TIMEOUT + 15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SSHTransportError(f"cannot resolve assigned SSH GPU: {exc}") from exc
+    uuid = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if result.returncode != 0 or not re.fullmatch(r"GPU-[0-9A-Fa-f-]+", uuid):
+        detail = (result.stderr or result.stdout).strip()[-1000:]
+        raise SSHTransportError(f"cannot resolve assigned SSH GPU: {detail}")
+    return uuid
+
+
+def _ssh_bwrap_command(
+    runtime_binds: list[str],
+    command: list[str],
+    *,
+    gpu_index: int,
+    gpu_uuid: str,
+    remote_dir: str | None = None,
+) -> str:
+    """Build the only remote execution path: a restricted Bubblewrap namespace."""
+    binds = [_ssh_runtime_bind(value) for value in runtime_binds]
+    args = [
+        "bwrap",
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind-try",
+        "/bin",
+        "/bin",
+        "--ro-bind-try",
+        "/sbin",
+        "/sbin",
+        "--ro-bind-try",
+        "/lib",
+        "/lib",
+        "--ro-bind-try",
+        "/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--ro-bind-try",
+        "/sys",
+        "/sys",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/dev/shm",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/tmp/atrex-home",
+    ]
+    for device in (
+        "/dev/nvidiactl",
+        "/dev/nvidia-uvm",
+        "/dev/nvidia-uvm-tools",
+        "/dev/nvidia-modeset",
+    ):
+        args.extend(("--dev-bind-try", device, device))
+    assigned_device = f"/dev/nvidia{gpu_index}"
+    args.extend(("--dev-bind", assigned_device, assigned_device))
+
+    created: set[str] = set()
+    for source, destination in binds:
+        parent = PurePosixPath(destination).parent
+        parents = list(reversed(parent.parents)) + [parent]
+        for directory in parents:
+            rendered = directory.as_posix()
+            if rendered == "/" or rendered in created:
+                continue
+            args.extend(("--dir", rendered))
+            created.add(rendered)
+        args.extend(("--ro-bind", source, destination))
+    if remote_dir is not None:
+        if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
+            raise ValueError("unsafe SSH workspace path")
+        args.extend(
+            ("--dir", "/atrex", "--bind", remote_dir, "/atrex", "--chdir", "/atrex")
+        )
+    args.extend(
+        (
+            "env",
+            "-i",
+            "HOME=/tmp/atrex-home",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG=C.UTF-8",
+            f"CUDA_VISIBLE_DEVICES={gpu_uuid}",
+            *command,
+        )
+    )
+    return shlex.join(args)
+
+
+def _ssh_base(executable: str, target: str) -> list[str]:
+    return [
+        executable,
+        "-o",
+        f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+        target,
+    ]
+
+
+def _ssh_shell_script(init_command: str, command: str) -> str:
+    lines = ["set -eo pipefail"]
+    if init_command.strip():
+        lines.append(init_command)
+    lines.append(command)
+    return "\n".join(lines) + "\n"
+
+
+def _run_ssh_health(
+    target: str,
+    init_command: str,
+    health_command: str,
+    runtime_binds: list[str],
+    gpu_index: int,
+    *,
+    timeout: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    ssh = shutil.which("ssh")
+    if ssh is None:
+        raise SSHTransportError("ssh executable not found on PATH")
+    try:
+        resolved_binds = _resolve_ssh_runtime_binds(ssh, target, runtime_binds)
+        gpu_uuid = _resolve_ssh_gpu(ssh, target, gpu_index)
+        script = _ssh_shell_script(init_command, health_command)
+        remote_command = _ssh_bwrap_command(
+            resolved_binds,
+            [
+                "python3",
+                "-c",
+                SSH_WATCHDOG_SOURCE,
+                str(timeout),
+                "bash",
+                "-lc",
+                script,
+            ],
+            gpu_index=gpu_index,
+            gpu_uuid=gpu_uuid,
+        )
+    except ValueError as exc:
+        raise SSHTransportError(str(exc)) from exc
+    try:
+        return subprocess.run(
+            [*_ssh_base(ssh, target), remote_command],
+            capture_output=True,
+            text=True,
+            timeout=timeout + SSH_CONNECT_TIMEOUT + 10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SSHTransportError(f"SSH health probe failed: {exc}") from exc
+
+
+def _remote_temp_dir(stdout: str) -> str:
+    value = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+    if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", value):
+        raise SSHTransportError("remote mktemp returned an unsafe directory")
+    return value
+
+
+def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
+    if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
+        return False
+    try:
+        result = subprocess.run(
+            [
+                *_ssh_base(ssh, target),
+                "rm -rf -- " + shlex.quote(remote_dir),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _run_ssh_job(
+    *,
+    target: str,
+    init_command: str,
+    runtime_binds: list[str],
+    gpu_index: int,
+    timeout: int,
+    env_items: list[str],
+    upload_paths: list[Path],
+    temp: Path,
+    workspace: Path,
+    sync_outputs: bool,
+) -> subprocess.CompletedProcess[str]:
+    """Upload one stateless sandbox allocation, execute it, and retrieve outputs."""
+    ssh = shutil.which("ssh")
+    scp = shutil.which("scp")
+    if ssh is None or scp is None:
+        missing = "ssh" if ssh is None else "scp"
+        raise SSHTransportError(f"{missing} executable not found on PATH")
+
+    resolved_binds = _resolve_ssh_runtime_binds(ssh, target, runtime_binds)
+    gpu_uuid = _resolve_ssh_gpu(ssh, target, gpu_index)
+
+    try:
+        environment = _parse_env_items(env_items)
+    except ValueError as exc:
+        raise SystemExit(f"sandbox: {exc}") from exc
+    entry_lines = ["#!/usr/bin/env bash", "set -eo pipefail"]
+    if init_command.strip():
+        entry_lines.append(init_command)
+    entry_lines.append('cd "$1"')
+    for key, value in environment.items():
+        entry_lines.append(f"export {key}={shlex.quote(value)}")
+    entry_lines.append(
+        "exec "
+        + shlex.join(
+            [
+                "python3",
+                "-c",
+                SSH_WATCHDOG_SOURCE,
+                str(timeout),
+                "bash",
+                "__atrex_runner.sh",
+            ]
+        )
+    )
+    entry_path = temp / "ssh_entry.sh"
+    entry_path.write_text("\n".join(entry_lines) + "\n", encoding="utf-8")
+
+    result: subprocess.CompletedProcess[str] | None = None
+    cleanup_succeeded = False
+    try:
+        create = subprocess.run(
+            [
+                *_ssh_base(ssh, target),
+                "mktemp -d /tmp/atrex-sandbox.XXXXXXXXXX",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=SSH_CONNECT_TIMEOUT + 10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SSHTransportError(f"cannot create remote workspace: {exc}") from exc
+    if create.returncode != 0:
+        detail = (create.stderr or create.stdout).strip()[-1000:]
+        raise SSHTransportError(f"cannot create remote workspace: {detail}")
+    remote_dir = _remote_temp_dir(create.stdout)
+    try:
+        transfer = subprocess.run(
+            [
+                scp,
+                "-q",
+                *[str(path) for path in upload_paths],
+                str(entry_path),
+                f"{target}:{remote_dir}/",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=max(60, timeout),
+        )
+        if transfer.returncode != 0:
+            detail = (transfer.stderr or transfer.stdout).strip()[-1000:]
+            raise SSHTransportError(f"cannot upload sandbox inputs: {detail}")
+
+        try:
+            remote_command = _ssh_bwrap_command(
+                resolved_binds,
+                ["bash", "/atrex/ssh_entry.sh", "/atrex"],
+                gpu_index=gpu_index,
+                gpu_uuid=gpu_uuid,
+                remote_dir=remote_dir,
+            )
+        except ValueError as exc:
+            raise SSHTransportError(str(exc)) from exc
+        try:
+            result = subprocess.run(
+                [*_ssh_base(ssh, target), remote_command],
+                capture_output=True,
+                text=True,
+                timeout=timeout + SSH_CONNECT_TIMEOUT + 15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SSHTransportError(f"SSH command wait timed out: {exc}") from exc
+
+        if sync_outputs:
+            local_archive = temp / "ssh_outputs.tar.gz"
+            download = subprocess.run(
+                [
+                    scp,
+                    "-q",
+                    f"{target}:{remote_dir}/{OSS_OUTPUT_ARCHIVE}",
+                    str(local_archive),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=max(60, timeout),
+            )
+            if download.returncode != 0:
+                detail = (download.stderr or download.stdout).strip()[-1000:]
+                execution_detail = (result.stderr or result.stdout).strip()[-1000:]
+                if result.returncode == 0:
+                    raise SSHTransportError(
+                        "cannot download sandbox outputs: "
+                        f"{detail}; remote_exit={result.returncode}; "
+                        f"remote_output={execution_detail}"
+                    )
+                warning = (
+                    "[sandbox] output archive unavailable after failed command: "
+                    f"{detail}"
+                )
+                result = subprocess.CompletedProcess(
+                    args=result.args,
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr="\n".join(
+                        part for part in (result.stderr, warning) if part
+                    ),
+                )
+            else:
+                try:
+                    _extract_output_archive(local_archive, workspace)
+                except (OSError, RuntimeError, tarfile.TarError) as exc:
+                    raise SSHTransportError(
+                        f"cannot extract sandbox outputs: {exc}"
+                    ) from exc
+    except OSError as exc:
+        raise SSHTransportError(str(exc)) from exc
+    finally:
+        cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        if not cleanup_succeeded:
+            _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
+    if not cleanup_succeeded:
+        raise SSHTransportError(
+            f"remote workspace cleanup failed and was queued for recovery: {remote_dir}"
+        )
+    if result is None:
+        raise SSHTransportError("SSH job produced no result")
+    return result
+
+
+def _environment_failure_path() -> Path | None:
+    value = os.environ.get("ATREX_ENVIRONMENT_STATE_FILE", "").strip()
+    return Path(value).expanduser().resolve() if value else None
+
+
+def _record_pending_ssh_cleanup(*, target: str, remote_dir: str) -> None:
+    state_file = _environment_failure_path()
+    if state_file is None:
+        print(
+            f"[sandbox] WARNING: remote workspace cleanup failed: {target}:{remote_dir}",
+            file=sys.stderr,
+        )
+        return
+    digest = hashlib.sha256(f"{target}\0{remote_dir}".encode("utf-8")).hexdigest()[:16]
+    path = state_file.parent / f"cleanup-{digest}.json"
+    payload = {
+        "schema_version": 1,
+        "transport": "ssh",
+        "target": target,
+        "remote_dir": remote_dir,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    durable_write_json(path, payload, indent=2, ensure_ascii=False)
+
+
+def _record_environment_failure(
+    *, target: str, stage: str, detail: str, health_status: int | None = None
+) -> None:
+    path = _environment_failure_path()
+    if path is None:
+        return
+    payload = {
+        "schema_version": 1,
+        "status": "blocked",
+        "transport": "ssh",
+        "target": target,
+        "stage": stage,
+        "detail": " ".join(detail.split())[-2000:],
+        "health_status": health_status,
+        "detected_at": datetime.now(timezone.utc).isoformat(),
+        "pid": os.getpid(),
+    }
+    durable_write_json(path, payload, indent=2, ensure_ascii=False)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -2866,19 +3611,51 @@ def _main(argv: list[str] | None = None) -> int:
     # Explicit endpoint flags override inherited sandbox endpoint variables.  This
     # matters when a long-lived optimization shell switches between a remote
     # profile and localhost without first scrubbing its environment.
-    if args.url and args.gateway_profile:
-        raise SystemExit("sandbox: --url and --gateway-profile are mutually exclusive")
-    if args.url is not None:
+    explicit_endpoints = sum(
+        value is not None for value in (args.url, args.gateway_profile, args.ssh)
+    )
+    if explicit_endpoints > 1:
+        raise SystemExit(
+            "sandbox: --ssh, --url, and --gateway-profile are mutually exclusive"
+        )
+    if args.ssh is not None:
+        args.url = ""
+        args.gateway_profile = None
+    elif args.url is not None:
+        args.ssh = ""
         args.gateway_profile = None
     elif args.gateway_profile is not None:
+        args.ssh = ""
         args.url = ""
     else:
+        args.ssh = os.environ.get("ATREX_SANDBOX_SSH", "")
         args.url = os.environ.get("ATREX_SANDBOX_URL", "")
         args.gateway_profile = os.environ.get("ATREX_SANDBOX_PROFILE") or None
-        if args.url and args.gateway_profile:
+        if sum(bool(value) for value in (args.ssh, args.url, args.gateway_profile)) > 1:
             raise SystemExit(
-                "sandbox: ATREX_SANDBOX_URL and ATREX_SANDBOX_PROFILE are mutually exclusive"
+                "sandbox: ATREX_SANDBOX_SSH, ATREX_SANDBOX_URL, and "
+                "ATREX_SANDBOX_PROFILE are mutually exclusive"
             )
+    if args.ssh:
+        try:
+            args.ssh = _validate_ssh_target(args.ssh)
+            args.ssh_gpu = _ssh_gpu_index(
+                args.ssh_gpu
+                if args.ssh_gpu is not None
+                else os.environ.get(SSH_GPU_ENV, "")
+            )
+            if args.ssh_runtime_bind is None:
+                args.ssh_runtime_bind = _environment_ssh_runtime_binds()
+            for runtime_bind in args.ssh_runtime_bind:
+                _ssh_runtime_bind(runtime_bind)
+        except ValueError as exc:
+            raise SystemExit(f"sandbox: {exc}") from exc
+        if not args.health_command.strip():
+            raise SystemExit("sandbox: --health-command must not be empty with --ssh")
+    elif args.ssh_runtime_bind:
+        raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
+    elif args.ssh_gpu is not None:
+        raise SystemExit("sandbox: --ssh-gpu requires --ssh")
     if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
         raise SystemExit(
             "sandbox: --timeout must be in the gateway-supported range "
@@ -2900,6 +3677,25 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
+    if args.check_health:
+        if not args.ssh:
+            raise SystemExit("sandbox: --check-health requires --ssh")
+        try:
+            health = _run_ssh_health(
+                args.ssh,
+                args.ssh_init,
+                args.health_command,
+                args.ssh_runtime_bind,
+                args.ssh_gpu,
+            )
+        except SSHTransportError as exc:
+            print(f"sandbox: {exc}", file=sys.stderr)
+            return 1
+        if health.stdout:
+            print(health.stdout.rstrip())
+        if health.stderr:
+            print(health.stderr.rstrip(), file=sys.stderr)
+        return health.returncode
     try:
         command = _command_text(args.command)
         sync_paths = (
@@ -2929,13 +3725,15 @@ def _main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
     if gateway_kind in TYPED_KINDS:
-        if (
+        if args.ssh:
+            typed_limitation = "SSH uses the portable sandbox command runner"
+        elif (
             gateway_kind == "profile"
             and args.profile_level == "deep"
             and not args.kernel_regex
         ):
             raise SystemExit("sandbox: --profile-level deep requires --kernel-regex")
-        if args.keep_pod:
+        elif args.keep_pod:
             typed_limitation = "--keep-pod is only supported by dev"
         elif args.input:
             typed_limitation = "custom --input files are only supported by dev"
@@ -2962,10 +3760,17 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
-        print(
-            f"[sandbox] {gateway_kind} interface unsupported ({typed_limitation}); using dev",
-            file=sys.stderr,
-        )
+        if args.ssh:
+            print(
+                f"[sandbox] {gateway_kind} kind uses the isolated OpenSSH runner",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[sandbox] {gateway_kind} interface unsupported "
+                f"({typed_limitation}); using dev",
+                file=sys.stderr,
+            )
         gateway_kind = "dev"
 
     evaluator_command = _is_test_kernel_command(args.command)
@@ -3024,7 +3829,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
         if command_environment:
             command = shlex.join(["env", *command_environment]) + " " + command
-    agate_executable = _find_agate()
+    agate_executable = None if args.ssh else _find_agate()
     direct_http = bool(args.url and agate_executable is None)
     standard_oss_gateway = bool(
         agate_executable
@@ -3038,10 +3843,14 @@ def _main(argv: list[str] | None = None) -> int:
         standard_oss_gateway and bundle_bytes > OSS_WORKSPACE_THRESHOLD_BYTES
     )
     workspace_transport = (
-        "oss" if oss_workspace else ("http" if direct_http else "inline")
+        "ssh"
+        if args.ssh
+        else ("oss" if oss_workspace else ("http" if direct_http else "inline"))
     )
     if not sync_paths:
         output_transport = "none"
+    elif args.ssh:
+        output_transport = "ssh"
     # Custom gateways do not advertise OSS capability yet, so both input and
     # output stay inline unless agate resolves to one of its standard profiles.
     elif standard_oss_gateway and not args.inline_output:
@@ -3054,7 +3863,7 @@ def _main(argv: list[str] | None = None) -> int:
             "above the 20 MiB direct gateway request limit"
         )
     print(
-        f"[sandbox] gateway_kind=dev hardware={args.hardware} files={file_count} "
+        f"[sandbox] sandbox_kind=dev hardware={args.hardware} files={file_count} "
         f"payload={bundle_bytes / 1024:.1f} KiB "
         f"input_transport={workspace_transport} "
         f"output_transport={output_transport} "
@@ -3068,6 +3877,10 @@ def _main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "hardware": args.hardware,
+                    "ssh": args.ssh or None,
+                    "ssh_init": bool(args.ssh_init),
+                    "ssh_isolation": "bubblewrap" if args.ssh else None,
+                    "ssh_runtime_binds": args.ssh_runtime_bind or [],
                     "url": args.url or None,
                     "gateway_profile": args.gateway_profile,
                     "workspace": str(workspace),
@@ -3102,7 +3915,7 @@ def _main(argv: list[str] | None = None) -> int:
         workspace_part_paths: list[Path] = []
         # Chunk workspace bundle when it exceeds MAX_ARG_STRLEN safe limit
         # (same pattern as runtime chunking). The runner concatenates parts.
-        if not oss_workspace and len(bundle) > WORKSPACE_CHUNK_BYTES:
+        if not args.ssh and not oss_workspace and len(bundle) > WORKSPACE_CHUNK_BYTES:
             for index, offset in enumerate(
                 range(0, len(bundle), WORKSPACE_CHUNK_BYTES)
             ):
@@ -3121,12 +3934,15 @@ def _main(argv: list[str] | None = None) -> int:
         collector_path.write_text(REMOTE_COLLECTOR, encoding="utf-8")
         outputs_path.write_text(json.dumps(output_cfg), encoding="utf-8")
         if runtime_bundle:
+            runtime_chunk_bytes = (
+                len(runtime_bundle) if args.ssh else RUNTIME_CHUNK_BYTES
+            )
             for index, offset in enumerate(
-                range(0, len(runtime_bundle), RUNTIME_CHUNK_BYTES)
+                range(0, len(runtime_bundle), runtime_chunk_bytes)
             ):
                 part_path = temp / f"atrex_runtime.part{index:03d}"
                 part_path.write_text(
-                    runtime_bundle[offset : offset + RUNTIME_CHUNK_BYTES],
+                    runtime_bundle[offset : offset + runtime_chunk_bytes],
                     encoding="ascii",
                 )
                 runtime_part_paths.append(part_path)
@@ -3199,7 +4015,97 @@ def _main(argv: list[str] | None = None) -> int:
         runner_path.write_text(_runner_source(), encoding="utf-8")
         agate[-1:-1] = ["--file", f"__atrex_runner.sh={runner_path}"]
 
-        if direct_http:
+        if args.ssh:
+            upload_dir = temp / "ssh-upload"
+            upload_dir.mkdir()
+            uploads: list[tuple[Path, str]] = [
+                (command_path, "__atrex_command.sh"),
+                (collector_path, "__atrex_collect.py"),
+                (outputs_path, "__atrex_outputs.json"),
+                (runner_path, "__atrex_runner.sh"),
+            ]
+            uploads.extend(
+                (path, f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}")
+                for index, path in enumerate(runtime_part_paths)
+            )
+            uploads.extend(
+                (path, f"__atrex_workspace.tar.gz.b64.part{index:03d}")
+                for index, path in enumerate(workspace_part_paths)
+            )
+            if not workspace_part_paths:
+                uploads.append((bundle_path, "__atrex_workspace.tar.gz.b64"))
+            upload_paths = []
+            for source, remote_name in uploads:
+                destination = upload_dir / remote_name
+                shutil.copy2(source, destination)
+                upload_paths.append(destination)
+            try:
+                ssh_result = _run_ssh_job(
+                    target=args.ssh,
+                    init_command=args.ssh_init,
+                    runtime_binds=args.ssh_runtime_bind,
+                    gpu_index=args.ssh_gpu,
+                    timeout=args.timeout,
+                    env_items=gateway_environment,
+                    upload_paths=upload_paths,
+                    temp=temp,
+                    workspace=workspace,
+                    sync_outputs=bool(sync_paths),
+                )
+            except SSHTransportError as exc:
+                _record_environment_failure(
+                    target=args.ssh,
+                    stage="transport",
+                    detail=str(exc),
+                )
+                print(f"sandbox: SSH environment unavailable: {exc}", file=sys.stderr)
+                return ENVIRONMENT_TEMPFAIL
+            if ssh_result.returncode != 0:
+                try:
+                    health = _run_ssh_health(
+                        args.ssh,
+                        args.ssh_init,
+                        args.health_command,
+                        args.ssh_runtime_bind,
+                        args.ssh_gpu,
+                    )
+                except SSHTransportError as exc:
+                    health = subprocess.CompletedProcess(
+                        args=["ssh", args.ssh],
+                        returncode=1,
+                        stdout="",
+                        stderr=str(exc),
+                    )
+                if health.returncode != 0:
+                    detail = (health.stderr or health.stdout or "health probe failed")[-2000:]
+                    _record_environment_failure(
+                        target=args.ssh,
+                        stage="post-command-health",
+                        detail=detail,
+                        health_status=health.returncode,
+                    )
+                    print(
+                        "sandbox: remote command failed and the GPU environment health "
+                        "probe also failed; optimization recovery requested",
+                        file=sys.stderr,
+                    )
+                    return ENVIRONMENT_TEMPFAIL
+            job = {
+                "job_id": f"ssh-{os.getpid()}",
+                "status": "succeeded" if ssh_result.returncode == 0 else "failed",
+                "result": {
+                    "stdout": ssh_result.stdout,
+                    "stderr": ssh_result.stderr,
+                    "exit_code": ssh_result.returncode,
+                },
+            }
+            proc = subprocess.CompletedProcess(
+                args=ssh_result.args,
+                returncode=ssh_result.returncode,
+                stdout=json.dumps(job),
+                stderr="",
+            )
+        elif direct_http:
             print(
                 "[sandbox] agate CLI not found; using direct gateway HTTP API",
                 file=sys.stderr,
@@ -3283,6 +4189,8 @@ def _main(argv: list[str] | None = None) -> int:
             command_stdout = remote_stdout.rstrip("\n")
         elif output_transport == "inline":
             command_stdout = _extract_outputs(remote_stdout, workspace)
+        elif output_transport == "ssh":
+            command_stdout = remote_stdout.rstrip("\n")
         else:
             command_stdout = remote_stdout.rstrip("\n")
     except (RuntimeError, ValueError, tarfile.TarError) as exc:

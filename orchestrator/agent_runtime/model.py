@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
 PhaseMarkerAction = Literal["start", "end"]
@@ -152,6 +151,10 @@ class AgentRunRequest:
     sandbox_timeout_s: int = 600
     session_id: str | None = None
     extra_environment: Mapping[str, str] | None = None
+    sandbox_ssh: str = ""
+    sandbox_ssh_init: str = ""
+    sandbox_health_command: str = ""
+    environment_state_file: str = ""
 
 
 @dataclass(frozen=True)

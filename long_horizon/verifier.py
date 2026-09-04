@@ -5,7 +5,7 @@ import math
 import shutil
 import subprocess
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -14,7 +14,6 @@ from .git_episode import _git
 from .models import VerificationResult, VerificationRun
 from .protocol import atomic_write_json
 from .store import VERIFY_DIR
-
 
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 DEFAULT_SHAPE_BATCH_SIZE = 4
@@ -416,6 +415,9 @@ class GatewayABBAValidator:
         hardware: str,
         profile: str = "",
         url: str = "",
+        ssh: str = "",
+        ssh_init: str = "",
+        health_command: str = "",
         timeout: int = 600,
         repeats: int = 2,
         per_run_timeout: int = 120,
@@ -427,6 +429,9 @@ class GatewayABBAValidator:
         self.hardware = hardware
         self.profile = profile
         self.url = url
+        self.ssh = ssh
+        self.ssh_init = ssh_init
+        self.health_command = health_command
         self.timeout = timeout
         self.repeats = max(1, repeats)
         self.per_run_timeout = per_run_timeout
@@ -512,6 +517,9 @@ class GatewayABBAValidator:
                         request_relative,
                         result_relative,
                     ],
+                    ssh=self.ssh,
+                    ssh_init=self.ssh_init,
+                    health_command=self.health_command,
                     sync=(),
                     wall_timeout=self.timeout + self.queue_wait_grace + 120,
                     gateway_kind="dev",
@@ -537,10 +545,27 @@ class GatewayABBAValidator:
             raise AssertionError("unreachable ABBA batch retry loop")
 
         try:
-            with ThreadPoolExecutor(
-                max_workers=min(DEFAULT_SHAPE_BATCH_WORKERS, len(batch_specs))
-            ) as executor:
-                payloads = list(executor.map(run_batch, batch_specs))
+            # One explicitly assigned SSH GPU must never run multiple timing batches
+            # concurrently. Gateway allocations remain parallel, but cancel queued work
+            # immediately when one batch confirms an outage or otherwise fails.
+            max_workers = (
+                1
+                if self.ssh
+                else min(DEFAULT_SHAPE_BATCH_WORKERS, len(batch_specs))
+            )
+            executor = ThreadPoolExecutor(max_workers=max_workers)
+            futures = [executor.submit(run_batch, spec) for spec in batch_specs]
+            try:
+                completed, pending = wait(futures, return_when=FIRST_EXCEPTION)
+                for future in completed:
+                    future.result()
+                payloads = [future.result() for future in futures]
+            except BaseException:
+                for future in pending:
+                    future.cancel()
+                raise
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
             payload = _merge_batch_payloads(payloads, schedule, expected_shape_ids)
         except (
             subprocess.SubprocessError,

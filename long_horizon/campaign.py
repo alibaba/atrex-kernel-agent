@@ -14,6 +14,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
+
 from . import main_adapter
 from .git_episode import (
     EpisodeWorktree,
@@ -25,10 +27,7 @@ from .git_episode import (
 )
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
-from .journal import sync_live_memory
-from .journal import validate_terminal
-from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
-
+from .journal import sync_live_memory, validate_terminal
 from .models import (
     EpisodeHandoff,
     SupervisorState,
@@ -37,10 +36,9 @@ from .models import (
 )
 from .protocol import read_handoff
 from .session import LongSessionRunner
-from .store import CampaignStore, RUNTIME_DIR, VERIFY_DIR
+from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
-
 
 MODULE_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
@@ -439,7 +437,9 @@ class LongHorizonCampaign:
         command = ["python", "tools/sandbox.py", "--kind", "run"]
         if self.base_campaign.sandbox_hardware:
             command += ["--hardware", self.base_campaign.sandbox_hardware]
-        if self.base_campaign.sandbox_url:
+        if self.base_campaign.sandbox_ssh:
+            command += ["--ssh", self.base_campaign.sandbox_ssh]
+        elif self.base_campaign.sandbox_url:
             command += ["--url", self.base_campaign.sandbox_url]
         elif self.base_campaign.sandbox_profile:
             command += ["--gateway-profile", self.base_campaign.sandbox_profile]
@@ -1826,6 +1826,9 @@ class LongHorizonCampaign:
             hardware=self.base_campaign.sandbox_hardware,
             profile=self.base_campaign.sandbox_profile,
             url=self.base_campaign.sandbox_url,
+            ssh=self.base_campaign.sandbox_ssh,
+            ssh_init=self.base_campaign.sandbox_ssh_init,
+            health_command=self.base_campaign.sandbox_health_command,
             timeout=self.base_campaign.sandbox_timeout,
             private_reference_dir=self.base_campaign.private_reference_dir,
         )

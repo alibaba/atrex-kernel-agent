@@ -54,7 +54,7 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
   command below is the only GPU execution route and must run once per trial. Do not route
   import/API probes or additional benchmarks through `tools/sandbox.py`.
 - Never install or build dependencies. Never start, stop, restart, signal, replace, or mutate the
-  shared gateway service or its jobs. Treat infrastructure failure as `blocked`.
+  shared sandbox executor or its jobs. Treat infrastructure failure as `blocked`.
 
 ## Required flow
 
