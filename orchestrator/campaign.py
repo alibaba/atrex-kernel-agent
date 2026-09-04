@@ -190,6 +190,9 @@ class Campaign:
     fast_episode_ask_qoder: bool = False
     full_episode_ask_codex: bool = True
     full_episode_ask_qoder: bool = True
+    max_staged_episodes: int = 4  # full-episode non-production checkpoints
+    staged_after_episodes: int = 40  # completed optimization episodes before staging
+    staged_after_stall: int = 8  # unpromoted episodes before architectural escape
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -2885,6 +2888,9 @@ class Campaign:
             token_budget=self.token_budget,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,
+            max_staged_episodes=self.max_staged_episodes,
+            staged_after_episodes=self.staged_after_episodes,
+            staged_after_stall=self.staged_after_stall,
             verifier=verifier,
             session_runner=LongSessionRunner(agent_cli=self.agent_cli),
         )

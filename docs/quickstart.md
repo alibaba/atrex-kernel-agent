@@ -277,6 +277,12 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --sandbox-timeout S              Remote command timeout, at most 600 seconds
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
+--max-staged-episodes N          Allow N consecutive full-episode architectural checkpoints
+                                 without production promotion (default: 4; 0 disables)
+--staged-after-episodes N        Completed optimization episodes before a new staged initiative
+                                 may start (default: 40; first eligible episode is 41)
+--staged-after-stall N           Consecutive unpromoted episodes before an architectural escape
+                                 initiative may start (default: 8; 0 disables this trigger)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
 --verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
@@ -294,6 +300,16 @@ handoff or its coding-agent process exits. `memory/live.json` exposes progress d
 episode, while canonical `memory/vN.json` is written only after the episode reaches a terminal state.
 The supervisor validates that this numbered record is both parseable and committed at `HEAD` before
 it advances campaign state, including failed, pivoted, blocked, and interrupted rounds.
+
+After 40 completed optimization episodes or 8 consecutive unpromoted episodes, rewrites that need
+several temporarily neutral or slower prerequisites may publish `staged_ready` (up to four
+consecutive checkpoints by default). Each stage must compile and prove a material architectural
+advance toward a stable escape hypothesis with explicit final-success and abort criteria; compile-only
+refactors and parameter sweeps are rejected. The supervisor keeps the production incumbent unchanged,
+restores that exact `kernel.py` only into the next isolated episode, and does not reset the promotion
+drought. `--staged-after-episodes`, `--staged-after-stall`, and `--max-staged-episodes` override these
+defaults; the final `candidate_ready` still requires the normal correctness, policy, and strict
+improvement gates.
 
 ### Direct sandbox and profiling
 
@@ -319,4 +335,5 @@ Each optimization workspace records the full optimization trail:
 - `plans/`: evidence-based optimization plans
 - `profiles/`: profiler artifacts and extracted bottleneck evidence
 - `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
+- `.atrex_long_horizon/staged_checkpoint/`: ignored continuation snapshot for an active staged initiative
 - `submission.json`: SOL-ExecBench submission output for SOL campaigns

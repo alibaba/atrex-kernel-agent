@@ -26,12 +26,22 @@ def normalize_handoff(value: object) -> EpisodeHandoff | None:
     if status not in TERMINAL_STATUSES:
         return None
     candidate = value.get("candidate_commit", "")
-    if status == "candidate_ready" and (not isinstance(candidate, str) or not candidate.strip()):
+    if status == "candidate_ready" and (
+        not isinstance(candidate, str) or not candidate.strip()
+    ):
+        return None
+    checkpoint = value.get("checkpoint_commit", "")
+    if status == "staged_ready" and (
+        not isinstance(checkpoint, str) or not checkpoint.strip()
+    ):
         return None
     trial = value.get("last_trial_commit", "")
     return EpisodeHandoff(
         status=str(status),
         candidate_commit=candidate.strip() if isinstance(candidate, str) else "",
+        checkpoint_commit=(
+            checkpoint.strip() if isinstance(checkpoint, str) else ""
+        ),
         last_trial_commit=trial.strip() if isinstance(trial, str) else "",
     )
 
@@ -59,7 +69,15 @@ def handoff_diagnosis(path: Path) -> str:
     if not isinstance(value, dict):
         return "handoff must be a JSON object"
     if value.get("status") not in TERMINAL_STATUSES:
-        return "handoff status must be candidate_ready, pivot, or blocked"
-    if value.get("status") == "candidate_ready" and not str(value.get("candidate_commit", "")).strip():
+        return (
+            "handoff status must be candidate_ready, staged_ready, pivot, or blocked"
+        )
+    if value.get("status") == "candidate_ready" and not str(
+        value.get("candidate_commit", "")
+    ).strip():
         return "candidate_ready requires candidate_commit"
+    if value.get("status") == "staged_ready" and not str(
+        value.get("checkpoint_commit", "")
+    ).strip():
+        return "staged_ready requires checkpoint_commit"
     return "handoff schema is valid but its episode completion contract is not satisfied"

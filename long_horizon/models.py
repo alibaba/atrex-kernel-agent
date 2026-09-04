@@ -10,7 +10,9 @@ from orchestrator.agent_runtime.model import (
 )
 
 
-TERMINAL_STATUSES = frozenset({"candidate_ready", "pivot", "blocked"})
+TERMINAL_STATUSES = frozenset(
+    {"candidate_ready", "staged_ready", "pivot", "blocked"}
+)
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,7 @@ class EpisodeHandoff:
     status: str
     candidate_commit: str = ""
     last_trial_commit: str = ""
+    checkpoint_commit: str = ""
 
     def as_dict(self) -> dict[str, str]:
         return {key: value for key, value in asdict(self).items() if value}
@@ -101,6 +104,11 @@ class SupervisorState:
     tokens: int = 0
     consecutive_without_promotion: int = 0
     attempts: list[dict[str, Any]] = field(default_factory=list)
+    staged: int = 0
+    consecutive_staged: int = 0
+    staged_initiatives_started: int = 0
+    staged_initiatives_promoted: int = 0
+    staged_initiatives_abandoned: int = 0
 
     @classmethod
     def from_dict(cls, value: object) -> "SupervisorState":

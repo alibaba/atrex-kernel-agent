@@ -62,6 +62,7 @@ FAST_POLICY_REVIEW_REQUEST_PATH = Path(
 )
 FAST_REASONING_EFFORT = "max"
 FULL_REASONING_EFFORT = "max"
+STAGED_STALLED_RETRY_THRESHOLD = 3
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -392,12 +393,21 @@ class LongHorizonCampaign:
     verifier: GatewayABBAValidator | None = None
     session_runner: LongSessionRunner | None = None
     worktree_root: Path | None = None
+    max_staged_episodes: int = 4
+    staged_after_episodes: int = 40
+    staged_after_stall: int = 8
 
     def __post_init__(self) -> None:
         if self.fast_episodes < 0:
             raise ValueError("fast_episodes must be non-negative")
         if self.fast_trials < 1:
             raise ValueError("fast_trials must be positive")
+        if self.max_staged_episodes < 0:
+            raise ValueError("max_staged_episodes must be non-negative")
+        if self.staged_after_episodes < 0:
+            raise ValueError("staged_after_episodes must be non-negative")
+        if self.staged_after_stall < 0:
+            raise ValueError("staged_after_stall must be non-negative")
 
     @property
     def workspace(self) -> Path:
@@ -424,6 +434,179 @@ class LongHorizonCampaign:
     @staticmethod
     def _episode_reasoning_effort(*, fast_mode: bool) -> str:
         return FAST_REASONING_EFFORT if fast_mode else FULL_REASONING_EFFORT
+
+    def _staged_trigger(
+        self, state: SupervisorState, *, fast_mode: bool
+    ) -> str:
+        if self.max_staged_episodes <= 0 or fast_mode:
+            return ""
+        if state.consecutive_staged >= self.max_staged_episodes:
+            return ""
+        if state.consecutive_staged > 0:
+            return "continuation"
+        if (
+            self.staged_after_stall > 0
+            and state.consecutive_without_promotion >= self.staged_after_stall
+        ):
+            return "promotion_drought"
+        if state.episodes >= self.staged_after_episodes:
+            return "episode_count"
+        return ""
+
+    def _staged_allowed(
+        self, state: SupervisorState, *, fast_mode: bool
+    ) -> bool:
+        return bool(self._staged_trigger(state, fast_mode=fast_mode))
+
+    @staticmethod
+    def _staged_blocked_retries(
+        state: SupervisorState,
+        staged_checkpoint: dict[str, Any] | None,
+    ) -> int:
+        """Count blocked landing attempts since the current stage was created."""
+        if not staged_checkpoint:
+            return 0
+        initiative_id = str(staged_checkpoint.get("initiative_id", "")).strip()
+        source_episode = staged_checkpoint.get("source_episode", 0)
+        if not initiative_id or not isinstance(source_episode, int):
+            return 0
+        return sum(
+            1
+            for attempt in state.attempts
+            if attempt.get("status") == "blocked"
+            and not attempt.get("violation")
+            and attempt.get("initiative_id") == initiative_id
+            and isinstance(attempt.get("episode"), int)
+            and int(attempt["episode"]) > source_episode
+        )
+
+    def _staged_rewrite_directive(
+        self,
+        *,
+        staged_allowed: bool,
+        staged_checkpoint: dict[str, Any] | None,
+        completed_episodes: int,
+        promotion_drought: int,
+        staged_trigger: str,
+        staged_blocked_retries: int,
+        fast_mode: bool,
+    ) -> str:
+        if self.max_staged_episodes <= 0:
+            return (
+                "Staged architectural rewrites are disabled for this campaign. Do not use "
+                "`staged_ready`; finish with `candidate_ready`, `pivot`, or `blocked`."
+            )
+        if (
+            staged_checkpoint is None
+            and completed_episodes < self.staged_after_episodes
+            and not (
+                self.staged_after_stall > 0
+                and promotion_drought >= self.staged_after_stall
+            )
+        ):
+            stall_clause = (
+                f" or {self.staged_after_stall} consecutive episodes without promotion"
+                if self.staged_after_stall > 0
+                else ""
+            )
+            return (
+                "Staged architectural rewrites activate after "
+                f"{self.staged_after_episodes} completed optimization episodes"
+                f"{stall_clause}. This campaign has completed {completed_episodes} "
+                f"episodes with a promotion drought of {promotion_drought}; do not use "
+                "`staged_ready` yet."
+            )
+        if fast_mode:
+            return (
+                "Staged architectural rewrites are unavailable in fast episodes. Do not use "
+                "`staged_ready` in this episode."
+            )
+        if not staged_allowed:
+            if staged_checkpoint is None:
+                return (
+                    "This episode's terminal contract was frozen before staged eligibility was "
+                    "latched. Do not use `staged_ready` in this in-flight episode; the next new "
+                    "full episode will reevaluate the architectural escape trigger."
+                )
+            return (
+                f"The {self.max_staged_episodes}-checkpoint initiative budget was reached. "
+                "Do not use `staged_ready`; "
+                "produce a final candidate, pivot, or report a real blocker."
+            )
+        if staged_checkpoint:
+            directive = (
+                "This worktree was bootstrapped from a non-production staged checkpoint for "
+                f"initiative `{staged_checkpoint.get('initiative_id')}`, stage "
+                f"{staged_checkpoint.get('stage')}. Continue its declared next stage: "
+                f"{staged_checkpoint.get('next_stage')}. Its escape hypothesis is "
+                f"{staged_checkpoint.get('escape_hypothesis')}; its architectural delta is "
+                f"{staged_checkpoint.get('architectural_delta')}. Keep the declared final success "
+                f"criterion ({staged_checkpoint.get('final_success_criterion')}) and abort "
+                f"criterion ({staged_checkpoint.get('abort_criterion')}) stable. If the abort "
+                "criterion is met, pivot instead of preserving the checkpoint. You may publish "
+                "another `staged_ready` "
+                "checkpoint if a coherent enabling stage is complete but the full initiative is "
+                "not yet promotion-ready."
+            )
+            if staged_blocked_retries >= STAGED_STALLED_RETRY_THRESHOLD:
+                directive += (
+                    f" This checkpoint has already consumed {staged_blocked_retries} valid "
+                    "blocked continuation episodes since its last stage advancement, so treat "
+                    "the evidence plan as stalled. Do not replay the same measurement budget "
+                    "unchanged. Before another expensive campaign, pre-register a materially "
+                    "different, variance-aware sequential stopping rule using same-allocation "
+                    "paired evidence and explicit success and abort bounds; keep the final "
+                    "production correctness, policy, and performance gates unchanged. If no new "
+                    "falsifiable evidence plan or architectural advancement can resolve the "
+                    "final criterion, pivot so another initiative can explore the search space. "
+                    "A genuine external blocker may still finish as `blocked` and preserve the "
+                    "checkpoint, but unchanged bytes or another identical retry must not be "
+                    "reported as stage advancement."
+                )
+            return directive
+        if staged_trigger == "promotion_drought":
+            return (
+                f"This campaign has gone {promotion_drought} consecutive episodes without a "
+                "production promotion, so this is an architectural escape episode. Start from a "
+                "bottleneck that local tuning of the incumbent cannot remove, cite the exhausted "
+                "local directions, and implement a materially different dataflow, layout, "
+                "pipeline, synchronization, or communication design. Use `candidate_ready` if "
+                "the structural candidate is already mature; otherwise use `staged_ready` only "
+                "for a coherent first enabling stage. Do not spend this escape opportunity on "
+                "another parameter-only tweak."
+            )
+        return (
+            "This full episode may start a multi-episode architectural initiative. Use "
+            "`staged_ready` only for a coherent, committed enabling stage that is intentionally "
+            "not promotion-ready; identify the initiative, stage number, concrete next stage, "
+            "escape hypothesis, architectural delta, final success criterion, and abort criterion."
+        )
+
+    def _restore_staged_checkpoint(
+        self,
+        store: CampaignStore,
+        worktree: EpisodeWorktree,
+        active: dict[str, Any],
+    ) -> None:
+        if isinstance(active.get("staged_checkpoint"), dict):
+            return
+        snapshot = store.load_staged_checkpoint()
+        if snapshot is None:
+            return
+        metadata, kernel = snapshot
+        current_kernel = (worktree.path / "kernel.py").read_bytes()
+        if git_head(worktree.path) != worktree.base_commit and current_kernel != kernel:
+            raise RuntimeError(
+                "cannot restore staged checkpoint over divergent episode work"
+            )
+        development_base_commit = worktree.bootstrap_staged_kernel(
+            kernel,
+            initiative_id=str(metadata["initiative_id"]),
+            stage=int(metadata["stage"]),
+        )
+        active["staged_checkpoint"] = metadata
+        active["development_base_commit"] = development_base_commit
+        store.save_active(active)
 
     def _expected_shape_ids(self) -> set[str] | None:
         private_reference_dir = self.base_campaign.private_reference_dir
@@ -561,6 +744,12 @@ class LongHorizonCampaign:
         fast_mode: bool,
         fast_trials: int | None = None,
         resumed: bool = False,
+        staged_allowed: bool = False,
+        staged_checkpoint: dict[str, Any] | None = None,
+        completed_episodes: int = 0,
+        promotion_drought: int = 0,
+        staged_trigger: str = "",
+        staged_blocked_retries: int = 0,
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign, version)
         fast_trial_count = fast_trials or self.fast_trials
@@ -584,6 +773,7 @@ class LongHorizonCampaign:
                 "PLATFORM": self.base_campaign.platform,
                 "FRAMEWORK": self.base_campaign.framework,
                 "BASE_COMMIT": worktree.base_commit,
+                "DEVELOPMENT_BASE_COMMIT": git_head(worktree.path),
                 "EPISODE_BRANCH": worktree.branch,
                 "JOURNAL_PATH": journal_path,
                 "JOURNAL_PATH_SHELL": json.dumps(str(journal_path)),
@@ -615,6 +805,15 @@ class LongHorizonCampaign:
                     "the incumbent latency."
                     if conversion_pending
                     else "No mandatory framework conversion is currently latched."
+                ),
+                "STAGED_REWRITE_DIRECTIVE": self._staged_rewrite_directive(
+                    staged_allowed=staged_allowed,
+                    staged_checkpoint=staged_checkpoint,
+                    completed_episodes=completed_episodes,
+                    promotion_drought=promotion_drought,
+                    staged_trigger=staged_trigger,
+                    staged_blocked_retries=staged_blocked_retries,
+                    fast_mode=fast_mode,
                 ),
             },
         )
@@ -733,9 +932,13 @@ class LongHorizonCampaign:
         *,
         fast_mode: bool = False,
         fast_trials: int | None = None,
+        staged_allowed: bool = False,
     ) -> str:
         candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
+        )
+        checkpoint = (
+            handoff.checkpoint_commit if handoff.status == "staged_ready" else ""
         )
         diagnosis = validate_terminal(
             journal_path,
@@ -744,9 +947,12 @@ class LongHorizonCampaign:
             branch=worktree.branch,
             state=handoff.status,
             candidate_commit=candidate,
+            checkpoint_commit=checkpoint,
         )
         if diagnosis:
             return diagnosis
+        if handoff.status == "staged_ready" and not staged_allowed:
+            return "staged_ready is not enabled for this episode"
         if fast_mode and handoff.status != "blocked":
             required_fast_trials = fast_trials or self.fast_trials
             try:
@@ -766,22 +972,25 @@ class LongHorizonCampaign:
                     f"fast episode requires {required_fast_trials} evaluator results; "
                     f"found {evaluation_count}"
                 )
-        if handoff.status != "candidate_ready":
+        if handoff.status not in {"candidate_ready", "staged_ready"}:
             return ""
-        violation, _ = worktree.validate_candidate(candidate)
+        terminal_commit = candidate or checkpoint
+        violation, _ = worktree.validate_candidate(terminal_commit)
         if violation:
             return violation
         try:
             journal = load_journal(journal_path)
             finalized_at = _iso_timestamp(str(journal["finalized_at"]))
             committed_at = float(
-                git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
+                git_text(
+                    worktree.path, "show", "-s", "--format=%ct", terminal_commit
+                )
             )
         except (KeyError, ValueError, OSError, json.JSONDecodeError) as exc:
             return f"cannot validate terminal journal ordering: {exc}"
         if finalized_at <= committed_at:
             return (
-                "candidate journal must be finalized after the exact candidate commit"
+                "terminal journal must be finalized after the exact handoff commit"
             )
         return ""
 
@@ -950,6 +1159,7 @@ class LongHorizonCampaign:
         violation: str,
         journal: dict[str, Any],
         candidate_commit: str,
+        checkpoint_commit: str = "",
         verification: VerificationResult | None = None,
         episode_workspace: Path | None = None,
         fast_mode: bool = False,
@@ -1146,6 +1356,10 @@ class LongHorizonCampaign:
             "long_horizon": {
                 "status": status,
                 "candidate_commit": candidate_commit or None,
+                "checkpoint_commit": checkpoint_commit or None,
+                "initiative_id": outcome.get("initiative_id"),
+                "stage": outcome.get("stage"),
+                "next_stage": outcome.get("next_stage"),
                 "mode": "fast" if fast_mode else "full",
                 "fast_trials": fast_trial_count if fast_mode else None,
             },
@@ -1164,11 +1378,49 @@ class LongHorizonCampaign:
         verifier: GatewayABBAValidator,
     ) -> tuple[str, list[str], VerificationResult | None, bool]:
         """Apply the authoritative candidate gates to one terminal handoff."""
-        if handoff.status != "candidate_ready":
+        if handoff.status not in {"candidate_ready", "staged_ready"}:
             return "", [], None, False
 
+        terminal_commit = (
+            handoff.candidate_commit
+            if handoff.status == "candidate_ready"
+            else handoff.checkpoint_commit
+        )
+        violation, paths = worktree.validate_candidate(terminal_commit)
+        if handoff.status == "staged_ready":
+            try:
+                journal = load_journal(worktree.path / RUNTIME_DIR / "journal.json")
+                outcome = journal["outcome"]
+                initiative_id = str(outcome["initiative_id"])
+                stage = int(outcome["stage"])
+            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+                return "staged_ready journal metadata is invalid", paths, None, False
+            prior = active.get("staged_checkpoint")
+            if isinstance(prior, dict):
+                if initiative_id != str(prior.get("initiative_id", "")):
+                    violation = "staged_ready must continue the active initiative_id"
+                elif stage != int(prior.get("stage", 0)) + 1:
+                    violation = "staged_ready stage must increment the active stage by one"
+                else:
+                    for field in (
+                        "escape_hypothesis",
+                        "architectural_delta",
+                        "final_success_criterion",
+                        "abort_criterion",
+                    ):
+                        if str(outcome.get(field, "")).strip() != str(
+                            prior.get(field, "")
+                        ).strip():
+                            violation = (
+                                "staged_ready continuation must preserve the active "
+                                f"{field}"
+                            )
+                            break
+            elif stage != 1:
+                violation = "a new staged initiative must begin at stage 1"
+            return violation, paths, None, False
+
         candidate_commit = handoff.candidate_commit
-        violation, paths = worktree.validate_candidate(candidate_commit)
         if (
             not violation
             and conversion_pending
@@ -1245,6 +1497,7 @@ class LongHorizonCampaign:
         fast_mode: bool,
         status: str,
         candidate_commit: str,
+        checkpoint_commit: str = "",
         violation: str,
         paths: list[str],
         verification: VerificationResult | None,
@@ -1278,6 +1531,11 @@ class LongHorizonCampaign:
             if isinstance(journal.get("outcome"), dict)
             else {}
         )
+        prior_staged = (
+            active.get("staged_checkpoint")
+            if isinstance(active.get("staged_checkpoint"), dict)
+            else {}
+        )
         attempt = {
             "episode": episode,
             "version": memory_version,
@@ -1290,6 +1548,7 @@ class LongHorizonCampaign:
             "episode_branch": worktree.branch,
             "episode_head": git_head(worktree.path),
             "candidate_commit": candidate_commit or None,
+            "checkpoint_commit": checkpoint_commit or None,
             "changed_paths": paths,
             "session_id": session_id or None,
             "resume_count": max(0, int(resume_count)),
@@ -1300,6 +1559,11 @@ class LongHorizonCampaign:
             "next_directions": outcome.get("next_directions")
             if isinstance(outcome, dict)
             else None,
+            "initiative_id": outcome.get("initiative_id")
+            or prior_staged.get("initiative_id"),
+            "initiative_stage": outcome.get("stage")
+            or prior_staged.get("stage"),
+            "staged_trigger": active.get("staged_trigger") or None,
             "verification": verification.as_dict() if verification else None,
         }
         if recovered_after_supervisor_interruption:
@@ -1363,12 +1627,39 @@ class LongHorizonCampaign:
             )
             attempt["promotion_commit"] = promotion_commit
             state.accepted += 1
+            if prior_staged:
+                state.staged_initiatives_promoted += 1
             state.consecutive_without_promotion = 0
+            state.consecutive_staged = 0
+            store.clear_staged_checkpoint()
             main_adapter.save_stall(self.workspace, 0)
             active["phase"] = "promoted"
             active["promotion_commit"] = promotion_commit
             store.save_active(active)
         else:
+            valid_staged = status == "staged_ready" and not violation
+            if valid_staged:
+                active["phase"] = "staging"
+                store.save_active(active)
+                staged_metadata = store.save_staged_checkpoint(
+                    {
+                        "initiative_id": str(outcome["initiative_id"]),
+                        "stage": int(outcome["stage"]),
+                        "next_stage": str(outcome["next_stage"]),
+                        "escape_hypothesis": str(outcome["escape_hypothesis"]),
+                        "architectural_delta": str(outcome["architectural_delta"]),
+                        "final_success_criterion": str(
+                            outcome["final_success_criterion"]
+                        ),
+                        "abort_criterion": str(outcome["abort_criterion"]),
+                        "checkpoint_commit": checkpoint_commit,
+                        "source_episode": episode,
+                        "source_base_commit": base_commit,
+                    },
+                    (worktree.path / "kernel.py").read_bytes(),
+                )
+                attempt["staged_checkpoint"] = staged_metadata
+                active["staged_checkpoint"] = staged_metadata
             active["phase"] = "recording"
             active["terminal_status"] = status
             store.save_active(active)
@@ -1378,6 +1669,7 @@ class LongHorizonCampaign:
                 violation=violation,
                 journal=journal,
                 candidate_commit=candidate_commit,
+                checkpoint_commit=checkpoint_commit,
                 verification=verification,
                 episode_workspace=worktree.path,
                 fast_mode=fast_mode,
@@ -1392,17 +1684,31 @@ class LongHorizonCampaign:
                 memory_record=memory,
             )
             attempt["outcome_commit"] = outcome_commit
-            state.consecutive_without_promotion += 1
-            main_adapter.save_stall(
-                self.workspace, state.consecutive_without_promotion
-            )
+            if valid_staged:
+                state.staged += 1
+                state.consecutive_staged += 1
+                if not prior_staged:
+                    state.staged_initiatives_started += 1
+                state.consecutive_without_promotion += 1
+                main_adapter.save_stall(
+                    self.workspace, state.consecutive_without_promotion
+                )
+            else:
+                state.consecutive_without_promotion += 1
+                main_adapter.save_stall(
+                    self.workspace, state.consecutive_without_promotion
+                )
             if status == "pivot" and not violation:
                 state.pivoted += 1
+                if prior_staged:
+                    state.staged_initiatives_abandoned += 1
+                state.consecutive_staged = 0
+                store.clear_staged_checkpoint()
             elif status == "blocked" and not violation:
                 state.blocked += 1
             elif status == "invalid_handoff":
                 state.protocol_failures += 1
-            else:
+            elif not valid_staged:
                 state.rejected += 1
         self._require_canonical_memory(memory_version)
         try:
@@ -1477,6 +1783,12 @@ class LongHorizonCampaign:
             handoff,
             fast_mode=fast_mode,
             fast_trials=fast_trials,
+            staged_allowed=bool(
+                active.get(
+                    "staged_allowed",
+                    self._staged_allowed(state, fast_mode=fast_mode),
+                )
+            ),
         )
         if diagnosis:
             print(
@@ -1513,6 +1825,7 @@ class LongHorizonCampaign:
             fast_mode=fast_mode,
             status=handoff.status,
             candidate_commit=handoff.candidate_commit,
+            checkpoint_commit=handoff.checkpoint_commit,
             violation=violation,
             paths=paths,
             verification=verification,
@@ -1563,6 +1876,7 @@ class LongHorizonCampaign:
                 "preparing",
                 "exploring",
                 "verifying",
+                "staging",
                 "promoting",
                 "recording",
             }
@@ -1662,6 +1976,11 @@ class LongHorizonCampaign:
                 terminal_status = "interrupted"
             self._require_canonical_memory(memory_version)
             if not already_recorded:
+                recovered_prior_staged = (
+                    active.get("staged_checkpoint")
+                    if isinstance(active.get("staged_checkpoint"), dict)
+                    else {}
+                )
                 state.episodes = max(state.episodes, episode)
                 recovered_attempt: dict[str, Any] = {
                     "episode": episode,
@@ -1676,13 +1995,47 @@ class LongHorizonCampaign:
                 }
                 if promoted:
                     state.accepted += 1
+                    if recovered_prior_staged:
+                        state.staged_initiatives_promoted += 1
                     state.consecutive_without_promotion = 0
+                    state.consecutive_staged = 0
+                    store.clear_staged_checkpoint()
                     recovered_attempt["promotion_commit"] = git_head(self.workspace)
                 else:
-                    state.consecutive_without_promotion += 1
                     recovered_attempt["outcome_commit"] = git_head(self.workspace)
+                    if terminal_status == "staged_ready":
+                        snapshot = store.load_staged_checkpoint()
+                        if snapshot is None:
+                            raise RuntimeError(
+                                "recorded staged episode has no persisted checkpoint"
+                            )
+                        staged_metadata, _staged_kernel = snapshot
+                        recovered_attempt["checkpoint_commit"] = (
+                            staged_metadata.get("checkpoint_commit")
+                        )
+                        recovered_attempt["staged_checkpoint"] = staged_metadata
+                        recovered_attempt["initiative_id"] = staged_metadata.get(
+                            "initiative_id"
+                        )
+                        recovered_attempt["initiative_stage"] = staged_metadata.get(
+                            "stage"
+                        )
+                        state.staged += 1
+                        state.consecutive_staged += 1
+                        if (
+                            int(staged_metadata.get("stage", 0)) == 1
+                            and int(staged_metadata.get("source_episode", 0)) == episode
+                        ):
+                            state.staged_initiatives_started += 1
+                        state.consecutive_without_promotion += 1
+                    else:
+                        state.consecutive_without_promotion += 1
                     if terminal_status == "pivot":
                         state.pivoted += 1
+                        if recovered_prior_staged:
+                            state.staged_initiatives_abandoned += 1
+                        state.consecutive_staged = 0
+                        store.clear_staged_checkpoint()
                     elif terminal_status == "blocked":
                         state.blocked += 1
                         recovered_attempt["blocked_retry_scheduled"] = True
@@ -1691,6 +2044,8 @@ class LongHorizonCampaign:
                         recovered_attempt["violation"] = "supervisor process interrupted"
                     elif terminal_status == "invalid_handoff":
                         state.protocol_failures += 1
+                    elif terminal_status == "staged_ready":
+                        pass
                     else:
                         state.rejected += 1
                 state.attempts.append(recovered_attempt)
@@ -1811,11 +2166,21 @@ class LongHorizonCampaign:
         store.save_state(state)
         store.clear_active()
         return None
-
     def run(self) -> str:
         main_adapter.prepare_campaign(self.base_campaign)
         store = CampaignStore(self.workspace)
         state = store.load_state()
+        staged_snapshot = store.load_staged_checkpoint()
+        if staged_snapshot is not None and self.max_staged_episodes <= 0:
+            raise RuntimeError(
+                "a staged architectural checkpoint exists; resume with "
+                "--max-staged-episodes greater than zero"
+            )
+        if staged_snapshot is not None:
+            staged_metadata, _staged_kernel = staged_snapshot
+            state.consecutive_staged = max(
+                state.consecutive_staged, int(staged_metadata["stage"])
+            )
         if state.episodes == 0 and state.consecutive_without_promotion == 0:
             state.consecutive_without_promotion = main_adapter.restored_stall(
                 self.workspace
@@ -1897,6 +2262,18 @@ class LongHorizonCampaign:
                 active.setdefault(
                     "fast_trials", self.fast_trials if fast_mode else None
                 )
+                computed_staged_trigger = self._staged_trigger(
+                    state, fast_mode=fast_mode
+                )
+                active.setdefault(
+                    "staged_allowed", bool(computed_staged_trigger)
+                )
+                active.setdefault(
+                    "staged_trigger",
+                    computed_staged_trigger
+                    if bool(active.get("staged_allowed"))
+                    else "",
+                )
                 if active.get("resumed_from_phase") == "preparing":
                     main_adapter.link_episode_runtime(
                         self.base_campaign, worktree.path
@@ -1916,6 +2293,12 @@ class LongHorizonCampaign:
                     "mode": "fast" if fast_mode else "full",
                     "fast_trials": self.fast_trials if fast_mode else None,
                     "phase": "preparing",
+                    "staged_allowed": self._staged_allowed(
+                        state, fast_mode=fast_mode
+                    ),
+                    "staged_trigger": self._staged_trigger(
+                        state, fast_mode=fast_mode
+                    ),
                 }
                 store.save_active(active)
                 worktree.materialize(self.workspace)
@@ -1934,8 +2317,28 @@ class LongHorizonCampaign:
                         "runtime linking dirtied the episode boundary: "
                         + ", ".join(unexpected)
                     )
+            self._restore_staged_checkpoint(store, worktree, active)
+            staged_checkpoint = (
+                active.get("staged_checkpoint")
+                if isinstance(active.get("staged_checkpoint"), dict)
+                else None
+            )
+            staged_blocked_retries = self._staged_blocked_retries(
+                state, staged_checkpoint
+            )
+            active["staged_blocked_retries"] = staged_blocked_retries
+            active["staged_stall_review"] = (
+                staged_blocked_retries >= STAGED_STALLED_RETRY_THRESHOLD
+            )
+            store.save_active(active)
             fast_trial_count = self._active_fast_trials(
                 active, fast_mode=fast_mode
+            )
+            staged_allowed = bool(
+                active.get(
+                    "staged_allowed",
+                    self._staged_allowed(state, fast_mode=fast_mode),
+                )
             )
             runtime = worktree.path / RUNTIME_DIR
             journal_path = runtime / "journal.json"
@@ -1947,6 +2350,7 @@ class LongHorizonCampaign:
                     memory_version=memory_version,
                     base_commit=base_commit,
                     branch=worktree.branch,
+                    development_base_commit=git_head(worktree.path),
                     live_path=store.live_memory_path,
                 )
             prompt = self._prompt(
@@ -1960,6 +2364,12 @@ class LongHorizonCampaign:
                 fast_mode=fast_mode,
                 fast_trials=fast_trial_count,
                 resumed=resumed,
+                staged_allowed=staged_allowed,
+                staged_checkpoint=staged_checkpoint,
+                completed_episodes=state.episodes,
+                promotion_drought=state.consecutive_without_promotion,
+                staged_trigger=str(active.get("staged_trigger", "")),
+                staged_blocked_retries=staged_blocked_retries,
             )
             store.write_brief(episode, prompt)
             telemetry_environment = {
@@ -2007,6 +2417,7 @@ class LongHorizonCampaign:
                         handoff,
                         fast_mode=fast_mode,
                         fast_trials=fast_trial_count,
+                        staged_allowed=staged_allowed,
                     ),
                     reasoning_effort=self._episode_reasoning_effort(
                         fast_mode=fast_mode
@@ -2033,6 +2444,7 @@ class LongHorizonCampaign:
             status = handoff.status if handoff else "invalid_handoff"
             violation = ""
             candidate_commit = handoff.candidate_commit if handoff else ""
+            checkpoint_commit = handoff.checkpoint_commit if handoff else ""
             paths: list[str] = []
             verification: VerificationResult | None = None
             accepted = False
@@ -2043,7 +2455,7 @@ class LongHorizonCampaign:
                     result.completion_diagnosis
                     or "session produced no valid terminal handoff"
                 )
-            elif status == "candidate_ready":
+            elif status in {"candidate_ready", "staged_ready"}:
                 violation, paths, verification, accepted = (
                     self._assess_terminal_handoff(
                         store,
@@ -2066,6 +2478,7 @@ class LongHorizonCampaign:
                 fast_mode=fast_mode,
                 status=status,
                 candidate_commit=candidate_commit,
+                checkpoint_commit=checkpoint_commit,
                 violation=violation,
                 paths=paths,
                 verification=verification,
@@ -2093,6 +2506,7 @@ class LongHorizonCampaign:
             if (
                 self.max_stall
                 and state.consecutive_without_promotion >= self.max_stall
+                and store.load_staged_checkpoint() is None
                 and not main_adapter.conversion_required(
                     self.base_campaign,
                     state.consecutive_without_promotion,
@@ -2104,7 +2518,11 @@ class LongHorizonCampaign:
 
         print(
             f"[long-horizon] STOP {reason}; episodes={state.episodes} accepted={state.accepted} "
-            f"rejected={state.rejected} pivoted={state.pivoted} blocked={state.blocked} "
+            f"staged={state.staged} rejected={state.rejected} pivoted={state.pivoted} "
+            f"blocked={state.blocked} staged_initiatives_started="
+            f"{state.staged_initiatives_started} staged_initiatives_promoted="
+            f"{state.staged_initiatives_promoted} staged_initiatives_abandoned="
+            f"{state.staged_initiatives_abandoned} "
             f"protocol_failures={state.protocol_failures} tokens={state.tokens}",
             flush=True,
         )

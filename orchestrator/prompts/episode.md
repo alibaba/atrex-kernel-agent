@@ -14,7 +14,8 @@ final squash promotion. You own only this episode branch and its structured evid
 - Canonical version produced by the supervisor: `v{{VERSION}}`
 - Platform: `{{PLATFORM}}`
 - Framework: `{{FRAMEWORK}}`
-- Incumbent commit: `{{BASE_COMMIT}}`
+- Production incumbent commit: `{{BASE_COMMIT}}`
+- Episode starting commit: `{{DEVELOPMENT_BASE_COMMIT}}`
 - Episode branch: `{{EPISODE_BRANCH}}`
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
@@ -86,6 +87,23 @@ and do not repeat a rejected direction unless new evidence or a materially diffe
 changes the expected result. Detailed within-episode journals remain archived under
 `.atrex_long_horizon/episodes/` and are not part of the inherited prompt context.
 
+## Multi-episode architectural initiative
+
+{{STAGED_REWRITE_DIRECTIVE}}
+
+A staged checkpoint is an engineering continuation point, never a production candidate. It may be
+neutral or slower than the incumbent because it establishes a prerequisite such as a new data
+layout, pipeline, loader, or synchronization model. It must still be a coherent `kernel.py` state
+that compiles through the official sandbox and proves one stage-specific architectural advancement.
+An initiative must state the incumbent limitation it is escaping, the material architectural delta,
+the measurable final success criterion, and the evidence that would abort the initiative. These four
+parts remain stable across continuation stages; if the hypothesis is falsified, pivot instead of
+preserving a checkpoint. A compile-only refactor, parameter sweep, or renamed incumbent path is not
+an architectural advancement. Do not weaken final correctness, policy, or performance requirements
+to preserve a stage.
+The supervisor keeps the production incumbent unchanged and restores the staged kernel only into the
+next isolated episode worktree.
+
 ## Wiki attribution contract
 
 GPU Wiki query responses emit a top-level `query_id`, and every returned record emits its own
@@ -137,8 +155,11 @@ Reach exactly one evidence-backed terminal state:
 1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` matches that exact
    commit, protected files are unchanged, and development correctness/performance supports
    independent verification. Uncommitted intermediate artifacts may remain in the worktree.
-2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
-3. `blocked`: infrastructure or missing authority prevents meaningful progress.
+2. `staged_ready`: an enabled architectural initiative completed one coherent prerequisite stage,
+   the checkpoint compiles and satisfies its declared stage gate, but the initiative is not yet
+   eligible for production verification. A temporary performance regression is allowed here.
+3. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
+4. `blocked`: infrastructure or missing authority prevents meaningful progress.
 
 For `candidate_ready`, append the final evidence, commit only `kernel.py`, then finalize the journal.
 The candidate commit must be the episode `HEAD`, and its complete diff from the incumbent must name
@@ -156,16 +177,35 @@ candidate_commit=$(git rev-parse HEAD)
 Use the one-based journal index of the experiment selected for handoff. Its structured evaluation
 must pass correctness and its decision must be `promote` or `keep_as_best`.
 
-For `pivot` or `blocked`, finalize with that state and omit `--candidate-commit`. The journal must
-contain at least one structured experiment and a non-empty outcome summary.
+For an enabled `staged_ready`, append the stage evidence, commit only `kernel.py`, and finalize after
+that exact commit. A new initiative starts at stage 1; continuation stages keep the same
+`initiative_id` and increment `stage` by exactly one. The escape contract fields must remain exact
+across continuation stages. `stage_gate.compile` and `stage_gate.advancement` must both be `pass`;
+`scope` states the bounded functional or structural invariant proven by this stage, and `evidence`
+identifies the official sandbox result. Merely compiling unchanged or locally retuned architecture
+does not satisfy `advancement`.
+
+```bash
+git add -- kernel.py
+git commit -m "v{{VERSION}}: staged architectural checkpoint"
+checkpoint_commit=$(git rev-parse HEAD)
+{{JOURNAL_COMMAND}} finalize --path {{JOURNAL_PATH_SHELL}} --state staged_ready \
+  --checkpoint-commit "$checkpoint_commit" \
+  --outcome-json '{"summary":"...","next_directions":["..."],"initiative_id":"...","stage":1,"next_stage":"...","escape_hypothesis":"incumbent limitation that local tuning cannot remove","architectural_delta":"materially different dataflow/layout/pipeline/synchronization/communication design","final_success_criterion":"measurable final correctness and performance gate","abort_criterion":"evidence that falsifies the initiative","stage_gate":{"compile":"pass","advancement":"pass","scope":"bounded invariant proven by this stage","evidence":"official sandbox result"}}'
+```
+
+For `pivot` or `blocked`, finalize with that state and omit both commit arguments. The journal must
+contain at least one structured experiment and a non-empty outcome summary. A valid `pivot` abandons
+the active staged initiative; a `blocked` handoff preserves its last accepted checkpoint.
 
 Only after finalizing, atomically publish the control handoff by writing complete JSON to
 `{{HANDOFF_PATH}}.tmp` and renaming it to `{{HANDOFF_PATH}}`:
 
 ```json
 {
-  "status": "candidate_ready | pivot | blocked",
+  "status": "candidate_ready | staged_ready | pivot | blocked",
   "candidate_commit": "required only for candidate_ready",
+  "checkpoint_commit": "required only for staged_ready",
   "last_trial_commit": "optional checkpoint for pivot or blocked"
 }
 ```

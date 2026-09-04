@@ -130,14 +130,15 @@ runtime-detected GPU vendor.
 3. Create one private branch/worktree per canonical version. The first two optimization episodes use
    five fast `plan -> implement -> evaluator` trials per episode by default; later episodes use the
    full evidence loop. The primary Agent uses maximum reasoning effort in both modes.
-4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
-   bounded same-thread recovery for Claude and Codex.
+4. Validate its structured journal and `candidate_ready`, `staged_ready`, `pivot`, or `blocked`
+   handoff, with bounded same-thread recovery for Claude and Codex.
 5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
    uncommitted intermediate artifacts to remain in the episode worktree.
 6. Select the fastest passing hash-matched result from each fast episode's five trials and compare it
    with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
-7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
-   failure/pivot/block evidence.
+7. Squash-promote only a strict correctness-passing improvement. When explicitly enabled, retain a
+   structurally valid `staged_ready` kernel outside the incumbent and bootstrap it into the next
+   full episode; otherwise commit only canonical failure/pivot/block evidence.
 8. Stop on version budget, token budget, optional stall budget, or target utilization.
 9. Recheck production policy and package the final candidate.
 
@@ -228,7 +229,7 @@ correctness and performance-parity gates.
 `Campaign.run()` in `orchestrator/campaign.py` invokes the internal Long Horizon engine. It creates
 an isolated branch and Git worktree from the incumbent for each episode. The Agent records
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
-`pivot`, or `blocked`.
+`staged_ready`, `pivot`, or `blocked`.
 
 A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
 satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
@@ -238,6 +239,20 @@ must pass the exact same-allocation ABBA schedule. Accepted candidates are squas
 canonical memory; rejected and non-candidate episodes advance memory without changing the incumbent.
 Every round's numbered memory is checked against committed `HEAD` before state advances. Active
 episode state supports crash recovery.
+
+A new staged initiative becomes eligible after `--staged-after-episodes N` completed optimization
+episodes (default 40) or `--staged-after-stall S` consecutive episodes without a production
+promotion (default 8). `--max-staged-episodes M` then permits up to M consecutive full-episode
+architectural checkpoints (default 4). A staged checkpoint must be an exact `kernel.py` commit,
+continue one named initiative with monotonic stage numbers, compile, and prove a bounded material
+advance toward a stable escape hypothesis, architectural delta, final success criterion, and abort
+criterion. Compilation, parameter-only tuning, or renaming the incumbent path is not advancement.
+The checkpoint skips performance promotion verification and never changes the production incumbent.
+The next isolated worktree is created from the current incumbent and receives a supervisor-authored
+bootstrap commit containing only the staged kernel, so a later final candidate still has a clean
+cumulative `kernel.py`-only diff. Fast episodes and campaigns setting `--max-staged-episodes 0`
+reject `staged_ready`. Staging does not reset the promotion-drought counter; only a verified
+production promotion does.
 
 ## End-to-End Flow
 
@@ -313,6 +328,13 @@ the worktree's exact committed `kernel.py`, and the candidate commit, then appli
 fast comparison or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
 advances canonical memory without changing the incumbent. Active episode state is restart-safe and
 reuses the registered worktree with its intermediate files after a supervisor restart.
+
+When staged initiatives are enabled, `staged_ready` also advances canonical memory without changing
+the incumbent, while atomically retaining the checkpoint under `.atrex_long_horizon/`. A final
+`candidate_ready` must still pass the unchanged production-policy, correctness, and strict
+performance gates; staging does not lower `--min-improvement-pct`. Supervisor state records started,
+promoted, and abandoned initiative counts so monitoring can distinguish useful architectural escape
+from checkpoint churn.
 
 For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
 journal command refreshes it after every decisive experiment. This live view is explicitly
