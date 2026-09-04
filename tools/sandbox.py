@@ -684,6 +684,29 @@ def _is_test_kernel_command(parts: list[str]) -> bool:
     return _test_kernel_script_index(parts) is not None
 
 
+def _shell_command_operand(
+    command: list[str], executable_index: int
+) -> tuple[str, int] | None:
+    """Locate a shell script or the command string consumed by ``-c``."""
+    if Path(command[executable_index]).name not in {"bash", "sh"}:
+        return None
+    index = executable_index + 1
+    while index < len(command):
+        option = command[index]
+        if option == "--":
+            index += 1
+            break
+        if re.fullmatch(r"-[abefhiklmpruvxBCHPc]+", option):
+            if "c" in option[1:]:
+                return ("command", index + 1) if index + 1 < len(command) else None
+            index += 1
+            continue
+        if option.startswith("-"):
+            return None
+        break
+    return ("script", index) if index < len(command) else None
+
+
 def _is_profile_command(parts: list[str]) -> bool:
     """Return whether argv invokes one of the repository profiler wrappers."""
     command, opaque = _parsed_command_parts(parts)
@@ -696,19 +719,19 @@ def _is_profile_command(parts: list[str]) -> bool:
         return False
     wrappers = {"profile_nvidia.sh", "profile_kernel.sh"}
     executable = Path(command[index]).name
-    return executable == "profile_driver.py" or executable in wrappers or (
-        executable in {"bash", "sh"}
-        and index + 1 < len(command)
-        and Path(command[index + 1]).name in wrappers
+    if executable == "profile_driver.py" or executable in wrappers:
+        return True
+    operand = _shell_command_operand(command, index)
+    return bool(
+        operand
+        and operand[0] == "script"
+        and Path(command[operand[1]]).name in wrappers
     )
 
 
-def _is_opaque_target_command(parts: list[str]) -> bool:
-    """Reject shell strings that hide an evaluator or profiler invocation."""
-    command, opaque = _parsed_command_parts(parts)
-    if len(command) != 1 or not opaque:
-        return False
-    lexer = shlex.shlex(command[0], posix=True, punctuation_chars=True)
+def _shell_text_tokens(command: str) -> list[str]:
+    """Tokenize one simple shell command for rejection-only inspection."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     parsed: list[str] = []
@@ -718,11 +741,11 @@ def _is_opaque_target_command(parts: list[str]) -> bool:
     except ValueError:
         pass
     if not parsed:
-        return False
+        return []
     name, separator, _ = parsed[0].partition("=")
     if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-        if re.match(rf"^\s*{re.escape(name)}=", command[0]) is None:
-            return False
+        if re.match(rf"^\s*{re.escape(name)}=", command) is None:
+            return []
         for index, token in enumerate(parsed):
             assignment, separator, _ = token.partition("=")
             if not separator or re.fullmatch(
@@ -731,10 +754,71 @@ def _is_opaque_target_command(parts: list[str]) -> bool:
                 break
             parsed[index] = f"{assignment}=x"
     elif any(character.isspace() for character in parsed[0]):
-        return False
-    return (
-        len(parsed) >= 2 and _is_test_kernel_command(parsed)
-    ) or _is_profile_command(parsed)
+        return []
+    return parsed
+
+
+def _shell_command_segments(command: str) -> list[str]:
+    """Split on unquoted shell control operators without executing the command."""
+    segments: list[str] = []
+    start = 0
+    quote: str | None = None
+    escaped = False
+    for index, character in enumerate(command):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            continue
+        if character in "&|;()<>\n{}":
+            segment = command[start:index].strip()
+            if segment:
+                segments.append(segment)
+            start = index + 1
+    segment = command[start:].strip()
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _nested_shell_command(command: list[str]) -> str | None:
+    executable_index = _command_executable_index(command)
+    if executable_index is None:
+        return None
+    operand = _shell_command_operand(command, executable_index)
+    if operand and operand[0] == "command":
+        return command[operand[1]]
+    return None
+
+
+def _shell_text_has_target(command: str) -> bool:
+    for segment in _shell_command_segments(command):
+        parsed = _shell_text_tokens(segment)
+        if not parsed:
+            continue
+        if _is_test_kernel_command(parsed) or _is_profile_command(parsed):
+            return True
+        nested = _nested_shell_command(parsed)
+        if nested is not None and _shell_text_has_target(nested):
+            return True
+    return False
+
+
+def _is_opaque_target_command(parts: list[str]) -> bool:
+    """Reject evaluator or profiler invocations hidden inside shell syntax."""
+    command, opaque = _parsed_command_parts(parts)
+    if opaque:
+        return len(command) == 1 and _shell_text_has_target(command[0])
+    nested = _nested_shell_command(command)
+    return nested is not None and _shell_text_has_target(nested)
 
 
 def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
