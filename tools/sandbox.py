@@ -556,7 +556,7 @@ def _command_input_paths(
 def _command_executable_index(
     command: list[str], *, typed_launcher: bool = False
 ) -> int | None:
-    """Skip supported shell assignments and an optional env wrapper."""
+    """Skip supported shell assignments, env, and execution wrappers."""
     def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
         while start < len(command):
             name, separator, _ = command[start].partition("=")
@@ -612,6 +612,86 @@ def _command_executable_index(
         index = assignment_end(index)
         if index is None:
             return None
+    while index < len(command):
+        wrapper = Path(command[index]).name
+        if wrapper not in {"command", "exec", "nice", "time"}:
+            break
+        if typed_launcher:
+            return None
+        index += 1
+
+        if wrapper == "command":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option == "-p":
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "exec":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option == "-a":
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if re.fullmatch(r"-[cl]+", option):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        elif wrapper == "nice":
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-n", "--adjustment"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-(?:n)?\d+", option)
+                    or option.startswith("--adjustment=")
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
+        else:
+            while index < len(command):
+                option = command[index]
+                if option == "--":
+                    index += 1
+                    break
+                if option in {"-f", "--format", "-o", "--output"}:
+                    if index + 1 >= len(command):
+                        return None
+                    index += 2
+                    continue
+                if (
+                    re.fullmatch(r"-[fo].+", option)
+                    or option.startswith("--format=")
+                    or option.startswith("--output=")
+                    or re.fullmatch(r"-[apqv]+", option)
+                    or option in {"--append", "--portability", "--quiet", "--verbose"}
+                ):
+                    index += 1
+                    continue
+                if option.startswith("-"):
+                    return None
+                break
     return index if index < len(command) else None
 
 
@@ -688,7 +768,8 @@ def _shell_command_operand(
     command: list[str], executable_index: int
 ) -> tuple[str, int] | None:
     """Locate a shell script or the command string consumed by ``-c``."""
-    if Path(command[executable_index]).name not in {"bash", "sh"}:
+    shell = Path(command[executable_index]).name
+    if shell not in {"bash", "sh"}:
         return None
     index = executable_index + 1
     while index < len(command):
@@ -696,9 +777,46 @@ def _shell_command_operand(
         if option == "--":
             index += 1
             break
-        if re.fullmatch(r"-[abefhiklmpruvxBCHPc]+", option):
-            if "c" in option[1:]:
-                return ("command", index + 1) if index + 1 < len(command) else None
+        if shell == "bash" and option in {"--init-file", "--rcfile"}:
+            if index + 1 >= len(command):
+                return None
+            index += 2
+            continue
+        if shell == "bash" and (
+            option.startswith("--init-file=") or option.startswith("--rcfile=")
+        ):
+            index += 1
+            continue
+        if shell == "bash" and option in {
+            "--debug",
+            "--debugger",
+            "--login",
+            "--noediting",
+            "--noprofile",
+            "--norc",
+            "--posix",
+            "--protected",
+            "--restricted",
+            "--verbose",
+        }:
+            index += 1
+            continue
+        if shell == "bash" and option in {
+            "--dump-po-strings",
+            "--dump-strings",
+            "--help",
+            "--version",
+            "--wordexp",
+        }:
+            return None
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*c", option):
+            return ("command", index + 1) if index + 1 < len(command) else None
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*[oO]", option):
+            if index + 1 >= len(command):
+                return None
+            index += 2
+            continue
+        if re.fullmatch(r"-[abefhiklmpruvxBCHP]+", option):
             index += 1
             continue
         if option.startswith("-"):
