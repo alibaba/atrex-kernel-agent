@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -22,6 +23,25 @@ WIKI_USAGE_DISPOSITIONS = {
 WIKI_USAGE_STATUSES = {"declared", "no_material_use", "not_queried"}
 EVALUATION_CORRECTNESS = {"pass", "fail", "unknown"}
 EVALUATION_PERFORMANCE = {"improved", "not_improved", "unknown"}
+PPU_DIAGNOSTIC_ROUTES = {"acu", "timeline", "joint"}
+PPU_EVIDENCE_SCHEMAS = {
+    "acu": {"ppu-acu-extraction/v3"},
+    "timeline": {
+        "ppu-fixed-slot-receipt/v4",
+        "ppu-critical-path-report/v2",
+    },
+    "joint": {"ppu-joint-profile/v3"},
+}
+PPU_DIAGNOSTIC_TEXT_FIELDS = (
+    "question",
+    "kernel_specialization",
+    "workload_identity",
+    "device_identity",
+    "launch_topology",
+    "control_pipeline_identity",
+    "finding",
+    "decision_impact",
+)
 QUERY_ID_RE = re.compile(r"wiki-query-[0-9a-f]{32}")
 WIKI_ID_RE = re.compile(
     r"(?:gpu_wiki|internal_gpu_wiki)::[A-Za-z0-9][A-Za-z0-9._:-]*"
@@ -246,6 +266,127 @@ def normalize_experiment_evaluation(raw: object) -> tuple[dict[str, Any] | None,
     }, []
 
 
+def normalize_accepted_ppu_diagnostics(
+    raw: object,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate reusable PPU evidence selected at terminal handoff."""
+    if not isinstance(raw, list):
+        return [], ["accepted_ppu_diagnostics must be a list"]
+    normalized: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, row in enumerate(raw):
+        label = f"accepted_ppu_diagnostics[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        route = row.get("route")
+        if route not in PPU_DIAGNOSTIC_ROUTES:
+            errors.append(
+                f"{label}.route must be one of "
+                + ", ".join(sorted(PPU_DIAGNOSTIC_ROUTES))
+            )
+            continue
+        item: dict[str, Any] = {"route": route}
+        item_errors: list[str] = []
+        for field in PPU_DIAGNOSTIC_TEXT_FIELDS:
+            value = row.get(field)
+            if not isinstance(value, str) or not value.strip():
+                item_errors.append(f"{label}.{field} must be a non-empty string")
+            else:
+                item[field] = value.strip()
+        invalidation_conditions = row.get("invalidation_conditions")
+        if (
+            not isinstance(invalidation_conditions, list)
+            or not invalidation_conditions
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in invalidation_conditions
+            )
+        ):
+            item_errors.append(
+                f"{label}.invalidation_conditions must be a non-empty string list"
+            )
+        else:
+            item["invalidation_conditions"] = [
+                value.strip() for value in invalidation_conditions
+            ]
+        evidence = row.get("evidence")
+        if not isinstance(evidence, dict):
+            item_errors.append(f"{label}.evidence must be an object")
+        else:
+            normalized_evidence: dict[str, str] = {}
+            for field in ("artifact", "sha256", "schema", "evidence_id"):
+                value = evidence.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    item_errors.append(
+                        f"{label}.evidence.{field} must be a non-empty string"
+                    )
+                else:
+                    normalized_evidence[field] = value.strip()
+            if (
+                normalized_evidence.get("schema")
+                and normalized_evidence["schema"] not in PPU_EVIDENCE_SCHEMAS[route]
+            ):
+                item_errors.append(
+                    f"{label}.evidence.schema is not valid for route {route}"
+                )
+            digest = normalized_evidence.get("sha256", "")
+            if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
+                item_errors.append(
+                    f"{label}.evidence.sha256 must be a lowercase SHA-256 digest"
+                )
+            item["evidence"] = normalized_evidence
+        if item_errors:
+            errors.extend(item_errors)
+            continue
+        normalized.append(item)
+    return normalized, errors
+
+
+def validate_accepted_ppu_evidence(
+    rows: list[dict[str, Any]], workspace: Path
+) -> list[str]:
+    """Verify that reusable conclusions bind to decision-grade artifacts."""
+    errors: list[str] = []
+    workspace = workspace.resolve()
+    for index, row in enumerate(rows):
+        label = f"accepted_ppu_diagnostics[{index}].evidence"
+        evidence = row["evidence"]
+        artifact = Path(evidence["artifact"])
+        if artifact.is_absolute():
+            errors.append(f"{label}.artifact must be workspace-relative")
+            continue
+        resolved = (workspace / artifact).resolve()
+        if not resolved.is_relative_to(workspace) or not resolved.is_file():
+            errors.append(f"{label}.artifact is outside the workspace or missing")
+            continue
+        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if digest != evidence["sha256"]:
+            errors.append(f"{label} content hash mismatch")
+            continue
+        try:
+            document = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            errors.append(f"{label} is not readable JSON: {error}")
+            continue
+        if not isinstance(document, dict):
+            errors.append(f"{label} must reference a JSON object")
+            continue
+        if document.get("schema") != evidence["schema"]:
+            errors.append(f"{label} schema mismatch")
+        if document.get("evidence_id") != evidence["evidence_id"]:
+            errors.append(f"{label} evidence_id mismatch")
+        if document.get("evidence_grade") != "decision":
+            errors.append(f"{label} is not decision-grade")
+        validation = document.get("validation")
+        accepted = validation == "accepted" or (
+            isinstance(validation, dict) and validation.get("status") == "accepted"
+        )
+        if not accepted:
+            errors.append(f"{label} validation is not accepted")
+    return errors
+
+
 def normalize_wiki_attribution(entry: dict[str, Any]) -> None:
     """Apply the explicit use/no-use contract while preserving legacy declarations."""
     raw_usage_present = "wiki_usage" in entry
@@ -343,6 +484,7 @@ def finalize(
         raise ValueError(f"cannot change finalized state to {state}")
     if not isinstance(outcome, dict) or not str(outcome.get("summary", "")).strip():
         raise ValueError("outcome.summary must be non-empty")
+    outcome = dict(outcome)
     directions = outcome.get("next_directions", [])
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         raise ValueError("outcome.next_directions must be a list of strings")
@@ -351,6 +493,17 @@ def finalize(
         raise ValueError("a terminal journal requires at least one experiment")
     if state == "candidate_ready" and not candidate_commit.strip():
         raise ValueError("candidate_ready requires candidate_commit")
+    if "accepted_ppu_diagnostics" in outcome:
+        normalized, errors = normalize_accepted_ppu_diagnostics(
+            outcome["accepted_ppu_diagnostics"]
+        )
+        if not errors:
+            errors.extend(
+                validate_accepted_ppu_evidence(normalized, path.resolve().parent.parent)
+            )
+        if errors:
+            raise ValueError("; ".join(errors))
+        outcome["accepted_ppu_diagnostics"] = normalized
     value["state"] = state
     value["outcome"] = outcome
     value["candidate_commit"] = candidate_commit.strip() or None
@@ -388,6 +541,16 @@ def validate_terminal(
     directions = outcome.get("next_directions", [])
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         return "episode journal next_directions is invalid"
+    if "accepted_ppu_diagnostics" in outcome:
+        normalized, errors = normalize_accepted_ppu_diagnostics(
+            outcome["accepted_ppu_diagnostics"]
+        )
+        if not errors:
+            errors.extend(
+                validate_accepted_ppu_evidence(normalized, path.resolve().parent.parent)
+            )
+        if errors:
+            return "; ".join(errors)
     if not value.get("finalized_at"):
         return "episode journal is not finalized"
     if state == "candidate_ready" and value.get("candidate_commit") != candidate_commit:

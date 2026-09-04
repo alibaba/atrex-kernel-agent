@@ -27,7 +27,31 @@
     "tool_used": "<ncu / profile_kernel.sh>",
     "evidence_summary": "<key profile metrics>",
     "bottleneck_type": "<compute_bound / memory_bound>",
-    "evidence_chain": "<evidence -> inference -> action>"
+    "evidence_chain": "<evidence -> inference -> action>",
+    "accepted_ppu_diagnostics": [
+      {
+        "route": "<acu / timeline / joint>",
+        "question": "<the performance question answered>",
+        "kernel_specialization": "<kernel and compile-time specialization>",
+        "workload_identity": "<shape, dtype, layout, and cache policy>",
+        "device_identity": "<physical device and PPU runtime architecture>",
+        "launch_topology": "<grid, block, selected roles, and relevant occupancy facts>",
+        "control_pipeline_identity": "<pipeline stages, waits, barriers, and epilogue structure>",
+        "finding": "<bounded profiler conclusion>",
+        "decision_impact": "<how the conclusion changed the optimization decision>",
+        "evidence": {
+          "artifact": "profiles/episode_N/<route>/attempt-N/<accepted-artifact>.json",
+          "sha256": "<lowercase SHA-256 of the exact artifact>",
+          "schema": "<route-compatible artifact schema>",
+          "evidence_id": "<evidence_id from that artifact>"
+        },
+        "invalidation_conditions": ["<condition that requires new evidence>"],
+        "source_memory_version": "v<N>",
+        "source_episode": 1,
+        "memory_ref": "memory/v<N>.json#profile_evidence.accepted_ppu_diagnostics/0",
+        "evidence_ref": "profiles/.../<accepted-artifact>.json#sha256=<digest>"
+      }
+    ]
   },
   "experience": {
     "experiment_count": 0,

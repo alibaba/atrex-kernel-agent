@@ -54,9 +54,17 @@ steps map onto the telemetry phases above: `profile`, `research`, `planning`, `i
 Read the workspace goal, unmasked `memory/v*.json`, and prior plans/profiles. Prior-episode summaries
 are carried only by canonical memory and are not injected into the episode prompt. Identify attempted
 dead ends and open directions from those records, including each record's compact
-`experience.experiments`. Start with one falsifiable hypothesis tied to the current bottleneck.
+`experience.experiments`. For PPU, also inspect
+`profile_evidence.accepted_ppu_diagnostics` and reuse a conclusion only when its recorded identities
+remain comparable and none of its `invalidation_conditions` holds. Start with one falsifiable
+hypothesis tied to the current bottleneck.
 
 ### 2. Profile and localize
+
+For a PPU target, do not apply the NVIDIA/AMD default below. Read
+`skills/ppu-acu-joint-profile/SKILL.md` first and let its PPU-specific per-iteration rule decide
+whether new PPU profiler evidence is needed. That route may use source or compiler inspection, the
+probe-free benchmark, or still-valid PPU evidence instead of collecting a new profile.
 
 Reuse a profile only when it matches the current committed kernel. Otherwise profile through the
 sandbox using the vendor-appropriate tooling. Both wrappers run `python <file>`, so the profiled file
@@ -104,6 +112,14 @@ standalone CUDA/inline PTX through its CUDA backend and CuTe DSL through IKeT. K
 under `<PROFILE_DIR>/timeline/attempt-N`; when the remote command reads backend files, pass that
 specific skill path with sandbox `--input` and sync only the attempt output directory.
 
+Within the PPU route, ACU can diagnose a device-level bottleneck for any supported PPU kernel. Select
+the standalone coarse-to-fine timeline only for a CUDA-compatible PPU kernel and a concrete
+kernel-internal ordering question; use joint analysis only when both independently interpreted
+evidence sets leave a relationship question. Do not collect all three by default. Timeline topology
+and writer roles remain hypothesis-driven; every-block thread-0 recording is only one optional tail
+design. Keep ACU, timeline, and joint attempts in separate subdirectories below `<PROFILE_DIR>` and
+preserve the same temporary-snapshot rules below.
+
 Timeline instrumentation is a temporary working snapshot on this episode's single HEAD line, not a
 candidate. Preserve the clean source and each useful instrumented source or reversible patch before
 replacing it. After the evidence answers the question, restore or rewrite a probe-free `kernel.py`
@@ -148,7 +164,8 @@ option before `--`, which routes the job through the dev interface.
 Search in this order and stop when one actionable direction is supported:
 
 1. **GPU Wiki through the natural-language front door.** Profile first, then describe the measured
-   problem rather than trying to guess query flags:
+   problem rather than trying to guess query flags. PPU is the exception: start from the decisive
+   evidence selected by `ppu-acu-joint-profile`, whether or not it required a new profile:
 
    ```bash
    python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
@@ -159,7 +176,9 @@ Search in this order and stop when one actionable direction is supported:
    the full product specification and relevant architecture/ISA facts so the response contains isolated
    `hardware_wiki` and `kernel_wiki` records. Also include the operator, framework, shapes, dtypes,
    profile numbers, what was already tried, exact failures, competing hypotheses, and the fact that would
-   end this line of work. Do not translate the hardware identity or pre-compress the prose into keywords.
+   end this line of work. For a PPU iteration that skipped profiling, identify the source, compiler,
+   clean-benchmark, or prior PPU evidence used instead. Do not translate the hardware identity or
+   pre-compress the prose into keywords.
 
    Read the compact response before acting: records are keyed by stable id, every `payload` is isolated,
    `store` distinguishes `gpu_wiki` from namespaced `internal_gpu_wiki` records,
@@ -179,8 +198,9 @@ repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-act
 ### 4. Plan a coherent direction
 
 Write or update `<PLAN_DRAFT>` with profile evidence, research findings, concrete edits, risks,
-rollback points, and measurable acceptance criteria. Then produce `<PLAN_FILE>` with the
-backend-native plan generator `<PLAN_GENERATOR>`.
+rollback points, and measurable acceptance criteria. For a PPU iteration that did not need a new
+profile, record the decisive PPU evidence selected by its routing skill instead. Then produce
+`<PLAN_FILE>` with the backend-native plan generator `<PLAN_GENERATOR>`.
 
 The episode may contain multiple related experiments, but they must advance one coherent engineering
 direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
@@ -238,4 +258,8 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 
 Leave the loop as soon as one coherent candidate passes the full development correctness check and
 has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
-the episode prompt's terminal contract for finalizing the journal and publishing the handoff.
+the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
+PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
+`skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
+probe-free kernel. Each retained row must bind an accepted decision-grade artifact by path, SHA-256,
+schema, and evidence id. This is optional when no reusable PPU profiler evidence exists.
