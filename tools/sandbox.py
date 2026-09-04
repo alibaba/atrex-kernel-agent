@@ -430,8 +430,22 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     raise ValueError(f"sandbox input does not exist: {value!r}")
 
 
+def _parsed_command_parts(parts: list[str]) -> tuple[list[str], bool]:
+    """Return command words and whether a single shell string stayed opaque."""
+    command = parts[1:] if parts and parts[0] == "--" else list(parts)
+    if len(command) != 1:
+        return command, False
+    try:
+        parsed = shlex.split(command[0])
+    except ValueError:
+        return command, True
+    if shlex.join(parsed) == command[0]:
+        return parsed, False
+    return command, True
+
+
 def _command_parts(parts: list[str]) -> list[str]:
-    return parts[1:] if parts and parts[0] == "--" else list(parts)
+    return _parsed_command_parts(parts)[0]
 
 
 def _python_inline_imports(parts: list[str]) -> set[str]:
@@ -539,14 +553,10 @@ def _command_input_paths(
     return frozenset(selected)
 
 
-def _test_kernel_script_index(
-    parts: list[str], *, typed_launcher: bool = False
+def _command_executable_index(
+    command: list[str], *, typed_launcher: bool = False
 ) -> int | None:
-    """Locate the evaluator; optionally require a prefix typed run may omit."""
-    command = _command_parts(parts)
-    if not command:
-        return None
-
+    """Skip supported shell assignments and an optional env wrapper."""
     def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
         while start < len(command):
             name, separator, _ = command[start].partition("=")
@@ -602,9 +612,20 @@ def _test_kernel_script_index(
         index = assignment_end(index)
         if index is None:
             return None
+    return index if index < len(command) else None
+
+
+def _python_script_index(
+    parts: list[str], script_name: str, *, typed_launcher: bool = False
+) -> int | None:
+    """Locate a Python script; optionally require a prefix typed run may omit."""
+    command, opaque = _parsed_command_parts(parts)
+    if opaque:
+        return None
+    index = _command_executable_index(command, typed_launcher=typed_launcher)
 
     if (
-        index >= len(command)
+        index is None
         or re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[index]).name) is None
     ):
         return None
@@ -646,9 +667,17 @@ def _test_kernel_script_index(
             return None
         break
 
-    if index < len(command) and Path(command[index]).name == "test_kernel.py":
+    if index < len(command) and Path(command[index]).name == script_name:
         return index
     return None
+
+
+def _test_kernel_script_index(
+    parts: list[str], *, typed_launcher: bool = False
+) -> int | None:
+    return _python_script_index(
+        parts, "test_kernel.py", typed_launcher=typed_launcher
+    )
 
 
 def _is_test_kernel_command(parts: list[str]) -> bool:
@@ -657,11 +686,55 @@ def _is_test_kernel_command(parts: list[str]) -> bool:
 
 def _is_profile_command(parts: list[str]) -> bool:
     """Return whether argv invokes one of the repository profiler wrappers."""
-    return any(
-        Path(token).name
-        in {"profile_nvidia.sh", "profile_kernel.sh", "profile_driver.py"}
-        for token in _command_parts(parts)
+    command, opaque = _parsed_command_parts(parts)
+    if opaque:
+        return False
+    if _python_script_index(command, "profile_driver.py") is not None:
+        return True
+    index = _command_executable_index(command)
+    if index is None:
+        return False
+    wrappers = {"profile_nvidia.sh", "profile_kernel.sh"}
+    executable = Path(command[index]).name
+    return executable == "profile_driver.py" or executable in wrappers or (
+        executable in {"bash", "sh"}
+        and index + 1 < len(command)
+        and Path(command[index + 1]).name in wrappers
     )
+
+
+def _is_opaque_target_command(parts: list[str]) -> bool:
+    """Reject shell strings that hide an evaluator or profiler invocation."""
+    command, opaque = _parsed_command_parts(parts)
+    if len(command) != 1 or not opaque:
+        return False
+    lexer = shlex.shlex(command[0], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    parsed: list[str] = []
+    try:
+        while (token := lexer.get_token()) is not None:
+            parsed.append(token)
+    except ValueError:
+        pass
+    if not parsed:
+        return False
+    name, separator, _ = parsed[0].partition("=")
+    if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        if re.match(rf"^\s*{re.escape(name)}=", command[0]) is None:
+            return False
+        for index, token in enumerate(parsed):
+            assignment, separator, _ = token.partition("=")
+            if not separator or re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_]*", assignment
+            ) is None:
+                break
+            parsed[index] = f"{assignment}=x"
+    elif any(character.isspace() for character in parsed[0]):
+        return False
+    return (
+        len(parsed) >= 2 and _is_test_kernel_command(parsed)
+    ) or _is_profile_command(parsed)
 
 
 def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
@@ -3082,18 +3155,25 @@ def _main(argv: list[str] | None = None) -> int:
         )
     if not workspace.is_dir():
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
+    if _is_opaque_target_command(args.command):
+        raise SystemExit(
+            "sandbox: evaluator and profile commands cannot be passed as opaque "
+            "shell strings; pass the command as separate arguments after --"
+        )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
     evaluator_command = _is_test_kernel_command(args.command)
     profile_command = _is_profile_command(args.command)
+    profile_request = gateway_kind == "profile" or profile_command
     if profile_command:
         try:
             args.env = _with_inherited_profile_environment(args.env)
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
     typed_limitation: str | None = None
+    typed_fallback_kind: str | None = None
     num_gpus = 1
-    if gateway_kind in TYPED_KINDS or evaluator_command:
+    if gateway_kind in TYPED_KINDS or evaluator_command or profile_request:
         try:
             num_gpus = _workspace_num_gpus(workspace)
         except ValueError as exc:
@@ -3134,16 +3214,21 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
-        if gateway_kind == "profile" and num_gpus > 1:
-            raise SystemExit(
-                "sandbox: distributed profile cannot fall back to dev "
-                f"({typed_limitation}); the dev route does not launch ranks"
-            )
+        typed_fallback_kind = gateway_kind
+        gateway_kind = "dev"
+
+    if gateway_kind == "dev" and profile_request and num_gpus > 1:
+        limitation = f" ({typed_limitation})" if typed_limitation else ""
+        raise SystemExit(
+            "sandbox: distributed profile commands require the typed profile route"
+            f"{limitation}; "
+            "the dev route does not launch ranks"
+        )
+    if typed_fallback_kind is not None:
         print(
-            f"[sandbox] {gateway_kind} interface unsupported ({typed_limitation}); using dev",
+            f"[sandbox] {typed_fallback_kind} interface unsupported ({typed_limitation}); using dev",
             file=sys.stderr,
         )
-        gateway_kind = "dev"
 
     if evaluator_command:
         selected = set(_evaluation_input_paths(workspace, args.command))
