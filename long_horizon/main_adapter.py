@@ -86,11 +86,17 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
-def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
+def episode_directives(
+    campaign: Campaign, version: int, *, fast: bool = False
+) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
     return {
         "hardware": hardware_directive(campaign.platform, campaign.arch),
-        "sandbox": campaign._sandbox_directive(),
+        "sandbox": (
+            campaign._fast_sandbox_directive()
+            if fast
+            else campaign._sandbox_directive()
+        ),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(agent_cli),

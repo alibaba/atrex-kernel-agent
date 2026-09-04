@@ -16,7 +16,8 @@ SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
 PROFILE_DRIVER = REPO_ROOT / "reference" / "profile_driver.py"
 SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
-SANDBOX_DIRECTIVE_PROMPT = PROMPTS_DIR / "sandbox_directive.md"
+SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
+SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
 CONVERT_PERF_TOL = (
     0.05  # triton->gluon is a direct translation: gluon must be within +5% of triton
 )

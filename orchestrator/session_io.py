@@ -24,7 +24,8 @@ from .constants import (
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     REPO_ROOT,
-    SANDBOX_DIRECTIVE_PROMPT,
+    SANDBOX_FULL_WORKFLOW_PROMPT,
+    SANDBOX_SAFETY_BOUNDARY_PROMPT,
     SANDBOX_TOOL,
     TEST_RESULT_PREFIX,
 )
@@ -402,15 +403,38 @@ def _validate_production_review(
     return rejected, summary.strip()
 
 
-def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
-    """Mandatory execution boundary injected into every optimization session."""
+def _sandbox_endpoint(profile: str = "", url: str = "") -> str:
+    """Render the gateway endpoint clause shared by sandbox directives."""
     if url:
-        endpoint = f" using gateway URL `{url}`"
-    elif profile:
-        endpoint = f" using gateway profile `{profile}`"
-    else:
-        endpoint = " using agate's configured gateway"
-    return _render(SANDBOX_DIRECTIVE_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
+        return f" using gateway URL `{url}`"
+    if profile:
+        return f" using gateway profile `{profile}`"
+    return " using agate's configured gateway"
+
+
+def sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
+    """Mandatory safety boundary plus full-mode workflow for full episodes."""
+    endpoint = _sandbox_endpoint(profile, url)
+    safety = _render(
+        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
+    )
+    workflow = _render(
+        SANDBOX_FULL_WORKFLOW_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
+    )
+    return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
+
+
+def fast_sandbox_directive(hardware: str, profile: str = "", url: str = "") -> str:
+    """Mandatory safety boundary for fast episodes.
+
+    The fast episode prompt already describes the fast-specific execution
+    contract (single evaluator, no multi-seed, no profile, supervisor-owned
+    memory), so only the invariant safety boundary is injected here.
+    """
+    endpoint = _sandbox_endpoint(profile, url)
+    return _render(
+        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
+    )
 
 
 def _sandbox_command(
