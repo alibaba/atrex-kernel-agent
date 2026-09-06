@@ -4253,6 +4253,11 @@ def _main(argv: list[str] | None = None) -> int:
             f"{limitation}; "
             "the dev route does not launch ranks"
         )
+    if args.ssh and evaluator_command and num_gpus > 1:
+        raise SystemExit(
+            "sandbox: distributed evaluator commands are not supported by the SSH "
+            "runner; it exposes only one GPU"
+        )
     if typed_fallback_kind is not None:
         if args.ssh:
             print(
