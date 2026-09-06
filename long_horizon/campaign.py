@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1254,6 +1255,7 @@ class LongHorizonCampaign:
         session_id: str = "",
         resume_count: int = 0,
         tokens: int = 0,
+        tokens_accounted: bool = False,
         invocations: tuple[Any, ...] = (),
         fast_trials: int | None = None,
         recovered_after_supervisor_interruption: bool = False,
@@ -1263,7 +1265,8 @@ class LongHorizonCampaign:
         base_commit = worktree.base_commit
         journal_path = worktree.path / RUNTIME_DIR / "journal.json"
         state.episodes = max(state.episodes, episode)
-        state.tokens += max(0, int(tokens))
+        if not tokens_accounted:
+            state.tokens += max(0, int(tokens))
         fast_trial_count = fast_trials or self._active_fast_trials(
             active, fast_mode=fast_mode
         )
@@ -2000,6 +2003,7 @@ class LongHorizonCampaign:
                     ),
                     stop_event=policy_stop,
                 )
+            usage_receipt = uuid.uuid4().hex
             try:
                 result = runner.run(
                     worktree.path,
@@ -2017,7 +2021,13 @@ class LongHorizonCampaign:
                         fast_mode=fast_mode
                     ),
                     telemetry_environment=telemetry_environment,
+                    record_usage=lambda tokens: store.record_usage(
+                        state, usage_receipt, tokens
+                    ),
                 )
+                # Also persist before verification: a GPU outage there must not
+                # discard the coding session's usage. Receipt replay is harmless.
+                store.record_usage(state, usage_receipt, result.tokens)
             finally:
                 if policy_stop is not None:
                     policy_stop.set()
@@ -2078,6 +2088,7 @@ class LongHorizonCampaign:
                 session_id=result.session_id,
                 resume_count=result.resume_count,
                 tokens=result.tokens,
+                tokens_accounted=True,
                 invocations=result.invocations,
             )
             if accepted and memory is not None:

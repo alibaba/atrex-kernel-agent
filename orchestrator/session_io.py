@@ -32,7 +32,6 @@ from .constants import (
     TEST_RESULT_PREFIX,
 )
 from .environment_recovery import (
-    environment_is_blocked,
     environment_state_file,
     raise_if_environment_blocked,
 )
@@ -480,6 +479,7 @@ def _sandbox_command(
     wall_timeout: Optional[int] = None,
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
+    preflight: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
@@ -511,7 +511,10 @@ def _sandbox_command(
             cmd += ["--sync", path]
     else:
         cmd.append("--no-sync")
-    cmd += ["--", *command]
+    if preflight:
+        cmd.append("--preflight")
+    else:
+        cmd += ["--", *command]
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
@@ -546,21 +549,34 @@ def _sandbox_command(
             return process.communicate()
 
     deadline = time.monotonic() + effective_timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            stdout, stderr = stop_process_group()
-            raise subprocess.TimeoutExpired(
-                cmd, effective_timeout, output=stdout, stderr=stderr
-            )
-        try:
-            stdout, stderr = process.communicate(timeout=min(0.25, remaining))
-        except subprocess.TimeoutExpired:
-            if environment_is_blocked():
-                stop_process_group()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stdout, stderr = stop_process_group()
+                raise subprocess.TimeoutExpired(
+                    cmd, effective_timeout, output=stdout, stderr=stderr
+                )
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+            except subprocess.TimeoutExpired:
                 raise_if_environment_blocked()
-            continue
-        break
+                continue
+            break
+    except BaseException:
+        # A first-run sandbox has its own session and no recovery guardian.
+        # Reap it on Ctrl-C and every exceptional exit, not just wall timeout.
+        try:
+            stop_process_group()
+        except BaseException:
+            # A second interrupt must not abandon the independently owned group
+            # or replace the original error. The normal path allows SSH cleanup.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        raise
     result = subprocess.CompletedProcess(
         args=cmd,
         returncode=process.returncode,
@@ -569,6 +585,18 @@ def _sandbox_command(
     )
     raise_if_environment_blocked()
     return result
+
+
+def check_ssh_environment(
+    workspace: Path, hardware: str, ssh: str, ssh_init: str, health_command: str
+) -> None:
+    """Fail into durable recovery before seeding, even when --arch was given."""
+    result = _sandbox_command(
+        workspace, hardware, "", "", 60, [], ssh=ssh, ssh_init=ssh_init,
+        health_command=health_command, preflight=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"SSH preflight failed: {result.stderr or result.stdout}")
 
 
 def _test_result_from_stdout(stdout: str) -> dict:

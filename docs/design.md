@@ -200,6 +200,11 @@ mutually exclusive, and neither makes remote filesystem state authoritative.
 ### Environment failure recovery
 
 SSH command failures, including status 255, pass through an independent isolated GPU health probe.
+The default probe performs allocation, arithmetic, and synchronization. SSH campaigns persist an
+additional trusted framework/SOL runtime preflight and run it before initialization, even with an
+explicit architecture. Recovery polling replays both probes, so an incompatible evaluator does not
+repeatedly restart the optimizer merely because CUDA device properties are readable. Native bundled
+evaluator contracts and candidate correctness remain the real evaluator's responsibility.
 A healthy probe preserves the original exit status as a candidate/tool failure. A transfer exception,
 or a failed probe after a failed command, atomically transitions the optimizer to
 `environment_blocked` and records a private marker. The coding-session process guard watches that
@@ -234,6 +239,13 @@ environment-only recovery options are replayed, and `monitor.pid` is removed by 
 owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
 boundary. User
 interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
+
+An interrupted SOL V0 with committed sources reuses that source commit and retries measurement;
+changed, missing, or staged sources fail closed without being overwritten. Long Horizon usage is
+durably recorded after each coding invocation, before propagating an environment failure and before
+GPU verification. Cumulative per-run receipts and token totals share one atomic state replacement:
+replaying a receipt does not double count, and recovery retains actual token usage without consuming
+an episode outcome. Partial reported usage is counted; unavailable usage is not fabricated.
 
 ```mermaid
 flowchart TD

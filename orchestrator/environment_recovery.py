@@ -18,16 +18,11 @@ from .durable_state import (
     ensure_private_directory,
 )
 from .recovery_processes import ACTIVE_MARKER, HANDOFF_ID_ENV
+from .ssh_health import DEFAULT_SSH_HEALTH_COMMAND  # noqa: F401
 
 ENVIRONMENT_STATE_ENV = "ATREX_ENVIRONMENT_STATE_FILE"
 RECOVERY_OWNER_ENV = "ATREX_ENVIRONMENT_RECOVERY_OWNER"
 ENVIRONMENT_TEMPFAIL = 75
-DEFAULT_SSH_HEALTH_COMMAND = (
-    "python -c \"import torch; "
-    "assert torch.cuda.is_available(); "
-    "p=torch.cuda.get_device_properties(0); "
-    "print(getattr(p, 'gcnArchName', '') or torch.cuda.get_device_capability(0))\""
-)
 
 
 class EnvironmentUnavailable(BaseException):
@@ -134,8 +129,10 @@ def configure_recovery(
     ssh_gpu: int,
     health_command: str,
     poll_interval: int,
+    runtime_health_command: str = "",
 ) -> RecoveryContext:
     """Create durable restart metadata and export the shared failure marker path."""
+    workspace_base = workspace_base.expanduser().resolve()
     inherited = environment_state_file()
     owner = os.environ.get(RECOVERY_OWNER_ENV, "1") != "0"
     command = [
@@ -152,6 +149,7 @@ def configure_recovery(
         "ssh_runtime_binds": list(ssh_runtime_binds),
         "ssh_gpu": ssh_gpu,
         "health_command": health_command,
+        "runtime_health_command": runtime_health_command,
         "poll_interval": poll_interval,
     }
     if inherited is not None:
@@ -170,6 +168,7 @@ def configure_recovery(
                         "ssh_runtime_binds",
                         "ssh_gpu",
                         "health_command",
+                        "runtime_health_command",
                         "poll_interval",
                     )
                 },
@@ -194,6 +193,7 @@ def configure_recovery(
     )
     os.environ["ATREX_SANDBOX_SSH_GPU"] = str(ssh_gpu)
     os.environ["ATREX_SANDBOX_HEALTH_COMMAND"] = health_command
+    os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command
     os.environ.pop("ATREX_SANDBOX_URL", None)
     os.environ.pop("ATREX_SANDBOX_PROFILE", None)
     os.environ[RECOVERY_OWNER_ENV] = "1" if owner else "0"
@@ -210,6 +210,8 @@ def configure_recovery(
             key
             for key, expected in stable_metadata.items()
             if existing.get(key) != expected
+            # Pre-preflight metadata is upgraded by the same validated owner.
+            and not (key == "runtime_health_command" and key not in existing)
         ]
         if existing.get("environment_state_file") != str(inherited):
             mismatches.append("environment_state_file")
@@ -222,7 +224,7 @@ def configure_recovery(
         _write_private_json(
             restart_path,
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "environment_state_file": str(inherited),
                 **stable_metadata,

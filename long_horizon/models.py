@@ -9,7 +9,6 @@ from orchestrator.agent_runtime.model import (
     TokenUsage,
 )
 
-
 TERMINAL_STATUSES = frozenset({"candidate_ready", "pivot", "blocked"})
 
 
@@ -99,6 +98,8 @@ class SupervisorState:
     protocol_failures: int = 0
     interrupted: int = 0
     tokens: int = 0
+    # Cumulative usage per runner invocation, independent of episode outcomes.
+    usage_receipts: dict[str, int] = field(default_factory=dict)
     consecutive_without_promotion: int = 0
     attempts: list[dict[str, Any]] = field(default_factory=list)
 

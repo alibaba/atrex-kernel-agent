@@ -111,6 +111,7 @@ class LongSessionRunner:
         reasoning_effort: str = "max",
         session_id: str = "",
         telemetry_environment: Mapping[str, str] | None = None,
+        record_usage: Callable[[int], None] | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
         is_codex = self.agent_cli == "codex"
@@ -202,7 +203,6 @@ class LongSessionRunner:
             stdout, stderr, exit_status, turn_timed_out = self.executor(
                 command, workspace, None, environment
             )
-            raise_if_environment_blocked()
             stdout_parts.append(stdout)
             stderr_parts.append(stderr)
             observed_session_id = main_adapter.session_id_from_stream(
@@ -288,6 +288,11 @@ class LongSessionRunner:
                     resume_usage_qualified=resume_usage_qualified,
                 )
             )
+            if record_usage is not None:
+                record_usage(total_tokens)
+            # Even an interrupted candidate has consumed real model tokens.
+            # Account first, then stop without consuming an episode outcome.
+            raise_if_environment_blocked()
             timed_out = turn_timed_out
             observed = read_handoff(handoff_path)
             if observed is not None:

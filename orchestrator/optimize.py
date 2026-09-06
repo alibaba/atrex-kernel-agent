@@ -117,7 +117,8 @@ try:
         validate_private_shapes,
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
-    from .session_io import detect_arch, ensure_submodules
+    from .session_io import check_ssh_environment, detect_arch, ensure_submodules
+    from .ssh_health import runtime_health_command
     from .workspace_state import (
         latest_version,
         read_memory,
@@ -168,9 +169,11 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         OPTIMIZATION_MODE_CHOICES,
     )
     from orchestrator.session_io import (  # type: ignore[no-redef]
+        check_ssh_environment,
         detect_arch,
         ensure_submodules,
     )
+    from orchestrator.ssh_health import runtime_health_command  # type: ignore[no-redef]
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
         read_memory,
@@ -814,6 +817,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
+    op = _resolve_op(args.op_dir, args.optimization_mode)
     if args.sandbox_ssh:
         workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
         configure_recovery(
@@ -827,10 +831,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             ssh_gpu=args.sandbox_ssh_gpu,
             health_command=args.sandbox_health_command,
             poll_interval=args.environment_poll_interval,
+            runtime_health_command=runtime_health_command(
+                sol=is_sol_op(Path(op["op_dir"])), framework=args.framework
+            ),
         )
         raise_if_environment_blocked()
+        check_ssh_environment(
+            workspace_base, sandbox_hardware, args.sandbox_ssh,
+            args.sandbox_ssh_init, args.sandbox_health_command,
+        )
 
-    op = _resolve_op(args.op_dir, args.optimization_mode)
     arch = args.arch or detect_arch(
         sandbox_hardware,
         args.sandbox_profile,

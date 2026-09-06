@@ -111,7 +111,6 @@ python orchestrator/optimize.py \
     --sandbox-ssh-gpu 0 \
     --sandbox-ssh-runtime-bind /opt/aka-venv \
     --sandbox-ssh-init 'source /opt/aka-venv/bin/activate' \
-    --sandbox-health-command 'python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_capability(0))"' \
     --environment-poll-interval 60 \
     --workspace /path/to/runs --max-iters 20
 ```
@@ -132,9 +131,13 @@ Before each execution, the remote host resolves every source symlink; the resolv
 pass the same denylist and be a directory.
 
 `--sandbox-ssh-init` defaults to empty and runs inside the isolated namespace. The default health
-command imports PyTorch, checks GPU
-availability, and reads device properties; override it when the remote stack uses a different
-runtime. Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
+command checks PyTorch GPU allocation, arithmetic, synchronization, and device properties;
+override it when the remote stack uses a different runtime. The optimizer also checks the selected
+framework's installed tooling and, for SOL operators, the evaluator interpreter and dtype mapping.
+These workspace-independent checks run before seeding (even with `--arch`), after failed commands,
+and during recovery polling. They never import candidate code. Native operator contracts and
+complete workload coverage still require real evaluation; preflight is not a replacement for it.
+Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
 with `--sandbox-url` and `--sandbox-profile`.
 
 Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sandbox.*` directory,
@@ -145,7 +148,7 @@ system paths, configured runtime binds, the assigned GPU device node, and its wr
 unisolated fallback. A portable Python watchdog enforces `--sandbox-timeout` even when GNU `timeout`
 is absent.
 
-When SSH transport fails, or a failed GPU command is followed by a failed health probe, the sandbox
+When preflight or SSH transport fails (including scp upload/download timeout), or a failed GPU command is followed by a failed health probe, the sandbox
 writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
 active Agent/framework process groups without treating the failure as a bad candidate. It then starts
 `tools/monitor_optimize_tasks.py` detached. Recovery state is stored below

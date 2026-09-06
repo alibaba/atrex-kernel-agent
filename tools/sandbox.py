@@ -87,6 +87,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
+from orchestrator.ssh_health import (  # noqa: E402
+    DEFAULT_SSH_HEALTH_COMMAND,
+    combined_health_command,
+)
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
@@ -162,12 +166,6 @@ SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
-DEFAULT_SSH_HEALTH_COMMAND = (
-    "python -c \"import torch; "
-    "assert torch.cuda.is_available(); "
-    "p=torch.cuda.get_device_properties(0); "
-    "print(getattr(p, 'gcnArchName', '') or torch.cuda.get_device_capability(0))\""
-)
 SSH_WATCHDOG_SOURCE = r"""
 import os
 import signal
@@ -1396,6 +1394,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--runtime-health-command",
+        default=os.environ.get("ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND", ""),
+        metavar="COMMAND",
+        help="Additional trusted evaluator/framework probe; replayed by recovery.",
+    )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check SSH health before optimization and record failures for recovery.",
+    )
+    parser.add_argument(
         "--check-health",
         action="store_true",
         help="Run only the configured SSH health probe; do not upload a workspace.",
@@ -2098,8 +2107,10 @@ def _run_ssh_job(
                     raise SSHTransportError(
                         f"cannot extract sandbox outputs: {exc}"
                     ) from exc
-    except OSError as exc:
-        raise SSHTransportError(str(exc)) from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        # scp can time out during either upload or download. Both are transport
+        # failures, even if the remote candidate itself has already exited.
+        raise SSHTransportError(f"SSH transfer failed: {exc}") from exc
     finally:
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
         if not cleanup_succeeded:
@@ -3677,9 +3688,12 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
-    if args.check_health:
+    args.health_command = combined_health_command(
+        args.health_command, args.runtime_health_command
+    )
+    if args.check_health or args.preflight:
         if not args.ssh:
-            raise SystemExit("sandbox: --check-health requires --ssh")
+            raise SystemExit("sandbox: --check-health/--preflight requires --ssh")
         try:
             health = _run_ssh_health(
                 args.ssh,
@@ -3689,12 +3703,21 @@ def _main(argv: list[str] | None = None) -> int:
                 args.ssh_gpu,
             )
         except SSHTransportError as exc:
-            print(f"sandbox: {exc}", file=sys.stderr)
-            return 1
+            health = subprocess.CompletedProcess(
+                args=["ssh", args.ssh], returncode=1, stdout="", stderr=str(exc)
+            )
         if health.stdout:
             print(health.stdout.rstrip())
         if health.stderr:
             print(health.stderr.rstrip(), file=sys.stderr)
+        if args.preflight and health.returncode != 0:
+            _record_environment_failure(
+                target=args.ssh,
+                stage="preflight",
+                detail=(health.stderr or health.stdout or "health probe failed")[-2000:],
+                health_status=health.returncode,
+            )
+            return ENVIRONMENT_TEMPFAIL
         return health.returncode
     try:
         command = _command_text(args.command)

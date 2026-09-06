@@ -95,6 +95,8 @@ def _load_restart(state_dir: Path) -> dict[str, Any]:
     ):
         raise RuntimeError("restart metadata has invalid ssh_runtime_binds")
     ssh_gpu = value.get("ssh_gpu")
+    if not isinstance(value.get("runtime_health_command", ""), str):
+        raise RuntimeError("restart metadata has invalid runtime_health_command")
     if (
         not isinstance(ssh_gpu, int)
         or isinstance(ssh_gpu, bool)
@@ -693,6 +695,8 @@ def _health_command(metadata: dict[str, Any]) -> list[str]:
         str(metadata["ssh_gpu"]),
         "--health-command",
         metadata["health_command"],
+        "--runtime-health-command",
+        metadata.get("runtime_health_command", ""),
         "--check-health",
     ]
     ssh_init = metadata.get("ssh_init")
@@ -797,6 +801,9 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     )
     environment["ATREX_SANDBOX_SSH_GPU"] = str(metadata["ssh_gpu"])
     environment["ATREX_SANDBOX_HEALTH_COMMAND"] = metadata["health_command"]
+    environment["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = metadata.get(
+        "runtime_health_command", ""
+    )
     environment["ATREX_ENVIRONMENT_POLL_INTERVAL"] = str(metadata["poll_interval"])
     environment.pop("ATREX_SANDBOX_URL", None)
     environment.pop("ATREX_SANDBOX_PROFILE", None)
@@ -1170,6 +1177,9 @@ def run_monitor(
             return 0
         while True:
             _raise_if_stop_requested(state_dir)
+            # A restarted older campaign may have upgraded its preflight
+            # metadata before encountering an incompatible evaluator runtime.
+            metadata = _load_restart(state_dir)
             checked_at = datetime.now(timezone.utc).isoformat()
             result = _run_health_probe(metadata, state_dir)
             _raise_if_stop_requested(state_dir)
