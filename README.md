@@ -28,6 +28,7 @@ AKA supports:
 
 - SOL-ExecBench and native Atrex-Bench operator layouts;
 - NVIDIA, AMD, and T-Head PPU (zwm890p) targets through isolated sandbox execution;
+- gateway and Bubblewrap-isolated OpenSSH GPU execution, with automatic environment recovery;
 - Triton, CuteDSL, CUDA, FlyDSL, and TileLang campaigns;
 - Claude, Qoder, Codex, and Pi coding-agent backends;
 - leaderboard and fail-closed production modes;
@@ -62,6 +63,22 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
+
+For a GPU server reachable through OpenSSH, use a dedicated low-privilege account and pass
+`--sandbox-ssh user@gpu-host --sandbox-ssh-gpu 0` with an explicit `--framework`. AKA keeps Agent,
+Git, memory, and episode state local, transfers only
+the sandbox allowlist to a fresh remote temporary directory, and runs it in a mandatory networkless
+Bubblewrap namespace before copying back requested artifacts. Use `--sandbox-ssh-runtime-bind` for
+read-only venv or toolchain trees outside the minimal system mounts. Runtime sources are checked
+against sensitive host paths after remote symlink resolution, and only the assigned physical NVIDIA
+GPU is visible; MIG execution fails closed until capability-node assignment is supported.
+If the remote environment fails its GPU health probe, AKA stops, preserves the active worktree, and
+starts a detached monitor that resumes the original command after the server recovers. See
+[Quick Start: Isolated OpenSSH GPU host](docs/quickstart.md#isolated-openssh-gpu-host).
+The generated `stop-recovery.sh` also stops a recovered optimizer and leaves automatic recovery
+disabled until the generated `recover.sh` is run explicitly. The recovery monitor stays with the
+restarted optimizer: an unexpected exit returns to health polling and automatic restart, while only a
+durably clean zero exit completes recovery.
 
 ## Acknowledgements
 

@@ -180,6 +180,147 @@ submits evaluator or profiler work to the configured remote executor, and synchr
 requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
 the coordinator.
 
+The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
+profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
+`/tmp/atrex-sandbox.*` directory and uploads the allowlisted bundle with `scp`, but never executes a
+candidate in the login account's ordinary shell. `tools/sandbox.py` always enters a Bubblewrap
+namespace that exposes a minimal read-only system tree, explicitly configured read-only runtime
+directories, one assigned physical NVIDIA GPU, and the one writable job directory. Runtime bind
+sources are denied when broad/sensitive, resolved on the remote host, and validated again so a
+symlink cannot restore access to credentials or a host root. The physical index is resolved to a GPU
+UUID; its device node and common driver nodes are the only GPU devices bound. MIG mode fails closed
+until capability-node assignment is available. The namespace unshares network, PID, IPC, and
+UTS namespaces, replaces `HOME` and `/tmp`, and clears the inherited environment. The remote Python
+watchdog enforces the requested command deadline without relying on GNU `timeout`.
+
+SSH aliases, keys, ports, and jump hosts are resolved by standard OpenSSH configuration. Bubblewrap
+and unprivileged user namespaces are mandatory; there is no unisolated fallback. These modes are
+mutually exclusive, and neither makes remote filesystem state authoritative.
+
+### Environment failure recovery
+
+SSH command failures, including status 255, pass through an independent isolated GPU health probe.
+The default probe performs allocation, arithmetic, and synchronization. SSH campaigns persist an
+additional trusted framework/SOL runtime preflight and run it before initialization, even with an
+explicit architecture. Recovery polling replays both probes, so an incompatible evaluator does not
+repeatedly restart the optimizer merely because CUDA device properties are readable. Native bundled
+evaluator contracts and candidate correctness remain the real evaluator's responsibility.
+A healthy probe preserves the original exit status as a candidate/tool failure. A transfer exception,
+or a failed probe after a failed command, atomically transitions the optimizer to
+`environment_blocked` and records a private marker. The coding-session process guard watches that
+marker and terminates the complete Agent process group. Supervisor-owned sandbox processes poll the
+same marker, terminate their own process groups, and cancel queued ABBA futures; SSH ABBA batches run
+serially on the assigned GPU, and SSH auto-framework dispatch is rejected. A remote directory that
+could not be deleted is recorded separately and becomes a
+required recovery action rather than being forgotten.
+
+Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor holds an
+OS advisory lock, repeats the configured health probe, removes every deferred remote workspace, and
+then replays the exact original argument array and working directory. Recovery state is keyed by the
+resolved target, init, runtime binds, assigned GPU, health probe, and a unique invocation identity;
+existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
+`restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
+construction, and workspace resume. An early exit restores `failure.json`; the durable campaign
+resume signal begins a two-phase transition: the monitor moves the marker to `active.json`, then the
+same registered primary must observe that marker and persist an acknowledgement. The monitor remains
+alive until the recovered optimizer exits. The marker records a fresh handoff ID and explicit start
+time, so the initialization timeout is independent of the older outage marker mtime. A second advisory
+lock is inherited by the restart process tree. The root and each controlled independent session start
+behind a stable wrapper, gated primary, and cleanup guardian in a separate session. All three
+kernel-start-time-qualified identities are written to the handoff registry before the actual command
+can run. The wrapper persists the primary result immediately, cleans same-group descendants, and only
+then persists completion. If the wrapper dies after recording the result, the guardian retains the
+lock, cleans the target group, and commits the same completion record. Every protocol write fsyncs its
+temporary file before replacement, and every critical replace or unlink fsyncs the affected directory.
+A replacement monitor can therefore adopt a live interrupted handoff and distinguish proven cleanup
+from an ownerless interruption without signalling a reused raw diagnostic PID or depending on periodic
+descendant snapshots. Resolved
+environment-only recovery options are replayed, and `monitor.pid` is removed by its matching lock
+owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
+boundary. User
+interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
+
+An interrupted SOL V0 with committed sources reuses that source commit and retries measurement;
+changed, missing, or staged sources fail closed without being overwritten. Long Horizon usage is
+durably recorded after each coding invocation, before propagating an environment failure and before
+GPU verification. Cumulative per-run receipts and token totals share one atomic state replacement:
+replaying a receipt does not double count, and recovery retains actual token usage without consuming
+an episode outcome. Partial reported usage is counted; unavailable usage is not fabricated.
+
+```mermaid
+flowchart TD
+    A[Agent requests sandbox run/profile] --> B[Build allowlisted bundle]
+    B --> C[Create remote temporary directory]
+    C --> D[Upload with scp]
+    D --> E[Enter mandatory Bubblewrap namespaces]
+    E --> F[Expose assigned GPU UUID/device only]
+    F --> G0[Portable Python deadline watchdog]
+    G0 --> G{Remote exit status}
+    G -->|0| H[Download requested artifacts]
+    G -->|non-zero, including 255| I[Independent isolated GPU health probe]
+    I -->|healthy| J[Return original candidate status]
+    I -->|unhealthy| K[Atomically write failure.json]
+    C -->|transport failure| K
+    D -->|transport failure| K
+    H --> L{Remote cleanup succeeded?}
+    J --> L
+    L -->|yes| M[Return result]
+    L -->|no| N[Persist cleanup marker]
+    N --> K
+    K --> O[Terminate Agent and sibling process groups]
+    O --> P[Detached monitor acquires OS advisory lock]
+    P -. operator rollback .-> X[Run verified stop-recovery control]
+    X --> X1{Monitor or stopper owns advisory lock?}
+    X1 --> X2[Persist stop and ask registered session owners to terminate]
+    X2 --> X3[Confirm empty tree and restore failure marker]
+    X3 --> X4[Select gateway transport]
+    P --> Q{Health probe succeeds?}
+    Q -->|no| R[Sleep and retry]
+    R --> Q
+    Q -->|yes| S{Deferred cleanup succeeds?}
+    S -->|no| R
+    S -->|yes| T{Spawn exact argv and cwd}
+    T -->|Popen fails| R
+    T -->|spawned| U[Record handoff ID, explicit start time, and process identities]
+    U --> U0[Retain marker and process-tree-owned advisory lock]
+    U0 --> V{Primary publishes durable readiness?}
+    V -->|early exit or outage| Z[Terminate registered groups and restore failure marker]
+    Z --> R
+    V -->|yes| W[Move marker to active]
+    W --> W0{Primary acknowledges matching active handoff?}
+    W0 -->|no or exits| Z
+    W0 -->|yes| W1{Durable primary exit and cleanup completion?}
+    W1 -->|zero and complete| W2[Archive active marker and release ownership]
+    W1 -->|nonzero or ownership lost| Z
+    W1 -->|operator stop| X
+    U0 -. monitor replaced .-> Y{Tree lock and registered identity still live?}
+    Y -->|yes| V
+    Y -->|no| Z
+```
+
+The motivating failure mode is an unattended optimization losing a GPU host after hours of work:
+previously it either consumed candidate budget for an infrastructure fault or required a human to
+reconstruct the exact launch. Success means candidate failures retain their status, confirmed
+environment failures stop all active work, no uploaded workspace survives recovery, only one monitor
+runs, and the exact command resumes automatically. The tradeoffs are an additional SSH/upload and
+namespace startup cost, a Bubblewrap requirement, no network inside candidate jobs, and explicit
+read-only binds for runtimes outside the minimal system tree.
+
+Rollback is configuration-only: run `.atrex_environment/<command-id>/stop-recovery.sh` and require
+its verified zero status, archive that private directory for diagnosis, and relaunch the same command
+with `--sandbox-url` or `--sandbox-profile` instead of `--sandbox-ssh`. Each stop first writes an
+immutable request that is handled by the live monitor, or by the stopper after it acquires the monitor
+lock; it succeeds only after the identity-owned process tree is empty and `stopped.json` is committed
+under that lock. Resume clears only its locked request snapshot, so a later stop cannot be erased. The
+persistent tombstone also blocks a detached monitor that had not reached the lock when stop was
+requested.
+`monitor.pid` is diagnostic and must not be signalled as a rollback mechanism. No candidate Git
+commit or canonical memory needs to be reverted. Run the generated `recover.sh` (or pass `--resume`
+while starting the monitor) to clear the tombstone under the monitor lock. If automatic restart is
+undesired but SSH should remain enabled, use the same verified stop path and then run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+cleaning any listed remote workspaces.
+
 ### Full-workload optimization
 
 SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every

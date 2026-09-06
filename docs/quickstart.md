@@ -11,6 +11,10 @@ agent in this repository to translate the task into that command and start the c
 - Python 3 and `torch` on the coordinator host
 - One coding runtime available on `PATH`: `claude`, `qodercli`, `codex`, or `pi`
 - A sandbox execution environment containing the workload's framework and GPU stack
+- For SSH execution: OpenSSH `ssh` and `scp` on the coordinator; Bash, Python 3, `tar`, `base64`,
+  Bubblewrap (`bwrap`), unprivileged user namespaces, and accessible GPU device nodes on the remote
+  host. Physical NVIDIA assignment also requires `nvidia-smi`. Authentication must be
+  non-interactive for detached recovery.
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
@@ -91,6 +95,124 @@ python orchestrator/optimize.py \
     --agent-cli qodercli \
     --max-iters 20 --token-budget 8000000 --target-util 90
 ```
+
+### Isolated OpenSSH GPU host
+
+Use a dedicated, low-privilege OpenSSH account or an alias from `~/.ssh/config`. Authentication,
+ports, jump hosts, and host-key policy remain OpenSSH's responsibility. The account needs permission
+to run `bwrap` and access only the intended GPU devices; do not attach cloud credentials or shared
+service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
+
+```bash
+python orchestrator/optimize.py \
+    --op-dir /path/to/sol-execbench/op \
+    --platform H20 --sandbox-hardware H20 --framework Triton \
+    --sandbox-ssh user@gpu-host \
+    --sandbox-ssh-gpu 0 \
+    --sandbox-ssh-runtime-bind /opt/aka-venv \
+    --sandbox-ssh-init 'source /opt/aka-venv/bin/activate' \
+    --environment-poll-interval 60 \
+    --workspace /path/to/runs --max-iters 20
+```
+
+`--sandbox-ssh-gpu` is required and selects one physical NVIDIA index. The runner resolves that index
+to its GPU UUID, exposes only its device node plus common driver control nodes, and exports UUID-based
+`CUDA_VISIBLE_DEVICES`. MIG-enabled GPUs and MIG/UUID selectors fail closed because their capability
+nodes are not assigned yet. SSH mode also requires an explicit `--framework`; automatic parallel
+framework dispatch is rejected, and multi-shape ABBA batches are serialized on the assigned card.
+
+`--sandbox-ssh-runtime-bind REMOTE_PATH[=SANDBOX_PATH]` is repeatable. A single path preserves its
+location; the `source=destination` form can mount it elsewhere. The bind is read-only. For example, a
+venv below a hidden login home can be exposed at its original path with
+`--sandbox-ssh-runtime-bind /home/gpu/aka/.venv`, or remapped when it is relocatable.
+Broad system/home roots and credential directories are rejected on the source side. A source below
+`/home` must be a conventional `.venv`/`venv` root or a direct child of a Conda `envs` directory.
+Before each execution, the remote host resolves every source symlink; the resolved target must still
+pass the same denylist and be a directory.
+
+`--sandbox-ssh-init` defaults to empty and runs inside the isolated namespace. The default health
+command checks PyTorch GPU allocation, arithmetic, synchronization, and device properties;
+override it when the remote stack uses a different runtime. The optimizer also checks the selected
+framework's installed tooling and, for SOL operators, the evaluator interpreter and dtype mapping.
+These workspace-independent checks run before seeding (even with `--arch`), after failed commands,
+and during recovery polling. They never import candidate code. Native operator contracts and
+complete workload coverage still require real evaluation; preflight is not a replacement for it.
+Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
+with `--sandbox-url` and `--sandbox-profile`.
+
+Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sandbox.*` directory,
+runs the requested evaluator or profiler inside mandatory Bubblewrap PID/IPC/UTS/network namespaces,
+downloads only requested `--sync` artifacts, and removes the remote directory. The namespace has no
+network, host home, inherited environment, or writable host filesystem; it sees only minimal read-only
+system paths, configured runtime binds, the assigned GPU device node, and its writable job directory. There is no
+unisolated fallback. A portable Python watchdog enforces `--sandbox-timeout` even when GNU `timeout`
+is absent.
+
+When preflight or SSH transport fails (including scp upload/download timeout), or a failed GPU command is followed by a failed health probe, the sandbox
+writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
+active Agent/framework process groups without treating the failure as a bad candidate. It then starts
+`tools/monitor_optimize_tasks.py` detached. Recovery state is stored below
+`<workspace>/.atrex_environment/<command-id>/`:
+
+- `failure.json`: the current failure stage and bounded diagnostic;
+- `cleanup-*.json`: remote workspaces that must be removed before restart;
+- `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
+- `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
+- `restart-child.lock`, `restart.pid`, `restart.primary.pid`, and `restart.log`: diagnostic wrapper,
+  primary, and cleanup status during the supervised resume handoff; durable registry identities
+  remain the process authority;
+- `restart.ready` and `restart.ack`: the two-phase resume handshake; activation is accepted only
+  after the primary observes its matching `active.json` and acknowledges it;
+- `restart.exit.json` and `restart.complete.json`: the primary result and the later confirmation that
+  its process group and registered sessions were cleaned up;
+- `restarting.json` and `active.json`: initialization and ready-but-still-running ownership states;
+- `stopped.json` and `stop-requests/*.json`: a persistent operator stop plus immutable concurrent
+  requests that prevent an earlier resume from erasing a later stop;
+- `restart-processes/<handoff-id>/*.json`: PID-reuse-safe wrapper, primary, and independent cleanup
+  guardian identities for the optimizer and every controlled process session it starts;
+- `recover.sh`: an idempotent manual way to clear `stopped.json` and start the same single-instance
+  poller;
+- `stop-recovery.sh`: the verified stop path for rollback.
+
+The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
+all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
+and moves the failure marker through `restarting.json`. The campaign first publishes readiness; the
+monitor changes the marker to `active.json`, and the primary must then acknowledge that exact handoff.
+The monitor keeps supervising the active run until a durable exit and cleanup result arrives. A clean
+zero exit archives recovery; a fully cleaned non-zero exit restores a retryable failure and returns to
+health polling. An exit without cleanup completion waits only while a verified owner remains and then
+fails closed for manual process verification. Cleanup or spawn failures likewise retain the marker.
+If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
+and the persistent session-owner identities to adopt a live handoff or request that every registered
+owner terminate its own process group before atomically restoring `failure.json`. Each wrapper, gated
+primary, and separate-session cleanup guardian is registered before the actual command can start. The
+guardian retains the inherited handoff lock through the completion commit and takes over same-group
+cleanup if its wrapper dies. The wrapper reports primary status before cleaning same-group leftovers.
+Protocol files are fsynced before atomic replacement, and critical directory-entry changes are
+directory-fsynced. The handoff timeout starts from the explicit
+`restart_handoff.started_at` value in the marker, never from a failure marker's older filesystem
+timestamp. Resolved environment-only settings, including the polling interval, are replayed into the
+child. PID files are diagnostic, removed by their matching owner, and never used as the lock or
+process-identity authority.
+The normal campaign resume path reuses its interrupted worktree and journal. Candidate compilation,
+correctness, timeout (status 124), and even explicit status 255 do not trigger this path when the
+independent health probe succeeds.
+
+To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --stop`) and require a zero exit status
+before changing transport. Stop first publishes an immutable request; the live monitor observes it
+without signalling its diagnostic PID, or the stopper takes over through the advisory lock after the
+monitor exits. It terminates every identity-verified recovery process group, restores a
+durable failure marker when needed, leaves the persistent `stopped.json` tombstone in place, and
+reports success only after no owned process remains. This includes an optimizer that has already
+reached `active.json`. Resume waits for the lock whenever stop state is present and returns zero only
+after clearing its locked snapshot; a later stop request always wins. Do not signal the diagnostic PID
+from `monitor.pid` directly. Preserve the private recovery directory for
+diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
+state and canonical memory are transport-independent and require no rollback. Run `STATE_DIR/recover.sh`
+to re-enable automatic recovery. To clear a recovered marker without restarting, run
+`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+verifying any deferred remote cleanup.
 
 ### What happens after launch
 
@@ -274,6 +396,12 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
+--sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
+--sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
+--sandbox-ssh-init COMMAND       Remote environment activation before jobs/probes
+--sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
+--sandbox-health-command COMMAND GPU health probe used for failure classification
+--environment-poll-interval S    Recovery probe interval (default: 60)
 --sandbox-timeout S              Remote command timeout, at most 600 seconds
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
@@ -303,6 +431,10 @@ The sandbox boundary can also be used directly for validation and profiling:
 python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
 python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
+  --ssh-gpu 0 \
+  --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
+  --no-sync -- python test_kernel.py --no-memory
 ```
 
 Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,

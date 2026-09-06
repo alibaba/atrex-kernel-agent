@@ -5,11 +5,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from orchestrator.durable_state import durable_write_json
+
 from . import main_adapter
 from .models import SupervisorState
 from .protocol import atomic_write_json, atomic_write_text
 from .telemetry import render_episode_brief
-
 
 RUNTIME_DIR = ".atrex_long_horizon"
 VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
@@ -78,7 +79,21 @@ class CampaignStore:
             return SupervisorState()
 
     def save_state(self, state: SupervisorState) -> None:
-        atomic_write_json(self.state_path, state.as_dict())
+        durable_write_json(self.state_path, state.as_dict())
+
+    def record_usage(
+        self, state: SupervisorState, receipt_id: str, cumulative_tokens: int
+    ) -> None:
+        """Persist usage and its replay receipt in one durable replacement."""
+        previous = state.usage_receipts.get(receipt_id, 0)
+        observed = max(previous, max(0, int(cumulative_tokens)))
+        # Do not mutate the caller's state until the durable write succeeds.
+        updated = SupervisorState.from_dict(state.as_dict())
+        updated.tokens += observed - previous
+        updated.usage_receipts[receipt_id] = observed
+        self.save_state(updated)
+        state.tokens = updated.tokens
+        state.usage_receipts = updated.usage_receipts
 
     def load_active(self) -> dict[str, Any] | None:
         try:

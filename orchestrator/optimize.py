@@ -54,10 +54,11 @@ import argparse
 import json
 import os
 import re
-import signal
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -90,13 +91,22 @@ try:
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
+    from .environment_recovery import (
+        DEFAULT_SSH_HEALTH_COMMAND,
+        ENVIRONMENT_TEMPFAIL,
+        EnvironmentUnavailable,
+        configure_recovery,
+        current_recovery_context,
+        environment_is_blocked,
+        launch_recovery_monitor,
+        raise_if_environment_blocked,
+        signal_restart_ready,
+    )
     from .hardware import (
         _workspace_slug,
         framework_workspace_suffix,
         supported_frameworks,
     )
-    from .optimization_policy import OPTIMIZATION_MODE_CHOICES
-    from .session_io import detect_arch, ensure_submodules
     from .operator_layout import (
         AGENT_PROBLEM_FILENAME,
         find_atrex_bench_root,
@@ -106,6 +116,9 @@ try:
         validate_agent_problem,
         validate_private_shapes,
     )
+    from .optimization_policy import OPTIMIZATION_MODE_CHOICES
+    from .session_io import check_ssh_environment, detect_arch, ensure_submodules
+    from .ssh_health import runtime_health_command
     from .workspace_state import (
         latest_version,
         read_memory,
@@ -127,17 +140,21 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
+    from orchestrator.environment_recovery import (  # type: ignore[no-redef]
+        DEFAULT_SSH_HEALTH_COMMAND,
+        ENVIRONMENT_TEMPFAIL,
+        EnvironmentUnavailable,
+        configure_recovery,
+        current_recovery_context,
+        environment_is_blocked,
+        launch_recovery_monitor,
+        raise_if_environment_blocked,
+        signal_restart_ready,
+    )
     from orchestrator.hardware import (  # type: ignore[no-redef]
         _workspace_slug,
         framework_workspace_suffix,
         supported_frameworks,
-    )
-    from orchestrator.optimization_policy import (  # type: ignore[no-redef]
-        OPTIMIZATION_MODE_CHOICES,
-    )
-    from orchestrator.session_io import (  # type: ignore[no-redef]
-        detect_arch,
-        ensure_submodules,
     )
     from orchestrator.operator_layout import (  # type: ignore[no-redef]
         AGENT_PROBLEM_FILENAME,
@@ -148,6 +165,15 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         validate_agent_problem,
         validate_private_shapes,
     )
+    from orchestrator.optimization_policy import (  # type: ignore[no-redef]
+        OPTIMIZATION_MODE_CHOICES,
+    )
+    from orchestrator.session_io import (  # type: ignore[no-redef]
+        check_ssh_environment,
+        detect_arch,
+        ensure_submodules,
+    )
+    from orchestrator.ssh_health import runtime_health_command  # type: ignore[no-redef]
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
         read_memory,
@@ -285,7 +311,14 @@ def dispatch_framework_campaigns(
             ]
             if arch:
                 cmd += ["--arch", arch]
-            proc = subprocess.Popen(cmd, start_new_session=True, text=True)
+            child_environment = os.environ.copy()
+            child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
+            proc = subprocess.Popen(
+                cmd,
+                start_new_session=True,
+                text=True,
+                env=child_environment,
+            )
             children.append((framework, workspace_suffix, proc))
             print(
                 f"[orchestrator] dispatched framework={framework} pid={proc.pid} "
@@ -293,16 +326,24 @@ def dispatch_framework_campaigns(
                 flush=True,
             )
 
-        # All children have already been spawned, so sequential waits do not
-        # serialize their optimization work.
-        for framework, _, proc in children:
-            returncode = proc.wait()
-            print(
-                f"[orchestrator] framework={framework} finished exit={returncode}",
-                flush=True,
-            )
-            if returncode != 0:
-                failed.append((framework, returncode))
+        remaining = {proc.pid: (framework, proc) for framework, _, proc in children}
+        while remaining:
+            for pid, (framework, proc) in list(remaining.items()):
+                returncode = proc.poll()
+                if returncode is None:
+                    continue
+                remaining.pop(pid)
+                print(
+                    f"[orchestrator] framework={framework} finished exit={returncode}",
+                    flush=True,
+                )
+                if returncode != 0:
+                    failed.append((framework, returncode))
+                if returncode == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
+                    stop_children()
+                    return ENVIRONMENT_TEMPFAIL
+            if remaining:
+                time.sleep(0.25)
     except KeyboardInterrupt:
         print(
             "[orchestrator] interrupt: stopping framework campaigns",
@@ -384,7 +425,7 @@ def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
     }
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def _run_main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
@@ -408,8 +449,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--sandbox-hardware",
         default="",
-        help="agate GPU scheduler token used for all tests/profiles, e.g. REMOTE_GPU. "
-        "Default: --platform; set explicitly when the gateway uses a different alias.",
+        help="Remote GPU hardware token used for all tests/profiles, e.g. REMOTE_GPU. "
+        "Default: --platform; set explicitly when the executor uses a different alias.",
     )
     ap.add_argument(
         "--sandbox-profile",
@@ -423,6 +464,56 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Explicit agate endpoint URL for all tests/profiles, e.g. "
         "http://127.0.0.1:8000 for `atrex-gateway serve --local`. "
         "Mutually exclusive with --sandbox-profile.",
+    )
+    ap.add_argument(
+        "--sandbox-ssh",
+        default=None,
+        metavar="[USER@]HOST",
+        help=(
+            "Run GPU work in a mandatory Bubblewrap namespace reached through "
+            "OpenSSH. Reuses ~/.ssh/config and is mutually exclusive with gateway "
+            "endpoint options."
+        ),
+    )
+    ap.add_argument(
+        "--sandbox-ssh-init",
+        default=os.environ.get("ATREX_SANDBOX_SSH_INIT", ""),
+        metavar="COMMAND",
+        help="Remote runtime activation command run before every SSH job and probe.",
+    )
+    ap.add_argument(
+        "--sandbox-ssh-runtime-bind",
+        action="append",
+        default=None,
+        metavar="REMOTE_PATH[=SANDBOX_PATH]",
+        help=(
+            "Read-only runtime directory exposed inside the mandatory SSH Bubblewrap "
+            "sandbox (repeatable)."
+        ),
+    )
+    ap.add_argument(
+        "--sandbox-ssh-gpu",
+        default=None,
+        metavar="INDEX",
+        help=(
+            "Physical NVIDIA GPU index assigned to SSH execution (required with "
+            "--sandbox-ssh; default: ATREX_SANDBOX_SSH_GPU)."
+        ),
+    )
+    ap.add_argument(
+        "--sandbox-health-command",
+        default=os.environ.get(
+            "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
+        ),
+        metavar="COMMAND",
+        help="GPU smoke command used by SSH failure classification and recovery polling.",
+    )
+    ap.add_argument(
+        "--environment-poll-interval",
+        type=int,
+        default=os.environ.get("ATREX_ENVIRONMENT_POLL_INTERVAL", "60"),
+        metavar="SECONDS",
+        help="Seconds between blocked SSH environment recovery probes (default: 60).",
     )
     ap.add_argument(
         "--sandbox-timeout",
@@ -627,8 +718,68 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     if args.framework_baseline_timeout <= 0:
         ap.error("--framework-baseline-timeout must be positive")
-    if args.sandbox_url and args.sandbox_profile:
-        ap.error("--sandbox-url and --sandbox-profile are mutually exclusive")
+    if args.sandbox_ssh is None:
+        args.sandbox_ssh = (
+            ""
+            if args.sandbox_url or args.sandbox_profile
+            else os.environ.get("ATREX_SANDBOX_SSH", "")
+        )
+    if sum(
+        bool(value)
+        for value in (args.sandbox_ssh, args.sandbox_url, args.sandbox_profile)
+    ) > 1:
+        ap.error(
+            "--sandbox-ssh, --sandbox-url, and --sandbox-profile are mutually exclusive"
+        )
+    if args.sandbox_ssh and (
+        args.sandbox_ssh.startswith("-")
+        or any(character.isspace() for character in args.sandbox_ssh)
+    ):
+        ap.error("--sandbox-ssh must be a non-option OpenSSH host or [user@]host")
+    if args.sandbox_ssh and not args.sandbox_health_command.strip():
+        ap.error("--sandbox-health-command must not be empty with --sandbox-ssh")
+    if args.sandbox_ssh:
+        raw_ssh_gpu = (
+            args.sandbox_ssh_gpu
+            if args.sandbox_ssh_gpu is not None
+            else os.environ.get("ATREX_SANDBOX_SSH_GPU", "")
+        )
+        if not re.fullmatch(r"[0-9]+", raw_ssh_gpu):
+            ap.error(
+                "--sandbox-ssh-gpu must be a physical NVIDIA index; "
+                "MIG/UUID selectors are not yet supported"
+            )
+        args.sandbox_ssh_gpu = int(raw_ssh_gpu)
+        if args.sandbox_ssh_gpu > 31:
+            ap.error("--sandbox-ssh-gpu must be in the range 0..31")
+        if not args.framework:
+            ap.error(
+                "--sandbox-ssh requires an explicit --framework so one assigned GPU "
+                "cannot be shared by auto-dispatched campaigns"
+            )
+        if args.sandbox_ssh_runtime_bind is None:
+            raw_runtime_binds = os.environ.get(
+                "ATREX_SANDBOX_SSH_RUNTIME_BINDS", "[]"
+            )
+            try:
+                args.sandbox_ssh_runtime_bind = json.loads(raw_runtime_binds)
+            except json.JSONDecodeError as exc:
+                ap.error(f"ATREX_SANDBOX_SSH_RUNTIME_BINDS is invalid JSON: {exc}")
+            if not isinstance(args.sandbox_ssh_runtime_bind, list) or not all(
+                isinstance(item, str) for item in args.sandbox_ssh_runtime_bind
+            ):
+                ap.error(
+                    "ATREX_SANDBOX_SSH_RUNTIME_BINDS must be a JSON array of strings"
+                )
+        for executable in ("ssh", "scp"):
+            if shutil.which(executable) is None:
+                ap.error(f"--sandbox-ssh requires {executable} on PATH")
+    elif args.sandbox_ssh_runtime_bind:
+        ap.error("--sandbox-ssh-runtime-bind requires --sandbox-ssh")
+    elif args.sandbox_ssh_gpu is not None:
+        ap.error("--sandbox-ssh-gpu requires --sandbox-ssh")
+    if args.environment_poll_interval <= 0:
+        ap.error("--environment-poll-interval must be positive")
     if shutil.which(args.agent_cli) is None:
         ap.error(f"--agent-cli executable not found on PATH: {args.agent_cli}")
     if args.agent_cli == "codex":
@@ -667,8 +818,36 @@ def main(argv: Optional[list[str]] = None) -> int:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
     op = _resolve_op(args.op_dir, args.optimization_mode)
+    if args.sandbox_ssh:
+        workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
+        configure_recovery(
+            workspace_base=workspace_base,
+            raw_argv=raw_argv,
+            optimize_script=Path(__file__),
+            sandbox_hardware=sandbox_hardware,
+            ssh_target=args.sandbox_ssh,
+            ssh_init=args.sandbox_ssh_init,
+            ssh_runtime_binds=args.sandbox_ssh_runtime_bind,
+            ssh_gpu=args.sandbox_ssh_gpu,
+            health_command=args.sandbox_health_command,
+            poll_interval=args.environment_poll_interval,
+            runtime_health_command=runtime_health_command(
+                sol=is_sol_op(Path(op["op_dir"])), framework=args.framework
+            ),
+        )
+        raise_if_environment_blocked()
+        check_ssh_environment(
+            workspace_base, sandbox_hardware, args.sandbox_ssh,
+            args.sandbox_ssh_init, args.sandbox_health_command,
+        )
+
     arch = args.arch or detect_arch(
-        sandbox_hardware, args.sandbox_profile, args.sandbox_url
+        sandbox_hardware,
+        args.sandbox_profile,
+        args.sandbox_url,
+        args.sandbox_ssh,
+        args.sandbox_ssh_init,
+        args.sandbox_health_command,
     )
     if not arch and args.framework:
         suffix = args.workspace_suffix or framework_workspace_suffix(
@@ -693,7 +872,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"optimization_mode={args.optimization_mode} platform={args.platform} "
         f"agent_problem={op.get('agent_problem_source', 'none')} "
         f"sandbox_hardware={sandbox_hardware} "
-        f"sandbox_endpoint={args.sandbox_url or args.sandbox_profile or 'agate-config'} "
+        "sandbox_endpoint="
+        f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
         f"frameworks={','.join(frameworks)} "
         "reviewers="
         f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
@@ -733,6 +913,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         sandbox_hardware=sandbox_hardware,
         sandbox_profile=args.sandbox_profile,
         sandbox_url=args.sandbox_url,
+        sandbox_ssh=args.sandbox_ssh,
+        sandbox_ssh_init=args.sandbox_ssh_init,
+        sandbox_ssh_gpu=args.sandbox_ssh_gpu,
+        sandbox_health_command=args.sandbox_health_command,
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
         agent_cli=args.agent_cli,
@@ -777,9 +961,37 @@ def main(argv: Optional[list[str]] = None) -> int:
             "generalized campaign baseline is incompatible with authoritative per-shape "
             f"memory: {baseline_coverage_problem}; start a fresh workspace"
         )
+    if args.sandbox_ssh:
+        # A recovery monitor may declare success only after operator resolution,
+        # architecture/submodule setup, campaign construction, and workspace resume.
+        signal_restart_ready()
     campaign.ensure_framework_baseline()
     campaign.run()
     return 0
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    try:
+        result = _run_main(argv)
+    except EnvironmentUnavailable:
+        result = ENVIRONMENT_TEMPFAIL
+    if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
+        context = current_recovery_context()
+        supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
+        pid = (
+            launch_recovery_monitor(context)
+            if context is not None and not supervised
+            else None
+        )
+        if pid is not None:
+            print(
+                "[orchestrator] remote GPU environment unavailable; optimization stopped; "
+                f"recovery monitor pid={pid} state={context.directory}",
+                file=sys.stderr,
+                flush=True,
+            )
+        return ENVIRONMENT_TEMPFAIL
+    return result
 
 
 if __name__ == "__main__":

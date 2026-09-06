@@ -186,6 +186,46 @@ def main(argv: list[str] | None = None) -> int:
     defn = json.loads((op / "definition.json").read_text(encoding="utf-8"))
 
     ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
+    if args.no_bench and (ws / ".git").exists():
+        history = subprocess.run(
+            ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
+            cwd=str(ws), capture_output=True, text=True,
+        )
+        if history.returncode == 0 and history.stdout.strip():
+            source_commit = history.stdout.split()[0]
+            # A committed V0 without memory is a measurement retry, not a new
+            # seed. Validate provenance before touching anything, including the
+            # index; never reset an edited or already optimized kernel to V0.
+            if subprocess.run(
+                ["git", "diff", "--cached", "--quiet"], cwd=str(ws),
+            ).returncode != 0:
+                raise SystemExit("refusing to reseed V0 with staged changes")
+            for name in (
+                *GROUND_TRUTH, "config.json", "kernel.py", "solution.json",
+                "test_kernel.py", "profile_driver.py",
+            ):
+                original = subprocess.run(
+                    ["git", "show", f"{source_commit}:{name}"],
+                    cwd=str(ws), capture_output=True, check=True,
+                ).stdout
+                committed = subprocess.run(
+                    ["git", "show", f"HEAD:{name}"],
+                    cwd=str(ws), capture_output=True, check=True,
+                ).stdout
+                if (
+                    committed != original or not (ws / name).is_file()
+                    or (ws / name).read_bytes() != original
+                ):
+                    raise SystemExit(f"refusing to reseed changed V0 source: {name}")
+            for name in GROUND_TRUTH:
+                if (ws / name).read_bytes() != (op / name).read_bytes():
+                    raise SystemExit(f"V0 operator input changed: {name}")
+            if (ws / "kernel.py").read_text(encoding="utf-8") != _render_kernel(
+                defn, (op / "reference.py").read_text(encoding="utf-8")
+            ):
+                raise SystemExit("existing V0 is not the SOL reference wrapper")
+            print(f"[sol_seed] reusing V0 source {source_commit}: {ws}")
+            return 0
     for sub in ("memory", "plans", "profiles"):
         (ws / sub).mkdir(parents=True, exist_ok=True)
 

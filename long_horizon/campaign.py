@@ -7,12 +7,15 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from typing import Any
+
+from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
 
 from . import main_adapter
 from .git_episode import (
@@ -25,10 +28,7 @@ from .git_episode import (
 )
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
-from .journal import sync_live_memory
-from .journal import validate_terminal
-from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
-
+from .journal import sync_live_memory, validate_terminal
 from .models import (
     EpisodeHandoff,
     SupervisorState,
@@ -37,10 +37,9 @@ from .models import (
 )
 from .protocol import read_handoff
 from .session import LongSessionRunner
-from .store import CampaignStore, RUNTIME_DIR, VERIFY_DIR
+from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
-
 
 MODULE_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
@@ -439,7 +438,9 @@ class LongHorizonCampaign:
         command = ["python", "tools/sandbox.py", "--kind", "run"]
         if self.base_campaign.sandbox_hardware:
             command += ["--hardware", self.base_campaign.sandbox_hardware]
-        if self.base_campaign.sandbox_url:
+        if self.base_campaign.sandbox_ssh:
+            command += ["--ssh", self.base_campaign.sandbox_ssh]
+        elif self.base_campaign.sandbox_url:
             command += ["--url", self.base_campaign.sandbox_url]
         elif self.base_campaign.sandbox_profile:
             command += ["--gateway-profile", self.base_campaign.sandbox_profile]
@@ -562,7 +563,9 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
-        directives = main_adapter.episode_directives(self.base_campaign, version)
+        directives = main_adapter.episode_directives(
+            self.base_campaign, version, fast=fast_mode
+        )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
             f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
@@ -1252,6 +1255,7 @@ class LongHorizonCampaign:
         session_id: str = "",
         resume_count: int = 0,
         tokens: int = 0,
+        tokens_accounted: bool = False,
         invocations: tuple[Any, ...] = (),
         fast_trials: int | None = None,
         recovered_after_supervisor_interruption: bool = False,
@@ -1261,7 +1265,8 @@ class LongHorizonCampaign:
         base_commit = worktree.base_commit
         journal_path = worktree.path / RUNTIME_DIR / "journal.json"
         state.episodes = max(state.episodes, episode)
-        state.tokens += max(0, int(tokens))
+        if not tokens_accounted:
+            state.tokens += max(0, int(tokens))
         fast_trial_count = fast_trials or self._active_fast_trials(
             active, fast_mode=fast_mode
         )
@@ -1824,6 +1829,9 @@ class LongHorizonCampaign:
             hardware=self.base_campaign.sandbox_hardware,
             profile=self.base_campaign.sandbox_profile,
             url=self.base_campaign.sandbox_url,
+            ssh=self.base_campaign.sandbox_ssh,
+            ssh_init=self.base_campaign.sandbox_ssh_init,
+            health_command=self.base_campaign.sandbox_health_command,
             timeout=self.base_campaign.sandbox_timeout,
             private_reference_dir=self.base_campaign.private_reference_dir,
         )
@@ -1995,6 +2003,7 @@ class LongHorizonCampaign:
                     ),
                     stop_event=policy_stop,
                 )
+            usage_receipt = uuid.uuid4().hex
             try:
                 result = runner.run(
                     worktree.path,
@@ -2012,7 +2021,13 @@ class LongHorizonCampaign:
                         fast_mode=fast_mode
                     ),
                     telemetry_environment=telemetry_environment,
+                    record_usage=lambda tokens: store.record_usage(
+                        state, usage_receipt, tokens
+                    ),
                 )
+                # Also persist before verification: a GPU outage there must not
+                # discard the coding session's usage. Receipt replay is harmless.
+                store.record_usage(state, usage_receipt, result.tokens)
             finally:
                 if policy_stop is not None:
                     policy_stop.set()
@@ -2073,6 +2088,7 @@ class LongHorizonCampaign:
                 session_id=result.session_id,
                 resume_count=result.resume_count,
                 tokens=result.tokens,
+                tokens_accounted=True,
                 invocations=result.invocations,
             )
             if accepted and memory is not None:
