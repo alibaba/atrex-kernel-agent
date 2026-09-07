@@ -14,36 +14,37 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+try:
+    from .evidence import (
+        ACU_ACTIVITY_METRICS,
+        ACU_CORRECTNESS_SCHEMA,
+        ACU_METRIC_GROUPS,
+        acu_metric_unit,
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+    )
+except ImportError:
+    from evidence import (
+        ACU_ACTIVITY_METRICS,
+        ACU_CORRECTNESS_SCHEMA,
+        ACU_METRIC_GROUPS,
+        acu_metric_unit,
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+    )
 
-METRIC_GROUPS = {
-    "ce__total_cta_num.sum": "launch",
-    "cu__cycles_active.avg": "compute",
-    "cu__inst_executed.avg.per_cycle_active": "compute",
-    "cu__inst_executed.avg.pct_of_peak_sustained_elapsed": "compute",
-    "cu__inst_executed_pipe_tensor_fp8.avg.pct_of_peak_sustained_active": "tensor",
-    "dram__bytes_read.sum.pct_of_peak_sustained_elapsed": "memory",
-    "dram__bytes_write.sum.pct_of_peak_sustained_elapsed": "memory",
-    "ksd__requests_hit_rate.pct": "ksd",
-    "ksd__requests_load_pipe_ws.sum": "ksd",
-    "ksd__requests_store_pipe_ws.sum": "ksd",
-    "kvd__requests_hit_rate.pct": "kvd",
-    "kvd__requests_load_pipe_lsu.sum": "kvd",
-    "kvd__requests_store_pipe_lsu.sum": "kvd",
-    "l2__requests_hit_rate.pct": "l2",
-}
 
-ACTIVITY_METRICS = {
-    "ksd__requests_hit_rate.pct": (
-        "ksd__requests_load_pipe_ws.sum",
-        "ksd__requests_store_pipe_ws.sum",
-    ),
-    "kvd__requests_hit_rate.pct": (
-        "kvd__requests_load_pipe_lsu.sum",
-        "kvd__requests_store_pipe_lsu.sum",
-    ),
-}
-COLLECTION_SCHEMA = "ppu-acu-collection/v1"
-EXTRACTION_SCHEMA = "ppu-acu-extraction/v3"
+METRIC_GROUPS = ACU_METRIC_GROUPS
+
+ACTIVITY_METRICS = ACU_ACTIVITY_METRICS
+COLLECTION_SCHEMA = "ppu-acu-collection/v2"
+EXTRACTION_SCHEMA = "ppu-acu-extraction/v4"
 SUPPORTED_PRODUCER = {"name": "acu", "version": "2.2"}
 EVIDENCE_GRADES = {"diagnostic", "decision"}
 VALID_PM_STATES = {"valid", "valid_activity_positive"}
@@ -188,9 +189,76 @@ def _load_collection(path: Path, report_path: Path) -> dict:
     producer_descriptor = _file_descriptor(resolved_producer)
     producer_descriptor["declared_path"] = producer_path
     producer_descriptor["identity"] = producer_identity.strip()
+
+    def bind_single(field: str, *, required: bool) -> dict[str, Any] | None:
+        row = value.get(field)
+        if row is None and not required:
+            return None
+        if not isinstance(row, dict):
+            raise RuntimeError(f"collection.{field} must be an object")
+        artifact_path = row.get("path")
+        identity = row.get("identity")
+        if not isinstance(artifact_path, str) or not artifact_path.strip():
+            raise RuntimeError(f"collection.{field}.path is required")
+        if not isinstance(identity, str) or not identity.strip():
+            raise RuntimeError(f"collection.{field}.identity is required")
+        resolved = Path(artifact_path)
+        if not resolved.is_absolute():
+            resolved = path.parent / resolved
+        descriptor = _file_descriptor(resolved)
+        descriptor["declared_path"] = artifact_path
+        descriptor["identity"] = identity.strip()
+        return descriptor
+
+    authoritative_kernel = bind_single("authoritative_kernel", required=True)
+    correctness = bind_single("correctness_artifact", required=grade == "decision")
+    if correctness is not None:
+        correctness_path = Path(correctness["path"])
+        try:
+            correctness_record = json.loads(correctness_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"cannot read correctness artifact: {error}") from error
+        if (
+            not isinstance(correctness_record, dict)
+            or correctness_record.get("schema") != ACU_CORRECTNESS_SCHEMA
+            or correctness_record.get("validation") != "accepted"
+        ):
+            raise RuntimeError(
+                f"correctness artifact must be accepted {ACU_CORRECTNESS_SCHEMA}"
+            )
+        if correctness_record.get("kernel_sha256") != authoritative_kernel["sha256"]:
+            raise RuntimeError(
+                "correctness artifact does not bind the authoritative kernel"
+            )
+        if correctness_record.get("workload_identity") != value["workload_identity"]:
+            raise RuntimeError("correctness artifact workload identity mismatch")
+        if correctness_record.get("device_identity") != value["device_identity"]:
+            raise RuntimeError("correctness artifact device identity mismatch")
+        checks = correctness_record.get("checks")
+        if (
+            not isinstance(checks, list)
+            or not checks
+            or any(
+                not isinstance(check, dict)
+                or not isinstance(check.get("name"), str)
+                or not check["name"].strip()
+                or check.get("status") != "passed"
+                for check in checks
+            )
+        ):
+            raise RuntimeError("correctness artifact requires named passed checks")
+
+    bound_artifacts = {
+        **artifacts,
+        "producer": producer_descriptor,
+        "authoritative_kernel": authoritative_kernel,
+    }
+    if correctness is not None:
+        bound_artifacts["correctness"] = correctness
     return {
         **value,
-        "bound_artifacts": {**artifacts, "producer": producer_descriptor},
+        "kernel_sha256": authoritative_kernel["sha256"],
+        "bound_artifacts": bound_artifacts,
     }
 
 
@@ -302,18 +370,6 @@ def extract_pm_packets(
                     if parsed is not None:
                         packets.append(parsed)
     return packets
-
-
-def _metric_unit(name: str) -> str:
-    if name.endswith(".pct") or ".pct_of_peak_" in name:
-        return "percent"
-    if "per_cycle" in name:
-        return "per_cycle"
-    if "cycles" in name:
-        return "cycles"
-    if "requests_" in name and name.endswith(".sum"):
-        return "requests"
-    return "unitless"
 
 
 def _parse_dims(value: str, field: str) -> list[int]:
@@ -521,6 +577,15 @@ def export(
     metadata_path: Path,
 ) -> dict:
     collection = _load_collection(collection_path, report_path)
+    source_paths = {
+        report_path.resolve(),
+        raw_csv_path.resolve(),
+        collection_path.resolve(),
+        *descriptor_paths(collection_path, collection["bound_artifacts"]),
+    }
+    ensure_no_output_aliases(
+        [csv_path, metadata_path], source_paths, "ACU export"
+    )
     launch, raw_errors = _read_raw_csv(raw_csv_path, collection)
     packets = extract_pm_packets(report_path.read_bytes())
     if not packets:
@@ -546,7 +611,7 @@ def export(
                         "header_field_5": headers.get(5, ""),
                         "metric_name": metric_name,
                         "metric_unit": (
-                            _metric_unit(metric_name) if known_metric else "unknown"
+                            acu_metric_unit(metric_name) if known_metric else "unknown"
                         ),
                         "sample_index": sample_index,
                         "window_start_ns": start_ns,
@@ -686,12 +751,18 @@ def export(
         writer.writeheader()
         writer.writerows(csv_rows)
 
-    input_artifacts = {
-        "report": _file_descriptor(report_path),
-        "raw_csv": _file_descriptor(raw_csv_path),
-        "collection": _file_descriptor(collection_path),
-    }
-    output_artifact = _file_descriptor(csv_path)
+    input_artifacts = portable_descriptors(
+        {
+            "report": _file_descriptor(report_path),
+            "raw_csv": _file_descriptor(raw_csv_path),
+            "collection": _file_descriptor(collection_path),
+        },
+        metadata_path,
+    )
+    output_artifact = portable_descriptors(_file_descriptor(csv_path), metadata_path)
+    bound_artifacts = portable_descriptors(
+        collection["bound_artifacts"], metadata_path
+    )
     identity = {
         field: collection[field]
         for field in (
@@ -707,9 +778,12 @@ def export(
     evidence_payload = {
         "producer": collection["producer"],
         "identity": identity,
-        "inputs": input_artifacts,
-        "bound_artifacts": collection["bound_artifacts"],
-        "pm_csv": output_artifact,
+        "kernel_sha256": collection["kernel_sha256"],
+        "inputs": binding_view(input_artifacts),
+        "bound_artifacts": binding_view(bound_artifacts),
+        "pm_csv": binding_view(output_artifact),
+        "launch": launch,
+        "metric_summaries": stream_summaries,
     }
     evidence_id = hashlib.sha256(_canonical_json(evidence_payload)).hexdigest()
     metadata = {
@@ -722,10 +796,12 @@ def export(
         },
         "evidence_id": evidence_id,
         "evidence_grade": collection["evidence_grade"],
+        "binding_payload": evidence_payload,
         "producer": collection["producer"],
+        "kernel_sha256": collection["kernel_sha256"],
         "identity": identity,
         "inputs": input_artifacts,
-        "bound_artifacts": collection["bound_artifacts"],
+        "bound_artifacts": bound_artifacts,
         "outputs": {"pm_csv": output_artifact},
         "source": "ACU .acurep Perfetto protobuf field 88/message field 15",
         "time_semantics": "each row covers [window_start_ns, window_end_ns)",
@@ -758,6 +834,13 @@ def export(
     metadata_path.write_text(
         json.dumps(metadata, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
+    if status == "accepted":
+        validate_acu_metadata(
+            metadata_path,
+            expected_pm=csv_path,
+            expected_raw=raw_csv_path,
+            require_decision=collection["evidence_grade"] == "decision",
+        )
     return metadata
 
 

@@ -9,14 +9,14 @@ For `--output-prefix fine.timeline`, the decoder writes:
 
 - `fine.timeline.canonical.json`: typed owner-local events with raw timestamps, relative nanoseconds,
   writer and launch identity, pairing, payloads, timer/correctness validation, and semantic
-  site fields;
-- `fine.timeline.perfetto.json`: one lane per explicitly declared owner and PPU timeline schema 4;
+  site fields using schema 5;
+- `fine.timeline.perfetto.json`: one lane per explicitly declared owner and PPU timeline schema 5;
 - `fine.timeline.summary.json`: capture mode, topology, range distributions, and interpretation limits;
-- `fine.timeline.receipt.json`: accepted validation invariants, evidence grade/id, SHA-256 bindings
-  for raw/manifest/dictionary/correctness, source/binary/workload provenance, and every decoded
-  output.
+- `fine.timeline.receipt.json`: schema 5 accepted validation invariants, evidence grade/id, the
+  authoritative probe-free kernel hash, SHA-256 bindings for raw/manifest/dictionary/correctness,
+  source/binary/workload provenance, and every decoded output.
 
-Manifest v4 declares `%globaltimer` with its documented nanosecond unit and binds the capture to an
+Manifest v5 declares `%globaltimer` with its documented nanosecond unit and binds the capture to an
 accepted numerical correctness artifact. A legacy conversion field, invalid timer source/unit, or
 correctness evidence for another kernel/workload/device is rejected before canonical output is
 written.
@@ -34,7 +34,7 @@ The Perfetto root carries the agent's choices rather than inferring a topology:
 ```json
 {
   "ppuTimeline": {
-    "schemaVersion": 4,
+    "schemaVersion": 5,
     "captureMode": "fine",
     "samplingRationale": "...",
     "kernelName": "target_kernel",
@@ -88,7 +88,7 @@ assuming that every kernel has the same phases:
 
 ```json
 {
-  "schema": "ppu-critical-path-plan/v1",
+  "schema": "ppu-critical-path-plan/v2",
   "owner_topology": "same",
   "parent": {"site_id": 10, "name": "chunk"},
   "components": [
@@ -97,7 +97,6 @@ assuming that every kernel has the same phases:
     {"site_id": 22, "name": "state_and_output"}
   ],
   "clean_reference": {
-    "duration_ns_samples": [2713.3, 2708.1, 2718.6],
     "source": "probe-free synchronized harness on the same workload",
     "identity": {
       "kernel_name": "target_kernel",
@@ -119,6 +118,17 @@ assuming that every kernel has the same phases:
 }
 ```
 
+The referenced clean measurement is the sole source of baseline durations:
+
+```json
+{
+  "schema": "ppu-clean-measurement/v1",
+  "validation": "accepted",
+  "identity": {"same fields as clean_reference.identity": "..."},
+  "duration_ns_samples": [2713.3, 2708.1, 2718.6]
+}
+```
+
 `components`, `clean_reference`, and `stability` are optional. `owner_topology` defaults to `same`;
 use `declared_variation` only when comparing intentionally different sampled owners. Omit components for parent-duration
 and owner/topology aggregation without closure. Their values come from the experiment and the
@@ -136,7 +146,7 @@ semantic boundary only when a specific unresolved dependency requires it.
 
 ## Joint merge semantics
 
-The merger accepts only accepted capture/timer contracts, `clockScope=owner_local`, and schema 4. ACU PM
+The merger accepts only accepted capture/timer contracts, `clockScope=owner_local`, and timeline schema 5. ACU PM
 windows are kernel-start-relative. Fine ranges are analysis-owner-origin-relative. If the declared
 analysis window ends at local time `window_end_ns`, the unknown owner-origin offset is bounded by:
 
@@ -150,8 +160,9 @@ For every exact ACU PM window, the merger preserves two distinct statements:
 - guaranteed overlap: every allowed offset makes the local range overlap.
 
 It never aligns raw clocks or rescales either run. ACU values retain device-global scope and replay
-packet membership. Optional A/B perturbation and B/C density-sensitivity files must match timeline
-workload/device identity and remain separate evidence.
+packet membership; joint metric summaries use interval-weighted means, matching ACU extraction.
+Optional A/B perturbation and B/C density-sensitivity files must match timeline workload/device
+identity and remain separate hash-bound evidence.
 
 Normalized all-block duration survival is optional. It is produced only when:
 

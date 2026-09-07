@@ -15,6 +15,23 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from .evidence import (
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_timeline_receipt,
+    )
+except ImportError:
+    from evidence import (
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_timeline_receipt,
+    )
+
 
 MAGIC = 0x0000314C54555050
 ABI_MAJOR = 1
@@ -29,12 +46,12 @@ STATUS_NAMES = {
     1 << 3: "duplicate_owner",
 }
 KIND_NAMES = {0: "begin", 1: "end", 2: "instant", 3: "counter"}
-MANIFEST_SCHEMA = "ppu-fixed-slot-timeline-manifest/v4"
+MANIFEST_SCHEMA = "ppu-fixed-slot-timeline-manifest/v5"
 DICTIONARY_SCHEMA = "ppu-fixed-slot-events/v2"
-CANONICAL_SCHEMA = "ppu-fixed-slot-canonical/v4"
-RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v4"
-CORRECTNESS_SCHEMA = "ppu-timeline-correctness/v1"
-MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v1"
+CANONICAL_SCHEMA = "ppu-fixed-slot-canonical/v5"
+RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v5"
+CORRECTNESS_SCHEMA = "ppu-timeline-correctness/v2"
+MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v2"
 SAMPLE_PREFIX = "__PPU_TIMELINE_SAMPLE__="
 TIMER_SOURCE = "globaltimer"
 TIMER_UNIT = "ns"
@@ -109,7 +126,8 @@ def _artifact(
         path = base_path.parent / path
     _require(path.is_file(), f"{label} is not a regular file: {path}")
     return {
-        "path": logical_path,
+        "path": str(path.resolve()),
+        "declared_path": logical_path,
         **({"identity": identity.strip()} if require_identity else {}),
         "sha256": _sha256(path),
         "size_bytes": path.stat().st_size,
@@ -163,10 +181,15 @@ def _provenance(manifest_path: Path, manifest: dict[str, Any]) -> dict[str, Any]
     result["workload_inputs"] = _artifact_list(
         manifest_path, value, "workload_inputs", required=decision
     )
+    result["authoritative_kernel"] = _artifact(
+        manifest_path,
+        value.get("authoritative_kernel"),
+        "provenance.authoritative_kernel",
+    )
     result["missing_decision_bindings"] = [
         field
         for field in ("compiled_binaries", "workload_inputs")
-        if not result[field]
+        if not result.get(field)
     ]
     return result
 
@@ -321,7 +344,7 @@ def _validate_manifest(
     provenance = _provenance(manifest_path, manifest)
     _require(
         "timer_tick_ns" not in manifest and "timer_calibration" not in manifest,
-        "manifest v4 uses the documented globaltimer nanosecond contract; "
+        "manifest v5 uses the documented globaltimer nanosecond contract; "
         "remove timer conversion fields",
     )
     timer = manifest.get("timer")
@@ -369,6 +392,12 @@ def _validate_manifest(
         ),
         "every correctness check must be named and passed",
     )
+    authoritative_kernel = provenance.get("authoritative_kernel")
+    if authoritative_kernel is not None:
+        _require(
+            correctness.get("kernel_sha256") == authoritative_kernel["sha256"],
+            "correctness evidence does not bind the authoritative kernel",
+        )
     layout = manifest.get("owner_layout")
     _require(isinstance(layout, dict), "owner_layout must be an object")
     _require(
@@ -949,7 +978,7 @@ def _perfetto(
     return {
         "displayTimeUnit": "ns",
         "ppuTimeline": {
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "kernelName": manifest["kernel_name"],
             "kernelDurationNs": manifest["kernel_duration_ns"],
             "grid": manifest["grid"],
@@ -982,8 +1011,8 @@ def _perfetto(
                 "allBlocks": coverage.get("all_blocks", False),
                 "rangeSiteId": coverage.get("range_site_id"),
                 "rangeEventName": sites_by_id.get(coverage.get("range_site_id")),
-                "instrumentedLaunch": manifest_info["coverage"].get(
-                    "instrumented_launch"
+                "instrumentedLaunch": binding_view(
+                    manifest_info["coverage"].get("instrumented_launch")
                 ),
             },
             "clockScope": "owner_local",
@@ -996,6 +1025,9 @@ def _perfetto(
             "kernelSpecialization": manifest_info["provenance"][
                 "kernel_specialization"
             ],
+            "kernelSha256": manifest_info["provenance"].get(
+                "authoritative_kernel", {}
+            ).get("sha256"),
             "cachePolicy": manifest_info["provenance"]["cache_policy"],
             "clockConfiguration": manifest_info["provenance"][
                 "clock_configuration"
@@ -1017,6 +1049,8 @@ def decode(
     manifest_path: Path,
     dictionary_path: Path,
     output_prefix: Path,
+    *,
+    self_validate: bool = True,
 ) -> dict[str, Any]:
     raw = raw_path.read_bytes()
     manifest = _load_object(manifest_path, "manifest")
@@ -1032,11 +1066,14 @@ def decode(
         "event_dictionary": _file_descriptor(dictionary_path),
         "correctness": _file_descriptor(manifest_info["correctness_path"]),
     }
+    authoritative_kernel = manifest_info["provenance"].get("authoritative_kernel")
+    kernel_sha256 = (
+        authoritative_kernel.get("sha256")
+        if isinstance(authoritative_kernel, dict)
+        else None
+    )
     binding_payload = {
-        "inputs": {
-            name: {"sha256": value["sha256"], "size_bytes": value["size_bytes"]}
-            for name, value in input_artifacts.items()
-        },
+        "inputs": binding_view(input_artifacts),
         "identity": {
             "kernel_name": manifest["kernel_name"],
             "workload_identity": manifest["workload_identity"],
@@ -1046,9 +1083,10 @@ def decode(
             "grid": manifest["grid"],
             "block": manifest["block"],
         },
-        "provenance": manifest_info["provenance"],
-        "instrumented_launch": manifest_info["coverage"].get(
-            "instrumented_launch"
+        "kernel_sha256": kernel_sha256,
+        "provenance": binding_view(manifest_info["provenance"]),
+        "instrumented_launch": binding_view(
+            manifest_info["coverage"].get("instrumented_launch")
         ),
     }
     evidence_binding = {
@@ -1103,8 +1141,9 @@ def decode(
         if event["type"] == "range":
             range_durations[event["name"]].append(event["duration_ns"])
     summary = {
-        "schema": "ppu-fixed-slot-summary/v4",
+        "schema": "ppu-fixed-slot-summary/v5",
         "validation": "accepted",
+        "kernel_sha256": kernel_sha256,
         "clock_scope": "owner_local",
         "capture_mode": manifest["capture_mode"],
         "sampling_rationale": manifest["sampling_rationale"],
@@ -1112,11 +1151,11 @@ def decode(
         "record_count": len(records),
         "owners": manifest["owner_layout"]["owners"],
         "analysis": manifest.get("analysis"),
-        "coverage": manifest_info["coverage"],
+        "coverage": binding_view(manifest_info["coverage"]),
         "evidence": {
             "id": evidence_binding["evidenceId"],
             "grade": evidence_binding["evidenceGrade"],
-            "provenance": manifest_info["provenance"],
+            "provenance": binding_view(manifest_info["provenance"]),
         },
         "identity": {
             "kernel_name": manifest["kernel_name"],
@@ -1143,7 +1182,7 @@ def decode(
         "correctness": {
             "validation": "accepted",
             "checks": manifest_info["correctness"]["checks"],
-            "artifact": str(manifest_info["correctness_path"].resolve()),
+            "artifact": binding_view(input_artifacts["correctness"]),
         },
         "ranges": {
             name: {
@@ -1162,6 +1201,7 @@ def decode(
     }
     canonical = {
         "schema": CANONICAL_SCHEMA,
+        "kernel_sha256": kernel_sha256,
         "clock_scope": "owner_local",
         "timer": {
             "source": manifest_info["timer"]["source"],
@@ -1195,7 +1235,7 @@ def decode(
         },
         "grid": manifest["grid"],
         "block": manifest["block"],
-        "coverage": manifest_info["coverage"],
+        "coverage": binding_view(manifest_info["coverage"]),
         "owners": manifest["owner_layout"]["owners"],
         "sites": [sites[site_id] for site_id in sorted(sites)],
         "events": events,
@@ -1207,17 +1247,38 @@ def decode(
         "summary": Path(f"{output_prefix}.summary.json"),
         "receipt": Path(f"{output_prefix}.receipt.json"),
     }
+    source_paths = {
+        raw_path.resolve(),
+        manifest_path.resolve(),
+        dictionary_path.resolve(),
+        manifest_info["correctness_path"].resolve(),
+        *descriptor_paths(manifest_path, manifest_info["provenance"]),
+        *descriptor_paths(manifest_path, manifest_info["coverage"]),
+    }
+    try:
+        ensure_no_output_aliases(outputs.values(), source_paths, "timeline")
+    except RuntimeError as error:
+        raise TimelineError(str(error)) from error
     _write_json(outputs["canonical"], canonical)
     _write_json(outputs["perfetto"], perfetto)
     _write_json(outputs["summary"], summary)
+    receipt_path = outputs["receipt"]
+    receipt_inputs = portable_descriptors(input_artifacts, receipt_path)
+    receipt_provenance = portable_descriptors(
+        manifest_info["provenance"], receipt_path
+    )
     receipt = {
         "schema": RECEIPT_SCHEMA,
         "validation": "accepted",
         "evidence_id": evidence_binding["evidenceId"],
         "evidence_grade": evidence_binding["evidenceGrade"],
+        "kernel_sha256": kernel_sha256,
         "binding_payload": binding_payload,
-        "inputs": input_artifacts,
-        "provenance": manifest_info["provenance"],
+        "inputs": receipt_inputs,
+        "provenance": receipt_provenance,
+        "coverage": portable_descriptors(
+            manifest_info["coverage"], receipt_path
+        ),
         "identity": {
             "kernel_name": manifest["kernel_name"],
             "workload": manifest.get("workload_identity"),
@@ -1235,15 +1296,27 @@ def decode(
             "balanced ranges and first-record owner-local origins",
             "declared analysis-window and all-block coverage contracts when enabled",
             "globaltimer source and nanosecond unit match the PPU timer contract",
-            "numerical correctness evidence matches kernel, workload, and device",
+            "numerical correctness evidence matches the authoritative probe-free "
+            "kernel, workload, and device",
         ],
-        "outputs": {
-            name: _file_descriptor(path)
-            for name, path in outputs.items()
-            if name != "receipt"
-        },
+        "outputs": portable_descriptors(
+            {
+                name: _file_descriptor(path)
+                for name, path in outputs.items()
+                if name != "receipt"
+            },
+            receipt_path,
+        ),
     }
     _write_json(outputs["receipt"], receipt)
+    if self_validate:
+        validate_timeline_receipt(
+            outputs["receipt"],
+            expected_outputs={
+                name: path for name, path in outputs.items() if name != "receipt"
+            },
+            require_decision=receipt["evidence_grade"] == "decision",
+        )
     return summary
 
 
@@ -1313,6 +1386,23 @@ def _run_sample(
         isinstance(sample.get("device_identity"), dict),
         f"{label} needs device_identity",
     )
+    kernel_sha256 = sample.get("kernel_sha256")
+    _require(
+        isinstance(kernel_sha256, str)
+        and len(kernel_sha256) == 64
+        and set(kernel_sha256) <= set("0123456789abcdef"),
+        f"{label} needs authoritative kernel_sha256",
+    )
+    _require(
+        isinstance(sample.get("runtime_identity"), dict)
+        and sample["runtime_identity"],
+        f"{label} needs runtime_identity",
+    )
+    for field in ("cache_policy", "clock_configuration"):
+        _require(
+            isinstance(sample.get(field), str) and sample[field].strip(),
+            f"{label} needs {field}",
+        )
     _require(
         isinstance(sample.get("allocation_identity"), str)
         and sample["allocation_identity"].strip(),
@@ -1335,9 +1425,14 @@ def measure(
         "A": ("baseline", baseline_command),
         "B": ("instrumented", instrumented_command),
     }
+    command_sha256 = {
+        arm: hashlib.sha256(_canonical_json(command)).hexdigest()
+        for arm, (_, command) in commands.items()
+    }
     runs: list[dict[str, Any]] = []
     device_identity: dict[str, Any] | None = None
     allocation_identity: str | None = None
+    profile_identity: dict[str, Any] | None = None
     for sequence in schedule:
         _require(
             sequence and set(sequence) <= {"A", "B"},
@@ -1346,19 +1441,36 @@ def measure(
         for arm in sequence:
             label, command = commands[arm]
             sample = _run_sample(command, label, workload, warmup, iterations, timeout)
+            current_profile_identity = {
+                "kernel_sha256": sample["kernel_sha256"],
+                "runtime_identity": sample["runtime_identity"],
+                "cache_policy": sample["cache_policy"],
+                "clock_configuration": sample["clock_configuration"],
+            }
             if device_identity is None:
                 device_identity = sample["device_identity"]
                 allocation_identity = sample["allocation_identity"]
+                profile_identity = current_profile_identity
             _require(
                 sample["device_identity"] == device_identity,
                 "device identity drifted across samples",
+            )
+            _require(
+                current_profile_identity == profile_identity,
+                "kernel, runtime, cache, or clock identity drifted across samples",
             )
             _require(
                 sample["allocation_identity"] == allocation_identity,
                 "allocation identity drifted across samples",
             )
             runs.append(
-                {"order": len(runs), "arm": arm, "variant": label, "sample": sample}
+                {
+                    "order": len(runs),
+                    "arm": arm,
+                    "variant": label,
+                    "command_sha256": command_sha256[arm],
+                    "sample": sample,
+                }
             )
     by_arm = {
         arm: [float(run["sample"]["latency_ms"]) for run in runs if run["arm"] == arm]
@@ -1376,6 +1488,11 @@ def measure(
         "workload_identity": workload,
         "device_identity": device_identity,
         "allocation_identity": allocation_identity,
+        "kernel_sha256": profile_identity["kernel_sha256"],
+        "runtime_identity": profile_identity["runtime_identity"],
+        "cache_policy": profile_identity["cache_policy"],
+        "clock_configuration": profile_identity["clock_configuration"],
+        "command_sha256": command_sha256,
         "warmup": warmup,
         "iterations": iterations,
         "runs": runs,

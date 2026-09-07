@@ -82,7 +82,7 @@ acu --version > acu-version.txt
 
 ```json
 {
-  "schema": "ppu-acu-collection/v1",
+  "schema": "ppu-acu-collection/v2",
   "producer": {"name": "acu", "version": "2.2"},
   "producer_artifact": {
     "path": "acu-version.txt",
@@ -90,6 +90,14 @@ acu --version > acu-version.txt
   },
   "evidence_grade": "decision",
   "report": "profile.acurep",
+  "authoritative_kernel": {
+    "path": "clean-source/kernel.py",
+    "identity": "probe-free candidate used by correctness and benchmark"
+  },
+  "correctness_artifact": {
+    "path": "correctness.json",
+    "identity": "accepted ppu-profile-correctness/v1 for this kernel, workload, and device"
+  },
   "kernel_name": "exact filtered kernel name",
   "kernel_specialization": "compile-time specialization and architecture flags",
   "workload_identity": "shape, dtype, layout, and input case",
@@ -113,10 +121,14 @@ acu --version > acu-version.txt
 ```
 
 `requested_metrics` is optional, but include it when the exact requested list is known so a missing
-metric is visible. KSD/KVD hit rate is valid only when matching load/store requests from the same
-replay packet and exact window are positive. Duplicate sample identities are rejected. L2 hit
-remains unknown without an activity denominator. Non-finite PM values reject extraction rather than
-being serialized as JSON `NaN` or treated as numerical evidence.
+metric is visible. `authoritative_kernel` is mandatory and identifies the probe-free candidate;
+decision-grade evidence also requires an accepted `ppu-profile-correctness/v1` JSON whose
+`kernel_sha256`, `workload_identity`, and `device_identity` match the collection and whose non-empty
+`checks` list contains only named `passed` checks. KSD/KVD hit rate is valid only when matching
+load/store requests from the same replay
+packet and exact window are positive. Duplicate sample identities are rejected. L2 hit remains
+unknown without an activity denominator. Non-finite PM values reject extraction rather than being
+serialized as JSON `NaN` or treated as numerical evidence.
 
 Run the exporter after exporting the ACU raw page:
 
@@ -131,11 +143,12 @@ python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
 The exporter leaves `.acurep`, `profile.raw.csv`, and the decoded PM values available to the agent.
 It also validates the exact raw kernel row, physical device, launch dimensions and finite launch
 resources; checks PM window continuity, duration coverage, interval agreement, dropped samples, and
-requested metric presence; and emits per-packet/per-metric valid counts and time-weighted summaries.
+requested metric presence; emits per-packet/per-metric valid counts and time-weighted summaries; and
+re-opens every bound artifact after writing the receipt to verify its hash and size.
 Unknown metrics remain in `profile.samples.csv` with `scope: unknown` and
 `validity: unknown_semantics`.
 
-`profile.extract.json` uses `ppu-acu-extraction/v3`. Its validation status has narrow data-quality
+`profile.extract.json` uses `ppu-acu-extraction/v4`. Its validation status has narrow data-quality
 semantics:
 
 - `accepted`: no detected integrity or sampling-quality issue;

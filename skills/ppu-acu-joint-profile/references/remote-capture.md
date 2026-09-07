@@ -94,9 +94,10 @@ The attempt harness performs these operations inside the remote environment:
 6. Warm up and validate the representative output, write the accepted correctness artifact, then
    capture one identified target launch, synchronize, and save the entire raw buffer with
    `save_torch_buffer`.
-7. Write manifest v4 and the event dictionary from actual grid, block, launch, device, runtime,
-   workload, writer, source, timer, and correctness facts. Bind the instrumented source, loaded
-   binary, workload inputs, specialization, cache policy, and clock configuration in `provenance`.
+7. Write manifest v5 and the event dictionary from actual grid, block, launch, device, runtime,
+   workload, writer, source, timer, and correctness facts. Bind the probe-free authoritative kernel,
+   instrumented source, loaded binary, workload inputs, specialization, cache policy, and clock
+   configuration in `provenance`.
 8. Run `scripts/timeline.py decode` before the remote job exits. A rejected capture is an attempt
    failure, not evidence to interpret.
 

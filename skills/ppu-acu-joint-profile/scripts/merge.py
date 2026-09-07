@@ -8,30 +8,43 @@ import csv
 import hashlib
 import json
 import math
+import re
 import statistics
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
+
+try:
+    from .evidence import (
+        binding_view,
+        descriptor_paths,
+        digest_json,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
+except ImportError:
+    from evidence import (
+        binding_view,
+        descriptor_paths,
+        digest_json,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
 
 
 WARNING_DELTA = 0.03
 REJECT_DELTA = 0.05
 MIN_SAMPLES = 10
-MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v1"
-TIMELINE_RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v4"
-ACU_EXTRACTION_SCHEMA = "ppu-acu-extraction/v3"
-JOINT_SUMMARY_SCHEMA = "ppu-joint-profile/v3"
+MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v2"
+JOINT_SUMMARY_SCHEMA = "ppu-joint-profile/v4"
 VALID_PM_STATES = {"valid", "valid_activity_positive"}
-
-
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def _sha256(path: Path) -> str:
@@ -40,6 +53,21 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _descriptor(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise RuntimeError(f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _descriptor_target(owner_path: Path, descriptor: dict[str, Any]) -> Path:
+    target = Path(descriptor["path"])
+    return target if target.is_absolute() else owner_path.parent / target
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
@@ -52,43 +80,14 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def _verify_descriptor(
-    descriptor: object, path: Path, label: str
-) -> dict[str, Any]:
-    if not isinstance(descriptor, dict):
-        raise RuntimeError(f"{label} descriptor is missing")
-    expected_hash = descriptor.get("sha256")
-    if not isinstance(expected_hash, str) or len(expected_hash) != 64:
-        raise RuntimeError(f"{label} descriptor has no sha256")
-    actual_hash = _sha256(path)
-    if actual_hash != expected_hash:
-        raise RuntimeError(f"{label} content hash mismatch")
-    expected_size = descriptor.get("size_bytes")
-    if expected_size != path.stat().st_size:
-        raise RuntimeError(f"{label} size mismatch")
-    return descriptor
-
-
 def _read_timeline_receipt(
     path: Path, timeline_path: Path, timeline_meta: dict[str, Any]
 ) -> dict[str, Any]:
-    receipt = _load_json(path, "timeline receipt")
-    if (
-        receipt.get("schema") != TIMELINE_RECEIPT_SCHEMA
-        or receipt.get("validation") != "accepted"
-    ):
-        raise RuntimeError("timeline receipt is not accepted")
-    if receipt.get("evidence_grade") != "decision":
-        raise RuntimeError("joint analysis requires decision-grade timeline evidence")
-    binding_payload = receipt.get("binding_payload")
-    if not isinstance(binding_payload, dict) or hashlib.sha256(
-        _canonical_json(binding_payload)
-    ).hexdigest() != receipt.get("evidence_id"):
-        raise RuntimeError("timeline receipt evidence id is invalid")
-    outputs = receipt.get("outputs")
-    if not isinstance(outputs, dict):
-        raise RuntimeError("timeline receipt outputs are missing")
-    _verify_descriptor(outputs.get("perfetto"), timeline_path, "timeline Perfetto")
+    receipt = validate_timeline_receipt(
+        path,
+        expected_outputs={"perfetto": timeline_path},
+        require_decision=True,
+    )
     binding = timeline_meta.get("evidenceBinding")
     if not isinstance(binding, dict):
         raise RuntimeError("timeline evidence binding is missing")
@@ -97,30 +96,20 @@ def _read_timeline_receipt(
         or binding.get("evidenceGrade") != "decision"
     ):
         raise RuntimeError("timeline evidence binding does not match its receipt")
+    if timeline_meta.get("kernelSha256") != receipt.get("kernel_sha256"):
+        raise RuntimeError("timeline metadata authoritative kernel mismatch")
     return receipt
 
 
 def _read_acu_metadata(
     path: Path, pm_path: Path, raw_path: Path
 ) -> dict[str, Any]:
-    metadata = _load_json(path, "ACU extraction metadata")
-    validation = metadata.get("validation")
-    if (
-        metadata.get("schema") != ACU_EXTRACTION_SCHEMA
-        or not isinstance(validation, dict)
-        or validation.get("status") != "accepted"
-    ):
-        raise RuntimeError("ACU extraction metadata is not accepted")
-    if metadata.get("evidence_grade") != "decision":
-        raise RuntimeError("joint analysis requires decision-grade ACU evidence")
-    if metadata.get("producer") != {"name": "acu", "version": "2.2"}:
-        raise RuntimeError("joint analysis supports only validated ACU 2.2 extraction")
-    outputs = metadata.get("outputs")
-    inputs = metadata.get("inputs")
-    if not isinstance(outputs, dict) or not isinstance(inputs, dict):
-        raise RuntimeError("ACU extraction artifact bindings are missing")
-    _verify_descriptor(outputs.get("pm_csv"), pm_path, "ACU PM CSV")
-    _verify_descriptor(inputs.get("raw_csv"), raw_path, "ACU raw CSV")
+    metadata = validate_acu_metadata(
+        path,
+        expected_pm=pm_path,
+        expected_raw=raw_path,
+        require_decision=True,
+    )
     identity = metadata.get("identity")
     if not isinstance(identity, dict) or not identity:
         raise RuntimeError("ACU collection identity is missing")
@@ -139,17 +128,6 @@ def _read_acu_metadata(
         "device_identity"
     ]:
         raise RuntimeError("ACU collection physical device identity is missing")
-    evidence_payload = {
-        "producer": metadata["producer"],
-        "identity": identity,
-        "inputs": inputs,
-        "bound_artifacts": metadata.get("bound_artifacts"),
-        "pm_csv": outputs.get("pm_csv"),
-    }
-    if hashlib.sha256(_canonical_json(evidence_payload)).hexdigest() != metadata.get(
-        "evidence_id"
-    ):
-        raise RuntimeError("ACU extraction evidence id is invalid")
     return metadata
 
 
@@ -237,6 +215,27 @@ def _read_measurement(path: Path, label: str) -> dict[str, Any]:
     expected_order = [arm for group in schedule for arm in group]
     if len(runs) != len(expected_order):
         raise RuntimeError(f"{label} schedule does not match its raw samples")
+    kernel_sha256 = measurement.get("kernel_sha256")
+    if not isinstance(kernel_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", kernel_sha256
+    ):
+        raise RuntimeError(f"{label} kernel_sha256 is invalid")
+    if not isinstance(measurement.get("runtime_identity"), dict):
+        raise RuntimeError(f"{label} runtime identity is missing")
+    for field in ("cache_policy", "clock_configuration"):
+        if not isinstance(measurement.get(field), str) or not measurement[field]:
+            raise RuntimeError(f"{label} {field} is missing")
+    command_sha256 = measurement.get("command_sha256")
+    if (
+        not isinstance(command_sha256, dict)
+        or set(command_sha256) != {"A", "B"}
+        or any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in command_sha256.values()
+        )
+    ):
+        raise RuntimeError(f"{label} command hashes are invalid")
     latencies: dict[str, list[float]] = {"A": [], "B": []}
     for index, (run, expected_arm) in enumerate(zip(runs, expected_order)):
         if not isinstance(run, dict) or run.get("order") != index:
@@ -245,6 +244,8 @@ def _read_measurement(path: Path, label: str) -> dict[str, Any]:
         sample = run.get("sample")
         if arm != expected_arm or arm not in latencies or not isinstance(sample, dict):
             raise RuntimeError(f"{label} has invalid sample arm")
+        if run.get("command_sha256") != command_sha256[arm]:
+            raise RuntimeError(f"{label} sample command hash drifted")
         latency = sample.get("latency_ms")
         if (
             not isinstance(latency, (int, float))
@@ -262,6 +263,14 @@ def _read_measurement(path: Path, label: str) -> dict[str, Any]:
             raise RuntimeError(f"{label} sample workload identity drifted")
         if sample.get("device_identity") != measurement.get("device_identity"):
             raise RuntimeError(f"{label} sample device identity drifted")
+        for field in (
+            "kernel_sha256",
+            "runtime_identity",
+            "cache_policy",
+            "clock_configuration",
+        ):
+            if sample.get(field) != measurement.get(field):
+                raise RuntimeError(f"{label} sample {field} drifted")
         if sample.get("allocation_identity") != measurement.get(
             "allocation_identity"
         ):
@@ -319,18 +328,25 @@ def _overlaps(left_start: float, left_end: float, right_start: float, right_end:
 def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(row["packet_index"], row["metric_name"])].append(
-            row["metric_value"]
-        )
-    return {
-        f"packet_{packet_index}:{name}": {
-            "samples": len(values),
-            "mean": statistics.fmean(values),
+        grouped[(row["packet_index"], row["metric_name"])].append(row)
+    result: dict[str, dict[str, float | int]] = {}
+    for (packet_index, name), stream in sorted(grouped.items()):
+        total_interval_ns = sum(row["interval_ns"] for row in stream)
+        if total_interval_ns <= 0:
+            raise RuntimeError(
+                f"packet {packet_index} metric {name} has no positive PM interval"
+            )
+        values = [row["metric_value"] for row in stream]
+        result[f"packet_{packet_index}:{name}"] = {
+            "samples": len(stream),
+            "time_weighted_mean": sum(
+                row["metric_value"] * row["interval_ns"] for row in stream
+            )
+            / total_interval_ns,
             "min": min(values),
             "max": max(values),
         }
-        for (packet_index, name), values in sorted(grouped.items())
-    }
+    return result
 
 
 def _validity_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -371,11 +387,13 @@ def merge(
     output_prefix: Path,
     perturbation_path: Path | None = None,
     density_sensitivity_path: Path | None = None,
+    *,
+    self_validate: bool = True,
 ) -> dict[str, Any]:
     timeline = _load_json(timeline_path, "timeline Perfetto")
     timeline_meta = timeline.get("ppuTimeline", {})
-    if timeline_meta.get("schemaVersion") != 4:
-        raise RuntimeError("PPU timeline schemaVersion 4 is required")
+    if timeline_meta.get("schemaVersion") != 5:
+        raise RuntimeError("PPU timeline schemaVersion 5 is required")
     if timeline_meta.get("captureValidation") != "accepted":
         raise RuntimeError(
             "PPU timeline must come from an accepted timeline.py decode capture"
@@ -394,6 +412,11 @@ def merge(
     acu_metadata = _read_acu_metadata(
         acu_metadata_path, pm_path, acu_raw_path
     )
+    if timeline_receipt.get("kernel_sha256") != acu_metadata.get("kernel_sha256"):
+        raise RuntimeError(
+            "ACU and timeline evidence describe different authoritative kernels"
+        )
+    kernel_sha256 = acu_metadata["kernel_sha256"]
     pm_rows = _read_pm(pm_path)
     valid_pm_rows = [row for row in pm_rows if row["validity"] in VALID_PM_STATES]
     if not valid_pm_rows:
@@ -440,6 +463,17 @@ def merge(
             errors.append(f"{label} workload identity mismatch")
         if measurement.get("device_identity") != timeline_meta.get("deviceIdentity"):
             errors.append(f"{label} device identity mismatch")
+        if measurement.get("kernel_sha256") != kernel_sha256:
+            errors.append(f"{label} authoritative kernel mismatch")
+        for measurement_field, timeline_field in (
+            ("runtime_identity", "runtimeIdentity"),
+            ("cache_policy", "cachePolicy"),
+            ("clock_configuration", "clockConfiguration"),
+        ):
+            if measurement.get(measurement_field) != timeline_meta.get(
+                timeline_field
+            ):
+                errors.append(f"{label} {measurement_field} mismatch")
     if timeline_meta.get("kernelName") != acu["kernel_name"]:
         errors.append("kernel identity mismatch")
     identity_pairs = (
@@ -476,12 +510,9 @@ def merge(
         warnings.append(f"timeline/ACU duration delta {duration_delta:.2%} exceeds 3%")
 
     by_stream: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
-    valid_by_stream: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
     for row in pm_rows:
         by_stream[(row["packet_index"], row["metric_name"])].append(row)
-        if row["validity"] in VALID_PM_STATES:
-            valid_by_stream[(row["packet_index"], row["metric_name"])].append(row)
-    _validate_pm_windows(valid_by_stream, errors)
+    _validate_pm_windows(by_stream, errors)
 
     if len(observed_intervals) != 1:
         jitter = (
@@ -765,17 +796,49 @@ def merge(
             )
 
     status = "rejected" if errors else ("warning" if warnings else "accepted")
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    joined_csv = Path(f"{output_prefix}.joint_samples.csv")
+    trace_path = Path(f"{output_prefix}.perfetto.json")
+    summary_path = Path(f"{output_prefix}.summary.json")
+    manifest_path = Path(f"{output_prefix}.run_manifest.json")
+    output_paths = [joined_csv, trace_path, summary_path, manifest_path]
+    source_paths = {
+        timeline_path.resolve(),
+        timeline_receipt_path.resolve(),
+        pm_path.resolve(),
+        acu_raw_path.resolve(),
+        acu_metadata_path.resolve(),
+        *descriptor_paths(timeline_receipt_path, timeline_receipt),
+        *descriptor_paths(acu_metadata_path, acu_metadata),
+    }
+    if perturbation_path is not None:
+        source_paths.add(perturbation_path.resolve())
+    if density_sensitivity_path is not None:
+        source_paths.add(density_sensitivity_path.resolve())
+    ensure_no_output_aliases(output_paths, source_paths, "joint")
+
+    input_descriptors: dict[str, Any] = {
+        "timeline": _descriptor(timeline_path),
+        "timeline_receipt": _descriptor(timeline_receipt_path),
+        "pm_samples": _descriptor(pm_path),
+        "acu_raw": _descriptor(acu_raw_path),
+        "acu_metadata": _descriptor(acu_metadata_path),
+    }
+    if perturbation_path is not None:
+        input_descriptors["a_b_perturbation"] = _descriptor(perturbation_path)
+    if density_sensitivity_path is not None:
+        input_descriptors["b_c_density_sensitivity"] = _descriptor(
+            density_sensitivity_path
+        )
+    inputs = portable_descriptors(input_descriptors, summary_path)
     evidence_payload = {
         "timeline_evidence_id": timeline_receipt["evidence_id"],
         "acu_evidence_id": acu_metadata["evidence_id"],
-        "timeline_sha256": _sha256(timeline_path),
-        "pm_csv_sha256": _sha256(pm_path),
-        "acu_raw_sha256": _sha256(acu_raw_path),
+        "kernel_sha256": kernel_sha256,
+        "inputs": binding_view(inputs),
         "identity": acu_identity,
     }
-    evidence_id = hashlib.sha256(_canonical_json(evidence_payload)).hexdigest()
-    output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    joined_csv = Path(f"{output_prefix}.joint_samples.csv")
+    evidence_id = digest_json(evidence_payload)
     with joined_csv.open("w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=list(joined_rows[0]))
         writer.writeheader()
@@ -785,9 +848,10 @@ def merge(
         "displayTimeUnit": "ns",
         "traceEvents": joint_events,
         "ppuJointProfile": {
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "evidenceId": evidence_id,
             "evidenceGrade": "decision",
+            "kernelSha256": kernel_sha256,
             "timerSource": timeline_meta["timerSource"],
             "timerUnit": timeline_meta["timerUnit"],
             "alignment": (
@@ -799,15 +863,25 @@ def merge(
             "validationStatus": status,
         },
     }
-    trace_path = Path(f"{output_prefix}.perfetto.json")
     trace_path.write_text(
         json.dumps(trace, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
+    output_descriptors = portable_descriptors(
+        {
+            "joint_samples": _descriptor(joined_csv),
+            "perfetto": _descriptor(trace_path),
+        },
+        summary_path,
     )
 
     summary = {
         "schema": JOINT_SUMMARY_SCHEMA,
         "evidence_id": evidence_id,
         "evidence_grade": "decision",
+        "kernel_sha256": kernel_sha256,
+        "binding_payload": evidence_payload,
+        "inputs": inputs,
+        "outputs": output_descriptors,
         "validation": {
             "status": status,
             "errors": errors,
@@ -888,47 +962,16 @@ def merge(
             "All-block duration survival exists only for explicit complete, comparable coverage.",
         ],
     }
-    summary_path = Path(f"{output_prefix}.summary.json")
     summary_path.write_text(
         json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "evidence_id": evidence_id,
         "evidence_grade": "decision",
-        "inputs": {
-            "timeline": {
-                "path": str(timeline_path.resolve()),
-                "sha256": _sha256(timeline_path),
-            },
-            "timeline_receipt": {
-                "path": str(timeline_receipt_path.resolve()),
-                "sha256": _sha256(timeline_receipt_path),
-            },
-            "pm_samples": {
-                "path": str(pm_path.resolve()),
-                "sha256": _sha256(pm_path),
-            },
-            "acu_raw": {
-                "path": str(acu_raw_path.resolve()),
-                "sha256": _sha256(acu_raw_path),
-            },
-            "acu_metadata": {
-                "path": str(acu_metadata_path.resolve()),
-                "sha256": _sha256(acu_metadata_path),
-            },
-            "a_b_perturbation": (
-                str(perturbation_path.resolve())
-                if perturbation_path is not None
-                else None
-            ),
-            "b_c_density_sensitivity": (
-                str(density_sensitivity_path.resolve())
-                if density_sensitivity_path is not None
-                else None
-            ),
-        },
+        "kernel_sha256": kernel_sha256,
+        "inputs": inputs,
         "outputs": {
             "joint_samples": str(joined_csv),
             "perfetto": str(trace_path),
@@ -941,11 +984,118 @@ def merge(
             "no_duration_rescaling": True,
         },
     }
-    Path(f"{output_prefix}.run_manifest.json").write_text(
+    manifest_path.write_text(
         json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
+    if self_validate:
+        validate_joint_summary(summary_path, require_accepted=status == "accepted")
     if errors:
         raise RuntimeError("joint profile rejected: " + "; ".join(errors))
+    return summary
+
+
+def validate_joint_summary(
+    path: Path, *, require_accepted: bool = True
+) -> dict[str, Any]:
+    summary = _load_json(path, "joint profile summary")
+    if summary.get("schema") != JOINT_SUMMARY_SCHEMA:
+        raise RuntimeError("unsupported joint profile schema")
+    if summary.get("evidence_grade") != "decision":
+        raise RuntimeError("joint profile is not decision-grade")
+    validation = summary.get("validation")
+    if not isinstance(validation, dict):
+        raise RuntimeError("joint profile validation is missing")
+    if require_accepted and validation.get("status") != "accepted":
+        raise RuntimeError("joint profile is not accepted")
+    kernel_sha256 = summary.get("kernel_sha256")
+    if not isinstance(kernel_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", kernel_sha256
+    ):
+        raise RuntimeError("joint profile has no authoritative kernel hash")
+    inputs = summary.get("inputs")
+    outputs = summary.get("outputs")
+    if not isinstance(inputs, dict):
+        raise RuntimeError("joint profile inputs are missing")
+    if not isinstance(outputs, dict):
+        raise RuntimeError("joint profile outputs are missing")
+    verify_descriptor_tree(path, inputs, "inputs")
+    verify_descriptor_tree(path, outputs, "outputs")
+    timeline_descriptor = inputs.get("timeline")
+    timeline_receipt_descriptor = inputs.get("timeline_receipt")
+    pm_descriptor = inputs.get("pm_samples")
+    raw_descriptor = inputs.get("acu_raw")
+    acu_descriptor = inputs.get("acu_metadata")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            timeline_descriptor,
+            timeline_receipt_descriptor,
+            pm_descriptor,
+            raw_descriptor,
+            acu_descriptor,
+        )
+    ):
+        raise RuntimeError("joint profile required input descriptors are incomplete")
+    timeline_path = _descriptor_target(path, timeline_descriptor)
+    timeline_receipt_path = _descriptor_target(path, timeline_receipt_descriptor)
+    pm_path = _descriptor_target(path, pm_descriptor)
+    raw_path = _descriptor_target(path, raw_descriptor)
+    acu_path = _descriptor_target(path, acu_descriptor)
+    timeline_receipt = validate_timeline_receipt(
+        timeline_receipt_path,
+        expected_outputs={"perfetto": timeline_path},
+        require_decision=True,
+    )
+    acu_metadata = validate_acu_metadata(
+        acu_path,
+        expected_pm=pm_path,
+        expected_raw=raw_path,
+        require_decision=True,
+    )
+    if (
+        timeline_receipt.get("kernel_sha256") != kernel_sha256
+        or acu_metadata.get("kernel_sha256") != kernel_sha256
+    ):
+        raise RuntimeError("joint profile input kernel hash mismatch")
+    measurement_paths: dict[str, Path] = {}
+    for field, label in (
+        ("a_b_perturbation", "A/B perturbation"),
+        ("b_c_density_sensitivity", "B/C density sensitivity"),
+    ):
+        descriptor = inputs.get(field)
+        if descriptor is not None:
+            if not isinstance(descriptor, dict):
+                raise RuntimeError(f"joint profile {field} descriptor is invalid")
+            measurement_path = _descriptor_target(path, descriptor)
+            _read_measurement(measurement_path, label)
+            measurement_paths[field] = measurement_path
+    expected_payload = {
+        "timeline_evidence_id": timeline_receipt["evidence_id"],
+        "acu_evidence_id": acu_metadata["evidence_id"],
+        "kernel_sha256": kernel_sha256,
+        "inputs": binding_view(inputs),
+        "identity": acu_metadata["identity"],
+    }
+    if summary.get("binding_payload") != expected_payload:
+        raise RuntimeError("joint profile binding payload mismatch")
+    if digest_json(expected_payload) != summary.get("evidence_id"):
+        raise RuntimeError("joint profile evidence id mismatch")
+    with tempfile.TemporaryDirectory(prefix="ppu-joint-validate-") as directory:
+        regenerated = merge(
+            timeline_path,
+            timeline_receipt_path,
+            pm_path,
+            raw_path,
+            acu_path,
+            Path(directory) / "joint",
+            perturbation_path=measurement_paths.get("a_b_perturbation"),
+            density_sensitivity_path=measurement_paths.get(
+                "b_c_density_sensitivity"
+            ),
+            self_validate=False,
+        )
+    if binding_view(summary) != binding_view(regenerated):
+        raise RuntimeError("joint profile summary does not match bound inputs")
     return summary
 
 

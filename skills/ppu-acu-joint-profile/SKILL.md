@@ -69,7 +69,7 @@ new evidence:
       "evidence": {
         "artifact": "profiles/episode_N/timeline/attempt-N/fine.timeline.receipt.json",
         "sha256": "lowercase SHA-256 of that exact JSON artifact",
-        "schema": "ppu-fixed-slot-receipt/v4",
+        "schema": "ppu-fixed-slot-receipt/v5",
         "evidence_id": "evidence_id read from the artifact"
       },
       "invalidation_conditions": [
@@ -81,8 +81,9 @@ new evidence:
 }
 ```
 
-The supervisor resolves each workspace-relative artifact, recomputes its hash, and accepts only an
-`accepted`, decision-grade artifact whose schema and evidence id match the row. It writes stable
+The supervisor resolves each workspace-relative artifact, recomputes its outer and transitive hashes,
+and runs `profile_report.py validate` before accepting an `accepted`, decision-grade artifact whose
+schema, authoritative kernel, binding payload, and evidence id match the row. It writes stable
 `source_memory_version`, `source_episode`, `memory_ref`, and hash-bound `evidence_ref` fields into
 canonical memory. Diagnostic-grade or warning artifacts may guide the current investigation but
 must not enter terminal-reusable memory. An empty or omitted list is valid when profiling was
@@ -134,6 +135,39 @@ once:
 ```bash
 /usr/local/PPU_SDK/ppu-smi/bin/ppu-smi gpm -i <DEVICE> -s 0
 ```
+
+### Compare candidates and measure headroom
+
+Use only accepted decision-grade ACU receipts with matching workload, physical device, runtime,
+cache, and clock identities. The comparison recomputes launch and PM deltas from both hash-bound
+artifact graphs:
+
+```bash
+python "$PPU_PROFILE_SKILL/scripts/profile_report.py" compare-acu \
+  --incumbent incumbent.extract.json --candidate candidate.extract.json \
+  --output candidate-vs-incumbent.json
+```
+
+Build each hardware bound from a measured calibration rather than a datasheet claim. First seal a
+`ppu-calibration-spec/v1` containing the device/runtime/cache/clock identity, named measurements, and
+at least one raw JSON benchmark artifact. Each measurement declares `kind`, `unit`, direction,
+`source_artifact`, and `json_pointer`; the sealing command reads the value from that hash-bound source
+rather than trusting a copied scalar:
+
+```bash
+python "$PPU_PROFILE_SKILL/scripts/profile_report.py" seal-calibration \
+  --spec calibration.spec.json --output calibration.receipt.json
+python "$PPU_PROFILE_SKILL/scripts/profile_report.py" envelope \
+  --current candidate.extract.json --calibration calibration.receipt.json \
+  --kind compute \
+  --current-pointer '/metric_summaries/packet_0:compute/time_weighted_mean' \
+  --bound-name compute_peak --output compute.envelope.json
+```
+
+The envelope output uses `ppu-envelope-measurement/v1`, binds the current kernel and both source
+artifacts, and reports measured headroom. Create separate bounds for compute, bandwidth,
+launch/merge, and random gather when applicable; a missing direction remains unknown rather than
+being treated as zero headroom.
 
 ## Route B: Timeline-only analysis
 
@@ -210,7 +244,7 @@ rejects legacy conversion fields, an invalid timer contract, or correctness evid
 did not pass.
 
 Initialize the ABI buffer on the host, copy it to the device, launch once, synchronize, and copy the
-entire allocation back. Emit manifest v4 and the event dictionary from actual launch and source
+entire allocation back. Emit manifest v5 and the event dictionary from actual launch and source
 facts, then decode:
 
 ```bash
@@ -261,9 +295,11 @@ python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
 ```
 
 Every emitted sample includes positive finite `latency_ms`, `correctness: "passed"`,
-`synchronized: true`, the exact workload/warmup/iteration and physical-device identity, and a stable
-`allocation_identity` such as the authorized Pod UID plus allocation/job id. The helper rejects any
-device or allocation drift across the interleaved schedule.
+`synchronized: true`, the exact workload/warmup/iteration, physical-device and runtime identity,
+`kernel_sha256`, cache policy, clock configuration, and a stable `allocation_identity` such as the
+authorized Pod UID plus allocation/job id. Measurement v2 also records each command argv hash. The
+helper rejects any kernel, runtime, cache, clock, device, allocation, or command drift across the
+interleaved schedule.
 
 A/B measures end-to-end probe overhead. B/C tests whether nearby density moves common intervals. Do
 not import a universal overhead threshold from another architecture; report the measured deltas and

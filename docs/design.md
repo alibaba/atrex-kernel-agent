@@ -496,10 +496,12 @@ from main-workspace commits; their recoverable local state remains on disk.
   when that route answers the question. Timeline writers and sites remain hypothesis-driven;
   optional joint analysis uses an independent probe-free ACU launch, and full-block lifetime
   coverage remains opt-in tail evidence.
-- A PPU terminal journal may select still-valid ACU/timeline/joint conclusions as
-  `accepted_ppu_diagnostics`. The supervisor recomputes each referenced artifact hash and accepts
-  only decision-grade evidence with matching schema, evidence id, and accepted validation state;
-  comparison identity and invalidation conditions remain explicit in the row. It then adds stable
+- A PPU terminal journal may select still-valid ACU, timeline, joint, candidate-comparison, or
+  measured-envelope conclusions as `accepted_ppu_diagnostics`. The supervisor recomputes the outer
+  and transitive artifact hashes, then invokes the schema-specific validator; only decision-grade
+  evidence with a matching authoritative kernel, binding payload, schema, evidence id, and accepted
+  validation state is retained. Comparison identity and invalidation conditions remain explicit in
+  the row. It then adds stable
   memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
   decide whether to reuse the bounded conclusion without loading the raw episode archive.
 - `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.

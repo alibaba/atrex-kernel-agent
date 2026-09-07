@@ -104,7 +104,7 @@ the trace easier to read.
 ## Timer contract and correctness evidence
 
 The recorder reads `%globaltimer`. The TIX contract for `ppu001` and `ppu0015` defines it as a
-64-bit nanosecond timer, so manifest v4 declares the source and unit and the decoder applies an
+64-bit nanosecond timer, so manifest v5 declares the source and unit and the decoder applies an
 identity conversion. Do not fit a `timer_tick_ns` scale from device-event timings: that would mix
 event overhead and measurement error into every decoded phase. If a synchronized sanity experiment
 materially contradicts the documented unit, reject the capture and investigate the runtime.
@@ -116,9 +116,10 @@ The capture harness also writes numerical correctness evidence from the represen
 
 ```json
 {
-  "schema": "ppu-timeline-correctness/v1",
+  "schema": "ppu-timeline-correctness/v2",
   "validation": "accepted",
   "kernel_name": "target_kernel",
+  "kernel_sha256": "lowercase SHA-256 of the probe-free candidate",
   "workload_identity": "m=...;n=...;k=...;dtype=...",
   "device_identity": {"physical_device": 7, "serial": "..."},
   "checks": [
@@ -132,14 +133,14 @@ The harness chooses metrics and tolerances appropriate to the operator contract.
 that every declared check passed and that kernel, workload, and device identities match; it does not
 invent numerical tolerances.
 
-## Manifest v4
+## Manifest v5
 
 Write launch facts next to the raw buffer. This fine example intentionally uses a nonzero writer
 thread and partial grid coverage:
 
 ```json
 {
-  "schema": "ppu-fixed-slot-timeline-manifest/v4",
+  "schema": "ppu-fixed-slot-timeline-manifest/v5",
   "backend": "ppu_fixed_slot",
   "capture_mode": "fine",
   "sampling_rationale": "coarse capture localized the unresolved load/MMA overlap to the steady-state loader role",
@@ -157,6 +158,10 @@ thread and partial grid coverage:
     "kernel_specialization": "compile-time shape, dtype, layout, and architecture flags",
     "cache_policy": "harness cache preparation and reuse policy",
     "clock_configuration": "locked/default clocks and observed power state",
+    "authoritative_kernel": {
+      "path": "clean-source/kernel.py",
+      "identity": "probe-free candidate used by correctness and benchmark"
+    },
     "instrumented_sources": [
       {"path": "instrumented-source/kernel.cu", "identity": "exact instrumented target source"}
     ],
@@ -220,10 +225,12 @@ This is an opt-in topology, not a baseline requirement.
 artifact path is resolved relative to the manifest unless absolute. Keep it inside the attempt
 directory for remote capture and handoff.
 
-The decoder hashes every declared artifact. `diagnostic` evidence may omit compiled binaries or
-workload files when they are genuinely unavailable, but it cannot enter joint analysis or terminal
-memory. `decision` evidence requires all three binding classes. Do not copy a hash from an earlier
-attempt: the decoder computes hashes from the files present when it accepts the capture.
+The decoder hashes every declared artifact and re-opens the full input/output graph after writing the
+receipt. Every capture requires the probe-free authoritative kernel and matching correctness
+artifact. `diagnostic` evidence may omit compiled binaries or workload files when they are genuinely
+unavailable, but it cannot enter joint analysis or terminal memory. `decision` evidence additionally
+requires the instrumented sources, compiled binary, and workload input. Do not copy a hash from an earlier attempt: the decoder computes hashes from
+the files present when it accepts the capture.
 
 ## Event dictionary v2
 

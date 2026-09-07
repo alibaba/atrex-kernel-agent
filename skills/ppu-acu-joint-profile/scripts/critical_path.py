@@ -7,16 +7,36 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import statistics
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from .evidence import (
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
+except ImportError:
+    from evidence import (
+        binding_view,
+        descriptor_paths,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
 
-PLAN_SCHEMA = "ppu-critical-path-plan/v1"
-CANONICAL_SCHEMA = "ppu-fixed-slot-canonical/v4"
-REPORT_SCHEMA = "ppu-critical-path-report/v2"
-RECEIPT_SCHEMA = "ppu-fixed-slot-receipt/v4"
+
+PLAN_SCHEMA = "ppu-critical-path-plan/v2"
+CANONICAL_SCHEMA = "ppu-fixed-slot-canonical/v5"
+REPORT_SCHEMA = "ppu-critical-path-report/v3"
 
 
 class CriticalPathError(RuntimeError):
@@ -55,37 +75,23 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _descriptor(path: Path) -> dict[str, Any]:
+    _require(path.is_file(), f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
 def _capture_receipt(path: Path, canonical_path: Path) -> dict[str, Any]:
-    receipt = _load(path, "timeline receipt")
-    _require(
-        receipt.get("schema") == RECEIPT_SCHEMA
-        and receipt.get("validation") == "accepted",
-        "canonical capture requires an accepted timeline receipt",
-    )
-    _require(
-        receipt.get("evidence_grade") in {"diagnostic", "decision"},
-        "timeline receipt has an invalid evidence grade",
-    )
-    binding_payload = receipt.get("binding_payload")
-    _require(
-        isinstance(binding_payload, dict)
-        and hashlib.sha256(_canonical_json(binding_payload)).hexdigest()
-        == receipt.get("evidence_id"),
-        "timeline receipt evidence id is invalid",
-    )
-    outputs = receipt.get("outputs")
-    _require(isinstance(outputs, dict), "timeline receipt outputs are missing")
-    descriptor = outputs.get("canonical")
-    _require(isinstance(descriptor, dict), "timeline canonical binding is missing")
-    _require(
-        descriptor.get("sha256") == _sha256(canonical_path),
-        "canonical capture content hash does not match its receipt",
-    )
-    _require(
-        descriptor.get("size_bytes") == canonical_path.stat().st_size,
-        "canonical capture size does not match its receipt",
-    )
-    return receipt
+    try:
+        return validate_timeline_receipt(
+            path,
+            expected_outputs={"canonical": canonical_path},
+        )
+    except RuntimeError as error:
+        raise CriticalPathError(str(error)) from error
 
 
 def _positive_number(value: object, label: str) -> float:
@@ -171,15 +177,6 @@ def _plan(path: Path) -> dict[str, Any]:
     clean_samples: list[float] | None = None
     if clean_reference is not None:
         _require(isinstance(clean_reference, dict), "clean_reference must be an object")
-        raw_samples = clean_reference.get("duration_ns_samples")
-        _require(
-            isinstance(raw_samples, list) and raw_samples,
-            "clean_reference.duration_ns_samples must be non-empty",
-        )
-        clean_samples = [
-            _positive_number(value, f"clean reference sample {index}")
-            for index, value in enumerate(raw_samples)
-        ]
         source = clean_reference.get("source")
         _require(
             isinstance(source, str) and source.strip(),
@@ -212,6 +209,25 @@ def _plan(path: Path) -> dict[str, Any]:
             and artifact_sha256 == _sha256(resolved_artifact),
             "clean_reference artifact hash mismatch",
         )
+        measurement = _load(resolved_artifact, "clean-reference measurement")
+        _require(
+            measurement.get("schema") == "ppu-clean-measurement/v1"
+            and measurement.get("validation") == "accepted",
+            "clean-reference measurement must be accepted ppu-clean-measurement/v1",
+        )
+        _require(
+            measurement.get("identity") == identity,
+            "clean-reference measurement identity mismatch",
+        )
+        raw_samples = measurement.get("duration_ns_samples")
+        _require(
+            isinstance(raw_samples, list) and raw_samples,
+            "clean-reference measurement samples must be non-empty",
+        )
+        clean_samples = [
+            _positive_number(value, f"clean reference sample {index}")
+            for index, value in enumerate(raw_samples)
+        ]
 
     stability = plan.get("stability")
     if stability is not None:
@@ -295,11 +311,39 @@ def analyze(
     plan_path: Path,
     captures_with_receipts: list[tuple[Path, Path]],
     output: Path,
+    *,
+    self_validate: bool = True,
 ) -> dict[str, Any]:
+    input_paths = [plan_path, *(path for pair in captures_with_receipts for path in pair)]
+    try:
+        ensure_no_output_aliases([output], input_paths, "critical-path")
+    except RuntimeError as error:
+        raise CriticalPathError(str(error)) from error
     plan = _plan(plan_path)
+    clean_reference = plan.get("clean_reference")
+    if isinstance(clean_reference, dict):
+        artifact = clean_reference.get("artifact")
+        if isinstance(artifact, dict) and isinstance(artifact.get("path"), str):
+            clean_path = Path(artifact["path"])
+            if not clean_path.is_absolute():
+                clean_path = plan_path.parent / clean_path
+            try:
+                ensure_no_output_aliases(
+                    [output], [clean_path], "critical-path clean reference"
+                )
+            except RuntimeError as error:
+                raise CriticalPathError(str(error)) from error
     _require(bool(captures_with_receipts), "at least one canonical capture is required")
+    captures_with_receipts = sorted(
+        captures_with_receipts,
+        key=lambda pair: (_sha256(pair[1]), _sha256(pair[0])),
+    )
     captures = [
-        (capture_path, *_canonical(capture_path, receipt_path))
+        (
+            capture_path,
+            receipt_path,
+            *_canonical(capture_path, receipt_path),
+        )
         for capture_path, receipt_path in captures_with_receipts
     ]
 
@@ -316,10 +360,32 @@ def analyze(
     reference_owners: list[dict[str, Any]] | None = None
     receipt_ids: list[str] = []
     evidence_grades: list[str] = []
+    kernel_sha256: str | None = None
+    kernel_identity_initialized = False
 
-    for capture_path, capture, receipt in captures:
+    for capture_path, receipt_path, capture, receipt in captures:
+        try:
+            ensure_no_output_aliases(
+                [output],
+                descriptor_paths(receipt_path, receipt),
+                "critical-path transitive",
+            )
+        except RuntimeError as error:
+            raise CriticalPathError(str(error)) from error
         receipt_ids.append(receipt["evidence_id"])
         evidence_grades.append(receipt["evidence_grade"])
+        capture_kernel_sha256 = receipt.get("kernel_sha256")
+        _require(
+            capture.get("kernel_sha256") == capture_kernel_sha256,
+            f"canonical authoritative kernel mismatch in {capture_path}",
+        )
+        if not kernel_identity_initialized:
+            kernel_sha256 = capture_kernel_sha256
+            kernel_identity_initialized = True
+        _require(
+            capture_kernel_sha256 == kernel_sha256,
+            f"authoritative kernel drifted in {capture_path}",
+        )
         identity = capture["identity"]
         comparable_identity = {
             key: identity[key]
@@ -476,7 +542,7 @@ def analyze(
                 component_union = _interval_union_ns(intervals)
                 uncovered_gap = max(0.0, parent_duration - component_union)
                 instance = {
-                    "capture": str(capture_path.resolve()),
+                    "capture_evidence_id": receipt["evidence_id"],
                     "launch_id": launch_id,
                     "owner": owner_id,
                     "owner_label": owner.get("label"),
@@ -533,7 +599,7 @@ def analyze(
         ]
         capture_reports.append(
             {
-                "capture": str(capture_path.resolve()),
+                "capture_evidence_id": receipt["evidence_id"],
                 "launch_id": launch_id,
                 "owner_count": len(owner_reports),
                 "unique_blocks": len({owner["block"] for owner in owner_reports}),
@@ -573,22 +639,36 @@ def analyze(
         }
         _require(values, f"declared component {name!r} was not observed")
 
+    capture_inputs = sorted(
+        (
+            {
+                "canonical": _descriptor(capture_path),
+                "receipt": _descriptor(receipt_path),
+            }
+            for capture_path, receipt_path in captures_with_receipts
+        ),
+        key=lambda row: row["receipt"]["sha256"],
+    )
+    inputs = portable_descriptors(
+        {"plan": _descriptor(plan_path), "captures": capture_inputs}, output
+    )
+    binding_payload = {
+        "inputs": binding_view(inputs),
+        "capture_evidence_ids": sorted(receipt_ids),
+        "kernel_sha256": kernel_sha256,
+    }
     report: dict[str, Any] = {
         "schema": REPORT_SCHEMA,
         "validation": "accepted",
-        "evidence_id": hashlib.sha256(
-            _canonical_json(
-                {
-                    "plan_sha256": _sha256(plan_path),
-                    "capture_evidence_ids": receipt_ids,
-                }
-            )
-        ).hexdigest(),
+        "evidence_id": hashlib.sha256(_canonical_json(binding_payload)).hexdigest(),
         "evidence_grade": (
             "decision" if all(grade == "decision" for grade in evidence_grades) else "diagnostic"
         ),
+        "kernel_sha256": kernel_sha256,
+        "binding_payload": binding_payload,
+        "inputs": inputs,
         "plan": {
-            "source": str(plan_path.resolve()),
+            "source": "inputs.plan",
             "parent": plan["parent"],
             "components": plan["components"],
             "owner_topology": plan["owner_topology"],
@@ -596,7 +676,7 @@ def analyze(
         "identity": reference_identity,
         "capture_count": len(capture_reports),
         "launch_ids": sorted(launch_ids),
-        "capture_evidence_ids": receipt_ids,
+        "capture_evidence_ids": sorted(receipt_ids),
         "parent_duration": _summary(parent_values),
         "components": component_report,
         "captures": capture_reports,
@@ -668,6 +748,105 @@ def analyze(
     output.write_text(
         json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
+    if self_validate:
+        validate_report(
+            output, require_decision=report["evidence_grade"] == "decision"
+        )
+    return report
+
+
+def _descriptor_target(owner_path: Path, descriptor: dict[str, Any]) -> Path:
+    target = Path(descriptor["path"])
+    return target if target.is_absolute() else owner_path.parent / target
+
+
+def validate_report(path: Path, *, require_decision: bool = True) -> dict[str, Any]:
+    report = _load(path, "critical-path report")
+    _require(report.get("schema") == REPORT_SCHEMA, "unsupported critical-path report")
+    _require(report.get("validation") == "accepted", "critical-path report is not accepted")
+    if require_decision:
+        _require(
+            report.get("evidence_grade") == "decision",
+            "decision-grade critical-path report is required",
+        )
+    kernel_sha256 = report.get("kernel_sha256")
+    _require(
+        isinstance(kernel_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", kernel_sha256),
+        "critical-path report has no authoritative kernel hash",
+    )
+    inputs = report.get("inputs")
+    _require(isinstance(inputs, dict), "critical-path report inputs are missing")
+    try:
+        verify_descriptor_tree(path, inputs, "inputs")
+    except RuntimeError as error:
+        raise CriticalPathError(str(error)) from error
+    plan_descriptor = inputs.get("plan")
+    captures = inputs.get("captures")
+    _require(isinstance(plan_descriptor, dict), "critical-path plan descriptor is missing")
+    _require(isinstance(captures, list) and captures, "critical-path capture inputs are missing")
+    plan_path = _descriptor_target(path, plan_descriptor)
+    plan = _plan(plan_path)
+    _require(
+        report.get("plan", {}).get("parent") == plan["parent"]
+        and report.get("plan", {}).get("components") == plan["components"]
+        and report.get("plan", {}).get("owner_topology") == plan["owner_topology"],
+        "critical-path report plan does not match its bound input",
+    )
+    receipt_ids = []
+    capture_paths: list[tuple[Path, Path]] = []
+    for index, capture in enumerate(captures):
+        _require(isinstance(capture, dict), f"critical-path capture {index} is invalid")
+        canonical = capture.get("canonical")
+        receipt_descriptor = capture.get("receipt")
+        _require(isinstance(canonical, dict), f"critical-path capture {index} lacks canonical")
+        _require(
+            isinstance(receipt_descriptor, dict),
+            f"critical-path capture {index} lacks receipt",
+        )
+        canonical_path = _descriptor_target(path, canonical)
+        receipt_path = _descriptor_target(path, receipt_descriptor)
+        receipt = validate_timeline_receipt(
+            receipt_path,
+            expected_outputs={"canonical": canonical_path},
+            require_decision=require_decision,
+        )
+        capture_paths.append((canonical_path, receipt_path))
+        _require(
+            receipt.get("kernel_sha256") == kernel_sha256,
+            "critical-path capture kernel hash mismatch",
+        )
+        receipt_ids.append(receipt["evidence_id"])
+    expected_payload = {
+        "inputs": binding_view(inputs),
+        "capture_evidence_ids": sorted(receipt_ids),
+        "kernel_sha256": kernel_sha256,
+    }
+    _require(
+        report.get("binding_payload") == expected_payload,
+        "critical-path binding payload mismatch",
+    )
+    _require(
+        hashlib.sha256(_canonical_json(expected_payload)).hexdigest()
+        == report.get("evidence_id"),
+        "critical-path evidence id mismatch",
+    )
+    with tempfile.NamedTemporaryFile(
+        prefix="ppu-critical-path-validate-",
+        suffix=".json",
+        dir=path.parent,
+        delete=False,
+    ) as temporary:
+        regenerated_path = Path(temporary.name)
+    try:
+        regenerated = analyze(
+            plan_path,
+            capture_paths,
+            regenerated_path,
+            self_validate=False,
+        )
+    finally:
+        regenerated_path.unlink(missing_ok=True)
+    _require(report == regenerated, "critical-path report does not match bound inputs")
     return report
 
 
