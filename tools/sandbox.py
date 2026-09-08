@@ -1493,6 +1493,11 @@ def _make_atrex_bench_runtime_bundle(
             if shape_contracts.is_file():
                 evaluator_files.append(shape_contracts)
             evaluator_files.extend(_walk_files(package / "eval"))
+            # Newer Atrex-Bench releases moved the CLI implementations into
+            # ``atrex_bench.cli`` and kept ``scripts/run_eval.py`` as a thin
+            # compatibility wrapper.  _walk_files yields nothing when the
+            # directory is absent, so releases without ``cli`` stay compatible.
+            evaluator_files.extend(_walk_files(package / "cli"))
             tf.add(run_eval, arcname="atrex-bench/scripts/run_eval.py", recursive=False)
             for path in evaluator_files:
                 relative = path.relative_to(package).as_posix()
