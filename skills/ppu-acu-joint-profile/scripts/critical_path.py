@@ -10,6 +10,7 @@ import math
 import re
 import statistics
 import tempfile
+from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
@@ -132,10 +133,10 @@ def _summary(values: list[float]) -> dict[str, float | int]:
 
 def _interval_union_ns(intervals: list[tuple[float, float]]) -> float:
     if not intervals:
-        return 0.0
+        return 0
     ordered = sorted(intervals)
     start, end = ordered[0]
-    total = 0.0
+    total = 0
     for next_start, next_end in ordered[1:]:
         if next_start <= end:
             end = max(end, next_end)
@@ -466,6 +467,29 @@ def analyze(
         ]
         owner_reports: list[dict[str, Any]] = []
         capture_instances: list[dict[str, Any]] = []
+        events_by_owner_site: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(
+            list
+        )
+        for event in range_events:
+            for field in (
+                "raw_start",
+                "raw_end",
+                "owner_relative_start_ns",
+                "duration_ns",
+            ):
+                value = event.get(field)
+                _require(
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0,
+                    f"canonical {field} must be a non-negative integer",
+                )
+            _require(
+                event["duration_ns"] == event["raw_end"] - event["raw_start"],
+                "canonical duration must equal raw_end - raw_start",
+            )
+            events_by_owner_site[(event["owner"], event["site_id"])].append(event)
+
         for owner in capture["owners"]:
             owner_id = owner.get("owner")
             _require(
@@ -473,12 +497,7 @@ def analyze(
                 "owner id must be an integer",
             )
             parents = sorted(
-                (
-                    event
-                    for event in range_events
-                    if event.get("owner") == owner_id
-                    and event.get("site_id") == parent_id
-                ),
+                events_by_owner_site[(owner_id, parent_id)],
                 key=lambda event: event["raw_start"],
             )
             _require(parents, f"owner {owner_id} emitted no parent range")
@@ -487,22 +506,26 @@ def analyze(
                     left["raw_end"] <= right["raw_start"],
                     f"owner {owner_id} has overlapping parent ranges",
                 )
-
-            owner_component_events = [
-                event
-                for event in range_events
-                if event.get("owner") == owner_id
-                and event.get("site_id") in components_by_id
-            ]
-            for event in owner_component_events:
-                _require(
-                    any(
-                        event["raw_start"] >= parent["raw_start"]
-                        and event["raw_end"] <= parent["raw_end"]
-                        for parent in parents
-                    ),
-                    f"owner {owner_id} component site {event['site_id']} is outside every parent",
-                )
+            parent_starts = [parent["raw_start"] for parent in parents]
+            components_by_occurrence: dict[int, list[dict[str, Any]]] = defaultdict(
+                list
+            )
+            for site_id in components_by_id:
+                for event in events_by_owner_site[(owner_id, site_id)]:
+                    occurrence = bisect_right(parent_starts, event["raw_start"]) - 1
+                    _require(
+                        occurrence >= 0
+                        and event["raw_end"] <= parents[occurrence]["raw_end"],
+                        f"owner {owner_id} component site {site_id} is outside every parent",
+                    )
+                    parent = parents[occurrence]
+                    _require(
+                        event["owner_relative_start_ns"]
+                        - parent["owner_relative_start_ns"]
+                        == event["raw_start"] - parent["raw_start"],
+                        "canonical relative and raw timestamps disagree",
+                    )
+                    components_by_occurrence[occurrence].append(event)
 
             owner_instances: list[dict[str, Any]] = []
             for occurrence, parent in enumerate(parents):
@@ -512,18 +535,8 @@ def analyze(
                 component_durations: dict[str, float] = defaultdict(float)
                 component_occurrences: dict[str, int] = defaultdict(int)
                 intervals: list[tuple[float, float]] = []
-                for event in range_events:
-                    site_id = event.get("site_id")
-                    if (
-                        event.get("owner") != owner_id
-                        or site_id not in components_by_id
-                    ):
-                        continue
-                    if not (
-                        event["raw_start"] >= parent["raw_start"]
-                        and event["raw_end"] <= parent["raw_end"]
-                    ):
-                        continue
+                for event in components_by_occurrence[occurrence]:
+                    site_id = event["site_id"]
                     component = components_by_id[site_id]
                     duration = _positive_number(
                         event.get("duration_ns"),
@@ -540,7 +553,11 @@ def analyze(
 
                 component_sum = sum(component_durations.values())
                 component_union = _interval_union_ns(intervals)
-                uncovered_gap = max(0.0, parent_duration - component_union)
+                _require(
+                    component_union <= parent_duration,
+                    "component union exceeds parent duration",
+                )
+                uncovered_gap = parent_duration - component_union
                 instance = {
                     "capture_evidence_id": receipt["evidence_id"],
                     "launch_id": launch_id,

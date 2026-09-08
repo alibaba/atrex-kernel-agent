@@ -375,6 +375,45 @@ def normalize_accepted_ppu_diagnostics(
     return normalized, errors
 
 
+# Reusable receipts/reports are JSON metadata, not raw captures or binaries.
+MAX_PPU_REPORT_BYTES = 64 * 1024 * 1024
+
+
+def _profile_json_snapshot(path: Path) -> tuple[bytearray, str]:
+    digest = hashlib.sha256()
+    data = bytearray()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            if len(data) + len(chunk) > MAX_PPU_REPORT_BYTES:
+                raise ValueError("PPU JSON report exceeds 64 MiB")
+            digest.update(chunk)
+            data.extend(chunk)
+    return data, digest.hexdigest()
+
+
+def _profile_file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _profile_nested_json(path: Path) -> object:
+    # Sources and loaded binaries need hashes but are not necessarily JSON. Detect
+    # JSON objects without depending on an extension or reading a binary wholesale.
+    with path.open("rb") as source:
+        while chunk := source.read(4096):
+            prefix = chunk.lstrip()
+            if prefix:
+                if not prefix.startswith(b"{"):
+                    return None
+                break
+        else:
+            return None
+    return json.loads(_profile_json_snapshot(path)[0])
+
+
 def _canonical_json(value: object) -> bytes:
     return json.dumps(
         value,
@@ -490,6 +529,15 @@ def _validate_profile_reference_document(
                 label=f"{label}.coverage.instrumented_launch.evidence_artifact",
                 errors=errors,
             )
+        timer_sanity = document.get("timer_sanity")
+        if isinstance(timer_sanity, dict):
+            _validate_profile_reference_path(
+                timer_sanity.get("artifact"),
+                owner_path=owner_path,
+                workspace=workspace,
+                label=f"{label}.timer_sanity.artifact",
+                errors=errors,
+            )
     elif schema == "ppu-critical-path-plan/v2":
         clean_reference = document.get("clean_reference")
         if isinstance(clean_reference, dict):
@@ -537,16 +585,19 @@ def _validate_profile_artifact_tree(
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 errors.append(f"{label}.sha256 must be a lowercase SHA-256 digest")
                 return
-            if hashlib.sha256(resolved.read_bytes()).hexdigest() != digest:
+            if _profile_file_hash(resolved) != digest:
                 errors.append(f"{label} content hash mismatch")
             if value.get("size_bytes") != resolved.stat().st_size:
                 errors.append(f"{label} size mismatch")
             if resolved not in visited:
                 visited.add(resolved)
                 try:
-                    nested_document = json.loads(resolved.read_text(encoding="utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError):
+                    nested_document = _profile_nested_json(resolved)
+                except (UnicodeError, json.JSONDecodeError):
                     nested_document = None
+                except (OSError, ValueError) as error:
+                    errors.append(f"{label} cannot read referenced JSON: {error}")
+                    return
                 if isinstance(nested_document, dict):
                     _validate_profile_reference_document(
                         nested_document,
@@ -610,12 +661,16 @@ def validate_accepted_ppu_evidence(
         if not resolved.is_relative_to(workspace) or not resolved.is_file():
             errors.append(f"{label}.artifact is outside the workspace or missing")
             continue
-        digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        try:
+            artifact_bytes, digest = _profile_json_snapshot(resolved)
+        except (OSError, ValueError) as error:
+            errors.append(f"{label} is unreadable: {error}")
+            continue
         if digest != evidence["sha256"]:
             errors.append(f"{label} content hash mismatch")
             continue
         try:
-            document = json.loads(resolved.read_text(encoding="utf-8"))
+            document = json.loads(artifact_bytes)
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             errors.append(f"{label} is not readable JSON: {error}")
             continue

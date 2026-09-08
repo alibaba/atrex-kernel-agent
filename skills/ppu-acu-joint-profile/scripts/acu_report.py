@@ -20,6 +20,7 @@ try:
         ACU_CORRECTNESS_SCHEMA,
         ACU_METRIC_GROUPS,
         acu_metric_unit,
+        attempt_file,
         binding_view,
         descriptor_paths,
         ensure_no_output_aliases,
@@ -32,6 +33,7 @@ except ImportError:
         ACU_CORRECTNESS_SCHEMA,
         ACU_METRIC_GROUPS,
         acu_metric_unit,
+        attempt_file,
         binding_view,
         descriptor_paths,
         ensure_no_output_aliases,
@@ -80,6 +82,7 @@ def _file_descriptor(path: Path) -> dict:
 
 
 def _load_collection(path: Path, report_path: Path) -> dict:
+    report_path = attempt_file(path, str(report_path.resolve()), "ACU report")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -97,9 +100,9 @@ def _load_collection(path: Path, report_path: Path) -> dict:
         raise RuntimeError("collection.producer_artifact.path is required")
     if not isinstance(producer_identity, str) or not producer_identity.strip():
         raise RuntimeError("collection.producer_artifact.identity is required")
-    resolved_producer = Path(producer_path)
-    if not resolved_producer.is_absolute():
-        resolved_producer = path.parent / resolved_producer
+    resolved_producer = attempt_file(path, producer_path, "producer artifact")
+    if resolved_producer.stat().st_size > 1024 * 1024:
+        raise RuntimeError("producer artifact exceeds 1 MiB")
     try:
         producer_text = resolved_producer.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
@@ -178,9 +181,7 @@ def _load_collection(path: Path, report_path: Path) -> dict:
                 raise RuntimeError(f"collection.{field}[{index}].path is required")
             if not isinstance(identity, str) or not identity.strip():
                 raise RuntimeError(f"collection.{field}[{index}].identity is required")
-            resolved = Path(artifact_path)
-            if not resolved.is_absolute():
-                resolved = path.parent / resolved
+            resolved = attempt_file(path, artifact_path, f"collection.{field}")
             descriptor = _file_descriptor(resolved)
             descriptor["declared_path"] = artifact_path
             descriptor["identity"] = identity.strip()
@@ -202,9 +203,7 @@ def _load_collection(path: Path, report_path: Path) -> dict:
             raise RuntimeError(f"collection.{field}.path is required")
         if not isinstance(identity, str) or not identity.strip():
             raise RuntimeError(f"collection.{field}.identity is required")
-        resolved = Path(artifact_path)
-        if not resolved.is_absolute():
-            resolved = path.parent / resolved
+        resolved = attempt_file(path, artifact_path, f"collection.{field}")
         descriptor = _file_descriptor(resolved)
         descriptor["declared_path"] = artifact_path
         descriptor["identity"] = identity.strip()
@@ -509,34 +508,42 @@ def _summarize_streams(
     for (packet_index, metric_name), stream in sorted(grouped.items()):
         label = f"packet {packet_index} metric {metric_name}"
         ordered = sorted(stream, key=lambda row: row["sample_index"])
-        if [row["sample_index"] for row in ordered] != list(range(len(ordered))):
-            errors.append(f"{label} has non-contiguous sample indices")
-        if ordered[0]["window_start_ns"] != 0:
-            errors.append(f"{label} does not start at kernel-relative zero")
-        if any(
-            left["window_end_ns"] != right["window_start_ns"]
-            for left, right in zip(ordered, ordered[1:])
-        ):
-            errors.append(f"{label} has a gap or overlap between PM windows")
-
-        coverage_end_ns = max(row["window_end_ns"] for row in ordered)
-        if coverage_end_ns > duration_ns:
-            errors.append(f"{label} extends beyond the ACU kernel duration")
-        interval_max_ns = max(row["interval_ns"] for row in ordered)
-        final_gap_ns = duration_ns - coverage_end_ns
-        if final_gap_ns > interval_max_ns:
-            warnings.append(
-                f"{label} leaves {final_gap_ns:g} ns of the kernel tail unsampled"
-            )
-        elif final_gap_ns > 0:
-            notes.append(
-                f"{label} omits a final partial interval of {final_gap_ns:g} ns"
-            )
-
         valid_rows = [row for row in ordered if row["validity"] in VALID_PM_STATES]
-        if valid_rows and len(valid_rows) < MIN_SAMPLES:
-            warnings.append(
-                f"{label} has only {len(valid_rows)} interpretable samples"
+        # Unknown streams remain visible as counts, with null numerical coverage.
+        coverage_end_ns = max(
+            (row["window_end_ns"] for row in valid_rows), default=None
+        )
+        interval_max_ns = max((row["interval_ns"] for row in valid_rows), default=None)
+        if valid_rows:
+            if any(
+                left["window_end_ns"] > right["window_start_ns"]
+                for left, right in zip(valid_rows, valid_rows[1:])
+            ):
+                errors.append(f"{label} has overlapping interpretable PM windows")
+            if coverage_end_ns > duration_ns:
+                errors.append(f"{label} extends beyond the ACU kernel duration")
+            gaps = [valid_rows[0]["window_start_ns"]] + [
+                right["window_start_ns"] - left["window_end_ns"]
+                for left, right in zip(valid_rows, valid_rows[1:])
+            ]
+            if any(gap > 0 for gap in gaps):
+                warnings.append(f"{label} has gaps in interpretable PM coverage")
+            final_gap_ns = duration_ns - coverage_end_ns
+            if final_gap_ns > interval_max_ns:
+                warnings.append(
+                    f"{label} leaves {final_gap_ns:g} ns of the kernel tail unsampled"
+                )
+            elif final_gap_ns > 0:
+                notes.append(
+                    f"{label} omits a final partial interval of {final_gap_ns:g} ns"
+                )
+            if len(valid_rows) < MIN_SAMPLES:
+                warnings.append(
+                    f"{label} has only {len(valid_rows)} interpretable samples"
+                )
+        else:
+            notes.append(
+                f"{label} has no interpretable samples; numerical coverage is unknown"
             )
         valid_interval_ns = sum(row["interval_ns"] for row in valid_rows)
         values = [row["metric_value_number"] for row in valid_rows]
@@ -551,8 +558,12 @@ def _summarize_streams(
             "excluded_sample_count": len(ordered) - len(valid_rows),
             "validity_counts": _validity_counts(ordered),
             "coverage_end_ns": coverage_end_ns,
-            "coverage_ratio": min(coverage_end_ns / duration_ns, 1.0),
-            "interval_min_ns": min(row["interval_ns"] for row in ordered),
+            "coverage_ratio": (
+                min(valid_interval_ns / duration_ns, 1.0) if valid_rows else None
+            ),
+            "interval_min_ns": min(
+                (row["interval_ns"] for row in valid_rows), default=None
+            ),
             "interval_max_ns": interval_max_ns,
             "time_weighted_mean": (
                 sum(
@@ -576,6 +587,12 @@ def export(
     csv_path: Path,
     metadata_path: Path,
 ) -> dict:
+    report_path = attempt_file(
+        collection_path, str(report_path.resolve()), "ACU report"
+    )
+    raw_csv_path = attempt_file(
+        collection_path, str(raw_csv_path.resolve()), "ACU raw CSV"
+    )
     collection = _load_collection(collection_path, report_path)
     source_paths = {
         report_path.resolve(),
@@ -692,9 +709,15 @@ def export(
     elif dropped_samples > 0:
         warnings.append(f"ACU reported {dropped_samples} dropped PM samples")
 
-    observed_intervals = sorted({row["interval_ns"] for row in rows})
+    observed_intervals = sorted(
+        {row["interval_ns"] for row in rows if row["validity"] in VALID_PM_STATES}
+    )
     reported_interval = launch["pm_interval_ns"]
-    if reported_interval is not None and reported_interval != max(observed_intervals):
+    if (
+        observed_intervals
+        and reported_interval is not None
+        and reported_interval != max(observed_intervals)
+    ):
         errors.append(
             "ACU raw PM interval disagrees with the maximum exact sample window"
         )

@@ -224,16 +224,13 @@ class Recorder {
       return;
     }
     const u64 slot = owner_ * header_->records_per_owner + sequence;
-    if (slot >= header_->capacity) {
-      atomicOr(&header_->status, static_cast<u32>(overflow));
-      enabled_ = false;
-      return;
-    }
     auto* records = reinterpret_cast<TraceRecord*>(
         reinterpret_cast<u8*>(header_) + header_->header_bytes);
     volatile TraceRecord* record = records + slot;
     record->raw_timestamp = timestamp;
     record->payload = payload;
+    // kCommitted is meaningful only after kernel completion and host synchronization.
+    // This buffer does not support in-kernel readers or concurrent live tailing.
     asm volatile("" : : : "memory");
     record->tag = static_cast<u32>(site) |
                   (static_cast<u32>(kind) << 16U) |

@@ -17,6 +17,7 @@ from typing import Any, Sequence
 
 try:
     from .evidence import (
+        attempt_file,
         binding_view,
         descriptor_paths,
         ensure_no_output_aliases,
@@ -25,6 +26,7 @@ try:
     )
 except ImportError:
     from evidence import (
+        attempt_file,
         binding_view,
         descriptor_paths,
         ensure_no_output_aliases,
@@ -106,9 +108,7 @@ def _file_descriptor(path: Path) -> dict[str, Any]:
     }
 
 
-def _artifact(
-    base_path: Path, value: object, label: str, *, require_identity: bool = True
-) -> dict[str, Any]:
+def _artifact(base_path: Path, value: object, label: str) -> dict[str, Any]:
     _require(isinstance(value, dict), f"{label} must be an object")
     logical_path = value.get("path")
     _require(
@@ -116,19 +116,15 @@ def _artifact(
         f"{label}.path is required",
     )
     identity = value.get("identity")
-    if require_identity:
-        _require(
-            isinstance(identity, str) and identity.strip(),
-            f"{label}.identity is required",
-        )
-    path = Path(logical_path)
-    if not path.is_absolute():
-        path = base_path.parent / path
-    _require(path.is_file(), f"{label} is not a regular file: {path}")
+    _require(
+        isinstance(identity, str) and identity.strip(),
+        f"{label}.identity is required",
+    )
+    path = attempt_file(base_path, logical_path, label)
     return {
         "path": str(path.resolve()),
         "declared_path": logical_path,
-        **({"identity": identity.strip()} if require_identity else {}),
+        "identity": identity.strip(),
         "sha256": _sha256(path),
         "size_bytes": path.stat().st_size,
     }
@@ -186,11 +182,6 @@ def _provenance(manifest_path: Path, manifest: dict[str, Any]) -> dict[str, Any]
         value.get("authoritative_kernel"),
         "provenance.authoritative_kernel",
     )
-    result["missing_decision_bindings"] = [
-        field
-        for field in ("compiled_binaries", "workload_inputs")
-        if not result.get(field)
-    ]
     return result
 
 
@@ -211,9 +202,7 @@ def _manifest_artifact(
 ) -> tuple[Path, dict[str, Any]]:
     value = manifest.get(field)
     _require(isinstance(value, str) and value.strip(), f"{field} is required")
-    path = Path(value)
-    if not path.is_absolute():
-        path = manifest_path.parent / path
+    path = attempt_file(manifest_path, value, label)
     return path, _load_object(path, label)
 
 
@@ -357,6 +346,48 @@ def _validate_manifest(
         timer.get("unit") == TIMER_UNIT,
         "manifest.timer.unit must be ns",
     )
+    timer_sanity = manifest.get("timer_sanity")
+    if timer_sanity is not None:
+        _require(isinstance(timer_sanity, dict), "timer_sanity must be an object")
+        bound = timer_sanity.get("max_relative_error")
+        _require(
+            isinstance(bound, (int, float))
+            and not isinstance(bound, bool)
+            and math.isfinite(bound)
+            and 0 <= bound < 1,
+            "timer_sanity.max_relative_error must be in [0, 1)",
+        )
+        descriptor = _artifact(
+            manifest_path, timer_sanity.get("artifact"), "timer sanity"
+        )
+        measured = _load_object(Path(descriptor["path"]), "timer sanity measurement")
+        _require(
+            measured.get("synchronized") is True, "timer sanity must be synchronized"
+        )
+        _require(
+            measured.get("device_identity") == device_identity
+            and measured.get("runtime_identity") == runtime_identity,
+            "timer sanity device/runtime identity mismatch",
+        )
+        values = [
+            measured.get(field)
+            for field in ("timer_elapsed_ns", "reference_elapsed_ns")
+        ]
+        _require(
+            all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and value > 0
+                for value in values
+            ),
+            "timer sanity requires positive finite elapsed times",
+        )
+        _require(
+            abs(values[0] / values[1] - 1) <= bound,
+            "timer sanity exceeds declared max_relative_error",
+        )
+        provenance["timer_sanity"] = descriptor
     correctness_path, correctness = _manifest_artifact(
         manifest_path, manifest, "correctness_artifact", "correctness evidence"
     )
@@ -854,15 +885,20 @@ def _canonicalize(
                 f"owner {owner} site {site_id} has {len(pending)} unmatched begin record(s)"
             )
 
-    origins: dict[int, int] = {}
+    first_records: dict[int, dict[str, Any]] = {}
+    for record in records:
+        owner = record["owner"]
+        if (
+            owner not in first_records
+            or record["sequence"] < first_records[owner]["sequence"]
+        ):
+            first_records[owner] = record
+    origins = {
+        owner: record["raw_timestamp"] for owner, record in first_records.items()
+    }
     for owner in range(owner_count):
-        owner_records = [record for record in records if record["owner"] == owner]
-        if not owner_records:
+        if owner not in origins:
             errors.append(f"owner {owner} emitted no records")
-            continue
-        origins[owner] = min(owner_records, key=lambda record: record["sequence"])[
-            "raw_timestamp"
-        ]
     if errors:
         raise TimelineError("; ".join(errors))
 
@@ -884,23 +920,19 @@ def _perfetto(
     manifest_info: dict[str, Any],
     events: list[dict[str, Any]],
     evidence_binding: dict[str, Any],
+    sites: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
     owner_pid = 6
     analysis = manifest.get("analysis")
     coverage = manifest.get("coverage", {"all_blocks": False})
-    sites_by_id = {event["site_id"]: event["name"] for event in events}
-    owner_spans_ns = {
-        owner["owner"]: max(
-            (
-                event["owner_relative_start_ns"]
-                + (event.get("duration_ns") or 0)
-                for event in events
-                if event["owner"] == owner["owner"]
-            ),
-            default=0,
+    sites_by_id = {site_id: site["name"] for site_id, site in sites.items()}
+    owner_spans_ns = {owner["owner"]: 0 for owner in manifest["owner_layout"]["owners"]}
+    for event in events:
+        owner = event["owner"]
+        owner_spans_ns[owner] = max(
+            owner_spans_ns[owner],
+            event["owner_relative_start_ns"] + (event.get("duration_ns") or 0),
         )
-        for owner in manifest["owner_layout"]["owners"]
-    }
     display_stride_ns = max(owner_spans_ns.values(), default=0) + max(
         1, int(max(owner_spans_ns.values(), default=0) * 0.1)
     )
@@ -938,8 +970,7 @@ def _perfetto(
             "name": event["name"],
             "cat": "PPU owner-local timeline",
             "ts": (
-                event["owner_relative_start_ns"]
-                + display_offsets_ns[event["owner"]]
+                event["owner_relative_start_ns"] + display_offsets_ns[event["owner"]]
             )
             / 1000.0,
             "pid": owner_pid,
@@ -955,6 +986,7 @@ def _perfetto(
                 "role": event["role"],
                 "clock_scope": "owner_local",
                 "owner_relative_start_ns": event["owner_relative_start_ns"],
+                "duration_ns": event.get("duration_ns"),
                 "display_offset_ns": display_offsets_ns[event["owner"]],
                 "boundary_semantics": event.get("boundary_semantics"),
                 "async_domain": event.get("async_domain"),
@@ -1052,6 +1084,12 @@ def decode(
     *,
     self_validate: bool = True,
 ) -> dict[str, Any]:
+    raw_path = attempt_file(
+        manifest_path, str(raw_path.resolve()), "timeline raw capture"
+    )
+    dictionary_path = attempt_file(
+        manifest_path, str(dictionary_path.resolve()), "event dictionary"
+    )
     raw = raw_path.read_bytes()
     manifest = _load_object(manifest_path, "manifest")
     dictionary = _load_object(dictionary_path, "event dictionary")
@@ -1106,6 +1144,16 @@ def decode(
             len(windows) == 1, "analysis owner must emit exactly one analysis window"
         )
         window = windows[0]
+        observed_sites = {
+            event["site_id"]
+            for event in events
+            if event["type"] == "range" and event["owner"] == analysis["owner"]
+        }
+        _require(
+            set(analysis.get("site_ids") or []).issubset(observed_sites),
+            "declared analysis sites emitted no ranges: "
+            + str(sorted(set(analysis.get("site_ids") or []) - observed_sites)),
+        )
         for event in events:
             if (
                 event["type"] == "range"
@@ -1134,7 +1182,7 @@ def decode(
             == {block: 1 for block in range(math.prod(manifest_info["grid"]))},
             "all-block coverage requires exactly one coverage range per block",
         )
-    perfetto = _perfetto(manifest, manifest_info, events, evidence_binding)
+    perfetto = _perfetto(manifest, manifest_info, events, evidence_binding, sites)
 
     range_durations: dict[str, list[float]] = defaultdict(list)
     for event in events:
@@ -1420,7 +1468,15 @@ def measure(
     schedule: list[str],
     timeout: float,
     output: Path,
+    max_relative_change: float,
 ) -> dict[str, Any]:
+    _require(
+        isinstance(max_relative_change, (int, float))
+        and not isinstance(max_relative_change, bool)
+        and math.isfinite(max_relative_change)
+        and 0 <= max_relative_change < 1,
+        "max_relative_change must be in [0, 1)",
+    )
     commands = {
         "A": ("baseline", baseline_command),
         "B": ("instrumented", instrumented_command),
@@ -1483,6 +1539,7 @@ def measure(
     instrumented_median = statistics.median(by_arm["B"])
     result = {
         "schema": MEASUREMENT_SCHEMA,
+        "max_relative_change": max_relative_change,
         "schedule": schedule,
         "fresh_process_per_sample": True,
         "workload_identity": workload,
@@ -1503,7 +1560,16 @@ def measure(
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    result["validation"] = (
+        "accepted"
+        if abs(result["summary"]["relative_overhead"]) <= max_relative_change
+        else "rejected"
+    )
+    _write_json(output, result)
+    _require(
+        result["validation"] == "accepted",
+        "measurement exceeds declared max_relative_change",
+    )
     return result
 
 
@@ -1537,6 +1603,7 @@ def _measure_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup", type=int, required=True)
     parser.add_argument("--iterations", type=int, required=True)
     parser.add_argument("--schedule", default="ABBA,BAAB")
+    parser.add_argument("--max-relative-change", type=float, required=True)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--output", type=Path, required=True)
     return parser
@@ -1557,19 +1624,12 @@ def measure_main(argv: Sequence[str] | None = None) -> int:
         schedule,
         args.timeout,
         args.output,
+        args.max_relative_change,
     )
     print(
         f"PPU timeline relative overhead: {result['summary']['relative_overhead']:.2%}"
     )
     return 0
-
-
-def decode_entrypoint() -> None:
-    raise SystemExit(decode_main())
-
-
-def measure_entrypoint() -> None:
-    raise SystemExit(measure_main())
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -25,6 +25,22 @@ def _dimensions(value: Sequence[int], field: str) -> tuple[int, int, int]:
     return dimensions  # type: ignore[return-value]
 
 
+# Explicit host/device allocation budget; callers may choose a different positive cap.
+DEFAULT_MAX_ALLOCATION_BYTES = 256 * 1024 * 1024
+
+
+def _validated_geometry(
+    owner_count: int, records_per_owner: int
+) -> tuple[int, int, int]:
+    owners, per_owner = int(owner_count), int(records_per_owner)
+    if not 1 <= owners <= UINT32_MAX or not 1 <= per_owner <= UINT32_MAX:
+        raise ValueError("owner_count and records_per_owner must fit positive uint32")
+    capacity = owners * per_owner
+    if capacity > UINT32_MAX:
+        raise ValueError("capacity does not fit the v1 header")
+    return owners, per_owner, capacity
+
+
 def make_header(
     *,
     owner_count: int,
@@ -35,13 +51,7 @@ def make_header(
 ) -> bytes:
     """Pack the exact 64-byte ABI header with status cleared."""
 
-    owners = int(owner_count)
-    per_owner = int(records_per_owner)
-    if not 1 <= owners <= UINT32_MAX or not 1 <= per_owner <= UINT32_MAX:
-        raise ValueError("owner_count and records_per_owner must fit positive uint32")
-    capacity = owners * per_owner
-    if capacity > UINT32_MAX:
-        raise ValueError("capacity does not fit the v1 header")
+    owners, per_owner, capacity = _validated_geometry(owner_count, records_per_owner)
     gx, gy, gz = _dimensions(grid, "grid")
     bx, by, bz = _dimensions(block, "block")
     launch = int(launch_id)
@@ -68,13 +78,7 @@ def make_header(
 
 
 def allocation_bytes(owner_count: int, records_per_owner: int) -> int:
-    owners = int(owner_count)
-    per_owner = int(records_per_owner)
-    if not 1 <= owners <= UINT32_MAX or not 1 <= per_owner <= UINT32_MAX:
-        raise ValueError("owner_count and records_per_owner must fit positive uint32")
-    capacity = owners * per_owner
-    if capacity > UINT32_MAX:
-        raise ValueError("capacity does not fit the v1 header")
+    owners, _, capacity = _validated_geometry(owner_count, records_per_owner)
     return HEADER_STRUCT.size + capacity * RECORD_BYTES + owners * CLAIM_BYTES
 
 
@@ -86,10 +90,9 @@ def allocate_torch_buffer(
     block: Sequence[int],
     launch_id: int,
     device: object = "cuda",
+    max_allocation_bytes: int = DEFAULT_MAX_ALLOCATION_BYTES,
 ):
     """Create an initialized one-dimensional ``torch.uint8`` PPU buffer."""
-
-    import torch
 
     header = make_header(
         owner_count=owner_count,
@@ -98,11 +101,24 @@ def allocate_torch_buffer(
         block=block,
         launch_id=launch_id,
     )
-    host = torch.zeros(
-        allocation_bytes(owner_count, records_per_owner), dtype=torch.uint8
+    fields = HEADER_STRUCT.unpack(header)
+    size = HEADER_STRUCT.size + fields[5] * RECORD_BYTES + fields[6] * CLAIM_BYTES
+    if (
+        not isinstance(max_allocation_bytes, int)
+        or isinstance(max_allocation_bytes, bool)
+        or max_allocation_bytes <= 0
+        or size > max_allocation_bytes
+    ):
+        raise ValueError(
+            f"timeline allocation {size} exceeds max_allocation_bytes={max_allocation_bytes}"
+        )
+    import torch
+
+    buffer = torch.zeros(size, dtype=torch.uint8, device=device)
+    buffer[: len(header)] = torch.tensor(
+        tuple(header), dtype=torch.uint8, device=device
     )
-    host[: len(header)] = torch.tensor(tuple(header), dtype=torch.uint8)
-    return host.to(device=device)
+    return buffer
 
 
 def save_torch_buffer(buffer: object, destination: str | Path) -> Path:

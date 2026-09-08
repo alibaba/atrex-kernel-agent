@@ -11,6 +11,7 @@ import math
 import re
 import statistics
 import tempfile
+from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Sequence
@@ -199,6 +200,8 @@ def _read_measurement(path: Path, label: str) -> dict[str, Any]:
     measurement = json.loads(path.read_text(encoding="utf-8"))
     if measurement.get("schema") != MEASUREMENT_SCHEMA:
         raise RuntimeError(f"{label} has an unsupported measurement schema")
+    if measurement.get("validation") != "accepted":
+        raise RuntimeError(f"{label} is not accepted")
     runs = measurement.get("runs")
     if not isinstance(runs, list) or not runs:
         raise RuntimeError(f"{label} has no raw ordered samples")
@@ -303,22 +306,29 @@ def _read_measurement(path: Path, label: str) -> dict[str, Any]:
                 break
     if not summary_matches:
         raise RuntimeError(f"{label} summary does not match its raw samples")
+    bound = measurement.get("max_relative_change")
+    if (
+        not isinstance(bound, (int, float))
+        or isinstance(bound, bool)
+        or not math.isfinite(bound)
+        or not 0 <= bound < 1
+        or abs(recomputed["relative_overhead"]) > bound
+    ):
+        raise RuntimeError(f"{label} exceeds or lacks declared max_relative_change")
     return measurement
 
 
-def _event_interval_ns(event: dict[str, Any]) -> tuple[float, float] | None:
+def _event_interval_ns(event: dict[str, Any]) -> tuple[int, int] | None:
     if event.get("ph") != "X":
         return None
     args = event.get("args")
-    owner_relative = args.get("owner_relative_start_ns") if isinstance(args, dict) else None
-    start = (
-        float(owner_relative)
-        if isinstance(owner_relative, (int, float))
-        and not isinstance(owner_relative, bool)
-        and math.isfinite(owner_relative)
-        else float(event.get("ts", 0)) * 1000.0
-    )
-    return start, start + float(event.get("dur", 0)) * 1000.0
+    if not isinstance(args, dict):
+        raise RuntimeError("timeline range requires integer-nanosecond args")
+    start, duration = args.get("owner_relative_start_ns"), args.get("duration_ns")
+    for name, value in (("owner_relative_start_ns", start), ("duration_ns", duration)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise RuntimeError(f"timeline range requires non-negative integer {name}")
+    return start, start + duration
 
 
 def _overlaps(left_start: float, left_end: float, right_start: float, right_end: float):
@@ -433,15 +443,19 @@ def merge(
         else None
     )
 
-    observed_intervals = sorted({row["interval_ns"] for row in pm_rows})
+    valid_pm_rows = [row for row in pm_rows if row["validity"] in VALID_PM_STATES]
+    if not valid_pm_rows:
+        raise RuntimeError("joint profile has no interpretable PM samples")
+    observed_intervals = sorted({row["interval_ns"] for row in valid_pm_rows})
     reported_interval = acu["pm_interval_ns"]
-    acu["pm_interval_ns"] = max(observed_intervals)
+    if acu.get("pm_interval_ns") is None:
+        acu["pm_interval_ns"] = max(observed_intervals)
     acu["pm_interval_source"] = (
         "acu_raw_pmsampler_column"
         if reported_interval is not None
         else "exact_pm_sample_windows"
     )
-    if reported_interval is not None and reported_interval != acu["pm_interval_ns"]:
+    if reported_interval is not None and reported_interval != max(observed_intervals):
         raise RuntimeError(
             "ACU raw PM interval disagrees with the sample-window maximum"
         )
@@ -510,7 +524,7 @@ def merge(
         warnings.append(f"timeline/ACU duration delta {duration_delta:.2%} exceeds 3%")
 
     by_stream: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in pm_rows:
+    for row in valid_pm_rows:
         by_stream[(row["packet_index"], row["metric_name"])].append(row)
     _validate_pm_windows(by_stream, errors)
 
@@ -520,7 +534,7 @@ def merge(
         ) / statistics.median(observed_intervals)
         message = f"PM intervals are {observed_intervals} (jitter {jitter:.3%})"
         (warnings if jitter > 0.01 else notes).append(message)
-    coverage_end_ns = max(row["window_end_ns"] for row in pm_rows)
+    coverage_end_ns = max(row["window_end_ns"] for row in valid_pm_rows)
     final_gap_ns = acu["duration_ns"] - coverage_end_ns
     if final_gap_ns > 0:
         message = f"final partial interval is not sampled ({final_gap_ns:g} ns)"
@@ -661,41 +675,46 @@ def merge(
             "declared all-block coverage produced no comparable coverage ranges"
         )
 
+    coverage_durations = sorted(
+        interval[1] - interval[0] for _, interval in coverage_events
+    )
+    overlap_cache: dict[tuple[int, int], tuple[list[str], list[str]]] = {}
     joined_rows = []
     for row in pm_rows:
         start = row["window_start_ns"]
         end = row["window_end_ns"]
         interpretable = row["validity"] in VALID_PM_STATES
         normalized_survival = ""
-        if interpretable and coverage_distribution_valid:
-            normalized_survival = sum(
-                _overlaps(start, end, 0, interval[1] - interval[0])
-                for _, interval in coverage_events
-            )
-        possible = (
-            sorted(
-                {
-                    event["name"]
-                    for event, interval in detail_events
-                    if _overlaps(
-                        start, end, interval[0], interval[1] + dispatch_upper_ns
-                    )
-                }
-            )
-            if interpretable
-            else []
-        )
-        guaranteed = (
-            sorted(
-                {
-                    event["name"]
-                    for event, interval in detail_events
-                    if interval[0] + dispatch_upper_ns < end and start < interval[1]
-                }
-            )
-            if interpretable
-            else []
-        )
+        possible, guaranteed = [], []
+        if interpretable:
+            if coverage_distribution_valid:
+                normalized_survival = (
+                    len(coverage_durations) - bisect_right(coverage_durations, start)
+                    if end > 0
+                    else 0
+                )
+            key = (start, end)
+            if key not in overlap_cache:
+                overlap_cache[key] = (
+                    sorted(
+                        {
+                            event["name"]
+                            for event, interval in detail_events
+                            if _overlaps(
+                                start, end, interval[0], interval[1] + dispatch_upper_ns
+                            )
+                        }
+                    ),
+                    sorted(
+                        {
+                            event["name"]
+                            for event, interval in detail_events
+                            if interval[0] + dispatch_upper_ns < end
+                            and start < interval[1]
+                        }
+                    ),
+                )
+            possible, guaranteed = overlap_cache[key]
         joined = dict(row)
         joined["normalized_coverage_duration_survival_count"] = normalized_survival
         joined["possible_overlapping_sampled_ranges"] = ";".join(possible)
@@ -750,6 +769,8 @@ def merge(
         stream: index for index, stream in enumerate(sorted(by_stream), 1)
     }
     for row in joined_rows:
+        if row["validity"] not in VALID_PM_STATES:
+            continue
         tid = metric_tids[(row["packet_index"], row["metric_name"])]
         start_us = row["window_start_ns"] / 1000.0
         duration_us = row["interval_ns"] / 1000.0
@@ -763,14 +784,7 @@ def merge(
                 "pid": 8,
                 "tid": tid,
                 "args": {
-                    "value": (
-                        row["metric_value"]
-                        if row["validity"] in VALID_PM_STATES
-                        else None
-                    ),
-                    "excluded_raw_value_preserved_in_joint_csv": (
-                        row["validity"] not in VALID_PM_STATES
-                    ),
+                    "value": row["metric_value"],
                     "unit": row["metric_unit"],
                     "logical_metric_group": row["logical_metric_group"],
                     "acu_packet_index": row["packet_index"],
@@ -782,19 +796,17 @@ def merge(
                 },
             }
         )
-        if row["validity"] in VALID_PM_STATES:
-            joint_events.append(
-                {
-                    "name": row["metric_name"],
-                    "cat": "ACU PM counter",
-                    "ph": "C",
-                    "ts": start_us + duration_us,
-                    "pid": 8,
-                    "tid": tid,
-                    "args": {"value": row["metric_value"]},
-                }
-            )
-
+        joint_events.append(
+            {
+                "name": row["metric_name"],
+                "cat": "ACU PM counter",
+                "ph": "C",
+                "ts": start_us + duration_us,
+                "pid": 8,
+                "tid": tid,
+                "args": {"value": row["metric_value"]},
+            }
+        )
     status = "rejected" if errors else ("warning" if warnings else "accepted")
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     joined_csv = Path(f"{output_prefix}.joint_samples.csv")
@@ -968,8 +980,9 @@ def merge(
 
     manifest = {
         "schema_version": 3,
+        "validation": {"status": status, "errors": errors, "warnings": warnings},
         "evidence_id": evidence_id,
-        "evidence_grade": "decision",
+        "evidence_grade": "decision" if status == "accepted" else "diagnostic",
         "kernel_sha256": kernel_sha256,
         "inputs": inputs,
         "outputs": {

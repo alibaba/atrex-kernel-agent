@@ -104,6 +104,16 @@ def load_json(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def attempt_file(owner_path: Path, value: str, label: str) -> Path:
+    """Resolve capture inputs inside the directory containing its manifest/collection."""
+    root = owner_path.resolve().parent
+    candidate = Path(value)
+    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    require(resolved.is_relative_to(root), f"{label} is outside the attempt directory")
+    require(resolved.is_file(), f"{label} is not a regular file: {resolved}")
+    return resolved
+
+
 def _descriptor_path(owner_path: Path, descriptor: dict[str, Any], label: str) -> Path:
     logical_path = descriptor.get("path")
     require(isinstance(logical_path, str) and logical_path.strip(), f"{label}.path is required")
@@ -280,6 +290,8 @@ def _validate_acu_derived_data(
     collection_path: Path,
     pm_path: Path,
 ) -> None:
+    raw_path = attempt_file(collection_path, str(raw_path.resolve()), "ACU raw CSV")
+    report_path = attempt_file(collection_path, str(report_path.resolve()), "ACU report")
     try:
         with raw_path.open(newline="", encoding="utf-8") as source:
             raw_rows = list(csv.DictReader(source))
@@ -505,19 +517,6 @@ def _validate_acu_derived_data(
     require(set(summaries) == set(grouped), "ACU metric summary streams do not match PM CSV")
     for key, rows in grouped.items():
         rows = sorted(rows, key=lambda row: int(row["_sample_index"]))
-        require(
-            [int(row["_sample_index"]) for row in rows] == list(range(len(rows))),
-            f"{key} sample indices are not contiguous",
-        )
-        require(float(rows[0]["_window_start_ns"]) == 0, f"{key} does not start at zero")
-        require(
-            all(
-                float(left["_window_end_ns"])
-                == float(right["_window_start_ns"])
-                for left, right in zip(rows, rows[1:])
-            ),
-            f"{key} has a PM window gap or overlap",
-        )
         summary = summaries.get(key)
         require(isinstance(summary, dict), f"ACU metric summary {key} is invalid")
         metric_name = rows[0].get("metric_name")
@@ -565,27 +564,35 @@ def _validate_acu_derived_data(
         )
         intervals = [
             _finite_number(row.get("interval_ns"), f"{key}.interval_ns")
-            for row in rows
+            for row in valid_rows
         ]
         coverage_end = max(
-            _finite_number(row.get("window_end_ns"), f"{key}.window_end_ns")
-            for row in rows
+            (
+                _finite_number(row.get("window_end_ns"), f"{key}.window_end_ns")
+                for row in valid_rows
+            ),
+            default=None,
         )
         require(
-            coverage_end <= float(launch["duration_ns"]),
+            coverage_end is None or coverage_end <= float(launch["duration_ns"]),
             f"{key} extends beyond the kernel duration",
         )
         require(summary.get("coverage_end_ns") == coverage_end, f"{key} coverage end mismatch")
         require(
-            summary.get("coverage_ratio") == min(coverage_end / float(launch["duration_ns"]), 1.0),
+            summary.get("coverage_ratio")
+            == (
+                min(sum(intervals) / float(launch["duration_ns"]), 1.0)
+                if intervals
+                else None
+            ),
             f"{key} coverage ratio mismatch",
         )
         require(
-            summary.get("interval_min_ns") == min(intervals),
+            summary.get("interval_min_ns") == min(intervals, default=None),
             f"{key} minimum interval mismatch",
         )
         require(
-            summary.get("interval_max_ns") == max(intervals),
+            summary.get("interval_max_ns") == max(intervals, default=None),
             f"{key} maximum interval mismatch",
         )
         validity_counts: dict[str, int] = {}
@@ -599,6 +606,17 @@ def _validate_acu_derived_data(
         expected_mean = None
         values: list[float] = []
         if valid_rows:
+            require(
+                float(valid_rows[0]["_window_start_ns"]) == 0,
+                f"{key} valid coverage does not start at zero",
+            )
+            require(
+                all(
+                    float(left["_window_end_ns"]) == float(right["_window_start_ns"])
+                    for left, right in zip(valid_rows, valid_rows[1:])
+                ),
+                f"{key} has gaps or overlaps in interpretable coverage",
+            )
             total_interval = sum(
                 _finite_number(row.get("interval_ns"), f"{key}.interval_ns")
                 for row in valid_rows
@@ -642,7 +660,12 @@ def _validate_acu_derived_data(
         {
             _finite_number(row.get("interval_ns"), "PM interval_ns")
             for row in pm_rows
+            if row["validity"] in {"valid", "valid_activity_positive"}
         }
+    )
+    require(
+        bool(observed_intervals),
+        "accepted ACU evidence has no interpretable PM intervals",
     )
     if launch.get("pm_interval_ns") is not None:
         require(

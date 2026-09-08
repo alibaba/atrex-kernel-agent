@@ -729,7 +729,11 @@ class Campaign:
     def _link_runtime(self) -> None:
         self._assert_generalized_inputs_are_private()
         native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
-        link_runtime(self.workspace, native_root)
+        link_runtime(
+            self.workspace,
+            native_root,
+            is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
+        )
         install_workspace_policy(
             self.workspace,
             self.optimization_mode,
@@ -890,7 +894,10 @@ class Campaign:
             FRAMEWORK=self.framework,
             KERNEL_DEMO="reference.py",
             NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+            AGENT_RUNTIME=_agent_runtime_directive(
+                self.agent_cli,
+                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
+            ),
             BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
@@ -2560,7 +2567,10 @@ class Campaign:
             FRAMEWORK=self.framework,
             ARCH=self.arch or "the runtime GPU arch",
             NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+            AGENT_RUNTIME=_agent_runtime_directive(
+                self.agent_cli,
+                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
+            ),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),
             EVALUATOR=self._evaluator_directive(),

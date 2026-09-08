@@ -30,7 +30,7 @@ from .git_episode import (
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
-from .journal import sync_live_memory, validate_terminal
+from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_terminal
 from .models import (
     EpisodeHandoff,
     SupervisorState,
@@ -380,33 +380,46 @@ def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _canonical_ppu_diagnostics(
-    journal: dict[str, Any], *, version: int
-) -> list[dict[str, Any]]:
-    """Attach stable canonical-memory references to terminal-valid PPU evidence."""
+    journal: dict[str, Any], *, version: int, workspace: Path | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate optional evidence at the canonical-memory boundary, including recovery."""
     outcome = journal.get("outcome")
     if not isinstance(outcome, dict):
-        return []
+        return [], []
     raw = outcome.get("accepted_ppu_diagnostics", [])
-    normalized, errors = normalize_accepted_ppu_diagnostics(raw)
-    if errors:
-        raise ValueError("; ".join(errors))
+    if not isinstance(raw, list):
+        return [], ["accepted_ppu_diagnostics must be a list"]
     episode = journal.get("episode")
     diagnostics: list[dict[str, Any]] = []
-    for index, item in enumerate(normalized):
-        canonical = dict(item)
+    rejected: list[str] = []
+    for index, row in enumerate(raw):
+        try:
+            normalized, errors = normalize_accepted_ppu_diagnostics([row])
+            if not errors:
+                errors = (
+                    validate_accepted_ppu_evidence(normalized, workspace)
+                    if workspace is not None
+                    else ["episode workspace unavailable"]
+                )
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            errors = [str(error)]
+        if errors:
+            rejected.append(f"diagnostic {index}: " + "; ".join(errors))
+            continue
+        canonical = dict(normalized[0])
         canonical["source_memory_version"] = f"v{version}"
         if isinstance(episode, int) and not isinstance(episode, bool):
             canonical["source_episode"] = episode
         canonical["memory_ref"] = (
             f"memory/v{version}.json#profile_evidence."
-            f"accepted_ppu_diagnostics/{index}"
+            f"accepted_ppu_diagnostics/{len(diagnostics)}"
         )
         evidence = canonical["evidence"]
         canonical["evidence_ref"] = (
             f"{evidence['artifact']}#sha256={evidence['sha256']}"
         )
         diagnostics.append(canonical)
-    return diagnostics
+    return diagnostics, rejected
 
 
 def _memory_profile_evidence(
@@ -417,6 +430,7 @@ def _memory_profile_evidence(
     fast_trial_count: int,
     is_ppu: bool,
     promoted: bool,
+    episode_workspace: Path | None,
 ) -> dict[str, Any]:
     """Build canonical profile memory without changing non-PPU behavior."""
     experiment_count = len(journal.get("experiments", []))
@@ -447,7 +461,9 @@ def _memory_profile_evidence(
             ),
         }
 
-    diagnostics = _canonical_ppu_diagnostics(journal, version=version)
+    diagnostics, rejected = _canonical_ppu_diagnostics(
+        journal, version=version, workspace=episode_workspace
+    )
     routes = list(dict.fromkeys(item["route"] for item in diagnostics))
     return {
         "tool_used": (
@@ -458,12 +474,17 @@ def _memory_profile_evidence(
         "evidence_summary": (
             f"{experiment_count} structured experiments; "
             f"{len(diagnostics)} terminal-reusable PPU diagnostics"
+            + ("; excluded: " + "; ".join(rejected) if rejected else "")
         ),
         "bottleneck_type": "episode-derived",
         "evidence_chain": (
-            "terminal-valid PPU evidence -> candidate -> independent ABBA -> promotion"
-            if promoted
-            else "terminal-valid PPU evidence -> terminal handoff -> no promotion"
+            "episode evidence -> terminal handoff; no reusable PPU diagnostics"
+            if not diagnostics
+            else (
+                "terminal-valid PPU evidence -> candidate -> independent ABBA -> promotion"
+                if promoted
+                else "terminal-valid PPU evidence -> terminal handoff -> no promotion"
+            )
         ),
         "accepted_ppu_diagnostics": diagnostics,
     }
@@ -903,6 +924,7 @@ class LongHorizonCampaign:
         candidate_commit: str,
         journal: dict[str, Any],
         verification: VerificationResult,
+        episode_workspace: Path,
         fast_mode: bool = False,
         fast_trials: int | None = None,
     ) -> dict[str, Any]:
@@ -955,9 +977,7 @@ class LongHorizonCampaign:
                     else "same_allocation_abba"
                 ),
                 "carried_from_version": None,
-                "performance_objective": representative.get(
-                    "performance_objective"
-                ),
+                "performance_objective": representative.get("performance_objective"),
                 "performance_score": verification.candidate_performance_score,
                 "speedup_vs_ref_mean": (
                     verification.candidate_performance_score
@@ -981,9 +1001,7 @@ class LongHorizonCampaign:
             },
             "optimization": {
                 "action_category": (
-                    "fast_long_horizon_episode"
-                    if fast_mode
-                    else "long_horizon_episode"
+                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
                 ),
                 "action_description": str(
                     outcome.get("summary", "verified long-horizon candidate")
@@ -1008,6 +1026,7 @@ class LongHorizonCampaign:
                     == "ppu"
                 ),
                 promoted=True,
+                episode_workspace=episode_workspace,
             ),
             "experience": _memory_experience(journal),
             "correctness": {
@@ -1164,9 +1183,11 @@ class LongHorizonCampaign:
                 "measurement_scope": "real_evaluator_shapes",
                 "shape_ids_are_opaque": self.base_campaign.private_reference_dir
                 is not None,
-                "measurement_status": "complete"
-                if measurement_complete
-                else "not_evaluated_or_incomplete",
+                "measurement_status": (
+                    "complete"
+                    if measurement_complete
+                    else "not_evaluated_or_incomplete"
+                ),
                 "measured_shape_count": measured_shape_count,
                 "expected_shape_count": expected_shape_count,
                 "shape_measurement_repeats": shape_measurement_repeats,
@@ -1177,9 +1198,7 @@ class LongHorizonCampaign:
                     if carried_from_version is not None
                     else None
                 ),
-                "performance_objective": representative.get(
-                    "performance_objective"
-                ),
+                "performance_objective": representative.get("performance_objective"),
                 "performance_score": representative.get("performance_score"),
                 "speedup_vs_ref_mean": representative.get("speedup_vs_ref_mean"),
                 "speedup_vs_ref_geomean": (
@@ -1195,9 +1214,7 @@ class LongHorizonCampaign:
             },
             "optimization": {
                 "action_category": (
-                    "fast_long_horizon_episode"
-                    if fast_mode
-                    else "long_horizon_episode"
+                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
                 ),
                 "action_description": str(outcome.get("summary", status)),
                 "expected_impact": "episode exploration did not produce a promotable improvement",
@@ -1215,11 +1232,14 @@ class LongHorizonCampaign:
                     == "ppu"
                 ),
                 promoted=False,
+                episode_workspace=episode_workspace,
             ),
             "experience": _memory_experience(journal),
             "correctness": {
                 "status": (
-                    "PASS" if measurement_complete else ("FAIL" if violation else "UNKNOWN")
+                    "PASS"
+                    if measurement_complete
+                    else ("FAIL" if violation else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),
@@ -1441,6 +1461,7 @@ class LongHorizonCampaign:
                 version=memory_version,
                 candidate_commit=candidate_commit,
                 journal=journal,
+                episode_workspace=worktree.path,
                 verification=verification,
                 fast_mode=fast_mode,
                 fast_trials=fast_trial_count,
