@@ -4,25 +4,16 @@ Read this only when a `ppu0015` result needs architecture-specific interpretatio
 decision-relevant facts for selecting probes and testing bottleneck hypotheses; it is not a product
 peak-performance sheet and does not make timeline collection mandatory.
 
-Authoritative sources:
+## Hardware sources
 
-- [T-Head SAIL TIX programming guide](https://developer.t-head.cn/docs_center/doc_detail/index.html?projectId=39&chapterId=197)
-- [T-Head SAIL HGGC programming guide](https://developer.t-head.cn/docs_center/doc_detail/index.html?projectId=39&chapterId=196)
+Read the target's hardware specifications from `gpu-wiki` and record the source references used by
+the experiment. Resolve warp size, thread limits, shared-memory/register capacity and CU topology
+there; combine those facts with actual launch resources and ACU occupancy evidence. A single
+resource limit does not establish achieved residency.
 
-## Timer and topology facts
-
-- `%globaltimer` is the 64-bit nanosecond timer used by the fixed-slot recorder.
-- `%clock64` is a per-CU cycle counter. Its delta includes scheduling, memory, and other resource
-  waits, so it is not pure instruction latency and must not supply the timeline conversion.
-- `%cuid` identifies the executing CU. `%ncuid` is the upper bound of the CU identifier space and may
-  exceed the physical CU count because CU identifiers need not be contiguous.
-- Warp size is 32; a CU supports up to 2048 threads and a block up to 1024 threads.
-- A CU exposes 256 KiB shared memory and 64K vector registers. Use launch resources and ACU
-  occupancy evidence to determine the active-block or active-warp constraint; do not infer it from
-  one resource in isolation.
-
-Keep decoded starts owner-local unless another accepted contract proves cross-owner synchronization.
-The nanosecond unit does not by itself establish cross-CU ordering.
+Use the [recorder timer contract](recorder.md#timer-contract-and-correctness-evidence) for timestamp semantics and keep decoded
+starts owner-local. This reference supplies interpretation patterns rather than a second hardware
+specification table.
 
 ## Select semantic boundaries from the hypothesis
 

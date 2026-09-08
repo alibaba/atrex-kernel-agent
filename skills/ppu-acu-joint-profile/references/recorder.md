@@ -107,10 +107,35 @@ The recorder reads `%globaltimer`. The TIX contract for `ppu001` and `ppu0015` d
 64-bit nanosecond timer, so manifest v5 declares the source and unit and the decoder applies an
 identity conversion. Do not fit a `timer_tick_ns` scale from device-event timings: that would mix
 event overhead and measurement error into every decoded phase. If a synchronized sanity experiment
-materially contradicts the documented unit, reject the capture and investigate the runtime.
+exceeds its declared error bound, reject the capture and investigate the runtime.
 
 `%clock64` is a different per-CU cycle counter. Its delta includes scheduling, memory, and resource
 waits and must not be substituted for `%globaltimer` or used as the timeline conversion.
+
+When running an environment sanity experiment, declare it in the manifest:
+
+```json
+"timer_sanity": {
+  "max_relative_error": 0.03,
+  "artifact": {"path": "timer-sanity.json", "identity": "same allocation timer sanity"}
+}
+```
+
+Choose the bound before capture; 0.03 is an example. The raw `timer-sanity.json` records
+`synchronized: true`, the same `device_identity` and `runtime_identity`, and positive finite
+`timer_elapsed_ns` and `reference_elapsed_ns`. Decode binds this file and rejects
+`abs(timer_elapsed_ns / reference_elapsed_ns - 1) > max_relative_error`. Omit `timer_sanity` when no
+experiment was run; the declared timer source/unit contract is still checked. This check does not
+establish cross-owner clock alignment.
+
+All capture inputs, including correctness, producer information, authoritative kernel snapshots,
+binaries and workload inputs, must be ordinary files contained in the attempt directory holding
+the manifest or ACU collection. Copy needed inputs there before capture; resolved symlink targets
+outside that directory are rejected. Receipt outputs may live in a separate output directory.
+`allocate_torch_buffer` defaults to a 256 MiB allocation budget; pass `max_allocation_bytes` explicitly
+when a measured capture design requires another budget. It allocates directly on the selected device.
+The record commit bit supports reading only after kernel completion and host synchronization.
+
 
 The capture harness also writes numerical correctness evidence from the representative output:
 

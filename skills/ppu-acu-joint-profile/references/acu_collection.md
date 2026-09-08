@@ -162,3 +162,16 @@ metadata first, inspects only the relevant raw rows, and chooses whether the evi
 enough. The exporter hashes the report, raw page, collection descriptor, bound
 source/binary/workload files, and resulting PM CSV. `merge.py` recomputes the raw/PM hashes before
 consuming only accepted decision-grade metadata.
+
+## Artifact boundary and invalid samples
+
+Keep the collection descriptor and its raw report, exported CSV, kernel/source/binary/workload
+snapshots, correctness record and producer text within one attempt directory. Paths are resolved
+before reading; a path or symlink escaping that directory and a non-regular file are rejected.
+Producer text is limited to 1 MiB. See [recorder.md](recorder.md#timer-contract-and-correctness-evidence) for the shared capture
+boundary. Comparison reports can reference separate validated attempts in the same workspace.
+
+Unknown or inactive metric rows remain in the raw CSV and validity counts. They do not determine
+interval agreement, jitter, numerical coverage or overlap. A stream without valid samples has null
+numerical coverage and a diagnostic note; a requested metric without valid samples prevents
+acceptance. Missing valid coverage in an otherwise interpretable stream is reported as a gap.

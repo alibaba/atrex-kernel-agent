@@ -30,7 +30,7 @@
     "evidence_chain": "<evidence -> inference -> action>",
     "accepted_ppu_diagnostics": [
       {
-        "route": "<acu / timeline / joint>",
+        "route": "<acu / timeline / joint / comparison / envelope>",
         "question": "<the performance question answered>",
         "kernel_specialization": "<kernel and compile-time specialization>",
         "workload_identity": "<shape, dtype, layout, and cache policy>",
@@ -45,11 +45,9 @@
           "schema": "<route-compatible artifact schema>",
           "evidence_id": "<evidence_id from that artifact>"
         },
-        "invalidation_conditions": ["<condition that requires new evidence>"],
-        "source_memory_version": "v<N>",
-        "source_episode": 1,
-        "memory_ref": "memory/v<N>.json#profile_evidence.accepted_ppu_diagnostics/0",
-        "evidence_ref": "profiles/.../<accepted-artifact>.json#sha256=<digest>"
+        "invalidation_conditions": [
+          "<condition that requires new evidence>"
+        ]
       }
     ]
   },

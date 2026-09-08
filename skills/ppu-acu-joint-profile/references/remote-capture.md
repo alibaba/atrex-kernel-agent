@@ -50,7 +50,8 @@ and synchronizes only the declared attempt directory. Keep raw captures below th
 `--max-output-file-mb` only when an expected evidence file exceeds the default bound.
 
 When the decision needs A/B perturbation, keep capture and measurement in one sandbox allocation.
-The wrapper first runs capture/decode, then invokes `timeline.py measure` with the attempt's clean and
+The wrapper first runs capture/decode, then invokes `timeline.py measure` with a predeclared
+`--max-relative-change` bound, using the attempt's clean and
 instrumented commands before returning:
 
 ```bash
@@ -73,10 +74,6 @@ then call `scripts/timeline.py measure` in the same parent process/allocation. T
 a fresh child process per A/B sample; physical device identity must remain identical across all
 samples. Two separate `tools/sandbox.py` invocations do not establish same-allocation evidence.
 
-If the PPU is available only through another authorized Pod executor, stage the same skill and
-attempt inputs and return the same attempt outputs. Transport may change; source snapshots, capture
-identity, decode requirements, and cleanup rules do not.
-
 ## Harness responsibilities
 
 The attempt harness performs these operations inside the remote environment:
@@ -89,8 +86,8 @@ The attempt harness performs these operations inside the remote environment:
    uploaded backend header through a native include.
 4. Pass the device buffer through the existing launch interface without changing useful-work
    predicates, barriers, waits, or control flow.
-5. Declare the `%globaltimer` nanosecond contract in the manifest. If an environment sanity check
-   materially contradicts that documented unit, reject the attempt rather than fitting a scale.
+5. Follow the [timer contract](recorder.md#timer-contract-and-correctness-evidence), including the declared bound and raw
+   artifact when an environment sanity experiment is run.
 6. Warm up and validate the representative output, write the accepted correctness artifact, then
    capture one identified target launch, synchronize, and save the entire raw buffer with
    `save_torch_buffer`.

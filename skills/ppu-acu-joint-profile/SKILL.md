@@ -48,7 +48,7 @@ different launches into one apparent execution.
 ## Persist only terminal-reusable evidence
 
 In a long-horizon episode, add `accepted_ppu_diagnostics` to the terminal journal outcome only for
-ACU, timeline, or joint conclusions that still apply to the terminal probe-free kernel. Omit an
+ACU, timeline, joint, comparison, or envelope conclusions that still apply to the terminal probe-free kernel. Omit an
 invalidated intermediate capture. Each row records the question and finding, the exact comparison
 identity, how it affected the optimization decision, and the conditions that require collection of
 new evidence:
@@ -80,6 +80,16 @@ new evidence:
   ]
 }
 ```
+
+Allowed terminal schemas:
+
+| Route | Accepted schemas |
+| --- | --- |
+| `acu` | `ppu-acu-extraction/v4` |
+| `timeline` | `ppu-fixed-slot-receipt/v5`, `ppu-critical-path-report/v3` |
+| `joint` | `ppu-joint-profile/v4` |
+| `comparison` | `ppu-acu-comparison/v1` |
+| `envelope` | `ppu-envelope-measurement/v1` |
 
 The supervisor resolves each workspace-relative artifact, recomputes its outer and transitive hashes,
 and runs `profile_report.py validate` before accepting an `accepted`, decision-grade artifact whose
@@ -114,12 +124,7 @@ any timeline manifest or instrumented source. Do not default to FP8: select Tens
 they match the kernel's actual dtype, and use no Tensor metric when it is irrelevant. Treat the
 reference's verified metric list as selectable examples rather than one required bundle:
 
-```bash
-acu -i profile.acurep --page raw --csv --csv-file profile.raw.csv
-python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
-  --raw-csv profile.raw.csv --collection profile.collection.json \
-  --csv profile.samples.csv --metadata profile.extract.json
-```
+Use the collection reference for the exact export commands and the single-device GPM retry.
 
 Read the compact validation and metric summaries in `profile.extract.json`, then inspect the relevant
 original rows in `profile.raw.csv` and `profile.samples.csv`; the summary never replaces those raw
@@ -128,13 +133,6 @@ cause. A `warning` does not trigger a retry or timeline automatically. Use the A
 independently to classify device-level compute, memory, cache, occupancy, or tail evidence, and stop
 when it selects or rejects the optimization hypothesis. Do not infer which source interval owns a
 device-global metric.
-
-If ACU reports a GPM permission or monitor conflict, disable GPM only on the target device and retry
-once:
-
-```bash
-/usr/local/PPU_SDK/ppu-smi/bin/ppu-smi gpm -i <DEVICE> -s 0
-```
 
 ### Compare candidates and measure headroom
 
@@ -160,7 +158,7 @@ python "$PPU_PROFILE_SKILL/scripts/profile_report.py" seal-calibration \
 python "$PPU_PROFILE_SKILL/scripts/profile_report.py" envelope \
   --current candidate.extract.json --calibration calibration.receipt.json \
   --kind compute \
-  --current-pointer '/metric_summaries/packet_0:compute/time_weighted_mean' \
+  --current-pointer '/metric_summaries/packet_0:cu__inst_executed.avg.pct_of_peak_sustained_elapsed/time_weighted_mean' \
   --bound-name compute_peak --output compute.envelope.json
 ```
 
@@ -232,16 +230,10 @@ For a remote attempt, read [references/remote-capture.md](references/remote-capt
 skill as an explicit sandbox input, keep clean/instrumented snapshots under one attempt directory,
 decode before the remote job exits, and synchronize only that attempt's evidence.
 
-The recorder reads `%globaltimer`, whose `ppu001`/`ppu0015` TIX contract is a 64-bit nanosecond
-timer. Declare `"timer": {"source": "globaltimer", "unit": "ns"}` and do not fit or copy a tick
-conversion. If a synchronized sanity experiment materially contradicts that contract, reject the
-capture and investigate the runtime instead of rescaling the timeline. `%clock64` is a CU cycle
-counter that includes scheduling and resource waits; it is not this timeline's time source.
-
-Read [references/recorder.md](references/recorder.md) for the timer and correctness artifact
-contracts. The manifest binds correctness to the exact device, kernel, and workload. The decoder
-rejects legacy conversion fields, an invalid timer contract, or correctness evidence whose checks
-did not pass.
+Read [references/recorder.md](references/recorder.md#timer-contract-and-correctness-evidence) for the timer contract,
+optional sanity experiment with a declared error bound, and correctness artifact requirements.
+The decoder rejects `timer_tick_ns`, `timer_calibration`, invalid source/unit declarations, and
+correctness evidence that does not pass for the exact kernel, workload, and device.
 
 Initialize the ABI buffer on the host, copy it to the device, launch once, synchronize, and copy the
 entire allocation back. Emit manifest v5 and the event dictionary from actual launch and source
@@ -285,12 +277,14 @@ python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
   --baseline-command '["python","run_a.py"]' \
   --instrumented-command '["python","run_b.py"]' \
   --workload-identity case-id --warmup 10 --iterations 100 \
+  --max-relative-change 0.03 \
   --output fine.perturbation-a-b.json
 
 python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
   --baseline-command '["python","run_b.py"]' \
   --instrumented-command '["python","run_c.py"]' \
   --workload-identity case-id --warmup 10 --iterations 100 \
+  --max-relative-change 0.03 \
   --output fine.perturbation-b-c.json
 ```
 
@@ -301,9 +295,12 @@ authorized Pod UID plus allocation/job id. Measurement v2 also records each comm
 helper rejects any kernel, runtime, cache, clock, device, allocation, or command drift across the
 interleaved schedule.
 
-A/B measures end-to-end probe overhead. B/C tests whether nearby density moves common intervals. Do
-not import a universal overhead threshold from another architecture; report the measured deltas and
-repeat with fewer or moved sites when the conclusion changes materially.
+A/B measures end-to-end probe overhead; B/C measures the end-to-end effect of probe density.
+Declare `--max-relative-change` before the experiment (0.03 above is an example, not a hardware
+constant). The helper records the bound and rejects an absolute median latency change above it;
+joint validation recomputes that gate. Compare common owner-local intervals separately when the
+claim depends on their stability, using a critical-path plan with `stability.material_relative_spread`.
+Reduce or move sites when either declared gate fails.
 
 ### Close an agent-declared critical path when needed
 
@@ -332,7 +329,8 @@ the plan contract.
 Choose this only after ACU and fine timeline were each collected and interpreted independently, and
 the unresolved question requires their relationship. The fine capture must declare one analysis
 owner, one enclosing window, and a non-empty site list. Verify kernel, grid, block, workload, device,
-and duration equivalence before interpreting the output.
+and duration agreement before interpreting the output (warning above 3%, rejection above 5%;
+warning evidence cannot enter reusable memory).
 
 ```bash
 python "$PPU_PROFILE_SKILL/scripts/merge.py" \
@@ -358,10 +356,8 @@ Interpret the result as four separate claims:
 3. guaranteed overlap first, then possible overlap under the bounded analysis-owner origin offset;
 4. probe overhead, density sensitivity, sampling coverage, and remaining ambiguity.
 
-The merger never aligns raw clocks or rescales either run. Full-block duration survival is emitted
-only when the manifest explicitly declares all-block coverage, the capture contains one comparable
-range per block, and the launch satisfies the validated one-wave condition. Otherwise partial
-sampling remains valid and that statistic is omitted.
+The merger never aligns raw clocks or rescales either run. The exact optional full-block survival
+gates are in [references/timeline_contract.md](references/timeline_contract.md#joint-merge-semantics).
 
 ## Finish
 

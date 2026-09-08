@@ -501,7 +501,10 @@ from main-workspace commits; their recoverable local state remains on disk.
   and transitive artifact hashes, then invokes the schema-specific validator; only decision-grade
   evidence with a matching authoritative kernel, binding payload, schema, evidence id, and accepted
   validation state is retained. Comparison identity and invalidation conditions remain explicit in
-  the row. It then adds stable
+  the row. Canonical memory writes revalidate each row against the episode worktree on promoted,
+  rejected, and interrupted paths. Invalid optional rows are excluded with a reason rather than
+  aborting the campaign. JSON receipts are limited to 64 MiB; their hash and parsed metadata come
+  from the same read, while raw artifact hashes are streamed. The supervisor then adds stable
   memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
   decide whether to reuse the bounded conclusion without loading the raw episode archive.
 - `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.

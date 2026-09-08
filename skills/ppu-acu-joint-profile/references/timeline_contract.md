@@ -17,13 +17,13 @@ For `--output-prefix fine.timeline`, the decoder writes:
   source/binary/workload provenance, and every decoded output.
 
 Manifest v5 declares `%globaltimer` with its documented nanosecond unit and binds the capture to an
-accepted numerical correctness artifact. A legacy conversion field, invalid timer source/unit, or
+accepted numerical correctness artifact. `timer_tick_ns`, `timer_calibration`, an invalid timer source/unit, or
 correctness evidence for another kernel/workload/device is rejected before canonical output is
 written.
 
 The first committed record of each owner defines only that owner's local zero. Perfetto places owners
 in sequential, non-overlapping display bands; each event preserves its true
-`owner_relative_start_ns` and display offset in args. The bands are not a shared time axis. The
+`owner_relative_start_ns`, integer `duration_ns` for ranges, and display offset in args. The bands are not a shared time axis. The
 decoder accepts a sparse subset of blocks and arbitrary declared writer threads. It rejects missing or duplicate writer
 claims, claim/manifest mismatch, holes, overflow, unknown sites, owner exclusions, kind mismatch,
 decreasing timestamps, unbalanced ranges, invalid declared analysis windows, and false all-block
@@ -65,14 +65,16 @@ The Perfetto root carries the agent's choices rather than inferring a topology:
 ```
 
 Chrome/Perfetto timestamps and durations are microseconds. Manifest, canonical, ACU, and joint
-durations are nanoseconds.
+durations are nanoseconds. Merge reads integer range args; display `ts` and `dur` never enter
+evidence arithmetic.
 
 ## Coarse and fine evidence
 
 A coarse capture is valid without an `analysis` object and is used to decide where more resolution is
 worth its probe cost. It is not mergeable merely because it contains ranges. A fine capture becomes
 mergeable only when it declares one analysis owner, one enclosing window site, and a non-empty list
-of range site ids inside that window.
+of range site ids inside that window. Every declared site must emit at least one range for the
+analysis owner; a missing measurement is rejected.
 
 This separation keeps topology choice with the agent:
 

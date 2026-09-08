@@ -112,13 +112,7 @@ standalone CUDA/inline PTX through its CUDA backend and CuTe DSL through IKeT. K
 under `<PROFILE_DIR>/timeline/attempt-N`; when the remote command reads backend files, pass that
 specific skill path with sandbox `--input` and sync only the attempt output directory.
 
-Within the PPU route, ACU can diagnose a device-level bottleneck for any supported PPU kernel. Select
-the standalone coarse-to-fine timeline only for a CUDA-compatible PPU kernel and a concrete
-kernel-internal ordering question; use joint analysis only when both independently interpreted
-evidence sets leave a relationship question. Do not collect all three by default. Timeline topology
-and writer roles remain hypothesis-driven; every-block thread-0 recording is only one optional tail
-design. Keep ACU, timeline, and joint attempts in separate subdirectories below `<PROFILE_DIR>` and
-preserve the same temporary-snapshot rules below.
+For PPU, use the routing and capture contracts in the PPU skill linked above.
 
 Timeline instrumentation is a temporary working snapshot on this episode's single HEAD line, not a
 candidate. Preserve the clean source and each useful instrumented source or reversible patch before
