@@ -16,6 +16,7 @@ from threading import Event
 from typing import Any
 
 from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
+from orchestrator.hardware import hardware_vendor
 
 from . import main_adapter
 from .git_episode import (
@@ -28,7 +29,8 @@ from .git_episode import (
 )
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
-from .journal import sync_live_memory, validate_terminal
+from .journal import normalize_accepted_ppu_diagnostics
+from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_terminal
 from .models import (
     EpisodeHandoff,
     SupervisorState,
@@ -374,6 +376,117 @@ def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
         "experiment_count": len(raw_experiments),
         "recorded_experiment_count": len(experiments),
         "experiments": experiments,
+    }
+
+
+def _canonical_ppu_diagnostics(
+    journal: dict[str, Any], *, version: int, workspace: Path | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate optional evidence at the canonical-memory boundary, including recovery."""
+    outcome = journal.get("outcome")
+    if not isinstance(outcome, dict):
+        return [], []
+    raw = outcome.get("accepted_ppu_diagnostics", [])
+    if not isinstance(raw, list):
+        return [], ["accepted_ppu_diagnostics must be a list"]
+    episode = journal.get("episode")
+    diagnostics: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for index, row in enumerate(raw):
+        try:
+            normalized, errors = normalize_accepted_ppu_diagnostics([row])
+            if not errors:
+                errors = (
+                    validate_accepted_ppu_evidence(normalized, workspace)
+                    if workspace is not None
+                    else ["episode workspace unavailable"]
+                )
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            errors = [str(error)]
+        if errors:
+            rejected.append(f"diagnostic {index}: " + "; ".join(errors))
+            continue
+        canonical = dict(normalized[0])
+        canonical["source_memory_version"] = f"v{version}"
+        if isinstance(episode, int) and not isinstance(episode, bool):
+            canonical["source_episode"] = episode
+        canonical["memory_ref"] = (
+            f"memory/v{version}.json#profile_evidence."
+            f"accepted_ppu_diagnostics/{len(diagnostics)}"
+        )
+        evidence = canonical["evidence"]
+        canonical["evidence_ref"] = (
+            f"{evidence['artifact']}#sha256={evidence['sha256']}"
+        )
+        diagnostics.append(canonical)
+    return diagnostics, rejected
+
+
+def _memory_profile_evidence(
+    journal: dict[str, Any],
+    *,
+    version: int,
+    fast_mode: bool,
+    fast_trial_count: int,
+    is_ppu: bool,
+    promoted: bool,
+    episode_workspace: Path | None,
+) -> dict[str, Any]:
+    """Build canonical profile memory without changing non-PPU behavior."""
+    experiment_count = len(journal.get("experiments", []))
+    if fast_mode:
+        return {
+            "tool_used": "none (fast mode)",
+            "evidence_summary": f"{experiment_count} structured experiments",
+            "bottleneck_type": "not_profiled_fast_mode",
+            "evidence_chain": (
+                f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
+                "trials -> "
+                + ("best-candidate promotion" if promoted else "no promotion")
+            ),
+        }
+    if not is_ppu:
+        return {
+            "tool_used": (
+                "episode-owned profiler evidence plus supervisor ABBA"
+                if promoted
+                else "episode journal"
+            ),
+            "evidence_summary": f"{experiment_count} structured experiments",
+            "bottleneck_type": "episode-derived",
+            "evidence_chain": (
+                "episode evidence -> candidate -> independent ABBA -> promotion"
+                if promoted
+                else "episode evidence -> terminal handoff -> no promotion"
+            ),
+        }
+
+    diagnostics, rejected = _canonical_ppu_diagnostics(
+        journal, version=version, workspace=episode_workspace
+    )
+    routes = list(dict.fromkeys(item["route"] for item in diagnostics))
+    return {
+        "tool_used": (
+            f"accepted PPU {' + '.join(routes)} evidence"
+            if routes
+            else "none recorded (PPU profiling is optional)"
+        ),
+        "evidence_summary": (
+            f"{experiment_count} structured experiments; "
+            f"{len(diagnostics)} terminal-reusable PPU diagnostics"
+            + ("; excluded: " + "; ".join(rejected) if rejected else "")
+        ),
+        "bottleneck_type": "episode-derived",
+        "evidence_chain": (
+            "episode evidence -> terminal handoff; no reusable PPU diagnostics"
+            if not diagnostics
+            else (
+                "terminal-valid PPU evidence -> candidate -> independent ABBA -> promotion"
+                if promoted
+                else "terminal-valid PPU evidence -> terminal handoff -> no promotion"
+            )
+        ),
+        "accepted_ppu_diagnostics": diagnostics,
     }
 
 
@@ -812,6 +925,7 @@ class LongHorizonCampaign:
         candidate_commit: str,
         journal: dict[str, Any],
         verification: VerificationResult,
+        episode_workspace: Path,
         fast_mode: bool = False,
         fast_trials: int | None = None,
     ) -> dict[str, Any]:
@@ -864,9 +978,7 @@ class LongHorizonCampaign:
                     else "same_allocation_abba"
                 ),
                 "carried_from_version": None,
-                "performance_objective": representative.get(
-                    "performance_objective"
-                ),
+                "performance_objective": representative.get("performance_objective"),
                 "performance_score": verification.candidate_performance_score,
                 "speedup_vs_ref_mean": (
                     verification.candidate_performance_score
@@ -890,9 +1002,7 @@ class LongHorizonCampaign:
             },
             "optimization": {
                 "action_category": (
-                    "fast_long_horizon_episode"
-                    if fast_mode
-                    else "long_horizon_episode"
+                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
                 ),
                 "action_description": str(
                     outcome.get("summary", "verified long-horizon candidate")
@@ -905,23 +1015,20 @@ class LongHorizonCampaign:
                 ),
                 "risks_and_rollback": "candidate retained on isolated episode branch",
             },
-            "profile_evidence": {
-                "tool_used": (
-                    "none (fast mode)"
-                    if fast_mode
-                    else "episode-owned profiler evidence plus supervisor ABBA"
+            "profile_evidence": _memory_profile_evidence(
+                journal,
+                version=version,
+                fast_mode=fast_mode,
+                fast_trial_count=fast_trial_count,
+                is_ppu=(
+                    hardware_vendor(
+                        self.base_campaign.platform, self.base_campaign.arch
+                    )
+                    == "ppu"
                 ),
-                "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
-                "bottleneck_type": (
-                    "not_profiled_fast_mode" if fast_mode else "episode-derived"
-                ),
-                "evidence_chain": (
-                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
-                    "trials -> best-candidate promotion"
-                    if fast_mode
-                    else "episode evidence -> candidate -> independent ABBA -> promotion"
-                ),
-            },
+                promoted=True,
+                episode_workspace=episode_workspace,
+            ),
             "experience": _memory_experience(journal),
             "correctness": {
                 "status": "PASS",
@@ -1077,9 +1184,11 @@ class LongHorizonCampaign:
                 "measurement_scope": "real_evaluator_shapes",
                 "shape_ids_are_opaque": self.base_campaign.private_reference_dir
                 is not None,
-                "measurement_status": "complete"
-                if measurement_complete
-                else "not_evaluated_or_incomplete",
+                "measurement_status": (
+                    "complete"
+                    if measurement_complete
+                    else "not_evaluated_or_incomplete"
+                ),
                 "measured_shape_count": measured_shape_count,
                 "expected_shape_count": expected_shape_count,
                 "shape_measurement_repeats": shape_measurement_repeats,
@@ -1090,9 +1199,7 @@ class LongHorizonCampaign:
                     if carried_from_version is not None
                     else None
                 ),
-                "performance_objective": representative.get(
-                    "performance_objective"
-                ),
+                "performance_objective": representative.get("performance_objective"),
                 "performance_score": representative.get("performance_score"),
                 "speedup_vs_ref_mean": representative.get("speedup_vs_ref_mean"),
                 "speedup_vs_ref_geomean": (
@@ -1108,31 +1215,32 @@ class LongHorizonCampaign:
             },
             "optimization": {
                 "action_category": (
-                    "fast_long_horizon_episode"
-                    if fast_mode
-                    else "long_horizon_episode"
+                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
                 ),
                 "action_description": str(outcome.get("summary", status)),
                 "expected_impact": "episode exploration did not produce a promotable improvement",
                 "risks_and_rollback": "incumbent kernel was preserved",
             },
-            "profile_evidence": {
-                "tool_used": "none (fast mode)" if fast_mode else "episode journal",
-                "evidence_summary": f"{len(journal.get('experiments', []))} structured experiments",
-                "bottleneck_type": (
-                    "not_profiled_fast_mode" if fast_mode else "episode-derived"
+            "profile_evidence": _memory_profile_evidence(
+                journal,
+                version=version,
+                fast_mode=fast_mode,
+                fast_trial_count=fast_trial_count,
+                is_ppu=(
+                    hardware_vendor(
+                        self.base_campaign.platform, self.base_campaign.arch
+                    )
+                    == "ppu"
                 ),
-                "evidence_chain": (
-                    f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
-                    "trials -> no promotion"
-                    if fast_mode
-                    else "episode evidence -> terminal handoff -> no promotion"
-                ),
-            },
+                promoted=False,
+                episode_workspace=episode_workspace,
+            ),
             "experience": _memory_experience(journal),
             "correctness": {
                 "status": (
-                    "PASS" if measurement_complete else ("FAIL" if violation else "UNKNOWN")
+                    "PASS"
+                    if measurement_complete
+                    else ("FAIL" if violation else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),
@@ -1354,6 +1462,7 @@ class LongHorizonCampaign:
                 version=memory_version,
                 candidate_commit=candidate_commit,
                 journal=journal,
+                episode_workspace=worktree.path,
                 verification=verification,
                 fast_mode=fast_mode,
                 fast_trials=fast_trial_count,

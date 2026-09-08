@@ -56,7 +56,7 @@ promotion; it is not a second CLI.
 │   └── prompts/                       # Setup, inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
-├── skills/                            # Backend-local workflow and plan-generation skills
+├── skills/                            # Backend-local workflows, including adaptive PPU profiling
 ├── tools/
 │   ├── sandbox.py                     # Remote packaging and execution boundary
 │   ├── memory_manager.py              # Structured iteration memory manager
@@ -488,6 +488,25 @@ from main-workspace commits; their recoverable local state remains on disk.
 
 - NVIDIA profiling uses `tools/profile_nvidia.sh` and Nsight Compute.
 - AMD profiling uses `tools/profile_kernel.sh`, rocprofv3, ATT, PMC, and assembly extraction.
+- PPU profiling uses `skills/ppu-acu-joint-profile/` as an evidence router: ACU-only device analysis,
+  standalone adaptive timeline analysis, and bounded joint analysis are separate selectable modes.
+  PPU alone uses a per-iteration evidence gate: the episode agent may skip a new PPU profile when
+  source or compiler inspection, the probe-free benchmark, or still-valid PPU evidence already
+  answers the current question. Otherwise it chooses the least intrusive decisive route and stops
+  when that route answers the question. Timeline writers and sites remain hypothesis-driven;
+  optional joint analysis uses an independent probe-free ACU launch, and full-block lifetime
+  coverage remains opt-in tail evidence.
+- A PPU terminal journal may select still-valid ACU, timeline, joint, candidate-comparison, or
+  measured-envelope conclusions as `accepted_ppu_diagnostics`. The supervisor recomputes the outer
+  and transitive artifact hashes, then invokes the schema-specific validator; only decision-grade
+  evidence with a matching authoritative kernel, binding payload, schema, evidence id, and accepted
+  validation state is retained. Comparison identity and invalidation conditions remain explicit in
+  the row. Canonical memory writes revalidate each row against the episode worktree on promoted,
+  rejected, and interrupted paths. Invalid optional rows are excluded with a reason rather than
+  aborting the campaign. JSON receipts are limited to 64 MiB; their hash and parsed metadata come
+  from the same read, while raw artifact hashes are streamed. The supervisor then adds stable
+  memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
+  decide whether to reuse the bounded conclusion without loading the raw episode archive.
 - `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.
 - Episodes attribute wall time and token usage to profile, research, planning, implementation,
   correctness, benchmark, and recording phases when the backend emits complete markers and usage
@@ -500,6 +519,8 @@ from main-workspace commits; their recoverable local state remains on disk.
 - Hardware specifications must come from `gpu-wiki` with auditable source references.
 - Official profiler evidence is required before full-mode optimization changes; fast mode explicitly
   substitutes five reviewed plans plus hash-matched evaluator results and best-candidate selection.
+  PPU is the scoped exception: follow `ppu-acu-joint-profile` and collect new PPU profiler evidence
+  only when its per-iteration decision rule says the unresolved fact can change the next edit.
 - Ground-truth evaluator inputs are immutable.
 - Correctness must pass before performance conclusions or promotion.
 - Every accepted candidate must be represented by Git and structured memory.

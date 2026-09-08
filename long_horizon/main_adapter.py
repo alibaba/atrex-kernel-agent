@@ -27,6 +27,7 @@ from orchestrator.campaign import Campaign
 from orchestrator.constants import DEFAULT_CONVERT_AFTER
 from orchestrator.hardware import (
     hardware_directive,
+    hardware_vendor,
     head_kernel_is_gluon,
     should_convert_to_gluon,
 )
@@ -82,7 +83,11 @@ def prepare_campaign(campaign: Campaign) -> None:
 
 def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     native = Path(campaign.atrex_bench_root) if campaign.atrex_bench_root else None
-    link_runtime(workspace, native)
+    link_runtime(
+        workspace,
+        native,
+        is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
+    )
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
@@ -99,7 +104,9 @@ def episode_directives(
         ),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
-        "agent_runtime": _agent_runtime_directive(agent_cli),
+        "agent_runtime": _agent_runtime_directive(
+            agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
+        ),
         "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 

@@ -10,7 +10,8 @@ from typing import Optional
 from .constants import REPO_ROOT, STALL_STATE_FILE
 
 
-def _agent_runtime_directive(agent_cli: str) -> str:
+def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
+    ppu_skill = "`ppu-acu-joint-profile`, " if is_ppu else ""
     if agent_cli in {"codex", "pi"}:
         syntax = (
             "Codex's `$skill-name` syntax"
@@ -20,13 +21,14 @@ def _agent_runtime_directive(agent_cli: str) -> str:
         return (
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
             "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
-            "`autonomous-gpu-kernel-timeline`, `ncu-report-skill`, "
+            f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
             f"`KernelWiki`, and `gen-plan`. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
-        "`autonomous-gpu-kernel-timeline`, `ncu-report-skill`, and `KernelWiki`."
+        f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
+        "and `KernelWiki`."
     )
 
 
@@ -106,7 +108,9 @@ def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> Non
     )
 
 
-def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> None:
+def link_runtime(
+    workspace: Path, atrex_bench_root: Optional[Path] = None, *, is_ppu: bool = False
+) -> None:
     """Link repository runtime assets into a campaign workspace.
 
     The gpu-kernel-* skills reference ``tools/``, ``reference/``, ``skills/``,
@@ -132,8 +136,14 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
     kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
     agents_src = REPO_ROOT / "agents"
     project_skills = REPO_ROOT / "skills"
-    plan_skill_src = project_skills / "gen-plan"
-    timeline_skill_src = project_skills / "autonomous-gpu-kernel-timeline"
+    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline"]
+    if is_ppu:
+        runtime_skill_names.append("ppu-acu-joint-profile")
+    else:
+        for root in (".claude", ".qoder", ".agents"):
+            stale = workspace / root / "skills" / "ppu-acu-joint-profile"
+            if stale.is_symlink():
+                stale.unlink()
     for runtime_dir_name in (".claude", ".qoder"):
         runtime_dir = workspace / runtime_dir_name
         runtime_skills_dir = runtime_dir / "skills"
@@ -143,12 +153,10 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
             dst = runtime_skills_dir / name
             if src.exists() and not dst.exists():
                 os.symlink(src, dst)
-        plan_skill_dst = runtime_skills_dir / "gen-plan"
-        if (plan_skill_src / "SKILL.md").is_file() and not plan_skill_dst.exists():
-            os.symlink(plan_skill_src, plan_skill_dst)
-        timeline_skill_dst = runtime_skills_dir / "autonomous-gpu-kernel-timeline"
-        if (timeline_skill_src / "SKILL.md").is_file() and not timeline_skill_dst.exists():
-            os.symlink(timeline_skill_src, timeline_skill_dst)
+        for name in runtime_skill_names:
+            source, destination = project_skills / name, runtime_skills_dir / name
+            if (source / "SKILL.md").is_file() and not destination.exists():
+                os.symlink(source, destination)
         # Claude/Qoder setup prompts can launch the baseline agent by name.
         if agents_src.exists() and not runtime_agents_dir.exists():
             os.symlink(agents_src, runtime_agents_dir)
@@ -173,6 +181,8 @@ def link_runtime(workspace: Path, atrex_bench_root: Optional[Path] = None) -> No
             shutil.rmtree(legacy_path)
     if project_skills.is_dir():
         for source in project_skills.iterdir():
+            if source.name == "ppu-acu-joint-profile" and not is_ppu:
+                continue
             if not (source / "SKILL.md").is_file():
                 continue
             destination = agent_skills_dir / source.name
