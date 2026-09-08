@@ -584,6 +584,7 @@ class LongHorizonCampaign:
                 "EPISODE": episode,
                 "VERSION": version,
                 "WORKSPACE": worktree.path,
+                "OPERATOR": self.base_campaign.name,
                 "PLATFORM": self.base_campaign.platform,
                 "FRAMEWORK": self.base_campaign.framework,
                 "BASE_COMMIT": worktree.base_commit,

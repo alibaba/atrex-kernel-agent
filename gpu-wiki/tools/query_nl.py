@@ -36,6 +36,7 @@ import agent_launch
 import hardware_identity
 import operator_scope
 import query_wiki
+import wiki_trace
 
 HERE = Path(__file__).resolve().parent
 OWN_STORE_ROOT = HERE.parent
@@ -1059,6 +1060,12 @@ def main(argv=None) -> int:
         INTERNAL_STORE: 0,
     }
     status = "error"
+    intent = None
+    normalized_intents: list[dict] = []
+    records: dict[str, dict] = {}
+    notes: list[str] = []
+    wiki_stores: list[dict[str, object]] = []
+    retrieval_failures: list[dict[str, str]] = []
     selected_cli = os.environ.get(BRIDGE_CLI_ENV, agent_launch.DEFAULT_CLI)
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("request", nargs="*")
@@ -1189,16 +1196,24 @@ def main(argv=None) -> int:
                 (bridge_attempts, detail), 4)
 
         retrieval_started = time.perf_counter()
-        notes: list[str] = []
         groups: list[tuple[str, dict[str, dict]]] = []
         for store, current_root in store_roots:
+            wiki_stores.append({
+                "store_id": store,
+                "wiki_revision": wiki_trace.store_revision(current_root),
+            })
             if not _queryable_store(current_root):
                 groups.append((store, {}))
                 notes.append("[%s] store unavailable; module returned empty" % store)
+                retrieval_failures.append({
+                    "store_id": store,
+                    "kind": "store_unavailable",
+                })
                 continue
             try:
                 normalized, current_notes = normalize_intent(
                     intent, current_root, request_text=request)
+                normalized_intents.append({"store_id": store, **normalized})
                 current_records: dict[str, dict] = {}
                 query_hardware(
                     current_root, normalized, current_records, current_notes,
@@ -1211,6 +1226,11 @@ def main(argv=None) -> int:
                 )
             except (OSError, ValueError, KeyError) as exc:
                 groups.append((store, {}))
+                retrieval_failures.append({
+                    "store_id": store,
+                    "kind": "retrieval_error",
+                    "error_type": type(exc).__name__,
+                })
                 notes.append(
                     "[%s] retrieval failed; module returned empty: %s"
                     % (store, str(exc).splitlines()[0][:160])
@@ -1245,7 +1265,7 @@ def main(argv=None) -> int:
             import shutil
             shutil.rmtree(workspace, ignore_errors=True)
         finished_at = datetime.now(timezone.utc)
-        _append_metric(os.environ.get(METRICS_LOG_ENV), {
+        metric = {
             "query_id": query_id,
             "task_id": os.environ.get(TASK_ID_ENV),
             "pid": os.getpid(),
@@ -1263,7 +1283,29 @@ def main(argv=None) -> int:
             "records_by_source": records_by_source,
             "records_by_store": records_by_store,
             **bridge_telemetry,
-        })
+        }
+        _append_metric(os.environ.get(METRICS_LOG_ENV), metric)
+        wiki_trace.write_query_event(
+            query_id=query_id,
+            request=request,
+            status=status,
+            bridge_intent=intent,
+            normalized_intents=normalized_intents,
+            returned_records=[
+                {
+                    "wiki_id": str(entry.get("wiki_id") or rid),
+                    "store_id": entry.get("store"),
+                    "rank": rank,
+                    "source": entry.get("source"),
+                    "type": entry.get("type"),
+                    "match": entry.get("match") or {},
+                }
+                for rank, (rid, entry) in enumerate(records.items(), start=1)
+            ],
+            wiki_stores=wiki_stores,
+            retrieval_failures=retrieval_failures,
+            metric=metric,
+        )
 
 
 if __name__ == "__main__":

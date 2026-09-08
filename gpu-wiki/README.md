@@ -165,6 +165,17 @@ them from mapping keys. Evidence, retrieval metadata, rank decomposition, bridge
 commentary, and other engine-side fields are deliberately not served, so they
 cannot anchor AKA's judgement.
 
+AKA sets `ATREX_WIKI_PROFILE_ROOT` to the incumbent campaign workspace. After
+CLI and request validation, `query_nl.py` writes one immutable, compact JSON
+event from its cleanup path, including dry-run and bridge-failure statuses plus
+compact per-store retrieval-failure diagnostics. Argument-parse errors and
+invalid or empty requests rejected before a query workspace exists do not emit
+an event. Events contain the request,
+normalized scope, returned canonical IDs, rank, and timing; returned payloads
+and coding-agent sessions are not copied. Consumers outside AKA may set the same
+environment variable to an output directory they own; without it, querying
+remains read-only and creates no telemetry files.
+
 ### Direct structured queries
 
 Use the lower-level tools when the address is already known or a script needs a

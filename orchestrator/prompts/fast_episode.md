@@ -58,6 +58,21 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 
 ## Required flow
 
+At episode start, run the required bounded GPU Wiki query once using the campaign's exact operator
+identifier rather than paraphrasing it. Additional targeted queries are allowed later when new
+evidence creates a materially different question:
+
+```bash
+python3 gpu-wiki/tools/query_nl.py "Target hardware {{PLATFORM}}, DSL {{FRAMEWORK}}. Optimize operator {{OPERATOR}} and retrieve techniques and pitfalls." --brief
+```
+
+Read only directly applicable returned records. Preserve the response's top-level `query_id` and
+the `wiki_id` from each record actually considered. Trial 1 must record this query as either
+`declared` (with the materially used/rejected record rows) or `no_material_use`; it must not claim
+`not_queried`. The query front door binds the product to its recorded architecture and returns the
+product spec alongside operator knowledge; do not paraphrase the exact command into a bridge-agent
+request. Later trials reuse that query id only when they actually reconsider the response.
+
 Keep telemetry usable for per-step timing even though each trial is short. Repeat these phase
 markers for every trial, with at most one phase active. Use `planning`, `implementation`, and
 `benchmark` respectively; never emit `profile` or `research` markers:

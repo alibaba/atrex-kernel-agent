@@ -107,6 +107,7 @@ try:
         framework_workspace_suffix,
         supported_frameworks,
     )
+    from .trace_retention import write_trace_retention_manifest
     from .operator_layout import (
         AGENT_PROBLEM_FILENAME,
         find_atrex_bench_root,
@@ -155,6 +156,9 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         _workspace_slug,
         framework_workspace_suffix,
         supported_frameworks,
+    )
+    from orchestrator.trace_retention import (  # type: ignore[no-redef]
+        write_trace_retention_manifest,
     )
     from orchestrator.operator_layout import (  # type: ignore[no-redef]
         AGENT_PROBLEM_FILENAME,
@@ -945,29 +949,60 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         full_episode_ask_qoder=args.full_episode_ask_qoder,
         convert_after=args.convert_after,
     )
-    if latest_version(campaign.workspace) < 0:
-        campaign.setup_baseline()
-    else:
-        print(
-            f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
-            flush=True,
+    trace_status = "failed"
+    handled_signals = (signal.SIGTERM, signal.SIGHUP)
+    previous_handlers = {
+        handled_signal: signal.getsignal(handled_signal)
+        for handled_signal in handled_signals
+    }
+
+    def interrupt_campaign(signum: int, _frame: object) -> None:
+        nonlocal trace_status
+        trace_status = "interrupted"
+        raise SystemExit(128 + signum)
+
+    for handled_signal in handled_signals:
+        signal.signal(handled_signal, interrupt_campaign)
+    try:
+        if latest_version(campaign.workspace) < 0:
+            campaign.setup_baseline()
+        else:
+            print(
+                f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
+                flush=True,
+            )
+            campaign._link_runtime()
+        baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
+            read_memory(campaign.workspace, 0)
         )
-        campaign._link_runtime()
-    baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
-        read_memory(campaign.workspace, 0)
-    )
-    if baseline_coverage_problem:
-        raise RuntimeError(
-            "generalized campaign baseline is incompatible with authoritative per-shape "
-            f"memory: {baseline_coverage_problem}; start a fresh workspace"
+        if baseline_coverage_problem:
+            raise RuntimeError(
+                "generalized campaign baseline is incompatible with authoritative per-shape "
+                f"memory: {baseline_coverage_problem}; start a fresh workspace"
+            )
+        if args.sandbox_ssh:
+            # A recovery monitor may declare success only after operator resolution,
+            # architecture/submodule setup, campaign construction, and workspace resume.
+            signal_restart_ready()
+        campaign.ensure_framework_baseline()
+        campaign.run()
+        trace_status = "completed"
+        return 0
+    except KeyboardInterrupt:
+        trace_status = "interrupted"
+        raise
+    finally:
+        write_trace_retention_manifest(
+            campaign.workspace,
+            trace_status,
+            hardware={
+                "platform": args.platform,
+                "arch": arch or "",
+                "sandbox_hardware": sandbox_hardware,
+            },
         )
-    if args.sandbox_ssh:
-        # A recovery monitor may declare success only after operator resolution,
-        # architecture/submodule setup, campaign construction, and workspace resume.
-        signal_restart_ready()
-    campaign.ensure_framework_baseline()
-    campaign.run()
-    return 0
+        for handled_signal, previous_handler in previous_handlers.items():
+            signal.signal(handled_signal, previous_handler)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
