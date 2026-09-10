@@ -582,7 +582,7 @@ class Campaign:
             ]
         return []
 
-    def _review_production_candidate(
+    def _review_production_candidate_once(
         self,
         workspace: Path,
         framework: str,
@@ -642,7 +642,9 @@ class Campaign:
                 agent_plugins=False,
             )
             self._account(result, "independent production policy review")
-            if result.exit_status != 0 or result.timed_out:
+            if result.timed_out:
+                raise TimeoutError("independent production policy reviewer timed out")
+            if result.exit_status != 0:
                 errors = [
                     "independent production policy review agent failed "
                     f"(exit={result.exit_status}, timeout={result.timed_out})"
@@ -721,6 +723,27 @@ class Campaign:
         )
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
         return list(dict.fromkeys([*errors, *persistence_errors]))
+
+    def _review_production_candidate(
+        self,
+        workspace: Path,
+        framework: str,
+        require_gluon: bool,
+    ) -> list[str]:
+        """Retry a timed-out model review once in a fresh isolated session."""
+        try:
+            return self._review_production_candidate_once(
+                workspace, framework, require_gluon
+            )
+        except TimeoutError:
+            print(
+                "[production-policy] reviewer infrastructure timed out; "
+                "retrying with a fresh isolated session",
+                flush=True,
+            )
+            return self._review_production_candidate_once(
+                workspace, framework, require_gluon
+            )
 
     def _production_kernel_violations(
         self,
@@ -2670,6 +2693,8 @@ class Campaign:
             validation_future = executor.submit(self._validate_framework_baseline, n)
             try:
                 violations = policy_future.result()
+            except TimeoutError:
+                raise
             except Exception as exc:
                 violations = [
                     "independent production policy review failed: "

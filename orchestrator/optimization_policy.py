@@ -304,6 +304,8 @@ def production_kernel_violations(
         return ["production candidate requires supervisor policy review"]
     try:
         review_errors = production_reviewer(workspace, framework, require_gluon)
+    except TimeoutError:
+        raise
     except Exception as exc:
         errors.append(
             "independent production policy review failed: "
