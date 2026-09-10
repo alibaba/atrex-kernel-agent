@@ -48,11 +48,10 @@ workspace template.
 
 ## Knowledge and Tools
 
-- Query `gpu-wiki/` first through `python3 gpu-wiki/tools/query_nl.py "<description>" --brief`.
-  The description must name the true product and authoritative runtime architecture, request the full
-  product specification and relevant architecture/ISA facts, and include the operator, framework,
-  measurements, failed attempts, and remaining hypotheses. Read each id-keyed record's `store`, isolated
-  payload, and notes; internal ids use the `internal_gpu_wiki::` namespace.
+- Consult enabled knowledge tools using `.atrex_plugins/instructions.md` and
+  `python3 tools/plugin.py list`. Follow the injected phase instructions. State the exact product,
+  authoritative runtime architecture, operator, framework, measurements and unresolved question.
+  Preserve returned source identifiers. With no suitable tool, use available reference sources.
 - Search `reference-projects/` only when the local knowledge base is insufficient.
 - Use `tools/profile_nvidia.sh` and `tools/classify_ncu.py` for NVIDIA evidence.
 - Use `tools/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.
@@ -71,7 +70,7 @@ workspace template.
   full-workload geomean improvement.
 - Campaigns stop on canonical version budget, token budget, optional stall budget, target
   utilization, or a terminal repeated blocker.
-- Hardware ceilings and optimization claims must be sourced from `gpu-wiki`; unknown values remain
+- Hardware ceilings and optimization claims must have auditable sources; unknown values remain
   explicitly unknown rather than guessed.
 
 ## Task Context

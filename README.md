@@ -61,6 +61,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
+| [Local plugins](docs/plugins.md) | Configure and extend AKA tools; GPU Wiki is the default plugin |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 

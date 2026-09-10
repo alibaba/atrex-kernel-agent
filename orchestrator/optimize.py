@@ -118,6 +118,7 @@ try:
         validate_private_shapes,
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
+    from .plugins import PluginError, PluginRegistry
     from .session_io import check_ssh_environment, detect_arch, ensure_submodules
     from .ssh_health import runtime_health_command
     from .workspace_state import (
@@ -172,6 +173,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
     )
+    from orchestrator.plugins import PluginError, PluginRegistry
     from orchestrator.session_io import (  # type: ignore[no-redef]
         check_ssh_environment,
         detect_arch,
@@ -434,6 +436,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
     ap.add_argument(
+        "--plugin-config", default="",
+        help="Local AKA plugin configuration JSON; defaults to bundled GPU Wiki",
+    )
+    ap.add_argument(
         "--op-dir",
         required=True,
         help=(
@@ -690,6 +696,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
+    try:
+        PluginRegistry(args.plugin_config) if args.plugin_config else PluginRegistry()
+    except PluginError as exc:
+        ap.error(str(exc))
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
         args.workspace_suffix
     ):
@@ -924,6 +934,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
         agent_cli=args.agent_cli,
+        plugin_config=args.plugin_config,
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,

@@ -19,11 +19,12 @@ profiles). Sandbox input filtering is owned by `tools/sandbox.py`; deleting camp
 payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are symlinked into the workspace — read/use them by relative path
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are symlinked into the workspace — read/use them by relative path
   (e.g. `python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 
 {{HARDWARE}}
+{{PLUGINS}}
 {{SANDBOX}}
 {{EVALUATOR}}
 
@@ -38,23 +39,12 @@ through `tools/sandbox.py`.
 
 Do the following, in order, but only through baseline:
 
-1. **Step 0 — Hardware specs + Roofline.** Query GPU Wiki with a natural-language request that names the
-   true public product exactly as `{{PLATFORM}}` and copy the authoritative runtime architecture exactly
-   from the injected Hardware ground-truth block. Explicitly request the complete product specification and any architecture/ISA facts relevant
-   to the operator, so `query_nl.py` returns isolated `hardware_wiki` and `kernel_wiki` records in one result:
-   ```bash
-   python3 gpu-wiki/tools/query_nl.py "The true target product is {{PLATFORM}} and the authoritative
-     runtime architecture is <exact value from Hardware ground truth>. I need the complete product specification and the hardware facts
-     required to compute the Roofline for this operator." --brief
-   ```
-   Query normalization may ignore case and separators, but must not translate hardware identities. If an
-   exact fact is needed, address `query_hardware.py --product {{PLATFORM}} --field <path>` directly; an
-   unknown or not-recorded value remains unknown and must never be replaced with a sibling product's value.
-   Source every hardware spec from these records (**no fabrication** — cite the stable record id), then
-   do the Roofline analysis from the public workload contract and compute absolute targets
-   (`hardware peak * 90%`), and write `Hardware Spec`, the Roofline analysis, and `Stop Conditions`
-   into the workspace `README.md`. If `agent_problem.json` exists, never seek private per-case
-   roofline data or exact evaluator shapes.
+1. **Step 0 — Hardware specs + Roofline.** Follow enabled plugin instructions for hardware lookup.
+   Name the true product `{{PLATFORM}}` and the authoritative runtime architecture exactly.
+   Source every hardware limit from auditable records or primary reference specifications. Unknown
+   values remain unknown; never borrow a sibling product's numbers. Compute the Roofline from the
+   public workload contract and record sources, Hardware Spec, Roofline and Stop Conditions in
+   `README.md`. Never seek private evaluator shapes or per-case roofline data.
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
 3. **Stage 1 — Baseline.** {{BASELINE_DRIVER}}: implement `kernel.py`, use the evaluator
    route declared above, run exactly one base-seed full-workload measurement for baseline performance, write `baseline_report.md`, write

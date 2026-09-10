@@ -711,6 +711,7 @@ class LongHorizonCampaign:
                 "HARDWARE": directives["hardware"],
                 "SANDBOX": directives["sandbox"],
                 "AGENT_RUNTIME": directives["agent_runtime"],
+                "PLUGINS": directives["plugins"],
                 "PLAN_GENERATOR": directives["plan_generator"],
                 "JOURNAL_COMMAND": journal_command,
                 "FAST_TRIALS": fast_trial_count,

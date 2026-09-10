@@ -63,6 +63,7 @@ promotion; it is not a second CLI.
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
 ├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
+├── plugins/                           # Local tool manifests, adapters and default plugin configuration
 ├── reference-projects/                # Optional source-search repositories
 └── 3rdparty/                          # Profiler-analysis dependencies
 ```
@@ -78,7 +79,7 @@ points.
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
 | GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
-| Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
+| Optimization knowledge | Enabled plugins (GPU Wiki by default), then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
 incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
@@ -160,8 +161,11 @@ direct host GPU execution, and profiler use outside the sandbox.
 
 ### Workspace runtime assets
 
-`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/`
-inside each campaign workspace. It also prepares backend-specific project-local discovery trees:
+`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and enabled plugin
+resources inside each campaign workspace. The default GPU Wiki plugin provides `gpu-wiki.query`
+through `tools/plugin.py`. Plugin manifests own resources and phase instructions; campaign locks
+check versions and content fingerprints on resume. See [Local plugins](plugins.md).
+It also prepares backend-specific project-local discovery trees:
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
 - `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
@@ -516,7 +520,7 @@ from main-workspace commits; their recoverable local state remains on disk.
 
 ## Critical Constraints
 
-- Hardware specifications must come from `gpu-wiki` with auditable source references.
+- Hardware specifications require auditable sources from enabled knowledge tools or primary references.
 - Official profiler evidence is required before full-mode optimization changes; fast mode explicitly
   substitutes five reviewed plans plus hash-matched evaluator results and best-candidate selection.
   PPU is the scoped exception: follow `ppu-acu-joint-profile` and collect new PPU profiler evidence

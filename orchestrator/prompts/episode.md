@@ -19,7 +19,7 @@ final squash promotion. You own only this episode branch and its structured evid
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are linked into the worktree.
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are linked into the worktree.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}
@@ -60,20 +60,8 @@ the supervisor creates it after terminal validation.
 
 When conversion is mandatory, treat the whole episode as a Triton-to-Gluon lowering direction:
 
-1. Query only for the conversion record matching the authoritative runtime architecture. In the
-   natural-language request, name the true product `{{PLATFORM}}` and copy the authoritative runtime
-   architecture exactly from the injected Hardware ground-truth block; then
-   request both the full product specification and the matching Triton-to-Gluon conversion guidance:
-   ```bash
-   python3 gpu-wiki/tools/query_nl.py "The true target product is {{PLATFORM}} and the authoritative
-     runtime architecture is <exact value from Hardware ground truth>. Return the full product specification and only the matching
-     Triton-to-Gluon conversion guidance." --brief
-   ```
-   The expected conversion record is `nvidia.blackwell.any.converter.blackwell` for `sm_100`/`sm_103`,
-   `nvidia.hopper.any.converter.hopper` for `sm_90`, `amd.cdna3.any.converter.cdna3` for `gfx94*`, or
-   `amd.cdna4.any.converter.cdna4` for `gfx95*`. Do not use a sibling architecture's conversion record.
-   This conversion-specific query replaces the general episode-start query below and counts as the
-   required query for Wiki attribution; do not issue the general query in addition.
+1. Consult enabled knowledge tools for architecture-matched conversion guidance. Follow the
+   plugin instructions below for any required query; never substitute a sibling architecture.
 2. Extract TTGIR before writing Gluon and derive layouts from the real kernel; never fabricate them.
 3. Preserve algorithm, tiling, signatures, and evaluator behavior. Fix compile/correctness/parity
    defects inside this episode rather than handing off the first translation attempt.
@@ -91,35 +79,7 @@ topology, pipeline identity, and invalidation conditions before reusing them. De
 journals remain archived under
 `.atrex_long_horizon/episodes/` and are not part of the inherited prompt context.
 
-## Wiki attribution contract
-
-At episode start, run the required bounded GPU Wiki query once using the campaign's exact operator
-identifier rather than paraphrasing it. Additional targeted queries are allowed later when new
-evidence creates a materially different question:
-
-```bash
-python3 gpu-wiki/tools/query_nl.py "Target hardware {{PLATFORM}}, DSL {{FRAMEWORK}}. Optimize operator {{OPERATOR}} and retrieve techniques and pitfalls." --brief
-```
-
-GPU Wiki query responses emit a top-level `query_id`, and every returned record emits its own
-canonical `wiki_id` in `store::record` form. Copy those fields exactly; never reconstruct either
-value from a response mapping key or from prose. Whenever a returned record
-materially influences an experiment or is explicitly evaluated and rejected, add `wiki_usage` to
-that experiment's journal append. Each row must contain the response's emitted `query_id`, an
-actually returned record's emitted `wiki_id`, a disposition of `applied`, `partially_applied`,
-`reference_only`, or `rejected`, plus a
-short `use` and observable `evidence`. Preserve repeated use in separate experiments; do not dedupe
-across the episode. The first experiment must account for the required query as either `declared`
-or `no_material_use`; it cannot claim `not_queried`. Every experiment must set
-`wiki_usage_status` to `declared` with non-empty usage,
-`no_material_use` when Wiki was queried without attributable use, or `not_queried` when it was not
-queried. For `declared` and `no_material_use`, include `wiki_query_ids` with every Wiki query considered
-by the experiment; omit it for `not_queried`. In later experiments, use `not_queried` when the
-experiment neither issued a new query nor reconsidered a previous response; do not carry an earlier
-query id forward unless its response informed that experiment. Record `evaluation.correctness`, `evaluation.performance`, optional evaluator latency/hash,
-and an explicit decision so attribution can be joined to the experiment outcome.
-Malformed Wiki telemetry is diagnostic only: the journal drops bad rows into `wiki_usage_errors`
-without invalidating the optimization experiment or its terminal handoff.
+{{PLUGINS}}
 
 ## Engineering loop
 

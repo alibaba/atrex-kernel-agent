@@ -1,0 +1,30 @@
+{
+  "id": "gpu-wiki",
+  "version": "1.0.0",
+  "api_version": 1,
+  "tools": {
+    "query": {
+      "description": "Query scoped GPU optimization experience and exact hardware facts from natural language.",
+      "entrypoint": "adapter.py",
+      "input_schema": "schemas/query.input.json",
+      "output_schema": "schemas/query.output.json",
+      "timeout_seconds": 360
+    }
+  },
+  "resources": {
+    "gpu-wiki": "../../gpu-wiki",
+    "internal-gpu-wiki": {"path": "../../internal_gpu_wiki", "optional": true, "mount": false}
+  },
+  "skills": {"KernelWiki": {"path": "../../gpu-wiki/3rdparty/KernelWiki", "optional": true}},
+  "instructions": {
+    "common": "instructions.md",
+    "setup": "setup.md",
+    "episode": "episode.md",
+    "fast_episode": "fast_episode.md",
+    "framework_baseline": "framework_baseline.md"
+  },
+  "environment": {
+    "ATREX_WIKI_PROFILE_ROOT": "{workspace}/.gpu_wiki_profile",
+    "ATREX_WIKI_TASK_ID": "{campaign_name}"
+  }
+}

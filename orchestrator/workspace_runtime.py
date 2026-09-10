@@ -1,4 +1,4 @@
-"""Workspace runtime wiring: reference/gpu-wiki links, agent skills, session directives."""
+"""Workspace runtime wiring: references, plugin resources, skills and directives."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .constants import REPO_ROOT, STALL_STATE_FILE
+from .plugins import PluginRegistry
 
 
 def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
@@ -22,13 +23,13 @@ def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
             "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
             f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-            f"`KernelWiki`, and `gen-plan`. Invoke a named skill with {syntax}."
+            f"`gen-plan` and enabled plugin skills. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
         f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-        "and `KernelWiki`."
+        "and enabled plugin skills."
     )
 
 
@@ -109,12 +110,16 @@ def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> Non
 
 
 def link_runtime(
-    workspace: Path, atrex_bench_root: Optional[Path] = None, *, is_ppu: bool = False
+    workspace: Path,
+    atrex_bench_root: Optional[Path] = None,
+    *,
+    is_ppu: bool = False,
+    plugin_registry: PluginRegistry | None = None,
 ) -> None:
     """Link repository runtime assets into a campaign workspace.
 
     The gpu-kernel-* skills reference ``tools/``, ``reference/``, ``skills/``,
-    ``reference-projects/``, and ``gpu-wiki/`` by relative path. Sessions run with
+    ``reference-projects/``, and enabled plugin resources by relative path. Sessions run with
     ``cwd=workspace``, so symlink them in using absolute targets. Atrex-Bench evaluator code is
     copied from its checkout without linking the checkout's private ``data/`` tree.
 
@@ -124,7 +129,9 @@ def link_runtime(
     Every backend receives the repository-native ``gen-plan`` skill through its project-local
     discovery root; plan generation does not require an external plugin or global installation.
     """
-    for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
+    registry = plugin_registry or PluginRegistry()
+    registry.check_lock(workspace)
+    for sub in ("tools", "reference", "skills", "reference-projects"):
         src, dst = REPO_ROOT / sub, workspace / sub
         if src.exists() and not dst.exists():
             os.symlink(src, dst)
@@ -133,7 +140,6 @@ def link_runtime(
     # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
     # so selecting a different --agent-cli does not change the available optimization knowledge.
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
     agents_src = REPO_ROOT / "agents"
     project_skills = REPO_ROOT / "skills"
     runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline"]
@@ -149,7 +155,7 @@ def link_runtime(
         runtime_skills_dir = runtime_dir / "skills"
         runtime_agents_dir = runtime_dir / "agents"
         runtime_skills_dir.mkdir(parents=True, exist_ok=True)
-        for src, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
+        for src, name in ((ncu_src, "ncu-report-skill"),):
             dst = runtime_skills_dir / name
             if src.exists() and not dst.exists():
                 os.symlink(src, dst)
@@ -188,7 +194,7 @@ def link_runtime(
             destination = agent_skills_dir / source.name
             if not destination.exists():
                 os.symlink(source, destination)
-    for source, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
+    for source, name in ((ncu_src, "ncu-report-skill"),):
         destination = agent_skills_dir / name
         if source.exists() and not destination.exists():
             os.symlink(source, destination)
@@ -201,7 +207,6 @@ def link_runtime(
         "/reference",
         "/skills",
         "/reference-projects",
-        "/gpu-wiki",
     ]
     missing_runtime_ignores = [
         entry for entry in runtime_ignores if entry not in existing_lines
@@ -229,3 +234,22 @@ def link_runtime(
     if add:
         with gi.open("a", encoding="utf-8") as fh:
             fh.write(add)
+
+    # One-time adoption of pre-plugin workspaces: remove only the exact symlinks
+    # installed by the previous runtime when their owning plugin is disabled.
+    legacy_wiki = REPO_ROOT / "gpu-wiki"
+    legacy_mounts = {"gpu-wiki": legacy_wiki}
+    legacy_mounts.update({
+        f"{backend}/skills/KernelWiki": legacy_wiki / "3rdparty/KernelWiki"
+        for backend in (".claude", ".qoder", ".agents")
+    })
+    desired = registry.mounts()
+    for name, source in legacy_mounts.items():
+        destination = workspace / name
+        if (
+            name not in desired
+            and destination.is_symlink()
+            and destination.resolve() == source.resolve()
+        ):
+            destination.unlink()
+    registry.install(workspace)

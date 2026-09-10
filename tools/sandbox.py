@@ -100,6 +100,7 @@ INPUT_SKIP_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     ".atrex_environment",
+    ".atrex_plugins",
     # Memory is optimizer state owned and updated by the local agent.  The pod
     # receives only code/harness inputs and returns test output/profile files.
     "memory",

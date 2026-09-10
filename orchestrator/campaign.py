@@ -86,6 +86,7 @@ from .plan_reviewers import (
     discover_plan_reviewers,
     plan_reviewer_environment,
 )
+from .plugins import PluginRegistry
 from .session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -122,8 +123,6 @@ _LONG_REVIEWER_SESSION_ENV = {
     "qoder": "ATREX_QODER_REVIEW_SESSION_FILE",
 }
 
-_WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
-_WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
 
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
@@ -188,6 +187,7 @@ class Campaign:
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
+    plugin_config: str = ""  # local JSON configuration; empty uses bundled defaults
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
     optimization_mode: str = (
         "leaderboard"  # permissive contest flow or strict production gate
@@ -223,6 +223,7 @@ class Campaign:
     )
 
     def __post_init__(self) -> None:
+        self.plugin_registry.check_lock(self.workspace)
         if sum(
             bool(value)
             for value in (self.sandbox_ssh, self.sandbox_url, self.sandbox_profile)
@@ -363,6 +364,25 @@ class Campaign:
                 )
                 return
 
+    @property
+    def plugin_registry(self) -> PluginRegistry:
+        return (
+            PluginRegistry(self.plugin_config)
+            if self.plugin_config
+            else PluginRegistry()
+        )
+
+    def plugin_directive(self, phase: str) -> str:
+        registry = self.plugin_registry
+        registry.check_lock(self.workspace)
+        return registry.instructions(
+            phase,
+            PLATFORM=self.platform,
+            ARCH=self.arch or "<exact runtime architecture>",
+            FRAMEWORK=self.framework,
+            OPERATOR=self.name,
+        )
+
     def _episode_plan_reviewers(self, episode_mode: str) -> tuple[str, ...]:
         if episode_mode not in ("fast", "full"):
             raise ValueError(f"unsupported episode mode: {episode_mode}")
@@ -417,12 +437,9 @@ class Campaign:
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
-        # Query events from disposable episode worktrees must land in the
-        # incumbent workspace, where the completion hook can retain them.
-        environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            (self.workspace / ".gpu_wiki_profile").resolve()
+        environment.update(
+            self.plugin_registry.environment(self.workspace, self.campaign_name)
         )
-        environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
 
     def ensure_plan_reviewer_availability(self, *, episode_mode: str) -> None:
@@ -744,6 +761,7 @@ class Campaign:
         link_runtime(
             self.workspace,
             native_root,
+            plugin_registry=self.plugin_registry,
             is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
         )
         install_workspace_policy(
@@ -901,6 +919,7 @@ class Campaign:
             return
         prompt = _render(
             PROMPTS_DIR / "setup.md",
+            PLUGINS=self.plugin_directive("setup"),
             WORKSPACE=str(self.workspace),
             PLATFORM=self.platform,
             FRAMEWORK=self.framework,
@@ -1049,7 +1068,7 @@ class Campaign:
             "- Ground-truth operator files and `profile_driver.py` are immutable after V0.\n\n"
             "## Hardware evidence policy\n\n"
             "V0 records identity only and does not speculate about peak specifications. Before an "
-            "optimization plan uses a hardware limit, source it from the workspace `gpu-wiki/` "
+            "optimization plan uses a hardware limit, source it from enabled knowledge tools or primary specifications "
             "and cite the exact path. The runtime architecture API is authoritative when a device "
             "name or vendor SMI is desensitized.\n\n"
             "## Stop conditions\n\n"
@@ -1783,7 +1802,11 @@ class Campaign:
 
     def _framework_baseline_reference_catalog(self) -> list[str]:
         """Rank a small exact-path catalog; reviewers may select only from this list."""
-        roots = (REPO_ROOT / "gpu-wiki", REPO_ROOT / "reference-projects")
+        # Knowledge stores are queried through enabled tools, not scanned as raw files.
+        roots = (REPO_ROOT / "reference-projects",)
+        roots = tuple(root for root in roots if root.is_dir())
+        if not roots:
+            return []
         candidates: list[str] = []
         if shutil.which("rg"):
             completed = subprocess.run(
@@ -1833,8 +1856,6 @@ class Campaign:
                 continue
             if relative.startswith("reference-projects/") and suffix != ".md":
                 score += 4
-            if relative.startswith("gpu-wiki/"):
-                score += 2
             if "/sources/prs/" in lowered:
                 score -= 5
             if not wants_backward and any(
@@ -2572,6 +2593,7 @@ class Campaign:
         smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
         return _render(
             PROMPTS_DIR / "framework_baseline.md",
+            PLUGINS=self.plugin_directive("framework_baseline"),
             WORKSPACE=str(self.workspace),
             N=n,
             PREV=n - 1,

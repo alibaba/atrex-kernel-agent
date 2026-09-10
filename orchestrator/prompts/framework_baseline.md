@@ -48,7 +48,7 @@ Hard rules for this session:
 
 - Workspace: `{{WORKSPACE}}` — this is your cwd, and a git repo. **git HEAD is the PyTorch V0 baseline.**
 - You are producing version **v{{N}}**. Previous version: **v{{PREV}}** (the PyTorch reference measurement).
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are symlinked into the workspace — read/use them by relative path
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are symlinked into the workspace — read/use them by relative path
   (`python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 
@@ -97,12 +97,10 @@ source of truth when reviewer advice conflicts.
 V1 is correctness-first bring-up, not an optimization plan. First read only the exact files in
 **Supervisor-selected implementation references** above (at most two). Do not open sibling files, follow their
 imports or links recursively, or scan `reference-projects/`. If no selected reference is available or resolves
-the required framework/toolchain syntax, run at most one architecture-scoped `gpu-wiki` query through the
-new natural-language front door:
+the required framework/toolchain syntax, consult an enabled knowledge tool at most once using the
+plugin instructions below. With no suitable tool enabled, record the missing reference explicitly.
 
-```bash
-python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
-```
+{{PLUGINS}}
 
 Describe the true product exactly as `{{PLATFORM}}`, the authoritative runtime architecture exactly as
 `{{ARCH}}`, the operator, `{{FRAMEWORK}}`, shapes, dtypes, and the missing implementation/toolchain fact.

@@ -86,6 +86,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     link_runtime(
         workspace,
         native,
+        plugin_registry=campaign.plugin_registry,
         is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
     )
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
@@ -96,6 +97,7 @@ def episode_directives(
 ) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
     return {
+        "plugins": campaign.plugin_directive("fast_episode" if fast else "episode"),
         "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": (
             campaign._fast_sandbox_directive()

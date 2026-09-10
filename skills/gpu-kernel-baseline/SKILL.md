@@ -1,6 +1,6 @@
 ---
 name: gpu-kernel-baseline
-description: Learn the target framework from gpu-wiki and implement a baseline GPU kernel. Use this skill to understand compute semantics, determine the target platform and framework, search reference implementations, and produce a correct V0 baseline with performance records for later profile-driven optimization.
+description: Learn the target framework from enabled knowledge tools and implement a baseline GPU kernel. Use this skill to understand compute semantics, determine the target platform and framework, search reference implementations, and produce a correct V0 baseline with performance records for later profile-driven optimization.
 ---
 
 # GPU Kernel Baseline
@@ -15,10 +15,9 @@ Use this skill when the user provides PyTorch logic or a kernel demo and asks to
 
 ## Workflow
 
-This stage first understands the PyTorch semantics, then learns the framework APIs (CuteDSL or FlyDSL) through `<gpu-wiki>/README.md`, implements `kernel.py` and `test_kernel.py`, validates correctness, records performance, writes `baseline_report.md`, and writes `memory/v0.json`.
+This stage first understands the PyTorch semantics, then learns the framework APIs (CuteDSL or FlyDSL) through enabled knowledge tools, implements `kernel.py` and `test_kernel.py`, validates correctness, records performance, writes `baseline_report.md`, and writes `memory/v0.json`.
 
-The orchestrator exposes the knowledge base at `./gpu-wiki/` inside each campaign workspace,
-referenced below as `<gpu-wiki>/`.
+The orchestrator installs enabled plugin instructions at `.atrex_plugins/instructions.md`.
 
 ## Phase 1: Understand PyTorch Semantics
 
@@ -34,22 +33,17 @@ referenced below as `<gpu-wiki>/`.
    - MI355X -> CDNA4 -> `FlyDSL`
 4. If the PyTorch logic is ambiguous, first create a minimal runnable reference, then continue.
 
-## Phase 2: Learn Framework APIs from gpu-wiki
+## Phase 2: Learn Framework APIs from enabled knowledge tools
 
-1. Read `<gpu-wiki>/README.md`, then use the natural-language front door:
-   ```bash
-   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
-   ```
-2. State the true target product and authoritative runtime architecture exactly as supplied. Explicitly
-   request the complete product specification and relevant architecture/ISA facts, plus the framework,
-   operator, shapes, dtypes, intended implementation, and uncertainties. Do not substitute another
-   hardware identity or reduce the description to keywords.
-3. Results contain a top-level `query_id`, `records`, and `notes`. Read each id-keyed record's own
-   canonical `wiki_id`, `store`, independent `payload`, `source`, `type`, and `match.arch`; internal
-   mapping keys use the `internal_gpu_wiki::` namespace. Copy emitted attribution ids exactly and use
-   `--max-bytes` when a hard context limit is needed.
-4. Prefer records with the same framework and compute pattern. Record the stable ids and the constraints
-   they established in `plans/v0_plan.md`.
+1. Read `.atrex_plugins/instructions.md` and inspect `python3 tools/plugin.py list` for enabled
+   tool names and input schemas. Follow the session's phase-specific plugin instructions.
+2. Query available knowledge tools with the exact product, authoritative runtime architecture,
+   framework, operator, shapes, dtypes and missing implementation facts. If no suitable plugin is
+   enabled, use available reference sources and record missing facts explicitly.
+3. Preserve returned source and attribution identifiers exactly. Respect hardware scope and context
+   budgets. Never substitute another hardware identity or treat a fallback sample as a match.
+4. Prefer sources with the same framework and compute pattern. Record references and the constraints
+   they establish in `plans/v0_plan.md`.
 
 ## Phase 3: Implement Baseline Kernel and Correctness Tests
 
@@ -87,7 +81,7 @@ for case in test_cases:
     finally:
         signal.alarm(0)
 ```
-6. If API, compilation, accuracy, performance, or hardware issues appear, query `<gpu-wiki>/` again with
+6. If API, compilation, accuracy, performance, or hardware issues appear, query enabled knowledge tools again with
    the exact failure and measured evidence, and then fix the implementation.
 7. Record the baseline configuration, including tile size, thread organization, grid/block design, and major data-movement patterns.
 
@@ -106,7 +100,7 @@ python tools/sandbox.py --kind run --no-sync -- \
 
    - Each individual test case must complete within **30 seconds** (configurable via `TEST_TIMEOUT_SEC` env var).
    - If a case exceeds the timeout, mark it as `TIMEOUT_FAIL`, kill the process, and record the failure in `baseline_report.md`.
-   - Common timeout causes: infinite loops in index calculation, deadlocks in synchronization, or excessive compilation time. Query gpu-wiki with the failure mode to diagnose.
+   - Common timeout causes: infinite loops in index calculation, deadlocks in synchronization, or excessive compilation time. Consult enabled knowledge tools with the failure mode to diagnose.
 
 2. Verify all correctness cases pass and record max `rel_err` plus PASS/FAIL.
 3. Measure baseline performance and record:
@@ -121,12 +115,12 @@ latency(us) | TFLOPS | bandwidth(GB/s) | TFLOPS peak utilization(%) | bandwidth 
 python tools/compute_utilization.py   --gpu <gpu> --dtype <dtype>   --flops-expr '<expr>' --bytes-expr '<expr>'   --time-ms <ms> --grid-blocks <blocks>
 ```
 
-5. Every theoretical peak, bandwidth, and utilization calculation must cite the gpu-wiki spec sources registered in Step 0.
+5. Every theoretical peak, bandwidth, and utilization calculation must cite the auditable spec sources registered in Step 0.
 6. Write `baseline_report.md` with:
    - Baseline kernel path
    - Correctness test path
    - PyTorch reference logic description
-   - Stable gpu-wiki record ids consulted
+   - Stable source record ids consulted
    - Baseline configuration summary
    - Correctness results: case list, max `rel_err`, PASS/FAIL (include any TIMEOUT_FAIL cases)
    - Baseline performance: latency(us), TFLOPS, bandwidth(GB/s), and peak utilization percentages
@@ -152,7 +146,7 @@ python tools/compute_utilization.py   --gpu <gpu> --dtype <dtype>   --flops-expr
 
    For array fields (`pitfalls_and_fixes`, `references`), update the JSON file directly or use `read` + manual edit + write-back. Fill in:
    - `pitfalls_and_fixes`: any errors encountered during implementation
-   - `references`: stable gpu-wiki record ids and other docs referenced during learning
+   - `references`: stable source record ids and other docs referenced during learning
 
 8. After the quality gate passes, commit:
 
@@ -167,7 +161,7 @@ Each iteration produces a `memory/v<N>.json` file following the schema defined i
 
 Key rules:
 - The `masked` field defaults to `false`. When set to `true`, the file is skipped during reads.
-- ISA optimization target thresholds are stored in `README.md` and must be derived from `<gpu-wiki>/` best practices, hardware specs, and Step 0 Roofline conclusions. Do not fabricate thresholds from experience.
+- ISA optimization target thresholds are stored in `README.md` and must be derived from documented best practices, hardware specs, and Step 0 Roofline conclusions. Do not fabricate thresholds from experience.
 
 ## Deliverables
 

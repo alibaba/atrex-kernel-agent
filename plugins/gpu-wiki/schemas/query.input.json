@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["request"],
+  "additionalProperties": false,
+  "properties": {
+    "request": {"type": "string", "minLength": 1},
+    "max_records": {"type": "integer", "minimum": 1, "maximum": 100},
+    "max_bytes": {"type": "integer", "minimum": 1},
+    "exclude": {"type": "string"}
+  }
+}
