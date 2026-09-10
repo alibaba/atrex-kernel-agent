@@ -5,7 +5,7 @@
   "tools": {
     "query": {
       "description": "Query scoped GPU optimization experience and exact hardware facts from natural language.",
-      "entrypoint": "adapter.py",
+      "command": ["{python}", "{plugin_root}/adapter.py"],
       "input_schema": "schemas/query.input.json",
       "output_schema": "schemas/query.output.json",
       "timeout_seconds": 360

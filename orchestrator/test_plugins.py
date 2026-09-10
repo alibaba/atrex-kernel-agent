@@ -123,6 +123,108 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(value["cwd"], str(self.workspace.resolve()))
         registry.install(self.workspace)  # Idempotent on resume.
 
+    def test_skill_only_package_supports_an_independent_host(self) -> None:
+        from plugin_runtime import HostLayout
+        from plugin_runtime import PluginRegistry as Registry
+
+        manifest = json.loads((self.plugin / "plugin.json").read_text())
+        del manifest["tools"]
+        manifest["skills"]["local-docs"] = {
+            "path": "skill",
+            "description": "Review a document.",
+        }
+        manifest["instructions"]["document-review"] = "instructions.md"
+        self.write_json(self.plugin / "plugin.json", manifest)
+        layout = HostLayout(state_dir=".extensions", skill_roots=("native/skills",))
+        registry = Registry(self.config, layout=layout)
+        registry.install(self.workspace)
+        self.assertEqual(registry.catalog(), [])
+        self.assertEqual(registry.skill_catalog()[0]["id"], "local-docs.local-docs")
+        self.assertTrue(
+            (self.workspace / "native/skills/local-docs/SKILL.md").is_file()
+        )
+        self.assertFalse((self.workspace / ".agents").exists())
+        self.assertIn("Review a document", registry.instructions("document-review"))
+        self.assertNotIn("wiki_usage", registry.instructions("document-review"))
+        self.assert_error(
+            "plugin_changed",
+            Registry(
+                self.config,
+                layout=HostLayout(
+                    state_dir=".extensions", skill_roots=("other/skills",)
+                ),
+            ).check_lock,
+            self.workspace,
+        )
+
+    def test_non_python_command_uses_json_without_shell_interpolation(self) -> None:
+        manifest = json.loads((self.plugin / "plugin.json").read_text())
+        tool = manifest["tools"]["query"]
+        del tool["entrypoint"]
+        tool["command"] = ["/bin/sh", "{plugin_root}/query.sh"]
+        (self.plugin / "query.sh").write_text(
+            'cat >/dev/null\nprintf \'{"answer":"shell","cwd":"%s"}\\n\' "$PWD"\n'
+        )
+        self.write_json(self.plugin / "plugin.json", manifest)
+        registry = PluginRegistry(self.config)
+        result = registry.call(
+            "local-docs.query", {"request": "$(touch unexpected)"}, self.workspace
+        )
+        self.assertEqual(result["answer"], "shell")
+        self.assertFalse((self.workspace / "unexpected").exists())
+
+    def test_tool_settings_are_validated_delivered_and_locked(self) -> None:
+        manifest = json.loads((self.plugin / "plugin.json").read_text())
+        manifest["settings_schema"] = "settings.json"
+        self.write_json(
+            self.plugin / "settings.json",
+            {
+                "type": "object",
+                "required": ["prefix"],
+                "properties": {"prefix": {"type": "string"}},
+            },
+        )
+        self.write_json(self.plugin / "plugin.json", manifest)
+        self.assert_error("invalid_config", PluginRegistry, self.config)
+        (self.plugin / "adapter.py").write_text(
+            'import os,json\nprint(json.dumps({"answer":json.loads(os.environ["PLUGIN_SETTINGS_JSON"])["prefix"],"cwd":os.getcwd()}))\n'
+        )
+        registry = self.configure(
+            [{"path": "local-docs", "settings": {"prefix": "private-value"}}]
+        )
+        registry.install(self.workspace)
+        result = registry.call("local-docs.query", {"request": "test"}, self.workspace)
+        self.assertEqual(result["answer"], "private-value")
+        self.assertNotIn(
+            "private-value", (self.workspace / STATE_DIR / "lock.json").read_text()
+        )
+        changed = self.configure(
+            [{"path": "local-docs", "settings": {"prefix": "changed"}}]
+        )
+        self.assert_error("plugin_changed", changed.check_lock, self.workspace)
+
+    def test_skill_collisions_and_empty_packages_fail(self) -> None:
+        self.make_plugin("other")
+        manifest = json.loads((self.root / "other/plugin.json").read_text())
+        manifest["skills"] = {"local-docs": {"path": "skill"}}
+        self.write_json(self.root / "other/plugin.json", manifest)
+        self.assert_error(
+            "invalid_manifest",
+            self.configure,
+            [{"path": "local-docs"}, {"path": "other"}],
+        )
+        manifest = {"id": "other", "version": "1", "api_version": 1}
+        self.write_json(self.root / "other/plugin.json", manifest)
+        self.assert_error("invalid_manifest", self.configure, [{"path": "other"}])
+
+    def test_missing_executable_fails_during_loading(self) -> None:
+        manifest = json.loads((self.plugin / "plugin.json").read_text())
+        tool = manifest["tools"]["query"]
+        del tool["entrypoint"]
+        tool["command"] = ["/missing/plugin-interpreter"]
+        self.write_json(self.plugin / "plugin.json", manifest)
+        self.assert_error("invalid_manifest", PluginRegistry, self.config)
+
     def test_no_plugins_removes_legacy_links_and_omits_wiki_instructions(self) -> None:
         registry = self.configure([{"path": "missing-plugin", "enabled": False}])
         (self.workspace / "gpu-wiki").symlink_to(REPO_ROOT / "gpu-wiki")
@@ -146,7 +248,7 @@ class PluginTest(unittest.TestCase):
             text = registry.instructions(phase)
             self.assertNotIn("gpu-wiki.query", text)
             self.assertNotIn("required bounded GPU Wiki query", text)
-            self.assertIn("not_queried", text)
+            self.assertNotIn("wiki_usage_status", text)
         self.assertEqual(registry.catalog(), [])
         self.assertNotIn(
             "ATREX_WIKI_PROFILE_ROOT", registry.environment(self.workspace, "task")
@@ -209,7 +311,9 @@ class PluginTest(unittest.TestCase):
         manifest["version"] = "2.0.0"
         self.write_json(self.plugin / "plugin.json", manifest)
         self.assert_error(
-            "plugin_changed", PluginRegistry(self.config).check_lock, self.workspace
+            "plugin_changed",
+            PluginRegistry(self.config).check_lock,
+            self.workspace,
         )
         registry = self.configure([])
         self.assert_error("plugin_changed", registry.install, self.workspace)

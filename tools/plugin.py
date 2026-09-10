@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         registry = PluginRegistry(config or DEFAULT_CONFIG)
         registry.check_lock(workspace)
         if args.command == "list":
-            result = {"tools": registry.catalog()}
+            result = {"tools": registry.catalog(), "skills": registry.skill_catalog()}
         else:
             request = (
                 decode_json(sys.stdin.read())
