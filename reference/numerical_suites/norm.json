@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "profile": "norm",
+  "world_size": 1,
+  "coverage": "compact",
+  "seeds": [
+    1729,
+    104729
+  ],
+  "contract": "Example LayerNorm/RMSNorm with x, weight and bias. Remove/add affine fields and bind epsilon/reduction semantics from the actual reference; finite-input examples are not universal bounds.",
+  "cases": [
+    {
+      "id": "low_variance",
+      "purpose": "A nonzero offset with tiny noise exposes unstable E[x^2]-E[x]^2 variance.",
+      "fields": {
+        "x": {
+          "generator": "near_constant",
+          "center": 8,
+          "amplitude": 0.002
+        },
+        "weight": {
+          "generator": "uniform",
+          "low": 0.5,
+          "high": 1.5
+        },
+        "bias": {
+          "generator": "uniform",
+          "low": -0.2,
+          "high": 0.2
+        }
+      }
+    },
+    {
+      "id": "epsilon_scale",
+      "purpose": "Tiny values exercise epsilon placement and underflow.",
+      "fields": {
+        "x": {
+          "generator": "log_uniform",
+          "min_exp": -24,
+          "max_exp": -12
+        },
+        "weight": {
+          "generator": "uniform",
+          "low": 0.5,
+          "high": 1.5
+        },
+        "bias": {
+          "generator": "constant",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": "wide_magnitudes",
+      "purpose": "Broad magnitudes exercise square/reduction stability.",
+      "fields": {
+        "x": {
+          "generator": "log_uniform",
+          "min_exp": -12,
+          "max_exp": 6
+        },
+        "weight": {
+          "generator": "uniform",
+          "low": 0.5,
+          "high": 1.5
+        },
+        "bias": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    },
+    {
+      "id": "zeros",
+      "purpose": "Zero variance must follow the reference epsilon and affine semantics.",
+      "fields": {
+        "x": {
+          "generator": "constant",
+          "value": 0
+        },
+        "weight": {
+          "generator": "uniform",
+          "low": 0.5,
+          "high": 1.5
+        },
+        "bias": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    }
+  ]
+}

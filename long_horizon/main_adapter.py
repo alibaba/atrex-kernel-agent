@@ -31,7 +31,7 @@ from orchestrator.hardware import (
     head_kernel_is_gluon,
     should_convert_to_gluon,
 )
-from orchestrator.optimization_policy import install_workspace_policy
+from orchestrator.optimization_policy import install_workspace_policy, production_kernel_violations
 from orchestrator.session_io import _sandbox_command
 from orchestrator.workspace_runtime import (
     _agent_runtime_directive,
@@ -65,9 +65,24 @@ def prepare_campaign(campaign: Campaign) -> None:
         campaign.optimization_mode == "production"
         and latest_version(campaign.workspace) > 0
     ):
-        violations = campaign._production_kernel_violations(
-            require_gluon=head_kernel_is_gluon(campaign.workspace)
-        )
+        require_gluon = head_kernel_is_gluon(campaign.workspace)
+        if getattr(campaign, "repair_numerical_head", False):
+            # Repair admission is separate from production acceptance. Never
+            # suppress violations in the shared candidate promotion gate.
+            violations = production_kernel_violations(
+                campaign.workspace, campaign.framework, require_gluon=require_gluon,
+                production_reviewer=campaign._review_production_candidate,
+            )
+            if not violations:
+                from orchestrator.numerical_policy import numerical_violations
+                numerical_errors = numerical_violations(campaign, campaign.workspace)
+                if numerical_errors:
+                    campaign._numerical_repair_head = (git_head(campaign.workspace), numerical_errors)
+                    print("[orchestrator] numerical repair admission: HEAD is NOT numerically certified; "
+                          "resuming exploration with all candidate promotion gates enforced: "
+                          + "; ".join(numerical_errors), flush=True)
+        else:
+            violations = campaign._production_kernel_violations(require_gluon=require_gluon)
         if violations and not head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
                 "cannot resume a non-compliant production HEAD: "
@@ -88,13 +103,29 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
         native,
         is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
     )
-    install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
+    install_workspace_policy(
+        workspace, campaign.optimization_mode, campaign.framework,
+        update_tracked_files=False,
+    )
 
 
 def episode_directives(
-    campaign: Campaign, version: int, *, fast: bool = False
+    campaign: Campaign, version: int, *, fast: bool = False, goal: bool = False
 ) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
+    mode_policy = campaign._mode_directive()
+    repair = getattr(campaign, "_numerical_repair_head", None)
+    if repair and git_head(campaign.workspace) == repair[0]:
+        mode_policy += (
+            "\n\nThe starting HEAD has failed the current numerical gate and is not a "
+            "certified production implementation. First diagnose and repair the reported "
+            "numerical failure within the operator contract, then optimize the validated "
+            "implementation. Preserve existing episode work and useful experiments. Historical "
+            "performance is comparison evidence only. Do not edit the evaluator, suite, "
+            "tolerances or supervisor to obtain a pass. Candidate promotion requires the "
+            "complete current numerical gate, independent reviews and ABBA verification. "
+            "Gate findings: " + "; ".join(repair[1])
+        )
     return {
         "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": (
@@ -103,11 +134,11 @@ def episode_directives(
             else campaign._sandbox_directive()
         ),
         "evaluator": campaign._evaluator_directive(),
-        "mode_policy": campaign._mode_directive(),
+        "mode_policy": mode_policy,
         "agent_runtime": _agent_runtime_directive(
             agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
         ),
-        "plan_generator": _plan_generator_directive(agent_cli, version),
+        "plan_generator": _plan_generator_directive(agent_cli, version, goal=goal),
     }
 
 

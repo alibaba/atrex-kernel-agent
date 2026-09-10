@@ -57,7 +57,18 @@ def _baseline_driver_directive(agent_cli: str) -> str:
     )
 
 
-def _plan_generator_directive(agent_cli: str, version: int) -> str:
+def _plan_generator_directive(agent_cli: str, version: int, *, goal: bool = False) -> str:
+    if goal:
+        return (
+            f"Read `skills/gen-plan/SKILL.md` and execute its goal scope in this session "
+            f"with `plans/v{version}_draft.md` as input and `plans/v{version}_plan.md` as "
+            "output, using direct/no-discussion mode. Mark the draft and proposal `Episode "
+            "mode: goal`. Plan multiple evidence-backed directions and kernel refactoring; "
+            "revise the roadmap as experiments teach you more. For later revisions use fresh "
+            f"`plans/v{version}_revision-N_draft.md` and `plans/v{version}_revision-N_plan.md` "
+            "paths so previous plans remain available. Run configured independent reviews "
+            "for each material plan revision."
+        )
     draft = f"plans/v{version}_draft.md"
     plan = f"plans/v{version}_plan.md"
     if agent_cli == "codex":

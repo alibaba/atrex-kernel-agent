@@ -1,6 +1,6 @@
 ---
 name: gpu-kernel-episode-loop
-description: Run the evidence loop of one long-horizon GPU kernel optimization episode. Use this skill to reconstruct the incumbent, profile and localize a bottleneck, research progressively, plan one coherent direction, implement and repair, validate development correctness and performance, and record every decisive experiment in the episode journal.
+description: Run the evidence loop of one long-horizon GPU kernel optimization episode. Use this skill to reconstruct the incumbent, profile and localize a bottleneck, research progressively, plan within the episode scope, implement and repair, validate development correctness and performance, and record every decisive experiment in the episode journal.
 ---
 
 # GPU Kernel Episode Loop
@@ -29,6 +29,15 @@ values you fill in from the campaign, or a choice among the listed alternatives,
 The episode prompt's ownership rules, execution boundary, mode policy, and framework-escalation
 directive outrank this skill. Where they conflict, follow the prompt.
 
+## Episode scope
+
+Use the episode prompt's declared mode. In `full` mode, pursue one coherent engineering direction
+and hand off its first mature candidate. In `goal` mode, pursue the complete optimization goal with
+multiple directions, interacting changes, and substantial kernel refactoring. Keep a roadmap and the
+best validated checkpoint, pivot within the episode, and keep exploring useful opportunities after
+an initial improvement. Stop according to the goal prompt's completion criteria. Every direction
+still needs evidence and the final combined implementation needs full validation.
+
 ## Telemetry
 
 Telemetry is best-effort and must not block engineering work. Mark phase boundaries with standalone
@@ -45,7 +54,7 @@ text into telemetry.
 
 ## Loop
 
-Repeat this evidence loop until the direction yields a mature candidate or is exhausted. The numbered
+Repeat this evidence loop until the declared episode scope reaches its completion criteria. The numbered
 steps map onto the telemetry phases above: `profile`, `research`, `planning`, `implementation`,
 `correctness`/`benchmark`, and `recording`.
 
@@ -56,8 +65,9 @@ are carried only by canonical memory and are not injected into the episode promp
 dead ends and open directions from those records, including each record's compact
 `experience.experiments`. For PPU, also inspect
 `profile_evidence.accepted_ppu_diagnostics` and reuse a conclusion only when its recorded identities
-remain comparable and none of its `invalidation_conditions` holds. Start with one falsifiable
-hypothesis tied to the current bottleneck.
+remain comparable and none of its `invalidation_conditions` holds. Start with falsifiable
+hypotheses tied to the current bottlenecks; full mode selects one direction, while goal mode ranks
+multiple avenues in an evolving roadmap.
 
 ### 2. Profile and localize
 
@@ -155,7 +165,8 @@ option before `--`, which routes the job through the dev interface.
 
 ### 3. Research progressively
 
-Search in this order and stop when one actionable direction is supported:
+Search in this order. In full mode stop when one actionable direction is supported; in goal mode
+continue targeted research as needed to evaluate the roadmap:
 
 1. **GPU Wiki through the natural-language front door.** Profile first, then describe the measured
    problem rather than trying to guess query flags. PPU is the exception: start from the decisive
@@ -189,16 +200,17 @@ Search in this order and stop when one actionable direction is supported:
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
 repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-action chain.
 
-### 4. Plan a coherent direction
+### 4. Plan the episode scope
 
 Write or update `<PLAN_DRAFT>` with profile evidence, research findings, concrete edits, risks,
 rollback points, and measurable acceptance criteria. For a PPU iteration that did not need a new
 profile, record the decisive PPU evidence selected by its routing skill instead. Then produce
 `<PLAN_FILE>` with the backend-native plan generator `<PLAN_GENERATOR>`.
 
-The episode may contain multiple related experiments, but they must advance one coherent engineering
-direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
-the whole direction.
+In full mode, related experiments advance one coherent engineering direction. In goal mode, the
+plan may span multiple optimization categories, algorithm or layout redesign, and substantial kernel
+refactoring. Revise it when evidence changes the best path. Preserve previous plan revisions and
+checkpoint the best validated source so failed experiments do not lose earlier improvements.
 
 ### 5. Implement and repair
 
@@ -206,10 +218,11 @@ Modify only candidate source/metadata files allowed by policy. Compile and probe
 On compile or correctness failure, diagnose and repair while the direction remains viable. Do not
 publish an intermediate checkpoint as a candidate.
 
-Land one optimization category per edit — vectorized load, swizzle, double buffering, tiling change,
-and so on — and attribute each edit as `evidence -> inference -> action`. Do not mix unrelated
-refactors, formatting, or cleanup into the same change: a bundled edit makes a regression
-unattributable. When the evidence localizes a symptom to specific lines, change those lines only.
+Attribute edits as `evidence -> inference -> action`. In full mode, land one optimization category
+per edit and limit changes to the localized source. In goal mode, combine categories or refactor the
+kernel when that advances the goal; use checkpoints and comparative measurements to isolate
+regressions and validate the final combination. A failed avenue can lead directly to the next
+avenue in the same episode.
 
 ### 6. Development correctness and performance
 
@@ -250,8 +263,10 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 
 ## Leaving the loop
 
-Leave the loop as soon as one coherent candidate passes the full development correctness check and
-has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
+In full mode, leave when one mature candidate passes development correctness and has credible
+performance evidence, or the direction is exhausted or blocked. In goal mode, preserve initial wins
+and continue until the goal prompt's completion criteria are met or a real blocker prevents work.
+Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
 PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
 `skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal

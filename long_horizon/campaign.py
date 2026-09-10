@@ -46,6 +46,9 @@ from .verifier import GatewayABBAValidator
 MODULE_ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
 FAST_PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "fast_episode.md"
+GOAL_AFTER_EPISODES = 50
+GOAL_STALL_THRESHOLD = 3
+GOAL_HANDOFF_RESUMES = 20
 EVIDENCE_PREFIXES = ("plans/", "profiles/")
 MEMORY_EXPERIMENT_FIELDS = (
     "name",
@@ -519,6 +522,24 @@ class LongHorizonCampaign:
         """Use the lightweight path for the first N optimization episodes."""
         return self.fast_episodes > 0 and 1 <= episode <= self.fast_episodes
 
+    @staticmethod
+    def _goal_required(state: SupervisorState) -> bool:
+        return (
+            state.episodes >= GOAL_AFTER_EPISODES
+            and state.consecutive_without_promotion > GOAL_STALL_THRESHOLD
+        )
+
+    def _episode_mode(
+        self, state: SupervisorState, active: dict[str, Any] | None = None
+    ) -> str:
+        # An in-flight episode keeps its original scope across supervisor restarts.
+        if active and active.get("mode") in {"fast", "full", "goal"}:
+            return str(active["mode"])
+        if self._goal_required(state):
+            return "goal"
+        episode = int(active["episode"]) if active else state.episodes + 1
+        return "fast" if self._is_fast_episode(episode) else "full"
+
     def _active_fast_trials(
         self, active: dict[str, Any], *, fast_mode: bool
     ) -> int:
@@ -673,11 +694,12 @@ class LongHorizonCampaign:
         live_memory_path: Path,
         conversion_pending: bool,
         fast_mode: bool,
+        goal_mode: bool = False,
         fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
         directives = main_adapter.episode_directives(
-            self.base_campaign, version, fast=fast_mode
+            self.base_campaign, version, fast=fast_mode, goal=goal_mode
         )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
@@ -694,6 +716,10 @@ class LongHorizonCampaign:
                 encoding="utf-8"
             ),
             {
+                "EPISODE_SCOPE": (
+                    MODULE_ROOT / "orchestrator" / "prompts"
+                    / ("goal_scope.md" if goal_mode else "full_scope.md")
+                ).read_text(encoding="utf-8"),
                 "EPISODE": episode,
                 "VERSION": version,
                 "WORKSPACE": worktree.path,
@@ -927,6 +953,7 @@ class LongHorizonCampaign:
         verification: VerificationResult,
         episode_workspace: Path,
         fast_mode: bool = False,
+        goal_mode: bool = False,
         fast_trials: int | None = None,
     ) -> dict[str, Any]:
         fast_trial_count = fast_trials or self.fast_trials
@@ -1047,7 +1074,7 @@ class LongHorizonCampaign:
             "git_commit_hash": candidate_commit,
             "long_horizon": {
                 "status": "candidate_ready",
-                "mode": "fast" if fast_mode else "full",
+                "mode": "goal" if goal_mode else ("fast" if fast_mode else "full"),
                 "verification": "single_evaluator" if fast_mode else "abba",
                 "fast_trials": fast_trial_count if fast_mode else None,
             },
@@ -1064,6 +1091,7 @@ class LongHorizonCampaign:
         verification: VerificationResult | None = None,
         episode_workspace: Path | None = None,
         fast_mode: bool = False,
+        goal_mode: bool = False,
         fast_trials: int | None = None,
     ) -> dict[str, Any]:
         fast_trial_count = fast_trials or self.fast_trials
@@ -1258,7 +1286,7 @@ class LongHorizonCampaign:
             "long_horizon": {
                 "status": status,
                 "candidate_commit": candidate_commit or None,
-                "mode": "fast" if fast_mode else "full",
+                "mode": "goal" if goal_mode else ("fast" if fast_mode else "full"),
                 "fast_trials": fast_trial_count if fast_mode else None,
             },
         }
@@ -1395,7 +1423,7 @@ class LongHorizonCampaign:
         attempt = {
             "episode": episode,
             "version": memory_version,
-            "mode": "fast" if fast_mode else "full",
+            "mode": active.get("mode", "fast" if fast_mode else "full"),
             "fast_trials": fast_trial_count if fast_mode else None,
             "status": status,
             "accepted": accepted,
@@ -1465,6 +1493,7 @@ class LongHorizonCampaign:
                 episode_workspace=worktree.path,
                 verification=verification,
                 fast_mode=fast_mode,
+                goal_mode=active.get("mode") == "goal",
                 fast_trials=fast_trial_count,
             )
             promotion_commit = promote_candidate(
@@ -1496,6 +1525,7 @@ class LongHorizonCampaign:
                 verification=verification,
                 episode_workspace=worktree.path,
                 fast_mode=fast_mode,
+                goal_mode=active.get("mode") == "goal",
                 fast_trials=fast_trial_count,
             )
             outcome_commit = record_episode_outcome(
@@ -1545,7 +1575,7 @@ class LongHorizonCampaign:
             " recovered=true" if recovered_after_supervisor_interruption else ""
         )
         print(
-            f"[long-horizon] episode={episode} mode={'fast' if fast_mode else 'full'} "
+            f"[long-horizon] episode={episode} mode={attempt['mode']} "
             f"status={status} accepted={accepted} "
             f"version=v{memory_version} tokens={max(0, int(tokens))} "
             f"commit={promotion_commit or outcome_commit or '-'}{recovery_label}",
@@ -1786,7 +1816,7 @@ class LongHorizonCampaign:
                     "violation": None,
                     "base_commit": base_commit,
                     "episode_branch": branch,
-                    "mode": "fast" if fast_mode else "full",
+                    "mode": active.get("mode", "fast" if fast_mode else "full"),
                     "recovered_after_supervisor_interruption": True,
                 }
                 if promoted:
@@ -1862,6 +1892,7 @@ class LongHorizonCampaign:
                 candidate_commit=candidate_commit,
                 episode_workspace=worktree_path,
                 fast_mode=fast_mode,
+                goal_mode=active.get("mode") == "goal",
                 fast_trials=self._active_fast_trials(active, fast_mode=fast_mode),
             )
             outcome_commit = record_episode_outcome(
@@ -1884,7 +1915,7 @@ class LongHorizonCampaign:
                 "violation": "supervisor process interrupted",
                 "base_commit": base_commit,
                 "episode_branch": branch,
-                "mode": "fast" if fast_mode else "full",
+                "mode": active.get("mode", "fast" if fast_mode else "full"),
                 "candidate_commit": candidate_commit or None,
                 "summary": outcome.get("summary"),
                 "next_directions": outcome.get("next_directions"),
@@ -1995,23 +2026,19 @@ class LongHorizonCampaign:
                 episode = worktree.episode
                 memory_version = int(active["memory_version"])
                 base_commit = worktree.base_commit
-                mode = active.get("mode")
-                fast_mode = (
-                    mode == "fast"
-                    if mode in {"fast", "full"}
-                    else self._is_fast_episode(episode)
-                )
+                episode_mode = self._episode_mode(state, active)
             else:
                 episode = state.episodes + 1
-                fast_mode = self._is_fast_episode(episode)
+                episode_mode = self._episode_mode(state)
 
-            episode_mode = "fast" if fast_mode else "full"
+            fast_mode = episode_mode == "fast"
+            goal_mode = episode_mode == "goal"
             self.base_campaign.ensure_plan_reviewer_availability(
                 episode_mode=episode_mode
             )
 
             if resumed:
-                active.setdefault("mode", "fast" if fast_mode else "full")
+                active.setdefault("mode", episode_mode)
                 active.setdefault(
                     "fast_trials", self.fast_trials if fast_mode else None
                 )
@@ -2031,7 +2058,7 @@ class LongHorizonCampaign:
                     "base_commit": base_commit,
                     "episode_branch": worktree.branch,
                     "worktree": str(worktree.path),
-                    "mode": "fast" if fast_mode else "full",
+                    "mode": episode_mode,
                     "fast_trials": self.fast_trials if fast_mode else None,
                     "phase": "preparing",
                 }
@@ -2077,6 +2104,7 @@ class LongHorizonCampaign:
                 conversion_pending=conversion_pending,
                 fast_mode=fast_mode,
                 fast_trials=fast_trial_count,
+                goal_mode=goal_mode,
                 resumed=resumed,
             )
             store.write_brief(episode, prompt)
@@ -2119,7 +2147,10 @@ class LongHorizonCampaign:
                     worktree.path,
                     prompt,
                     handoff_path=handoff_path,
-                    handoff_resumes=self.handoff_resumes,
+                    handoff_resumes=(
+                        max(self.handoff_resumes, GOAL_HANDOFF_RESUMES)
+                        if goal_mode else self.handoff_resumes
+                    ),
                     completion_check=lambda handoff: self._completion_check(
                         worktree,
                         journal_path,
@@ -2218,6 +2249,7 @@ class LongHorizonCampaign:
                 continue
             if (
                 self.max_stall
+                and not self._goal_required(state)
                 and state.consecutive_without_promotion >= self.max_stall
                 and not main_adapter.conversion_required(
                     self.base_campaign,

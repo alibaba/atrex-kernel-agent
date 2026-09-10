@@ -107,6 +107,13 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         "when they only build or launch the candidate's self-authored kernel. Prebuilt kernels/operators/math "
         "implementations, alternate DSLs, hidden dispatch, PyTorch compute fallbacks, and external "
         "implementation loading remain forbidden. Ambiguous evidence is rejected.\n"
+        "- A separate numerical safety gate regenerates operator-valid values from independent "
+        "distribution families on representative shapes with targeted seed repetition and all required ranks. "
+        "It then reviews arithmetic, precision, value-range assumptions, quantization, nonlinear "
+        "stability, routing and coverage against the trusted contract and reference. The "
+        "operator-owned numerical_suite.json is used when present; otherwise the supervisor constructs and caches a compact suite from the trusted reference/input contract. Changing seeds in the ordinary "
+        "generator or passing dependency review cannot satisfy this gate. Missing evidence "
+        "or unresolved numerical risks block promotion in fast, full and goal modes.\n"
         "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
@@ -124,6 +131,7 @@ def install_workspace_policy(
     framework: str,
     *,
     agent_runtime: str | None = None,
+    update_tracked_files: bool = True,
 ) -> None:
     """Persist immutable mode, framework, and optional campaign runtime identity.
 
@@ -176,6 +184,11 @@ def install_workspace_policy(
             json.dumps(state, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    if not update_tracked_files:
+        # Episode checkouts preserve their protected Git boundary. The current
+        # policy is supplied by optimization_mode_directive in every prompt.
+        return
 
     claude_path = workspace / "CLAUDE.md"
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""

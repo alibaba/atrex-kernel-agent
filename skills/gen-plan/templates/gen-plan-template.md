@@ -8,15 +8,16 @@
 
 - Evidence: <profile, benchmark, source, or prior-episode observation>
 - Inference: <what the evidence implies about the bottleneck>
-- Optimization category: <exactly one category>
-- Action: <smallest coherent implementation direction>
+- Episode mode: <fast, full, or goal>
+- Optimization categories: <one category for fast/full; evidence-backed roadmap for goal>
+- Action: <concrete implementation direction or goal roadmap>
 
 ## Dual Review
 
 ### Candidate Proposal Reviewed
 
 - Frozen hypothesis: <candidate evidence-to-inference claim>
-- Frozen optimization category: <exactly one category>
+- Frozen optimization scope: <episode mode and its selected categories>
 - Frozen proposed action: <candidate target paths, symbols, and expected mechanism>
 
 ### Codex Findings
@@ -54,7 +55,7 @@
 
 ### Upper Bound
 
-<Most comprehensive acceptable implementation without broadening the optimization category.>
+<Most comprehensive acceptable implementation within the episode scope, including goal refactoring.>
 
 ### Lower Bound
 

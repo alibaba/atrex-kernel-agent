@@ -1,9 +1,6 @@
 # Kernel optimization episode {{EPISODE}}
 
-Own one complete engineering direction in this isolated Git worktree. Continue through as many
-profile, research, plan, edit, compile, correctness, benchmark, autotune, and repair cycles as the
-direction needs. Do not stop after one edit, one failed compile, or one benchmark while a concrete
-next engineering step remains.
+{{EPISODE_SCOPE}}
 
 The supervisor owns the incumbent branch, authoritative ABBA verification, canonical memory, and
 final squash promotion. You own only this episode branch and its structured evidence.
@@ -124,7 +121,7 @@ without invalidating the optimization experiment or its terminal handoff.
 ## Engineering loop
 
 `skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
-reconstruct the incumbent, profile and localize, research progressively, plan one coherent direction,
+reconstruct the incumbent, profile and localize, research progressively, plan within the episode scope,
 implement and repair, validate development correctness and performance, record every decisive
 experiment, and mark the phase telemetry. **Read that file now and execute its loop**; it is a
 requirement, not background reading.
@@ -143,9 +140,8 @@ Bind its placeholders to this episode:
 
 {{PLAN_GENERATOR}}
 
-As soon as one coherent candidate passes the full development correctness check and has credible
-performance evidence, publish the terminal handoff. Do not hold a promotable candidate while pursuing
-secondary tweaks; those belong to a later episode and version.
+Follow the episode scope above to decide when exploration is complete and publish the terminal
+handoff. Keep the best validated source and its evidence recoverable throughout the episode.
 
 ## Terminal contract
 
@@ -154,7 +150,7 @@ Reach exactly one evidence-backed terminal state:
 1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` matches that exact
    commit, protected files are unchanged, and development correctness/performance supports
    independent verification. Uncommitted intermediate artifacts may remain in the worktree.
-2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
+2. `pivot`: the exploration scope is exhausted without a promotable candidate.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 
 For `candidate_ready`, append the final evidence, commit only `kernel.py`, then finalize the journal.
