@@ -21,13 +21,12 @@ implementation.
 
 ## Optimization scope
 
-Read `ATREX_EPISODE_MODE` from the session environment. `goal` authorizes a roadmap across multiple
-optimization categories, interacting changes, algorithm/layout redesign, and substantial kernel
-refactoring. Record `Episode mode: goal` in the draft, candidate proposal, and plan so in-session
-reviews also use that scope. Other modes select exactly one coherent optimization category.
-Apply this scope consistently during analysis, review, synthesis, and final validation. Goal plans
-include priorities, checkpoints, criteria for switching directions, and validation of combined
-changes. Subsequent revisions use fresh input/output paths and remain complete standalone plans.
+Use the supervisor-provided `ATREX_EPISODE_SCOPE` (default: `single_direction`) throughout
+planning, synthesis, and review. `single_direction` limits the plan to one coherent optimization
+category. `whole_operator` permits multiple directions, interacting changes, algorithm/layout
+redesign, and kernel refactoring. Evaluate the complete scope, preserve the best validated
+checkpoint, and revise the plan when evidence changes the next useful experiment. Record the
+scope in the draft, proposal, and final plan; use fresh paths for subsequent plan revisions.
 
 ## Hard boundaries
 
@@ -71,13 +70,13 @@ Build an evidence-to-action chain:
 1. Identify the measured bottleneck or failure.
 2. Connect the evidence to a concrete inference.
 3. Select optimization categories within the declared episode scope.
-4. Identify concrete file changes that test those inferences, including goal-scoped refactoring.
+4. Identify concrete file changes that test those inferences, within that scope.
 5. Define correctness, performance, rollback, and stop conditions.
 
 Before consulting either reviewer, populate
 `skills/gen-plan/templates/candidate-proposal-template.md` in automatically removed process scratch.
 This frozen candidate proposal is not the final plan. It must state the selected evidence-to-action
-chain, episode mode and its permitted optimization categories, target paths and symbols, the expected mechanism, scope
+chain, declared exploration scope and its optimization categories, target paths and symbols, the expected mechanism, scope
 constraints, rejected directions, validation and falsification conditions, and unresolved
 assumptions. Do not persist the candidate proposal in the campaign workspace.
 
@@ -167,11 +166,8 @@ follows:
 
 1. Adopt a suggestion only when it strengthens the selected evidence-to-action chain, closes a
    correctness gap, or makes validation more deterministic.
-2. Reject suggestions that contradict measured evidence or violate campaign constraints. Full and
-   fast plans reject additional categories; goal plans may add categories and refactoring supported
-   by evidence.
-3. In goal mode, schedule promising suggestions needing more evidence as experiments in the roadmap;
-   in other modes, defer suggestions outside the selected direction.
+2. Reject suggestions that contradict measured evidence or violate campaign constraints.
+3. Schedule evidence-backed suggestions within the declared scope; defer suggestions outside it.
 4. Resolve conflicting suggestions explicitly, stating the evidence that selected one or rejected
    both.
 5. Convert unresolved reviewer questions into conservative assumptions or pending decisions
@@ -191,7 +187,7 @@ with concrete content. The plan must include:
 - Codex and Qoder consultation status (including configured-disabled status), available material
   findings, agreements, disagreements, and the suggestions adopted, rejected, or deferred with
   reasons;
-- the episode mode, permitted optimization categories, and their evidence-to-inference-to-action chains;
+- the exploration scope, permitted optimization categories, and their evidence-to-inference-to-action chains;
 - acceptance criteria in `AC-N` form, each with positive and negative tests;
 - upper and lower scope boundaries plus allowed and prohibited choices;
 - exact target paths and a dependency-ordered implementation sequence;
@@ -212,7 +208,7 @@ Before writing, verify that the plan:
 - uses available reviews selectively and records the disposition of material suggestions and
   conflicts;
 - records the frozen candidate and the evidence-based changes made after review;
-- proposes attributable changes within the episode scope, with combined validation in goal mode;
+- proposes attributable changes within the episode scope, with combined validation for interacting changes;
 - names concrete files and validation commands;
 - distinguishes correctness from performance evidence;
 - has deterministic, measurable acceptance and rollback conditions; and

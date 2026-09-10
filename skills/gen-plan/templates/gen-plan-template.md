@@ -8,16 +8,16 @@
 
 - Evidence: <profile, benchmark, source, or prior-episode observation>
 - Inference: <what the evidence implies about the bottleneck>
-- Episode mode: <fast, full, or goal>
-- Optimization categories: <one category for fast/full; evidence-backed roadmap for goal>
-- Action: <concrete implementation direction or goal roadmap>
+- Exploration scope: <supervisor-provided scope>
+- Optimization categories: <categories within the declared scope>
+- Action: <concrete implementation plan>
 
 ## Dual Review
 
 ### Candidate Proposal Reviewed
 
 - Frozen hypothesis: <candidate evidence-to-inference claim>
-- Frozen optimization scope: <episode mode and its selected categories>
+- Frozen optimization scope: <declared exploration scope and selected categories>
 - Frozen proposed action: <candidate target paths, symbols, and expected mechanism>
 
 ### Codex Findings

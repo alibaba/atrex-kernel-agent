@@ -137,11 +137,7 @@ if [[ -n "$session_file" && "$session_file" != /* ]]; then
     exit 2
 fi
 
-if [[ "${ATREX_EPISODE_MODE:-}" == "goal" ]]; then
-    scope_instruction='Episode mode: goal. Evaluate multiple evidence-backed optimization categories, interacting changes, and substantial kernel refactoring. Recommend justified directions and assess checkpoints, pivot criteria, and combined validation.'
-else
-    scope_instruction='Preserve one optimization category unless unsupported or infeasible; recommend at most one coherent replacement direction. Do not broaden the draft into multiple categories.'
-fi
+scope_instruction="Exploration scope: ${ATREX_EPISODE_SCOPE:-single_direction}"
 
 if [[ -n "$proposal_file" ]]; then
     query="$(printf '%s\n' \

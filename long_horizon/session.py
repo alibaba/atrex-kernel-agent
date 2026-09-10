@@ -187,13 +187,6 @@ class LongSessionRunner:
                     "Before stopping, finalize the episode journal and atomically publish a valid "
                     "handoff."
                 )
-                if environment.get("ATREX_EPISODE_MODE") == "goal":
-                    turn_prompt += (
-                        " This is still goal mode: continue the whole optimization roadmap, "
-                        "including new directions and kernel refactoring. Preserve the best "
-                        "validated candidate and keep exploring evidence-backed opportunities; "
-                        "one failed direction or first small improvement does not complete the goal."
-                    )
                 command = (
                     main_adapter.resume_session_command(
                         turn_prompt, active_session_id, reasoning_effort

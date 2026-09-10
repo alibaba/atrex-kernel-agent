@@ -388,11 +388,16 @@ class Campaign:
             if enabled
         )
 
+    @staticmethod
+    def episode_scope(episode_mode: str) -> str:
+        return "whole_operator" if episode_mode == "goal" else "single_direction"
+
     def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
         if episode_mode:
             environment["ATREX_EPISODE_MODE"] = episode_mode
+            environment["ATREX_EPISODE_SCOPE"] = self.episode_scope(episode_mode)
             enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
             reviewer_mode = "full" if episode_mode == "goal" else episode_mode
             for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():

@@ -21,6 +21,17 @@ wall-clock limit or fixed trial count, and resumable backends receive at least 2
 continuations (ordinary episodes use `--handoff-resumes`). Non-resumable backends use one long
 invocation. A valid terminal handoff still finishes the episode immediately.
 
+Python selects the exploration scope through `Campaign.episode_scope`: `whole_operator` for goal
+and `single_direction` otherwise. The same value is rendered in the common episode template and
+exported as `ATREX_EPISODE_SCOPE` for both plan-review helpers. `skills/gen-plan/SKILL.md` defines
+these two scope values once; the engineering loop and plan templates consume that contract.
+There are no separate mode-specific prompt files or planning/continuation prompt branches.
+
+The supervisor owns the numerical trigger, persisted mode, recovery allowance, reviewer selection,
+handoff validation and promotion decisions. Exploration scope is task data supplied to the coding
+agent; it does not let the agent alter those controls. A valid handoff is an engineering declaration
+of completion, not a proof that every possible optimization has been exhausted.
+
 The active episode, archived attempt, and canonical memory retain `mode: goal` across restarts.
 After promotion resets the consecutive-stall counter, subsequent episodes return to their normal
 mode until the trigger is reached again. Evaluator immutability, sandbox boundaries, framework

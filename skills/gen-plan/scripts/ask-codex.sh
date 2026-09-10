@@ -167,14 +167,7 @@ environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
 environment.pop("CODEX_THREAD_ID", None)
 environment.pop("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)
 
-scope_instruction = (
-    "Episode mode: goal. Evaluate a roadmap spanning multiple evidence-backed optimization "
-    "categories, interacting changes, and substantial kernel refactoring. Recommend additional "
-    "directions when justified; assess checkpoints, pivot criteria, and combined validation.\n"
-    if environment.get("ATREX_EPISODE_MODE") == "goal"
-    else "Preserve one optimization category unless unsupported or infeasible; recommend at most "
-    "one coherent replacement direction. Do not broaden the draft into multiple categories.\n"
-)
+scope_instruction = "Exploration scope: " + environment.get("ATREX_EPISODE_SCOPE", "single_direction") + "\n"
 parts = ["Act as an independent reviewer for a GPU-kernel implementation plan.\n", scope_instruction]
 if proposal_file is not None:
     parts.extend(

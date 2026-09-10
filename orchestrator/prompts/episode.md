@@ -1,6 +1,11 @@
 # Kernel optimization episode {{EPISODE}}
 
-{{EPISODE_SCOPE}}
+Episode mode: {{EPISODE_MODE}}
+Exploration scope: {{EXPLORATION_SCOPE}}
+
+Own this optimization episode within the supervisor-declared scope. Use the shared engineering
+loop below to investigate, plan, implement, and validate. Preserve the best candidate and its
+measurements while evaluating the remaining scope.
 
 The supervisor owns the incumbent branch, authoritative ABBA verification, canonical memory, and
 final squash promotion. You own only this episode branch and its structured evidence.
@@ -140,8 +145,7 @@ Bind its placeholders to this episode:
 
 {{PLAN_GENERATOR}}
 
-Follow the episode scope above to decide when exploration is complete and publish the terminal
-handoff. Keep the best validated source and its evidence recoverable throughout the episode.
+Complete the declared exploration scope before publishing the terminal handoff. Keep the best validated source and its evidence recoverable throughout the episode.
 
 ## Terminal contract
 

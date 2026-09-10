@@ -138,7 +138,7 @@ def episode_directives(
         "agent_runtime": _agent_runtime_directive(
             agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
         ),
-        "plan_generator": _plan_generator_directive(agent_cli, version, goal=goal),
+        "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 
 

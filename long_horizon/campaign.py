@@ -716,10 +716,8 @@ class LongHorizonCampaign:
                 encoding="utf-8"
             ),
             {
-                "EPISODE_SCOPE": (
-                    MODULE_ROOT / "orchestrator" / "prompts"
-                    / ("goal_scope.md" if goal_mode else "full_scope.md")
-                ).read_text(encoding="utf-8"),
+                "EPISODE_MODE": "goal" if goal_mode else ("fast" if fast_mode else "full"),
+                "EXPLORATION_SCOPE": self.base_campaign.episode_scope("goal" if goal_mode else "full"),
                 "EPISODE": episode,
                 "VERSION": version,
                 "WORKSPACE": worktree.path,
