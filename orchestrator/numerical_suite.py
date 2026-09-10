@@ -6,7 +6,7 @@ import shutil
 import tempfile
 
 from long_horizon.remote_numerical import validate_suite
-from .infrastructure_retry import InfrastructureUnavailable, retry_infrastructure
+from .infrastructure_retry import check_review_service, retry_infrastructure
 
 PROMPT = Path(__file__).with_name("prompts") / "numerical_suite.md"
 EXAMPLES = Path(__file__).resolve().parents[1] / "reference" / "numerical_suites"
@@ -46,8 +46,7 @@ def resolve_suite(campaign, workspace, private):
             result = run_session(root, PROMPT.read_text(), timeout=600,
                                  agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False)
             campaign._account(result, "operator numerical suite construction")
-            if result.exit_status or result.timed_out:
-                raise InfrastructureUnavailable("operator numerical suite author unavailable")
+            check_review_service(result)
             return result
         retry_infrastructure(workspace, f"numerical-suite:{digest.hexdigest()}", author_once)
         for name, path in sources.items():

@@ -15,7 +15,7 @@ import uuid
 
 from long_horizon.remote_numerical import PREFIX, validate_suite, validation_schedule
 from .numerical_suite import resolve_suite
-from .infrastructure_retry import InfrastructureUnavailable, check_transport, retry_infrastructure
+from .infrastructure_retry import InfrastructureUnavailable, check_review_service, check_transport, retry_infrastructure
 from long_horizon.store import VERIFY_DIR
 
 CHECKS = {"input_domain", "precision_and_reductions", "nonlinear_and_quantization",
@@ -168,13 +168,16 @@ def numerical_violations(campaign, workspace):
             if cancel.is_set():
                 raise subprocess.SubprocessError("numerical batch cancelled")
             print(f"[numerical-safety] mode={mode} case={case['id']} ({index + 1}/{len(specs)})", flush=True)
-            process = _sandbox_command(
-                workspace, campaign.sandbox_hardware, campaign.sandbox_profile, campaign.sandbox_url,
-                600, ["python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))],
-                ssh=campaign.sandbox_ssh, ssh_init=campaign.sandbox_ssh_init,
-                health_command=campaign.sandbox_health_command, gateway_kind="dev",
-                private_reference_dir=campaign.private_reference_dir, cancel_event=cancel,
-                wall_timeout=wall_timeout)
+            try:
+                process = _sandbox_command(
+                    workspace, campaign.sandbox_hardware, campaign.sandbox_profile, campaign.sandbox_url,
+                    600, ["python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))],
+                    ssh=campaign.sandbox_ssh, ssh_init=campaign.sandbox_ssh_init,
+                    health_command=campaign.sandbox_health_command, gateway_kind="dev",
+                    private_reference_dir=campaign.private_reference_dir, cancel_event=cancel,
+                    wall_timeout=wall_timeout)
+            except subprocess.TimeoutExpired as exc:
+                raise InfrastructureUnavailable("GPU transport wait deadline exceeded") from exc
             batch = None
             for line in process.stdout.splitlines():
                 if line.startswith(PREFIX):
@@ -226,12 +229,10 @@ def numerical_violations(campaign, workspace):
             (review_root / "review_request.json").write_text(json.dumps({"evidence_digest": digest, "coverage": coverage}))
             def review_once():
                 (review_root / "numerical_review.json").unlink(missing_ok=True)
-                result = run_session(review_root, PROMPT.read_text(), timeout=600,
+                result = run_session(review_root, PROMPT.read_text(), timeout=getattr(campaign, "numerical_review_timeout", 600),
                                      agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False)
                 campaign._account(result, "independent numerical safety review")
-                if result.exit_status or result.timed_out:
-                    raise InfrastructureUnavailable(
-                        f"numerical safety reviewer unavailable (exit={result.exit_status}, timeout={result.timed_out})")
+                check_review_service(result)
                 return result
             retry_infrastructure(workspace, f"numerical-review:{digest}", review_once)
             if evidence_digest({name: review_root / name for name in review_files}) != visible_digest:

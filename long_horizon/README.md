@@ -186,7 +186,7 @@ Restart revalidates a candidate. No tolerance is relaxed to make a test pass.
 
 ## Infrastructure recovery during validation
 
-Unavailable GPU transport and unavailable review services pause the current validation
+Confirmed GPU transport outages and structured review-service errors pause the current validation
 step. After each failure, the supervisor waits 30 minutes before retrying the same
 step. Recovery is established by a real validation request, rather than a health
 endpoint alone. There is no retry-count limit and no episode, rejection, or stall
@@ -204,3 +204,15 @@ Explicit numerical mismatches, compilation or kernel execution failures, policy
 rejections, invalid evidence, and insufficient speedup remain validation failures.
 They are not treated as transport outages. Gateway infrastructure categories remain
 visible through a fixed marker while hidden evaluator details stay private.
+
+Reviewer exits without a structured service error and reviewer execution deadlines
+fail validation. Only top-level CLI service errors (`overloaded_error`,
+`rate_limit_error`, `service_unavailable_error`) enter the 30-minute retry loop.
+`--production-review-timeout` and `--numerical-review-timeout` independently bound
+the dependency and numerical reviewers (both default to 600 seconds).
+
+Sandbox infrastructure errors use exit code 75 plus an exact stderr marker;
+remote command text cannot declare this category. Agate upload/nonblocking
+submission holds its admission lock for at most 600 seconds, limited further by
+the remaining wait budget. A submission deadline releases the lock and returns
+the infrastructure signal so subsequent jobs can submit.

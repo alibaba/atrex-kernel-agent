@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from threading import Event
 from typing import Any
 
-from orchestrator.infrastructure_retry import check_transport, retry_infrastructure
+from orchestrator.infrastructure_retry import InfrastructureUnavailable, check_transport, retry_infrastructure
 
 from . import main_adapter
 from .git_episode import _git
@@ -510,26 +510,29 @@ class GatewayABBAValidator:
         def run_batch(spec: tuple[str, str]) -> dict[str, Any]:
             request_relative, result_relative = spec
             def evaluate_batch():
-                process = main_adapter.run_sandbox(
-                    workspace,
-                    self.hardware,
-                    self.profile,
-                    self.url,
-                    self.timeout,
-                    [
-                        "python3",
-                        f"{relative_dir}/test_kernel.py",
-                        request_relative,
-                        result_relative,
-                    ],
-                    ssh=self.ssh,
-                    ssh_init=self.ssh_init,
-                    health_command=self.health_command,
-                    sync=(),
-                    wall_timeout=self.timeout + self.queue_wait_grace + 120,
-                    gateway_kind="dev",
-                    private_reference_dir=self.private_reference_dir,
-                )
+                try:
+                    process = main_adapter.run_sandbox(
+                        workspace,
+                        self.hardware,
+                        self.profile,
+                        self.url,
+                        self.timeout,
+                        [
+                            "python3",
+                            f"{relative_dir}/test_kernel.py",
+                            request_relative,
+                            result_relative,
+                        ],
+                        ssh=self.ssh,
+                        ssh_init=self.ssh_init,
+                        health_command=self.health_command,
+                        sync=(),
+                        wall_timeout=self.timeout + self.queue_wait_grace + 120,
+                        gateway_kind="dev",
+                        private_reference_dir=self.private_reference_dir,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise InfrastructureUnavailable("GPU transport wait deadline exceeded") from exc
                 output = process.stdout + "\n" + process.stderr
                 if process.returncode == 0:
                     payload = _payload_from_stdout(process.stdout)

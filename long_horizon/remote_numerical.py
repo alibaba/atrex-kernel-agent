@@ -147,7 +147,7 @@ def numerical_inputs(inputs, case, seed, rank):
     return result
 
 
-def install_inputs(namespace, driver, case, seeds, receipts):
+def install_inputs(namespace, case, seeds, receipts):
     original = namespace["_make_inputs"]
     counts = {}
     def make_inputs(**kwargs):
@@ -192,7 +192,7 @@ def run(request_path):
             receipts = request_path.parent / "receipts.jsonl"
             receipts.unlink(missing_ok=True)
             tail = ("\nimport runpy as __numeric_runpy\n"
-                    f"__numeric_runpy.run_path({str(Path(__file__).resolve())!r})['install_inputs'](globals(), None, {case!r}, {plan['seeds']!r}, {str(receipts.resolve())!r})\n")
+                    f"__numeric_runpy.run_path({str(Path(__file__).resolve())!r})['install_inputs'](globals(), {case!r}, {plan['seeds']!r}, {str(receipts.resolve())!r})\n")
             input_path.write_bytes(original + tail.encode())
             for stem in ("input", "test_kernel"):
                 for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):

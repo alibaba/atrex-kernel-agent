@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import subprocess
 import time
 from concurrent.futures import CancelledError
@@ -14,6 +13,7 @@ from .durable_state import durable_write_json
 
 POLL_SECONDS = 30 * 60
 INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
+INFRASTRUCTURE_EXIT_CODE = 75
 
 
 class InfrastructureUnavailable(RuntimeError):
@@ -22,15 +22,30 @@ class InfrastructureUnavailable(RuntimeError):
 
 def check_transport(process: subprocess.CompletedProcess) -> None:
     """Only classify transport failures; never infer an outage from a kernel failure."""
-    output = (process.stdout or "") + "\n" + (process.stderr or "")
-    if any(marker in output for marker in (
-        INFRASTRUCTURE_MARKER,
-        "generalized gateway response unavailable",
-        "did not contain an artifact frame",
-        "Connection refused", "Connection reset by peer",
-        "Temporary failure in name resolution",
-    )) or re.search(r"HTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", output):
+    if (process.returncode == INFRASTRUCTURE_EXIT_CODE
+            and INFRASTRUCTURE_MARKER in (process.stderr or "").splitlines()):
         raise InfrastructureUnavailable("GPU validation transport unavailable")
+
+
+def check_review_service(result) -> None:
+    """Retry explicit CLI service errors, not reviewer bugs or execution deadlines."""
+    if result.timed_out:
+        raise ValueError("reviewer exceeded its configured execution timeout")
+    if result.exit_status == 0:
+        return
+    for line in getattr(result, "stdout_tail", "").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "error":
+            continue
+        error = event.get("error")
+        if isinstance(error, dict) and error.get("type") in {
+            "overloaded_error", "rate_limit_error", "service_unavailable_error",
+        }:
+            raise InfrastructureUnavailable(f"review service unavailable: {error['type']}")
+    raise ValueError(f"reviewer failed (exit={result.exit_status}); no service-outage evidence")
 
 
 def _wait_until(deadline: float, cancel: Event) -> None:
@@ -56,9 +71,9 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
             raise CancelledError("validation batch cancelled")
         try:
             result = operation()
-        except (InfrastructureUnavailable, subprocess.TimeoutExpired, ConnectionError) as exc:
+        except InfrastructureUnavailable as exc:
             now = time.time()
-            reason = str(exc) if isinstance(exc, InfrastructureUnavailable) else type(exc).__name__
+            reason = str(exc)
             record = {
                 "schema_version": 1, "stage": stage,
                 "status": "waiting_for_infrastructure",

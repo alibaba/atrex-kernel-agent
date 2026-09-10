@@ -199,6 +199,7 @@ class Campaign:
     handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
     numerical_gate: str = "auto"  # light locally/SSH; thorough on remote agate
     repair_numerical_head: bool = False  # resume exploration; promotion still requires every gate
+    numerical_review_timeout: int = 600
     production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
@@ -596,7 +597,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from .infrastructure_retry import InfrastructureUnavailable, retry_infrastructure
+        from .infrastructure_retry import check_review_service, retry_infrastructure
 
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon
@@ -653,13 +654,13 @@ class Campaign:
                     agent_plugins=False,
                 )
                 self._account(result, "independent production policy review")
-                if result.exit_status != 0 or result.timed_out:
-                    raise InfrastructureUnavailable(
-                        "independent production policy reviewer unavailable "
-                        f"(exit={result.exit_status}, timeout={result.timed_out})")
+                check_review_service(result)
                 return result
 
-            retry_infrastructure(workspace, f"dependency-review:{cache_key}", review_once)
+            try:
+                retry_infrastructure(workspace, f"dependency-review:{cache_key}", review_once)
+            except ValueError as exc:
+                return [f"independent production policy review failed: {exc}"]
             changed = []
             for relative, expected_hash in source_hashes.items():
                 candidate_path = candidate_root / relative

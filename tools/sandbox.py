@@ -165,6 +165,7 @@ MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
+INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
 SSH_WATCHDOG_SOURCE = r"""
@@ -2787,12 +2788,28 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
     )
 
 
-def _report_infrastructure_failure(job: dict) -> None:
+def _report_infrastructure_failure(job: dict) -> bool:
     """Preserve the failure category without revealing private evaluator details."""
     error = job.get("error")
     if (isinstance(error, dict) and error.get("class") == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
-        print("__ATREX_INFRASTRUCTURE_UNAVAILABLE__", file=sys.stderr)
+        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
+        return True
+    return False
+
+
+def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
+    """Inspect CLI transport diagnostics only when no remote job envelope exists."""
+    if _job_response(proc.stdout or "") is not None:
+        return False
+    detail = proc.stderr or ""
+    if (proc.returncode == ENVIRONMENT_TEMPFAIL and INFRASTRUCTURE_MARKER in detail.splitlines()
+            or re.search(r"\bHTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", detail)
+            or any(message in detail for message in (
+                "Connection refused", "Connection reset by peer", "Temporary failure in name resolution"))):
+        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
+        return True
+    return False
 
 
 def _ray_submit_version_mismatch(job: dict | None) -> bool:
@@ -2978,7 +2995,15 @@ def _run_agate_once(
     lock_path = Path(tempfile.gettempdir()) / f"atrex-agate-submit-{os.getuid()}-{key}.lock"
     with lock_path.open("a") as admission:
         fcntl.flock(admission, fcntl.LOCK_EX)
-        submitted = subprocess.run([*agate, "--no-wait"], capture_output=True, text=True)
+        remaining = wait_budget - (time.monotonic() - wait_started)
+        if remaining <= 0:
+            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
+        try:
+            submitted = subprocess.run(
+                [*agate, "--no-wait"], capture_output=True, text=True,
+                timeout=min(MAX_HTTP_REQUEST_TIMEOUT, remaining))
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
     job = _job_response(submitted.stdout or "")
     if submitted.returncode or not job:
         return submitted
@@ -4014,6 +4039,9 @@ def _run_typed_gateway(
                 file=sys.stderr,
             )
             return None
+        if exc.status in {429, 502, 503, 504}:
+            print(INFRASTRUCTURE_MARKER, file=sys.stderr)
+            return ENVIRONMENT_TEMPFAIL
         if generalized:
             raise SystemExit(
                 f"sandbox: generalized {kind} gateway request failed; "
@@ -4036,9 +4064,12 @@ def _run_typed_gateway(
             )
             return None
         if proc.stderr and not generalized:
-            print(proc.stderr.rstrip(), file=sys.stderr)
+            print("\n".join(line for line in proc.stderr.rstrip().splitlines()
+                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
         job = _job_response(proc.stdout or "")
         if job is None:
+            if _report_agate_transport_failure(proc):
+                return ENVIRONMENT_TEMPFAIL
             if proc.stdout and not generalized:
                 print(proc.stdout.rstrip())
             elif generalized:
@@ -4048,7 +4079,8 @@ def _run_typed_gateway(
                 )
             return proc.returncode or 2
         if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-            _report_infrastructure_failure(job)
+            if _report_infrastructure_failure(job):
+                return ENVIRONMENT_TEMPFAIL
             if generalized:
                 print(
                     "[sandbox] generalized evaluation failed; hidden-case details withheld; "
@@ -4690,6 +4722,11 @@ def _main(argv: list[str] | None = None) -> int:
                     command="bash __atrex_runner.sh",
                     num_gpus=num_gpus,
                 )
+            except GatewayHTTPError as exc:
+                if exc.status in {429, 502, 503, 504}:
+                    print(INFRASTRUCTURE_MARKER, file=sys.stderr)
+                    return ENVIRONMENT_TEMPFAIL
+                raise SystemExit(f"sandbox: direct gateway request failed: {exc}") from exc
             except (OSError, RuntimeError, TimeoutError) as exc:
                 raise SystemExit(
                     f"sandbox: direct gateway request failed: {exc}"
@@ -4712,10 +4749,13 @@ def _main(argv: list[str] | None = None) -> int:
 
     hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
     if proc.stderr and not hide_evaluator_details:
-        print(proc.stderr.rstrip(), file=sys.stderr)
+        print("\n".join(line for line in proc.stderr.rstrip().splitlines()
+                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
     try:
         job = json.loads(proc.stdout)
     except json.JSONDecodeError:
+        if _report_agate_transport_failure(proc):
+            return ENVIRONMENT_TEMPFAIL
         if proc.stdout and not hide_evaluator_details:
             print(proc.stdout.rstrip())
         elif hide_evaluator_details:
@@ -4725,10 +4765,12 @@ def _main(argv: list[str] | None = None) -> int:
             )
         return proc.returncode or 2
 
-    _report_infrastructure_failure(job)
+    if _report_infrastructure_failure(job):
+        return ENVIRONMENT_TEMPFAIL
     result = job.get("result") or {}
     remote_stdout = str(result.get("stdout") or "")
-    remote_stderr = str(result.get("stderr") or "")
+    remote_stderr = "\n".join(line for line in str(result.get("stderr") or "").splitlines()
+                              if line != INFRASTRUCTURE_MARKER)
     try:
         if output_transport == "oss":
             artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
