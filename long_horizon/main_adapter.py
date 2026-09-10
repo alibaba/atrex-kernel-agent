@@ -110,7 +110,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
 
 
 def episode_directives(
-    campaign: Campaign, version: int, *, fast: bool = False, goal: bool = False
+    campaign: Campaign, version: int, *, fast: bool = False
 ) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
     mode_policy = campaign._mode_directive()

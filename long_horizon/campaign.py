@@ -698,8 +698,9 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
+        episode_mode = "goal" if goal_mode else ("fast" if fast_mode else "full")
         directives = main_adapter.episode_directives(
-            self.base_campaign, version, fast=fast_mode, goal=goal_mode
+            self.base_campaign, version, fast=fast_mode
         )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
@@ -716,8 +717,8 @@ class LongHorizonCampaign:
                 encoding="utf-8"
             ),
             {
-                "EPISODE_MODE": "goal" if goal_mode else ("fast" if fast_mode else "full"),
-                "EXPLORATION_SCOPE": self.base_campaign.episode_scope("goal" if goal_mode else "full"),
+                "EPISODE_MODE": episode_mode,
+                "EXPLORATION_SCOPE": self.base_campaign.episode_scope(episode_mode),
                 "EPISODE": episode,
                 "VERSION": version,
                 "WORKSPACE": worktree.path,
