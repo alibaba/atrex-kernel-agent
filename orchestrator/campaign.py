@@ -647,7 +647,7 @@ class Campaign:
             if result.exit_status != 0:
                 errors = [
                     "independent production policy review agent failed "
-                    f"(exit={result.exit_status}, timeout={result.timed_out})"
+                    f"(exit={result.exit_status})"
                 ]
             else:
                 changed = []
