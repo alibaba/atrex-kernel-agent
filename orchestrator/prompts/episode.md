@@ -1,11 +1,12 @@
 # Kernel optimization episode {{EPISODE}}
 
 Episode mode: {{EPISODE_MODE}}
-Exploration scope: {{EXPLORATION_SCOPE}}
 
-Own this optimization episode within the supervisor-declared scope. Use the shared engineering
-loop below to investigate, plan, implement, and validate. Preserve the best candidate and its
-measurements while evaluating the remaining scope.
+For full mode, own one complete engineering direction in this isolated Git worktree. Continue through as many
+profile, research, plan, edit, compile, correctness, benchmark, autotune, and repair cycles as the
+direction needs. Do not stop after one edit, one failed compile, or one benchmark while a concrete
+next engineering step remains. In goal mode, own an operator-level roadmap that may span multiple
+engineering directions; preserve the best validated candidate while completing that roadmap.
 
 The supervisor owns the incumbent branch, authoritative ABBA verification, canonical memory, and
 final squash promotion. You own only this episode branch and its structured evidence.
@@ -126,7 +127,7 @@ without invalidating the optimization experiment or its terminal handoff.
 ## Engineering loop
 
 `skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
-reconstruct the incumbent, profile and localize, research progressively, plan within the episode scope,
+reconstruct the incumbent, profile and localize, research progressively, plan according to the episode mode,
 implement and repair, validate development correctness and performance, record every decisive
 experiment, and mark the phase telemetry. **Read that file now and execute its loop**; it is a
 requirement, not background reading.
@@ -145,7 +146,11 @@ Bind its placeholders to this episode:
 
 {{PLAN_GENERATOR}}
 
-Complete the declared exploration scope before publishing the terminal handoff. Keep the best validated source and its evidence recoverable throughout the episode.
+For full mode, as soon as one coherent candidate passes the full development correctness check and has credible
+performance evidence, publish the terminal handoff. Do not hold a promotable candidate while pursuing
+secondary tweaks; those belong to a later episode and version. For goal mode, finish the planned
+roadmap or exhaust its remaining evidence-backed directions, then restore and validate the best
+candidate before handoff.
 
 ## Terminal contract
 
@@ -154,7 +159,7 @@ Reach exactly one evidence-backed terminal state:
 1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` matches that exact
    commit, protected files are unchanged, and development correctness/performance supports
    independent verification. Uncommitted intermediate artifacts may remain in the worktree.
-2. `pivot`: the exploration scope is exhausted without a promotable candidate.
+2. `pivot`: the direction (full mode) or roadmap (goal mode) is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 
 For `candidate_ready`, append the final evidence, commit only `kernel.py`, then finalize the journal.

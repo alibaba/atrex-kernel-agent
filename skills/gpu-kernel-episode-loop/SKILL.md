@@ -1,6 +1,6 @@
 ---
 name: gpu-kernel-episode-loop
-description: Run the evidence loop of one long-horizon GPU kernel optimization episode. Use this skill to reconstruct the incumbent, profile and localize a bottleneck, research progressively, plan within the episode scope, implement and repair, validate development correctness and performance, and record every decisive experiment in the episode journal.
+description: Run the evidence loop of one long-horizon GPU kernel optimization episode. Use this skill to reconstruct the incumbent, profile and localize a bottleneck, research progressively, plan one coherent direction, implement and repair, validate development correctness and performance, and record every decisive experiment in the episode journal.
 ---
 
 # GPU Kernel Episode Loop
@@ -29,11 +29,12 @@ values you fill in from the campaign, or a choice among the listed alternatives,
 The episode prompt's ownership rules, execution boundary, mode policy, and framework-escalation
 directive outrank this skill. Where they conflict, follow the prompt.
 
-## Episode scope
+## Episode mode
 
-Use the supervisor-declared exploration scope, defined in `skills/gen-plan/SKILL.md`.
-Keep the best validated checkpoint and complete that scope before handing off. Every experiment
-needs evidence, and the final combined implementation needs full validation.
+Use the Python-supplied `ATREX_EPISODE_MODE` (default: `full`), as defined in
+`skills/gen-plan/SKILL.md`. Fast/full episodes advance one coherent engineering direction.
+Goal episodes can repeat this loop across a roadmap of directions, preserving the best
+validated checkpoint until the roadmap is complete or exhausted.
 
 ## Telemetry
 
@@ -51,7 +52,7 @@ text into telemetry.
 
 ## Loop
 
-Repeat this evidence loop until the declared episode scope reaches its completion criteria. The numbered
+Repeat this evidence loop until the direction (fast/full) or roadmap (goal) yields a mature candidate or is exhausted. The numbered
 steps map onto the telemetry phases above: `profile`, `research`, `planning`, `implementation`,
 `correctness`/`benchmark`, and `recording`.
 
@@ -62,8 +63,8 @@ are carried only by canonical memory and are not injected into the episode promp
 dead ends and open directions from those records, including each record's compact
 `experience.experiments`. For PPU, also inspect
 `profile_evidence.accepted_ppu_diagnostics` and reuse a conclusion only when its recorded identities
-remain comparable and none of its `invalidation_conditions` holds. Start with falsifiable
-hypotheses within the declared scope, tied to the current bottlenecks.
+remain comparable and none of its `invalidation_conditions` holds. Start with one falsifiable
+hypothesis tied to the current bottleneck.
 
 ### 2. Profile and localize
 
@@ -161,7 +162,7 @@ option before `--`, which routes the job through the dev interface.
 
 ### 3. Research progressively
 
-Search in this order until the declared exploration scope has enough evidence for an actionable plan:
+Search in this order and stop when one actionable direction is supported:
 
 1. **GPU Wiki through the natural-language front door.** Profile first, then describe the measured
    problem rather than trying to guess query flags. PPU is the exception: start from the decisive
@@ -195,16 +196,16 @@ Search in this order until the declared exploration scope has enough evidence fo
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
 repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-action chain.
 
-### 4. Plan the episode scope
+### 4. Plan a coherent direction
 
 Write or update `<PLAN_DRAFT>` with profile evidence, research findings, concrete edits, risks,
 rollback points, and measurable acceptance criteria. For a PPU iteration that did not need a new
 profile, record the decisive PPU evidence selected by its routing skill instead. Then produce
 `<PLAN_FILE>` with the backend-native plan generator `<PLAN_GENERATOR>`.
 
-Keep experiments within the declared scope. Revise the plan when evidence changes the best path.
-Preserve previous revisions and checkpoint the best validated source so failed experiments do not
-lose earlier improvements.
+Fast/full episodes may contain multiple related experiments, but they must advance one coherent
+engineering direction. Goal episodes may plan and validate multiple directions. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
+the whole direction.
 
 ### 5. Implement and repair
 
@@ -212,9 +213,10 @@ Modify only candidate source/metadata files allowed by policy. Compile and probe
 On compile or correctness failure, diagnose and repair while the direction remains viable. Do not
 publish an intermediate checkpoint as a candidate.
 
-Attribute edits as `evidence -> inference -> action`. Use checkpoints and comparative measurements
-to isolate regressions and validate interacting changes within the declared scope. A failed
-experiment does not exhaust other evidence-backed experiments in that scope.
+Land one optimization category per edit — vectorized load, swizzle, double buffering, tiling change,
+and so on — and attribute each edit as `evidence -> inference -> action`. Do not mix unrelated
+refactors, formatting, or cleanup into the same change: a bundled edit makes a regression
+unattributable. When the evidence localizes a symptom to specific lines, change those lines only.
 
 ### 6. Development correctness and performance
 
@@ -255,9 +257,9 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 
 ## Leaving the loop
 
-Leave when the declared scope is complete or an actual blocker prevents further work. Restore
-and validate the best source before candidate handoff; otherwise record why the scope is exhausted
-or blocked. Follow
+In fast/full mode, leave the loop as soon as one coherent candidate passes the full development correctness check and
+has credible performance evidence, or as soon as the direction is exhausted or blocked. In goal mode, finish or exhaust the roadmap
+and restore the best validated checkpoint, or report a blocker. Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
 PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
 `skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal

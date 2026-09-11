@@ -59,7 +59,6 @@ import argparse
 import ast
 import base64
 import hashlib
-import fcntl
 import io
 import json
 import math
@@ -165,7 +164,6 @@ MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
-INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
 SSH_WATCHDOG_SOURCE = r"""
@@ -236,7 +234,6 @@ AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"tools/profile_kernel.sh"})
 OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
-NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
 TYPED_FALLBACK_REASONS = (
@@ -275,13 +272,7 @@ def _safe_relative(value: str) -> str:
 
 
 def _find_agate() -> str | None:
-    """Honor a campaign wrapper, then search beside Python and on PATH."""
-    configured = os.environ.get("ATREX_AGATE_EXECUTABLE", "").strip()
-    if configured:
-        executable = shutil.which(os.path.expanduser(configured))
-        if executable is None:
-            raise FileNotFoundError(f"ATREX_AGATE_EXECUTABLE is not executable: {configured}")
-        return executable
+    """Find agate beside the active Python before consulting the shell PATH."""
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
@@ -2788,30 +2779,6 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
     )
 
 
-def _report_infrastructure_failure(job: dict) -> bool:
-    """Preserve the failure category without revealing private evaluator details."""
-    error = job.get("error")
-    if (isinstance(error, dict) and error.get("class") == "infra"
-            or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
-        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
-        return True
-    return False
-
-
-def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
-    """Inspect CLI transport diagnostics only when no remote job envelope exists."""
-    if _job_response(proc.stdout or "") is not None:
-        return False
-    detail = proc.stderr or ""
-    if (proc.returncode == ENVIRONMENT_TEMPFAIL and INFRASTRUCTURE_MARKER in detail.splitlines()
-            or re.search(r"\bHTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", detail)
-            or any(message in detail for message in (
-                "Connection refused", "Connection reset by peer", "Temporary failure in name resolution"))):
-        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
-        return True
-    return False
-
-
 def _ray_submit_version_mismatch(job: dict | None) -> bool:
     error = job.get("error") if job else None
     return bool(
@@ -2987,23 +2954,7 @@ def _run_agate_once(
 ) -> subprocess.CompletedProcess[str]:
     """Submit one agate job, then wait while keeping its id available for cleanup."""
     wait_started = time.monotonic()
-    # Large concurrent upload/submit requests can overload gateway ingress before
-    # jobs reach its GPU queue. Serialize only this short admission phase across
-    # local sandbox processes; release before polling so GPU jobs remain parallel.
-    endpoint = url or gateway_profile or os.environ.get("AGATE_URL") or "default"
-    key = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
-    lock_path = Path(tempfile.gettempdir()) / f"atrex-agate-submit-{os.getuid()}-{key}.lock"
-    with lock_path.open("a") as admission:
-        fcntl.flock(admission, fcntl.LOCK_EX)
-        remaining = wait_budget - (time.monotonic() - wait_started)
-        if remaining <= 0:
-            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
-        try:
-            submitted = subprocess.run(
-                [*agate, "--no-wait"], capture_output=True, text=True,
-                timeout=min(MAX_HTTP_REQUEST_TIMEOUT, remaining))
-        except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
+    submitted = subprocess.run([*agate, "--no-wait"], capture_output=True, text=True)
     job = _job_response(submitted.stdout or "")
     if submitted.returncode or not job:
         return submitted
@@ -3816,25 +3767,6 @@ def _hydrate_result_lines(workspace: Path, stdout: str) -> str:
     return "\n".join(normalized)
 
 
-def _public_numerical_result_line(line: str) -> str:
-    """Expose coverage/aggregate errors without private shapes or raw diagnostics."""
-    payload = json.loads(line[len(NUMERICAL_RESULT_PREFIX):])
-    public = {key: payload.get(key) for key in ("schema_version", "all_pass")}
-    public["runs"] = []
-    for row in payload.get("runs", []):
-        item = {key: row.get(key) for key in (
-            "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
-            "shape_count", "seeds", "world_size", "selection_digest", "numerical_metrics")}
-        result = row.get("result")
-        item["result"] = ({key: result.get(key) for key in (
-            "all_pass", "max_abs_err", "max_rel_err", "evaluator")}
-            if isinstance(result, dict) else None)
-        public["runs"].append(item)
-    if payload.get("error"):
-        public["error"] = "numerical evaluator failed; private diagnostics withheld"
-    return NUMERICAL_RESULT_PREFIX + json.dumps(public, allow_nan=False)
-
-
 def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
     """Normalize candidate-only ABBA run results for long-lived supervisors."""
     normalized: list[str] = []
@@ -4039,9 +3971,6 @@ def _run_typed_gateway(
                 file=sys.stderr,
             )
             return None
-        if exc.status in {429, 502, 503, 504}:
-            print(INFRASTRUCTURE_MARKER, file=sys.stderr)
-            return ENVIRONMENT_TEMPFAIL
         if generalized:
             raise SystemExit(
                 f"sandbox: generalized {kind} gateway request failed; "
@@ -4064,12 +3993,9 @@ def _run_typed_gateway(
             )
             return None
         if proc.stderr and not generalized:
-            print("\n".join(line for line in proc.stderr.rstrip().splitlines()
-                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
+            print(proc.stderr.rstrip(), file=sys.stderr)
         job = _job_response(proc.stdout or "")
         if job is None:
-            if _report_agate_transport_failure(proc):
-                return ENVIRONMENT_TEMPFAIL
             if proc.stdout and not generalized:
                 print(proc.stdout.rstrip())
             elif generalized:
@@ -4079,8 +4005,6 @@ def _run_typed_gateway(
                 )
             return proc.returncode or 2
         if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-            if _report_infrastructure_failure(job):
-                return ENVIRONMENT_TEMPFAIL
             if generalized:
                 print(
                     "[sandbox] generalized evaluation failed; hidden-case details withheld; "
@@ -4722,11 +4646,6 @@ def _main(argv: list[str] | None = None) -> int:
                     command="bash __atrex_runner.sh",
                     num_gpus=num_gpus,
                 )
-            except GatewayHTTPError as exc:
-                if exc.status in {429, 502, 503, 504}:
-                    print(INFRASTRUCTURE_MARKER, file=sys.stderr)
-                    return ENVIRONMENT_TEMPFAIL
-                raise SystemExit(f"sandbox: direct gateway request failed: {exc}") from exc
             except (OSError, RuntimeError, TimeoutError) as exc:
                 raise SystemExit(
                     f"sandbox: direct gateway request failed: {exc}"
@@ -4749,13 +4668,10 @@ def _main(argv: list[str] | None = None) -> int:
 
     hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
     if proc.stderr and not hide_evaluator_details:
-        print("\n".join(line for line in proc.stderr.rstrip().splitlines()
-                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
+        print(proc.stderr.rstrip(), file=sys.stderr)
     try:
         job = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        if _report_agate_transport_failure(proc):
-            return ENVIRONMENT_TEMPFAIL
         if proc.stdout and not hide_evaluator_details:
             print(proc.stdout.rstrip())
         elif hide_evaluator_details:
@@ -4765,12 +4681,9 @@ def _main(argv: list[str] | None = None) -> int:
             )
         return proc.returncode or 2
 
-    if _report_infrastructure_failure(job):
-        return ENVIRONMENT_TEMPFAIL
     result = job.get("result") or {}
     remote_stdout = str(result.get("stdout") or "")
-    remote_stderr = "\n".join(line for line in str(result.get("stderr") or "").splitlines()
-                              if line != INFRASTRUCTURE_MARKER)
+    remote_stderr = str(result.get("stderr") or "")
     try:
         if output_transport == "oss":
             artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
@@ -4798,9 +4711,9 @@ def _main(argv: list[str] | None = None) -> int:
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
         command_stdout = "\n".join(
-            _public_numerical_result_line(line) if line.startswith(NUMERICAL_RESULT_PREFIX) else line
+            line
             for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX))
+            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
         )
     if command_stdout:
         print(command_stdout)

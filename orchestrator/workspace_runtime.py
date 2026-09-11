@@ -63,7 +63,7 @@ def _plan_generator_directive(agent_cli: str, version: int) -> str:
     if agent_cli == "codex":
         return (
             f"Invoke the `$gen-plan` skill with `{draft}` as input and `{plan}` as "
-            "output. Use direct/no-discussion mode within the declared episode scope. "
+            "output. Use direct/no-discussion mode for this optimization plan. "
             "The skill is repository-local under `.agents/skills/`; freeze its candidate proposal "
             "and Codex review in this current session before reading the independent Qoder review, "
             "then synthesize."
