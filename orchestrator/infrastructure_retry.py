@@ -28,9 +28,9 @@ def check_transport(process: subprocess.CompletedProcess) -> None:
 
 
 def check_review_service(result) -> None:
-    """Retry explicit CLI service errors, not reviewer bugs or execution deadlines."""
+    """Classify execution timeouts separately from explicit service outages."""
     if result.timed_out:
-        raise ValueError("reviewer exceeded its configured execution timeout")
+        raise TimeoutError("reviewer exceeded its configured execution timeout")
     if result.exit_status == 0:
         return
     for line in getattr(result, "stdout_tail", "").splitlines():
@@ -46,6 +46,15 @@ def check_review_service(result) -> None:
         }:
             raise InfrastructureUnavailable(f"review service unavailable: {error['type']}")
     raise ValueError(f"reviewer failed (exit={result.exit_status}); no service-outage evidence")
+
+
+def retry_timeout_once(stage: str, operation):
+    """Retry one execution timeout without turning it into a durable retry loop."""
+    try:
+        return operation()
+    except TimeoutError:
+        print(f"[infrastructure] {stage}: reviewer timed out; retrying once", flush=True)
+        return operation()
 
 
 def _wait_until(deadline: float, cancel: Event) -> None:

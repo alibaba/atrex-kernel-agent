@@ -595,7 +595,7 @@ class Campaign:
             ]
         return []
 
-    def _review_production_candidate(
+    def _review_production_candidate_once(
         self,
         workspace: Path,
         framework: str,
@@ -739,6 +739,22 @@ class Campaign:
         )
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
         return list(dict.fromkeys([*errors, *persistence_errors]))
+
+    def _review_production_candidate(
+        self,
+        workspace: Path,
+        framework: str,
+        require_gluon: bool,
+    ) -> list[str]:
+        """Retry a timed-out policy review once in a fresh isolated session."""
+        from .infrastructure_retry import retry_timeout_once
+
+        return retry_timeout_once(
+            "production-policy",
+            lambda: self._review_production_candidate_once(
+                workspace, framework, require_gluon
+            ),
+        )
 
     def _production_kernel_violations(
         self,
@@ -2694,6 +2710,8 @@ class Campaign:
             validation_future = executor.submit(self._validate_framework_baseline, n)
             try:
                 violations = policy_future.result()
+            except TimeoutError:
+                raise
             except Exception as exc:
                 violations = [
                     "independent production policy review failed: "
