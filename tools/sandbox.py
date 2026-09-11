@@ -275,7 +275,7 @@ def _safe_relative(value: str) -> str:
 
 
 def _find_agate() -> str | None:
-    """Honor a campaign wrapper, then search beside Python and on PATH."""
+    """Require an explicit campaign wrapper; auto-discover only when unset."""
     configured = os.environ.get("ATREX_AGATE_EXECUTABLE", "").strip()
     if configured:
         executable = shutil.which(os.path.expanduser(configured))

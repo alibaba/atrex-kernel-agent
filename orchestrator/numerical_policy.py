@@ -129,7 +129,9 @@ def numerical_violations(campaign, workspace):
         source_digest = evidence_digest(files)
         digest = hashlib.sha256((source_digest + ":" + mode).encode()).hexdigest()
         record["evidence_digest"] = digest
-        # Cache only within this supervisor process, after both gates passed.
+        # Resume intentionally recertifies HEAD in each supervisor process. Saved
+        # results are audit evidence, not portable GPU/runtime certificates.
+        # Only a success in this process can skip the probes and reviewer.
         cache = getattr(campaign, "_numerical_review_cache", set())
         if digest in cache:
             record.update(accepted=True, cached=True)

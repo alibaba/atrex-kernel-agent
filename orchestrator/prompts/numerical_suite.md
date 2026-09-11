@@ -40,6 +40,8 @@ Supported generators: uniform(low,high), log_uniform(min_exp,max_exp,signed=true
 sparse(low,high,density), alternating(amplitude,opposite_ranks=false),
 constant(value), ramp(low,high,axis=-1), near_constant(center,amplitude),
 packed_bytes() for legal unrestricted packed uint8 encodings only.
+For integer or boolean inputs, constant(value) must be integral and within the
+input dtype's representable range (uint8: 0 through 255; bool: 0 or 1).
 Ramps vary along the selected axis; near_constant uses independent uniform noise.
 Maintain required tensor correlations through suitable constants/patterns; if these
 constructors cannot represent an essential valid case, report that limitation rather

@@ -112,7 +112,17 @@ def numerical_inputs(inputs, case, seed, rank):
                 raise ValueError("packed_bytes requires an explicitly byte-packed input")
             values = torch.randint(0, 256, shape, generator=rng, device=template.device, dtype=torch.uint8)
         elif kind == "constant":
-            values = torch.full(shape, rule["value"], device=template.device, dtype=torch.float32)
+            value = rule["value"]
+            if not template.is_floating_point() and not template.is_complex():
+                lower, upper = (0, 1) if template.dtype == torch.bool else (
+                    torch.iinfo(template.dtype).min, torch.iinfo(template.dtype).max
+                )
+                if not lower <= value <= upper or int(value) != value:
+                    raise ValueError(
+                        f"constant for {name} must be an integer in [{lower}, {upper}] "
+                        f"for {template.dtype}"
+                    )
+            values = torch.full(shape, value, device=template.device, dtype=template.dtype)
         elif kind in {"alternating", "ramp"}:
             index = torch.arange(template.numel(), device=template.device).reshape(shape)
             if kind == "alternating":

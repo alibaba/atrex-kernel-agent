@@ -83,7 +83,10 @@ input and public contract files, without candidate source. The result is cached 
 `<private-reference>/.atrex_numerical/<contract-digest>/`; changed reference/input/
 shapes or author instructions invalidate it. Examples for attention, GEMM and norm
 are in `reference/numerical_suites/`. They illustrate mathematical risks, not fixed
-ABI names or universally valid numeric ranges. Contract construction errors block
+ABI names or universally valid numeric ranges. `constant(value)` constructs directly
+in the input dtype. Integer and boolean inputs require an integral value within
+the dtype's representable range (for example, 0 through 255 for `uint8`); invalid
+values fail suite execution instead of wrapping or truncating. Contract construction errors block
 certification instead of guessing valid inputs. The candidate's independent
 numerical reviewer still checks the generated suite's relevance and sufficiency.
 
@@ -163,7 +166,22 @@ metrics are returned through the sanitized sandbox protocol.
 Evidence is saved under `verification_artifacts/.atrex_long_horizon_verify/`.
 The in-process certificate cache binds candidate, suite, trusted reference/input/
 shapes, evaluator, transport, driver, reviewer prompt and public contract bytes.
-Restart revalidates a candidate. No tolerance is relaxed to make a test pass.
+A successful gate skips duplicate probes and numerical review only within that
+supervisor process. The on-disk suite cache stores input recipes; saved numerical
+results are audit evidence. Neither is a reusable acceptance certificate.
+
+Normal production resume deliberately revalidates HEAD before exploration. This
+also covers workspaces created before this gate existed: a historically promoted
+HEAD does not establish numerical safety under the current contract and suite.
+After a supervisor restart, the full GPU suite and numerical reviewer run again
+for the same HEAD; automatic suite authoring is reused from its separate disk
+cache when the trusted contract and instructions still match. The additional GPU
+and reviewer cost is intentional. A durable acceptance certificate would also
+need authenticated evidence provenance and GPU/runtime/environment identity that
+the current digest does not bind. This PR therefore does not trust an archived
+success as a production certificate. `--repair-numerical-head` remains the explicit
+way to explore from a failing HEAD, and never bypasses promotion gates. No tolerance
+is relaxed to make a test pass.
 
 ## Infrastructure recovery during validation
 
@@ -202,3 +220,9 @@ remote command text cannot declare this category. Agate upload/nonblocking
 submission holds its admission lock for at most 600 seconds, limited further by
 the remaining wait budget. A submission deadline releases the lock and returns
 the infrastructure signal so subsequent jobs can submit.
+
+An explicit `ATREX_AGATE_EXECUTABLE` is authoritative: it must resolve to an
+executable path or command name, otherwise sandbox setup raises `FileNotFoundError`.
+Falling back could bypass a campaign wrapper's endpoint or execution policy. Leave
+it unset to use the existing adjacent-to-Python and then PATH discovery order.
+This configuration failure is not an infrastructure outage and is not retried.
