@@ -747,14 +747,19 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Retry a timed-out policy review once in a fresh isolated session."""
-        from .infrastructure_retry import retry_timeout_once
-
-        return retry_timeout_once(
-            "production-policy",
-            lambda: self._review_production_candidate_once(
+        try:
+            return self._review_production_candidate_once(
                 workspace, framework, require_gluon
-            ),
-        )
+            )
+        except TimeoutError:
+            print(
+                "[production-policy] reviewer infrastructure timed out; "
+                "retrying with a fresh isolated session",
+                flush=True,
+            )
+            return self._review_production_candidate_once(
+                workspace, framework, require_gluon
+            )
 
     def _production_kernel_violations(
         self,

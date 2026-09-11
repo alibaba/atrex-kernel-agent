@@ -48,15 +48,6 @@ def check_review_service(result) -> None:
     raise ValueError(f"reviewer failed (exit={result.exit_status}); no service-outage evidence")
 
 
-def retry_timeout_once(stage: str, operation):
-    """Retry one execution timeout without turning it into a durable retry loop."""
-    try:
-        return operation()
-    except TimeoutError:
-        print(f"[infrastructure] {stage}: reviewer timed out; retrying once", flush=True)
-        return operation()
-
-
 def _wait_until(deadline: float, cancel: Event) -> None:
     while (remaining := deadline - time.time()) > 0:
         if cancel.wait(min(60, remaining)):
