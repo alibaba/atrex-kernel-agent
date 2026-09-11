@@ -1,0 +1,53 @@
+digraph EpisodeMode {
+  graph [rankdir=TB, bgcolor="#ffffff", pad=0.35, nodesep=0.4, ranksep=0.65,
+         fontname="Helvetica", fontsize=22, labelloc=t,
+         label="Episode mode: scheduling, durable recovery and acceptance\nlong_horizon/campaign.py"];
+  node [shape=box, style="rounded,filled", fillcolor="#edf3fb", color="#6884a4",
+        fontname="Helvetica", fontsize=15, margin="0.2,0.12"];
+  edge [fontname="Helvetica", fontsize=12, color="#567087", arrowsize=0.8];
+
+  start [label="run(): prepare campaign\nLoad state + active_episode.json"];
+  recovery [shape=diamond, label="_recover_interrupted\nActive work?", fillcolor="#fff4d7"];
+  recover [label="Registered worktree + matching base\nRecover persisted mode; legacy: infer fast/full\nfrom recorded episode + configured fast range"];
+  terminal [shape=diamond, label="_recover_completed_handoff\nValid terminal handoff?", fillcolor="#fff4d7"];
+  archive [label="Missing/stale worktree or completed commit\nArchive / reconcile outcome idempotently"];
+  budgets [shape=diamond, label="run(): admission budgets\nversion / episodes / invocation limit / tokens", fillcolor="#fff4d7"];
+  exit [label="STOP / fail closed: budget, target, stall or setup failure\nMandatory conversion + exhausted\nversion/token budget raises an error", fillcolor="#ffe5e5", color="#b66a6a"];
+  select [shape=diamond, label="_episode_mode\nResuming an active episode?", fillcolor="#fff4d7"];
+  keep [label="Keep recovered mode\nNever widen active work to goal"];
+  choose [label="New episode\ncompleted >= 50 AND stalls > 3: goal\nelse in fast range: fast; otherwise: full"];
+  active [label="run(): persist mode + phase + worktree\nATREX_EPISODE_MODE -> session and reviewers\ngoal: full reviewer config, >= 20 handoff resumes\non backends with same-session recovery"];
+  session [label="Run / resume coding session\nMode remains fixed for this episode"];
+  assess [label="_assess_terminal_handoff\nProtected source + production policy\nfast: single evaluator; full/goal: ABBA"];
+  record [label="_record_terminal_episode\nPass: promote, reset stalls to 0\nPivot / blocked / failed gate / invalid handoff / session failure:\nrecord outcome, increment stalls\nPersist state and memory; clear active work"];
+  next [shape=diamond, label="run(): after recording\nTarget met? Valid blocked? Stall stop?", fillcolor="#fff4d7"];
+  interrupted [label="Unexpected exception / supervisor interruption\nActive state, journal and worktree retained\nOn restart, recover before admission budgets", fillcolor="#ffe5e5", color="#b66a6a"];
+
+  start -> recovery;
+  start -> exit [label="setup / resume compliance failure", style=dashed, constraint=false];
+  recovery -> budgets [label="no active work"];
+  recovery -> recover [label="resumable"];
+  recovery -> archive [label="not resumable / already committed"];
+  archive -> budgets;
+  recover -> terminal;
+  terminal -> assess [label="yes: recheck and finalize before next admission"];
+  terminal -> budgets [label="no: resume engineering"];
+  budgets -> exit [label="exhausted"];
+  budgets -> select [label="available"];
+  select -> keep [label="yes"];
+  select -> choose [label="no"];
+  keep -> active;
+  choose -> active;
+  active -> session;
+  session -> assess [label="candidate_ready"];
+  session -> record [label="pivot / blocked / session or handoff failure"];
+  assess -> record [label="gate pass or definitive rejection"];
+  record -> next [label="normal run completion"];
+  record -> budgets [label="recovered terminal handoff: finalize, then admission", constraint=false, style=dashed];
+  next -> exit [label="target met OR\nmax_stall > 0 AND stalls >= limit\nAND next mode != goal\nAND no mandatory conversion"];
+  next -> budgets [label="continue; valid blocked skips stall stop\n(goal also bypasses stall stop)", constraint=false];
+  session -> interrupted [label="process interrupted", style=dashed];
+  assess -> interrupted [label="unexpected exception", style=dashed];
+  record -> interrupted [label="interrupted while recording / promoting", style=dashed];
+  interrupted -> start [label="supervisor restart", style=dashed, constraint=false];
+}

@@ -525,11 +525,11 @@ class LongHorizonCampaign:
     def _episode_mode(
         self, state: SupervisorState, active: dict[str, Any] | None = None
     ) -> str:
-        if active:
+        if active is not None:
             # Never widen an in-flight episode, including legacy state without a mode.
             if active.get("mode") in {"fast", "full", "goal"}:
                 return str(active["mode"])
-            return "fast" if self._is_fast_episode(int(active["episode"])) else "full"
+            return "fast" if self._is_fast_episode(int(active.get("episode", 0))) else "full"
         if (
             state.episodes >= GOAL_AFTER_EPISODES
             and state.consecutive_without_promotion > GOAL_STALL_THRESHOLD

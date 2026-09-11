@@ -82,5 +82,27 @@ validated checkpoint until the roadmap is complete or exhausted.
 Goal episodes use the full-episode reviewer settings, existing correctness and
 ABBA promotion gates, and at least 20 same-session handoff recovery continuations
 on backends that support them. Goal admission takes precedence over `--max-stall`
-once its trigger is met; a lower stall limit can still stop a campaign before 50
-episodes. Episode, version and token budgets retain their existing behavior.
+once its trigger is met. For ordinary non-blocked outcomes without mandatory conversion,
+`--max-stall` from 1 to 3 can stop a campaign even after 50 completed episodes,
+because the stall counter has not yet exceeded 3. With `--max-stall >= 4`, the
+stall stop can fire before 50 completed episodes; after that, reaching the stop
+threshold also selects goal mode and bypasses the stall stop. Zero disables the
+stall stop. Episode, version and token budgets retain their existing behavior.
+
+Recovery deliberately uses one interpretation in all paths: a persisted mode wins;
+a legacy record without a mode uses its recorded episode number and the configured
+fast-episode range (fast inside that range, full outside it), including completed
+handoff verification. Missing episode numbers do not select fast mode; the existing
+worktree/recovery checks handle the incomplete record. Legacy mode inference never
+selects goal. This aligns `_recover_interrupted` and `_recover_completed_handoff`
+with `run()` admission.
+
+![Episode mode scheduling and recovery](../assets/episode-mode-state-machine.svg)
+
+The diagram maps to `long_horizon/campaign.py`: `_episode_mode` selects or restores
+mode, `run()` checks budgets and admits episodes, `_recover_interrupted` restores or
+archives active work, `_recover_completed_handoff` rechecks terminal handoffs, and
+`_record_terminal_episode` updates counters and canonical memory. Recovery runs
+before the next admission budget check, so a completed handoff can be finalized
+before a budget stops further exploration. The [diagram source](../assets/episode-mode-state-machine.dot)
+is kept alongside the rendered SVG.

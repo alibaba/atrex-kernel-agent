@@ -141,7 +141,7 @@ episode_mode="${ATREX_EPISODE_MODE:-full}"
 if [[ "$episode_mode" == "goal" ]]; then
     category_instruction='Assess the goal roadmap across its evidence-backed optimization categories.'
 else
-    category_instruction='Preserve its single optimization category unless the packet shows that direction is unsupported or infeasible. If replacement is necessary, recommend at most one coherent replacement direction. Do not broaden the draft into multiple optimization categories.'
+    category_instruction='Keep the plan within a single optimization category unless the packet shows that direction is unsupported or infeasible. If replacement is necessary, recommend at most one coherent replacement direction. Do not broaden the draft into multiple optimization categories.'
 fi
 
 if [[ -n "$proposal_file" ]]; then

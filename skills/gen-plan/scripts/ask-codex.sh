@@ -171,9 +171,9 @@ episode_mode = environment.get("ATREX_EPISODE_MODE", "full")
 category_instruction = (
     "Assess the goal roadmap across its evidence-backed optimization categories.\n"
     if episode_mode == "goal" else
-    "Preserve its single optimization category unless the packet shows that direction is "
+    "Keep the plan within a single optimization category unless the packet shows that direction is "
     "unsupported or infeasible. If replacement is necessary, recommend at most one coherent "
-    "replacement direction.\n"
+    "replacement direction. Do not broaden the draft into multiple optimization categories.\n"
 )
 parts = ["Act as an independent reviewer for a GPU-kernel implementation plan.\n",
          "Episode mode: " + episode_mode + "\n", category_instruction]
