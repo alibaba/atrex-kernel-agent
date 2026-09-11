@@ -480,6 +480,7 @@ def _sandbox_command(
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
     preflight: bool = False,
+    cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
@@ -551,6 +552,8 @@ def _sandbox_command(
     deadline = time.monotonic() + effective_timeout
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise subprocess.SubprocessError("sandbox command cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 stdout, stderr = stop_process_group()
