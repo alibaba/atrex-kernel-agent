@@ -683,7 +683,7 @@ def _reconcile_active_run(state_dir: Path) -> tuple[bool, int | None]:
 
 
 def _health_command(metadata: dict[str, Any]) -> list[str]:
-    sandbox = Path(__file__).resolve().parent / "sandbox.py"
+    sandbox = Path(__file__).resolve().parents[1] / "supervisor" / "gateway.py"
     command = [
         str(Path(sys.executable).resolve()),
         str(sandbox),

@@ -612,7 +612,13 @@ def envelope(hits, store, args, pool_size: int, total: int, kind: str) -> dict:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    from supervisor_runtime_proxy import maybe_proxy
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    proxied = maybe_proxy("query_wiki", arguments)
+    if proxied is not None:
+        return proxied
+    args = build_parser().parse_args(arguments)
     if args.weight_importance < 0:
         die("--weight-importance must not be negative")
     store = Path(args.json_store).resolve() if args.json_store else STORE

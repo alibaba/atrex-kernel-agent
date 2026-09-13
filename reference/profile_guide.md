@@ -5,7 +5,24 @@
 > - NVIDIA: `nvidia/common/ncu-profiling-guide.md`, `nvidia/gluon/sm90/profiling_guide.md`
 
 This guide consolidates profile tool usage for both AMD and NVIDIA platforms.
-All profiling evidence must come from these official tools 
+All profiling evidence must come from these official tools.
+
+## Standard Agent entry
+
+```bash
+python3 tools/sandbox.py --kind profile --profile-level sol --sync profiles/v<N>
+python3 tools/sandbox.py --kind profile --profile-level deep --kernel-name <name> --profile-source --sync profiles/v<N>
+```
+
+Select a real opaque case with `--profile-shape-id ID`. The Supervisor constructs the input and
+injects its private driver into the remote job; there is no driver to copy or modify locally.
+
+The low-level commands below describe **remote GPU execution**, not commands to run in the Agent
+shell. Use them only for a justified custom diagnostic, through
+`python3 tools/sandbox.py --kind dev --input scratch --sync profiles/v<N> -- <command>`.
+Here `scratch/probe.py` means a probe you author for the specific public workload; it is not a
+preinstalled file or a replacement evaluator. GPU tool installation and service changes are
+operator-only tasks, not Agent actions.
 
 ---
 
@@ -17,19 +34,19 @@ The recommended entry point for AMD profiling:
 
 ```bash
 # Full profile (ATT + PMC + ASM)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
+bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N>
 
 # PMC only (hardware counters)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --pmc-only
+bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N> --pmc-only
 
 # ATT only (instruction-level trace)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --att-only
+bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N> --att-only
 
 # ASM only (assembly extraction)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --asm-only
+bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N> --asm-only
 
 # Filter specific kernel
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> \
+bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N> \
     --kernel-regex "<kernel_name>" --iteration-range 0-0
 ```
 
@@ -75,7 +92,7 @@ rocprofv3 --att \
     --output-format csv json \
     --kernel-iteration-range "[1]" \
     -d <output-dir>/att \
-    -- python profile_driver.py
+    -- python scratch/probe.py
 ```
 
 | Parameter | Value | Description |
@@ -108,7 +125,7 @@ env LD_LIBRARY_PATH=/opt/rocm/lib64:/opt/rocm/lib:$LD_LIBRARY_PATH \
     --output-format csv json \
     --kernel-iteration-range "[1]" \
     -d <output-dir>/att \
-    -- python profile_driver.py
+    -- python scratch/probe.py
 ```
 
 #### Locating the Target Kernel
@@ -163,21 +180,21 @@ rocprofv3 --pmc \
     SQ_LDS_BANK_CONFLICT,SQ_INSTS_VMEM_RD,SQ_INSTS_VMEM_WR,SQ_INSTS_LDS \
     --output-format csv \
     -d <output-dir>/pmc/batch1 \
-    -- python profile_driver.py || echo "Warning: batch 1 counter collection failed"
+    -- python scratch/probe.py || echo "Warning: batch 1 counter collection failed"
 
 # Batch 2: SPI counters
 rocprofv3 --pmc \
     SPI_RA_VGPR_SGPR_FULL_CSN,SPI_RA_LDS_CU_FULL_CSN,SPI_RA_WAVE_SIMD_FULL_CSN \
     --output-format csv \
     -d <output-dir>/pmc/batch2 \
-    -- python profile_driver.py || echo "Warning: batch 2 counter collection failed"
+    -- python scratch/probe.py || echo "Warning: batch 2 counter collection failed"
 
 # Batch 3: TCP counters
 rocprofv3 --pmc \
     TCP_TOTAL_READ,TCP_TCC_MISS \
     --output-format csv \
     -d <output-dir>/pmc/batch3 \
-    -- python profile_driver.py || echo "Warning: batch 3 counter collection failed"
+    -- python scratch/probe.py || echo "Warning: batch 3 counter collection failed"
 ```
 
 > **Note**: Each batch failure produces a Warning but does not terminate the script. Partial PMC results are still usable.
@@ -258,7 +275,7 @@ normal route:
 
 ```bash
 python tools/sandbox.py --kind profile --hardware local --url http://127.0.0.1:<port> \
-    --profiler ncu --profile-level sol -- python profile_driver.py
+    --profiler ncu --profile-level sol
 ```
 
 ### Release the Performance Counters First (MANDATORY)
@@ -327,7 +344,7 @@ Discover other counters with `acu --query-metrics` (~1240 available) and section
 > Blindly using `--launch-skip 10` will likely profile a wrong kernel.
 
 ```bash
-ncu --print-summary per-kernel python profile_driver.py
+ncu --print-summary per-kernel python scratch/probe.py
 ```
 
 Find the target Gluon kernel name and its launch index (e.g., index 23).
@@ -340,7 +357,7 @@ Find the target Gluon kernel name and its launch index (e.g., index 23).
 ncu --set full \
     --launch-skip <N> --launch-count 1 \
     -o profiles/v<N>/ncu \
-    python profile_driver.py
+    python scratch/probe.py
 ```
 
 | Parameter | Description | Recommended |
@@ -357,7 +374,7 @@ ncu --set full \
     --kernel-name "chunk_gated_delta_rule_fwd" \
     --launch-count 1 \
     -o profiles/v<N>/ncu \
-    python profile_driver.py
+    python scratch/probe.py
 ```
 
 #### Quick Metrics Only (Faster)
@@ -369,7 +386,7 @@ ncu --metrics \
     l1tex__throughput.avg.pct_of_peak_sustained_elapsed,\
     launch__occupancy \
     --launch-skip <N> --launch-count 1 \
-    python profile_driver.py
+    python scratch/probe.py
 ```
 
 ### Viewing Profile Data (CLI)
@@ -475,7 +492,7 @@ Step 2: Compute utilization
        --flops-expr '<expr>' --bytes-expr '<expr>' --time-ms <ms>
 
 Step 3: If utilization < 90%, run full profile (default: ASM + ATT + PMC)
-  └─ bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
+  └─ bash tools/profile_kernel.sh scratch/probe.py --output-dir profiles/v<N>
   └─ Script auto-executes: Step 0 (ASM) → Step 1 (ATT) → Step 2 (PMC)
 
 Step 4: Locate target kernel (auto-done by script, or manually)

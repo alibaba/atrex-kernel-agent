@@ -67,7 +67,7 @@ new evidence:
       "finding": "owner-local ranges show the wait on the measured critical path",
       "decision_impact": "next edit targets the load/tensor handoff instead of the epilogue",
       "evidence": {
-        "artifact": "profiles/episode_N/timeline/attempt-N/fine.timeline.receipt.json",
+        "artifact": "scratch/timeline/attempt-N/fine.timeline.receipt.json",
         "sha256": "lowercase SHA-256 of that exact JSON artifact",
         "schema": "ppu-fixed-slot-receipt/v5",
         "evidence_id": "evidence_id read from the artifact"

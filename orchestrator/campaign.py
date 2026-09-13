@@ -17,14 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import agent_runtime as _agent_runtime
+from .agent_assets import DEFAULT_AGENT_SKILLS
 from .constants import (
     AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_CONVERT_AFTER,
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
     DEFAULT_HANDOFF_RESUMES,
     DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
@@ -33,16 +30,15 @@ from .constants import (
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     DEPENDENCY_REVIEW_TIMEOUT_S,
     FRAMEWORK_BASELINE_CATEGORY,
-    FRAMEWORK_BASELINE_FILE,
     FRAMEWORK_BASELINE_TIMEOUT_S,
     FRAMEWORK_BASELINE_VERSION,
     IMMUTABLE_BASELINE_PATHS,
-    PROFILE_DRIVER,
     PROMPTS_DIR,
     REPO_ROOT,
     SOL_SEED,
     WORKSPACE_INIT,
 )
+from .durable_state import durable_write_json
 from .environment_recovery import (
     EnvironmentUnavailable,
     environment_state_file,
@@ -73,6 +69,7 @@ from .operator_layout import (
     is_sol_op,
     validate_agent_problem,
     validate_generated_agent_problem,
+    validate_operator_layout,
     validate_private_shapes,
 )
 from .optimization_policy import (
@@ -95,16 +92,17 @@ from .session_io import (
     _sandbox_command,
     _test_result_from_stdout,
     _validate_production_review,
-    fast_sandbox_directive,
+    sandbox_boundary_directive,
     run_session,
     sandbox_directive,
 )
 from .workspace_runtime import (
     _agent_runtime_directive,
-    _baseline_driver_directive,
     link_runtime,
 )
 from .workspace_state import (
+    framework_baseline_path,
+    validate_framework_baseline_marker,
     git_head,
     git_kernel_blob,
     git_path_blob,
@@ -122,7 +120,6 @@ _LONG_REVIEWER_SESSION_ENV = {
     "qoder": "ATREX_QODER_REVIEW_SESSION_FILE",
 }
 
-_WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
 _WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
 
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
@@ -174,10 +171,8 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    setup_timeout: int = 7200  # 120 min for the baseline session
+    problem_generation_timeout: int = 1800  # public operator contract authoring
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
-    fast_episodes: int = DEFAULT_FAST_EPISODES  # first N post-baseline episodes
-    fast_trials: int = DEFAULT_FAST_TRIALS  # trials per fast episode
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     )
@@ -189,6 +184,8 @@ class Campaign:
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
+    agent_skills: tuple[str, ...] = DEFAULT_AGENT_SKILLS
+    agent_reference_projects: bool = False
     optimization_mode: str = (
         "leaderboard"  # permissive contest flow or strict production gate
     )
@@ -203,8 +200,6 @@ class Campaign:
     long_reviewer_session: str = ""
     v1_ask_codex: bool = False
     v1_ask_qoder: bool = False
-    fast_episode_ask_codex: bool = False
-    fast_episode_ask_qoder: bool = False
     full_episode_ask_codex: bool = True
     full_episode_ask_qoder: bool = True
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
@@ -332,7 +327,8 @@ class Campaign:
                 result = run_session(
                     staging,
                     prompt,
-                    timeout=min(self.setup_timeout, 1_800),
+                    timeout=self.problem_generation_timeout,
+                    workspace_role="problem-generation",
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
                 )
@@ -364,7 +360,7 @@ class Campaign:
                 return
 
     def _episode_plan_reviewers(self, episode_mode: str) -> tuple[str, ...]:
-        if episode_mode not in ("fast", "full"):
+        if episode_mode != "full":
             raise ValueError(f"unsupported episode mode: {episode_mode}")
         return tuple(
             reviewer
@@ -417,11 +413,8 @@ class Campaign:
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
-        # Query events from disposable episode worktrees must land in the
-        # incumbent workspace, where the completion hook can retain them.
-        environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            (self.workspace / ".gpu_wiki_profile").resolve()
-        )
+        # Only attribution is supplied here. The Supervisor owns the private
+        # query-event destination and never passes it into an Agent Session.
         environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
 
@@ -637,6 +630,7 @@ class Campaign:
                 review_workspace,
                 DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
                 timeout=DEPENDENCY_REVIEW_TIMEOUT_S,
+                workspace_role="production-review",
                 agent_cli=self.agent_cli,
                 reasoning_effort="high",
                 agent_plugins=False,
@@ -739,12 +733,11 @@ class Campaign:
         from long_horizon.store import CampaignStore
 
         self._assert_generalized_inputs_are_private()
-        CampaignStore.ensure_excluded(self.workspace, wiki_trace_only=True)
-        native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
+        CampaignStore.ensure_excluded(self.workspace)
         link_runtime(
             self.workspace,
-            native_root,
-            is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
+            agent_skills=self.agent_skills,
+            agent_reference_projects=self.agent_reference_projects,
         )
         install_workspace_policy(
             self.workspace,
@@ -754,85 +747,42 @@ class Campaign:
         )
 
     def _evaluator_directive(self) -> str:
+        score = (
+            "Maximize `performance_score`, the arithmetic mean of per-Shape speedups; "
+            "use `latency_us_by_shape` for diagnosis. Follow the phase's measurement and "
+            "acceptance procedure. Evaluation/profiling drivers and the canonical evaluator "
+            "are Supervisor-private; do not replace them or their methodology."
+        )
         if self.atrex_bench_root:
             if self.private_reference_dir is not None:
                 return (
                     "## Evaluation route: Atrex-Bench generalized private-case native\n\n"
-                    "Treat workspace `agent_problem.json` as the authoritative public optimization "
-                    "contract. Exact `shapes.json`, `metadata.json`, and `roofline.json` cases are "
-                    "evaluator-only and intentionally absent from the workspace; never search for, "
-                    "reconstruct, or read the private reference directory. The immutable "
-                    "`test_kernel.py` adapter and sandbox inject those cases only into the remote "
-                    "official evaluator. Optimize for the complete declared `shape_domain`, using "
-                    "aggregate `distribution_profile` shares only for prioritization. Correctness "
-                    "must pass every hidden case. The optimization score is the arithmetic mean "
-                    "of each opaque shape's measured speedup against its authoritative Atrex-Bench "
-                    "metadata production latency; maximize `performance_score`. After "
-                    "evaluation, use the real "
-                    "`latency_us_by_shape` map keyed by opaque ids without attempting to infer their "
-                    "private inputs. For profiling, choose a real opaque id from canonical "
-                    "`memory/vN.json.performance.latency_us_by_shape` with PROFILE_SHAPE_ID; the "
-                    "sandbox injects only that real case into the remote profile job. Do not edit "
-                    "or replace the adapter or implement a custom correctness/timing harness."
+                    "Workspace `agent_problem.json` defines the public contract. Cover its "
+                    "complete `shape_domain`; any `distribution_profile` only prioritizes "
+                    "common paths. "
+                    "Exact shapes, metadata, and roofline inputs are private and injected by the "
+                    "Supervisor. Results use opaque Shape IDs; do not infer private inputs. "
+                    "Each Shape's speedup is relative to its metadata production latency. "
+                    + score
                 )
             return (
                 "## Evaluation route: Atrex-Bench native\n\n"
-                "This workspace's `test_kernel.py` is an orchestrator-installed immutable adapter. "
-                "It invokes the canonical `atrex-bench/scripts/run_eval.py` against `kernel.py` and "
-                "the workspace `reference.py`/`input.py`/`shapes.json`/`metadata.json`, then emits "
-                "the optimizer's `RESULT_JSON` transport line from the official `eval_result.json`. "
-                "The optimization score is `performance_score`: for each shape, divide "
-                "metadata `production_performance.performance_us` by measured latency, then take "
-                "the arithmetic mean across shapes. Maximize this score. "
-                "Do not edit or replace this adapter and do not implement a custom correctness or "
-                "timing harness. `--multi-seed N` maps to N additional Atrex-Bench correctness "
-                "cases while performance remains one official run per shape."
+                "Evaluate `kernel.py` against the operator's `reference.py`, `input.py`, and "
+                "Shape Contract. Each Shape's speedup is metadata "
+                "`production_performance.performance_us` "
+                "divided by measured latency. `--multi-seed N`, when requested by the phase, adds "
+                "N correctness-only seeds; performance uses the base seed. "
+                + score
             )
         op_dir = Path(self.kernel_demo).resolve().parent
         if is_sol_op(op_dir):
             return (
                 "## Evaluation route: SOL-ExecBench\n\n"
-                "Keep using the immutable SOL `test_kernel.py`, which invokes `sol-execbench` over "
-                "the complete `workload.jsonl`. Each workload's SOL reference is its performance "
-                "baseline; maximize `performance_score`, the arithmetic mean of per-workload "
-                "speedups. Do not substitute the Atrex-Bench native evaluator."
+                "The SOL evaluator runs over the complete `workload.jsonl`. Each workload's "
+                "reference implementation is its performance baseline. "
+                + score
             )
-        return (
-            "## Evaluation route: derived legacy boundary\n\n"
-            "This derived boundary is not a complete Atrex-Bench operator directory. Preserve its "
-            "committed full-shape `test_kernel.py` methodology and do not replace it after V0."
-        )
-
-    def _install_native_evaluator(self) -> None:
-        """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
-        if not self.atrex_bench_root:
-            return
-        if not ATREX_BENCH_HARNESS.is_file():
-            raise FileNotFoundError(f"missing {ATREX_BENCH_HARNESS}")
-        shutil.copy2(ATREX_BENCH_HARNESS, self.workspace / "test_kernel.py")
-
-    def _install_profile_driver(self) -> None:
-        """Seed the immutable external profiling entry for every campaign layout.
-
-        Both profiler wrappers run ``python <file>``, so profiling needs a runnable script.
-        Keeping it out of ``kernel.py`` means a session that rewrites ``run()``/``Model``
-        cannot silently destroy profiling: an in-kernel ``__main__`` block would vanish with
-        the rewrite and the profiler would still exit 0 having captured nothing.
-        """
-        if not PROFILE_DRIVER.is_file():
-            raise FileNotFoundError(f"missing {PROFILE_DRIVER}")
-        shutil.copy2(PROFILE_DRIVER, self.workspace / "profile_driver.py")
-        # Stage it when a repository already exists so the baseline commit tracks it without
-        # depending on how the setup session stages files; restoring an immutable path needs
-        # a blob in the root commit.
-        if (self.workspace / ".git").exists():
-            subprocess.run(
-                ["git", "add", "profile_driver.py"],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        raise ValueError("unsupported operator layout: expected native Atrex-Bench or SOL")
 
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
@@ -842,8 +792,8 @@ class Campaign:
             self.sandbox_ssh,
         )
 
-    def _fast_sandbox_directive(self) -> str:
-        return fast_sandbox_directive(
+    def _sandbox_boundary_directive(self) -> str:
+        return sandbox_boundary_directive(
             self.sandbox_hardware,
             self.sandbox_profile,
             self.sandbox_url,
@@ -854,167 +804,32 @@ class Campaign:
         return optimization_mode_directive(self.optimization_mode, self.framework)
 
     def setup_baseline(self) -> None:
-        # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
-        # (no baseline session) — sol_seed.py copies the ground-truth files, writes
-        # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
+        """Seed and measure V0 through the Supervisor, without a Setup Agent."""
         op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
+        native_root = validate_operator_layout(op_dir)
+        if native_root is None:
             self._setup_baseline_sol(op_dir)
             return
+        if not self.atrex_bench_root:
+            self.atrex_bench_root = str(native_root)
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
-        # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
-        # so cwd must be the work_dir (or the process cwd when --workspace is absent).
+        # workspace_init.sh creates $(pwd)/kernel_opt_<name>.
         subprocess.run(
             ["bash", str(WORKSPACE_INIT), self.campaign_name, self.kernel_demo],
             cwd=str(self.workspace.parent),
             check=True,
         )
-        # Production native tasks always expose a generalized public contract. Exact shapes and
-        # release metadata remain in the source operator directory and are injected only at the
-        # sandbox boundary. A missing public contract is authored before the baseline session.
+        # Exact evaluator inputs remain private in production. If needed, a separate
+        # contract-authoring session generates the public problem before V0 is measured.
         generalized = self.private_reference_dir is not None
         for name in agent_visible_operator_files(op_dir, generalized=generalized):
             source = op_dir / name
             if source.is_file():
                 shutil.copy2(source, self.workspace / name)
         self._ensure_agent_problem()
-        if generalized:
-            # Seed the immutable public contract into the eventual V0 commit even when the
-            # baseline agent stages only its own implementation files.
-            subprocess.run(
-                ["git", "add", AGENT_PROBLEM_FILENAME],
-                cwd=str(self.workspace),
-                check=True,
-            )
         self._link_runtime()
-        self._install_native_evaluator()
-        self._install_profile_driver()
-        # A native Atrex-Bench V0 is already materialized as the verbatim reference
-        # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
-        # Agent session adds no implementation value here.  Commit the sources, run the
-        # one required remote measurement, and record the result mechanically.  The
-        # derived legacy boundary below retains the Agent fallback because its harness
-        # and input layout are not canonical enough to synthesize safely.
-        if self.atrex_bench_root:
-            self._setup_baseline_native(op_dir, generalized=generalized)
-            return
-        prompt = _render(
-            PROMPTS_DIR / "setup.md",
-            WORKSPACE=str(self.workspace),
-            PLATFORM=self.platform,
-            FRAMEWORK=self.framework,
-            KERNEL_DEMO="reference.py",
-            NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(
-                self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-            ),
-            BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
-            HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._sandbox_directive(),
-            EVALUATOR=self._evaluator_directive(),
-            MODE_POLICY=self._mode_directive(),
-        )
-        res = run_session(
-            self.workspace,
-            prompt,
-            timeout=self.setup_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_ssh=self.sandbox_ssh,
-            sandbox_ssh_init=self.sandbox_ssh_init,
-            sandbox_health_command=self.sandbox_health_command,
-            sandbox_timeout=self.sandbox_timeout,
-            reasoning_effort="high",
-            extra_environment=self.agent_environment(),
-        )
-        self._assert_generalized_inputs_are_private()
-        self._account(res, "setup")
-        if res.exit_status != 0 and res.tokens == 0:
-            raise RuntimeError(
-                f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
-                "this is likely an API key / authentication issue. "
-                f"{_agent_runtime.auth_hint(self.agent_cli)}."
-            )
-        baseline_memory = read_memory(self.workspace, 0)
-        baseline_problem = "missing memory/v0.json" if baseline_memory is None else ""
-        if baseline_memory is not None and not git_head(self.workspace):
-            baseline_problem = "memory/v0.json exists but the workspace has no Git HEAD"
-        if not baseline_problem:
-            baseline_problem = self._generalized_memory_coverage_problem(
-                baseline_memory
-            )
-        if not baseline_problem:
-            baseline_problem = self._generalized_contract_commit_problem()
-        if baseline_problem:
-            print(
-                f"[orchestrator] WARNING: incomplete setup ({baseline_problem}); "
-                "starting one clean recovery session",
-                file=sys.stderr,
-                flush=True,
-            )
-            recovery_prompt = (
-                self._mode_directive()
-                + "\n\n# Recover incomplete V0 setup\n\n"
-                + f"Workspace: `{self.workspace}`\n\n"
-                + "A previous non-interactive setup session stopped before producing the required "
-                f"baseline ({baseline_problem}). Continue from the files already present and finish V0 "
-                "autonomously. "
-                "Do not ask the user for confirmation or permission. Inspect the current workspace, "
-                "implement `kernel.py`, preserve the evaluator route described below, run the complete "
-                "workspace workload exactly once with the base seed through the mandatory sandbox "
-                "with `--no-memory`; do not run `--multi-seed` for V0. Parse its "
-                "`[test_kernel] RESULT_JSON=...`, write local `memory/v0.json` and `baseline_report.md`, "
-                "then Git commit `V0: baseline kernel`. Do not enter optimization iterations.\n\n"
-                + self._evaluator_directive()
-                + "\n\n"
-                + self._sandbox_directive()
-            )
-            recovery = run_session(
-                self.workspace,
-                recovery_prompt,
-                timeout=self.setup_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_ssh=self.sandbox_ssh,
-                sandbox_ssh_init=self.sandbox_ssh_init,
-                sandbox_health_command=self.sandbox_health_command,
-                sandbox_timeout=self.sandbox_timeout,
-                reasoning_effort="high",
-                extra_environment=self.agent_environment(),
-            )
-            self._assert_generalized_inputs_are_private()
-            self._account(recovery, "setup recovery")
-            if recovery.exit_status != 0 and recovery.tokens == 0:
-                raise RuntimeError(
-                    f"setup recovery failed immediately (exit={recovery.exit_status}, tokens=0) — "
-                    f"{_agent_runtime.auth_hint(self.agent_cli)}."
-                )
-            recovered_memory = read_memory(self.workspace, 0)
-            recovery_problem = (
-                "missing memory/v0.json" if recovered_memory is None else ""
-            )
-            if recovered_memory is not None and not git_head(self.workspace):
-                recovery_problem = (
-                    "memory/v0.json exists but the workspace still has no Git HEAD"
-                )
-            if not recovery_problem:
-                recovery_problem = self._generalized_memory_coverage_problem(
-                    recovered_memory
-                )
-            if not recovery_problem:
-                recovery_problem = self._generalized_contract_commit_problem()
-            if recovery_problem:
-                detail = recovery.stderr_tail or recovery.stdout_tail
-                raise RuntimeError(
-                    f"setup recovery left an incomplete baseline ({recovery_problem})"
-                    + (f": {detail}" if detail else "")
-                )
+        self._setup_baseline_native(op_dir, generalized=generalized)
 
     def _native_v0_readme(self, *, generalized: bool) -> str:
         contract = (
@@ -1042,11 +857,11 @@ class Campaign:
             f"- Additional notes: {notes}\n\n"
             "## Contract and evaluator\n\n"
             f"- {contract}\n"
-            "- `test_kernel.py` is the immutable supervisor-installed adapter to the official "
-            "`atrex-bench/scripts/run_eval.py`.\n"
+            "- Evaluate and profile through `python3 tools/sandbox.py --kind run/profile`. "
+            "The Supervisor injects its private drivers and evaluator only into remote jobs.\n"
             "- V0 uses exactly one full-workload base-seed evaluator run. It does not profile, "
             "run multi-seed correctness, or perform ABBA.\n"
-            "- Ground-truth operator files and `profile_driver.py` are immutable after V0.\n\n"
+            "- Ground-truth operator files are immutable after V0.\n\n"
             "## Hardware evidence policy\n\n"
             "V0 records identity only and does not speculate about peak specifications. Before an "
             "optimization plan uses a hardware limit, source it from the workspace `gpu-wiki/` "
@@ -1082,12 +897,13 @@ class Campaign:
             self.sandbox_profile,
             self.sandbox_url,
             self.sandbox_timeout,
-            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+            ["python3", "test_kernel.py", "--version", "v0", "--no-memory"],
             ssh=self.sandbox_ssh,
             ssh_init=self.sandbox_ssh_init,
             health_command=self.sandbox_health_command,
             gateway_kind="run",
             private_reference_dir=self.private_reference_dir,
+            reuse_completed=True,
         )
         self._print_v0_evaluator_output(test)
         try:
@@ -1110,8 +926,7 @@ class Campaign:
         """Measure V0 while prefetching the source-only V1 correctness review.
 
         The review packet deliberately excludes V0 measurement artifacts, so its
-        digest is stable before and after the evaluator writes memory/v0.json and
-        baseline_report.md. Review failure remains non-fatal here: the ordinary V1
+        digest is stable before and after the evaluator writes memory/v0.json. Review failure remains non-fatal here: the ordinary V1
         entry point validates the cache and retries synchronously when necessary.
         """
         if not self._framework_baseline_correctness_reviewers():
@@ -1138,47 +953,6 @@ class Campaign:
                         flush=True,
                     )
 
-    def _write_v0_baseline_report(self, result: dict, source_commit: str) -> Path:
-        def metric(name: str) -> str:
-            value = result.get(name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "unknown"
-            return f"{float(value):.6g}"
-
-        by_shape = result.get("latency_us_by_shape")
-        by_shape = by_shape if isinstance(by_shape, dict) else {}
-        evaluator = str(result.get("evaluator") or "workspace test_kernel.py")
-        eval_id = result.get("eval_id")
-        shape_note = (
-            "Shape ids are opaque; exact production inputs remain evaluator-private."
-            if (self.workspace / AGENT_PROBLEM_FILENAME).is_file()
-            else "The complete public workload was evaluated."
-        )
-        report = (
-            "# V0 baseline report\n\n"
-            "This report was generated mechanically by the campaign supervisor.\n\n"
-            "## Provenance\n\n"
-            f"- Source commit: `{source_commit}`\n"
-            "- Implementation: verbatim `reference.py` copied to `kernel.py`\n"
-            f"- Evaluator: `{evaluator}`\n"
-            "- Route: remote sandbox, one base-seed full-workload run\n"
-            f"- Evaluator id: `{eval_id if eval_id is not None else 'unknown'}`\n\n"
-            "## Result\n\n"
-            "- Correctness: `PASS`\n"
-            f"- Measured shapes: `{len(by_shape)}`\n"
-            f"- Geomean latency: `{metric('latency_us_geomean')} us`\n"
-            f"- Arithmetic mean latency: `{metric('latency_us_arith_mean')} us`\n"
-            f"- Mean speedup vs metadata: `{metric('speedup_vs_ref_mean')}x`\n"
-            f"- Performance score: `{metric('performance_score')}`\n"
-            f"- Maximum absolute error: `{metric('max_abs_err')}`\n"
-            f"- Maximum relative error: `{metric('max_rel_err')}`\n\n"
-            f"{shape_note} Per-shape values are stored once in `memory/v0.json`; they are "
-            "not duplicated here.\n"
-        )
-        path = self.workspace / "baseline_report.md"
-        path.write_text(report, encoding="utf-8")
-        return path
-
     def _finalize_v0_measurement(
         self,
         result: dict,
@@ -1189,7 +963,7 @@ class Campaign:
         """Commit V0 measurement metadata without rewriting its source commit SHA."""
         memory_path = self.workspace / "memory" / "v0.json"
         memory = json.loads(memory_path.read_text(encoding="utf-8"))
-        memory["git_commit_hash"] = source_commit
+        memory.pop("git_commit_hash", None)
         optimization = memory.setdefault("optimization", {})
         optimization["action_category"] = "baseline"
         optimization["action_description"] = (
@@ -1203,9 +977,7 @@ class Campaign:
         coverage_problem = self._generalized_memory_coverage_problem(memory)
         if coverage_problem:
             raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
-        self._write_v0_baseline_report(result, source_commit)
-
-        staged = ["memory/v0.json", "baseline_report.md"]
+        staged = ["memory/v0.json"]
         staged.extend(
             path for path in extra_paths if (self.workspace / path).is_file()
         )
@@ -1227,9 +999,8 @@ class Campaign:
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        recorded = read_memory(self.workspace, 0) or {}
-        if recorded.get("git_commit_hash") != source_commit:
-            raise RuntimeError("memory/v0.json does not point to the V0 source commit")
+        if v0_baseline_commit(self.workspace) != source_commit:
+            raise RuntimeError("V0 source commit does not match kernel.py Git provenance")
         if git_path_blob(self.workspace, source_commit, "kernel.py") != git_worktree_blob(
             self.workspace, "kernel.py"
         ):
@@ -1250,12 +1021,9 @@ class Campaign:
             self._native_v0_readme(generalized=generalized), encoding="utf-8"
         )
         source_paths = [
-            ".gitignore",
             "CLAUDE.md",
             "README.md",
             "kernel.py",
-            "test_kernel.py",
-            "profile_driver.py",
             *agent_visible_operator_files(op_dir, generalized=generalized),
         ]
         source_paths = list(
@@ -1338,7 +1106,7 @@ class Campaign:
         self._finalize_v0_measurement(
             result,
             source_commit,
-            extra_paths=("CLAUDE.md", ".gitignore"),
+            extra_paths=("CLAUDE.md",),
         )
 
     def ensure_framework_baseline(self) -> None:
@@ -1658,6 +1426,7 @@ class Campaign:
                         review_workspace,
                         prompt,
                         timeout=600,
+                        workspace_role="baseline-exit-review",
                         agent_cli=supervisor_cli,
                         reasoning_effort="high",
                         agent_plugins=False,
@@ -1783,7 +1552,9 @@ class Campaign:
 
     def _framework_baseline_reference_catalog(self) -> list[str]:
         """Rank a small exact-path catalog; reviewers may select only from this list."""
-        roots = (REPO_ROOT / "gpu-wiki", REPO_ROOT / "reference-projects")
+        roots = [REPO_ROOT / "gpu-wiki"]
+        if self.agent_reference_projects:
+            roots.append(REPO_ROOT / "reference-projects")
         candidates: list[str] = []
         if shutil.which("rg"):
             completed = subprocess.run(
@@ -2046,6 +1817,7 @@ class Campaign:
                     review_workspace,
                     prompt,
                     timeout=_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S,
+                    workspace_role="baseline-correctness-review",
                     agent_cli=agent_cli,
                     reasoning_effort="max",
                     agent_plugins=False,
@@ -2252,11 +2024,11 @@ class Campaign:
             "Qoder" if reviewer == "qodercli" else "Codex" for reviewer in reviewers
         ]
         sections = [
-            "## Mandatory external pre-implementation correctness guidance\n",
+            "## Pre-implementation correctness guidance\n",
             " and ".join(reviewer_labels)
             + " reviewed the bounded public packet. Before editing `kernel.py`, reconcile the "
-            "available guidance against the immutable reference. Shared requirements are "
-            "mandatory; reviewer suggestions never override the public contract.\n",
+            "available guidance against the immutable reference; suggestions never override "
+            "the public contract.\n",
         ]
         for reviewer in reviewers:
             label = "Qoder" if reviewer == "qodercli" else "Codex"
@@ -2286,22 +2058,14 @@ class Campaign:
                     f"(nominated by {item['votes']}/{len(reviewers)} configured reviewers)\n"
                 )
             sections.append(
-                "Read only these exact files as static design evidence. Do not open sibling "
-                "files, follow imports or links recursively, execute/import the reference, "
-                "delegate computation to it, or copy a prebuilt implementation. Raw reviewer "
-                "nominations were reconciled and are not additional authorization.\n"
+                "Use these references only if mounted and readable; Step B defines the research "
+                "scope. Other reviewer-nominated paths are not additional authorization.\n"
             )
         else:
             sections.append(
                 "- None selected. Do not broaden research unless the bounded fallback in Step B "
                 "is needed for framework/toolchain syntax.\n"
             )
-        sections.append(
-            "\nBefore implementation, write a concise internal checklist that resolves any "
-            "disagreement and covers output initialization/padding, paged addressing, causal "
-            "alignment, ragged batches, launch ABI, and numerical stability. Do not create a "
-            "plan file.\n"
-        )
         return "".join(sections)
 
     def _run_framework_baseline_agent(
@@ -2505,7 +2269,7 @@ class Campaign:
 
     def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
         """Return the only ordinary evaluator command the V1 implementation Agent should run."""
-        command = ["python", "tools/sandbox.py", "--kind", "run"]
+        command = ["python3", "tools/sandbox.py", "--kind", "run"]
         if self.sandbox_hardware:
             command += ["--hardware", self.sandbox_hardware]
         if self.sandbox_ssh:
@@ -2516,9 +2280,6 @@ class Campaign:
             command += ["--gateway-profile", self.sandbox_profile]
         command += [
             "--no-sync",
-            "--",
-            "python",
-            "test_kernel.py",
             "--version",
             f"v{n}",
         ]
@@ -2531,7 +2292,6 @@ class Campaign:
             command += ["--shape-id", shape_id]
         if self.atrex_bench_root:
             command += ["--timed-runs", "1"]
-        command.append("--no-memory")
         if shape_ids:
             scope = (
                 f"The supervisor selected {len(shape_ids)} opaque V0 ids spanning the baseline "
@@ -2545,28 +2305,8 @@ class Campaign:
         return shlex.join(command), scope
 
     def _framework_baseline_sandbox_directive(self) -> str:
-        """Concise V1-specific boundary without generic repeated full-evaluator examples."""
-        endpoint = (
-            self.sandbox_ssh
-            or self.sandbox_url
-            or self.sandbox_profile
-            or "agate configuration"
-        )
-        hardware = self.sandbox_hardware or "the configured remote GPU"
-        return (
-            "## V1 GPU sandbox boundary\n\n"
-            f"- Target `{hardware}` through `{endpoint}`. Every GPU import, compile, smoke, "
-            "correctness check, and timer must cross `tools/sandbox.py`; never execute "
-            "`kernel.py`, `test_kernel.py`, a profiler, or a JIT-capable GPU import on the host.\n"
-            "- Use only the bounded smoke command below during the ordinary V1 turn. Do not "
-            "run a full-workload evaluator, `--multi-seed`, a separate benchmark, or profiling.\n"
-            "- Keep `--no-memory`: the supervisor parses evaluator output and owns canonical "
-            "memory. Sandbox uploads are allowlist-only; declare inputs for any custom smoke "
-            "helper, and never upload optimizer memory or private evaluator inputs.\n"
-            "- The remote executor is supervisor-owned infrastructure. Do not start, stop, "
-            "restart, signal, reconfigure, or cancel its jobs. Report an infrastructure "
-            "failure and exit.\n"
-        )
+        """Use the shared boundary; the Baseline Prompt owns its smoke procedure."""
+        return self._sandbox_boundary_directive()
 
     def _framework_baseline_prompt(self, n: int) -> str:
         smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
@@ -2581,7 +2321,8 @@ class Campaign:
             NOTES=self.notes,
             AGENT_RUNTIME=_agent_runtime_directive(
                 self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
+                agent_skills=self.agent_skills,
+                agent_reference_projects=self.agent_reference_projects,
             ),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),
@@ -2589,7 +2330,6 @@ class Campaign:
             CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
             SMOKE_COMMAND=smoke_command,
             SMOKE_SCOPE=smoke_scope,
-            MODE_POLICY=self._mode_directive(),
         )
 
     def _restore_immutable_baseline_paths(self, baseline_commit: str) -> list[str]:
@@ -2696,7 +2436,7 @@ class Campaign:
         # small timing sample so a slow but valid first implementation can enter the
         # optimization loop without exhausting the evaluator's benchmark budget.
         command = [
-            "python",
+            "python3",
             "test_kernel.py",
             "--version",
             f"v{n}",
@@ -2721,6 +2461,7 @@ class Campaign:
                 health_command=self.sandbox_health_command,
                 gateway_kind="run",
                 private_reference_dir=self.private_reference_dir,
+                reuse_completed=True,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
@@ -2814,7 +2555,7 @@ class Campaign:
             memory = {}
         memory["version"] = f"v{n}"
         memory["masked"] = False
-        memory["git_commit_hash"] = None
+        memory.pop("git_commit_hash", None)
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
         memory["correctness"] = {"status": "FAIL"}
         memory["optimization"] = {
@@ -2840,7 +2581,7 @@ class Campaign:
         )
 
     def _commit_framework_baseline(self, n: int, result: dict) -> str:
-        """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
+        """Commit the accepted Kernel and memory, then publish its private baseline pin."""
         staged = [
             path
             for path in (
@@ -2851,10 +2592,6 @@ class Campaign:
                 f"memory/v{n}.json",
             )
             if (self.workspace / path).exists()
-        ]
-        staged += [
-            str(path.relative_to(self.workspace))
-            for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
         ]
         subprocess.run(
             ["git", "add", *staged],
@@ -2904,7 +2641,7 @@ class Campaign:
         optimization["action_description"] = (
             f"first self-contained {self.framework} implementation of the whole operator"
         )
-        memory["git_commit_hash"] = kernel_commit
+        memory.pop("git_commit_hash", None)
         memory[FRAMEWORK_BASELINE_CATEGORY] = {
             "framework": self.framework,
             "validated_stages": ["combined-base-performance+multi-seed-5"],
@@ -2916,12 +2653,7 @@ class Campaign:
         return kernel_commit
 
     def _pin_framework_baseline(self, commit: str, *, version: int) -> None:
-        """Write and commit the framework-baseline marker.
-
-        Deliberately a separate commit rather than an amend: amending would rewrite the very
-        commit whose sha the marker records, leaving a dangling pointer. This commit does not
-        touch kernel.py, so it never registers as an optimization win.
-        """
+        """Durably pin a committed baseline outside the Agent workspace."""
         marker = {
             "schema_version": 1,
             "version": f"v{version}",
@@ -2932,37 +2664,37 @@ class Campaign:
             "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
-            json.dumps(marker, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        paths = [FRAMEWORK_BASELINE_FILE]
+        validate_framework_baseline_marker(self.workspace, marker)
+        paths = []
         if (self.workspace / "memory" / f"v{version}.json").exists():
             paths.append(f"memory/v{version}.json")
-        subprocess.run(
-            ["git", "add", *paths],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        if (
+        if paths:
             subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"v{version}: pin framework baseline {commit[:8]}",
-                ],
+                ["git", "add", *paths],
                 cwd=str(self.workspace),
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
+            if (
+                subprocess.run(
+                    ["git", "diff", "--cached", "--quiet"],
+                    cwd=str(self.workspace),
+                    check=False,
+                ).returncode
+                != 0
+            ):
+                subprocess.run(
+                    [
+                        "git",
+                        "commit",
+                        "-m",
+                        f"v{version}: pin framework baseline {commit[:8]}",
+                    ],
+                    cwd=str(self.workspace),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                )
+        durable_write_json(framework_baseline_path(self.workspace), marker, indent=2)
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
 
@@ -2991,8 +2723,6 @@ class Campaign:
         engine = LongHorizonCampaign(
             base_campaign=self,
             max_version=self.max_iters,
-            fast_episodes=self.fast_episodes,
-            fast_trials=self.fast_trials,
             token_budget=self.token_budget,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,

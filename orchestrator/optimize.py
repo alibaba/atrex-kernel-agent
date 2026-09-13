@@ -5,11 +5,9 @@ Owns the OUTER optimization loop so termination no longer depends on the model's
 in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
 
 Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
-By default the first two post-baseline episodes use five fast plan/implement/evaluator
-trials per episode;
-later episodes use the full profile/research/repair loop. The supervisor squash-promotes only a
-strict, correctness-passing improvement, using canonical-memory comparison in fast mode and a
-same-allocation ABBA schedule in full mode.
+Every post-baseline episode uses the same evidence-backed research/implementation/validation
+loop. The supervisor squash-promotes only a strict, correctness-passing improvement verified
+through same-allocation ABBA.
 
 Termination policy
 ------------------
@@ -80,13 +78,10 @@ try:
     from .constants import (
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
-        DEFAULT_FAST_EPISODES,
-        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
-        FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
@@ -107,21 +102,27 @@ try:
         framework_workspace_suffix,
         supported_frameworks,
     )
-    from .trace_retention import write_trace_retention_manifest
     from .operator_layout import (
         AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
         has_agent_problem,
         is_sol_op,
         should_use_generalized_problem,
         validate_agent_problem,
-        validate_private_shapes,
+        validate_operator_layout,
     )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
+    from .agent_assets import DEFAULT_AGENT_SKILLS, SKILL_PATHS
     from .session_io import check_ssh_environment, detect_arch, ensure_submodules
     from .ssh_health import runtime_health_command
+    from .supervisor_runtime import (
+        SupervisorRuntime,
+        SupervisorRuntimeConfig,
+        activate_supervisor_runtime,
+    )
+    from .trace_retention import write_trace_retention_manifest
     from .workspace_state import (
         latest_version,
+        read_framework_baseline,
         read_memory,
     )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
@@ -130,13 +131,10 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.constants import (  # type: ignore[no-redef]
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
-        DEFAULT_FAST_EPISODES,
-        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
-        FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
@@ -157,29 +155,35 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         framework_workspace_suffix,
         supported_frameworks,
     )
-    from orchestrator.trace_retention import (  # type: ignore[no-redef]
-        write_trace_retention_manifest,
-    )
     from orchestrator.operator_layout import (  # type: ignore[no-redef]
         AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
         has_agent_problem,
         is_sol_op,
         should_use_generalized_problem,
         validate_agent_problem,
-        validate_private_shapes,
+        validate_operator_layout,
     )
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
     )
+    from orchestrator.agent_assets import DEFAULT_AGENT_SKILLS, SKILL_PATHS
     from orchestrator.session_io import (  # type: ignore[no-redef]
         check_ssh_environment,
         detect_arch,
         ensure_submodules,
     )
     from orchestrator.ssh_health import runtime_health_command  # type: ignore[no-redef]
+    from orchestrator.supervisor_runtime import (  # type: ignore[no-redef]
+        SupervisorRuntime,
+        SupervisorRuntimeConfig,
+        activate_supervisor_runtime,
+    )
+    from orchestrator.trace_retention import (  # type: ignore[no-redef]
+        write_trace_retention_manifest,
+    )
     from orchestrator.workspace_state import (  # type: ignore[no-redef]
         latest_version,
+        read_framework_baseline,
         read_memory,
     )
 
@@ -202,9 +206,8 @@ def _without_cli_options(argv: list[str], option_names: tuple[str, ...]) -> list
 
 
 def _recorded_workspace_arch(workspace: Path) -> str:
-    try:
-        marker = json.loads((workspace / FRAMEWORK_BASELINE_FILE).read_text())
-    except (OSError, json.JSONDecodeError):
+    marker = read_framework_baseline(workspace)
+    if marker is None:
         return ""
     arch = str(marker.get("arch") or "")
     return arch if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", arch) else ""
@@ -379,12 +382,12 @@ def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
     --op-dir (+ the non-deducible --platform).
     """
     d = Path(op_dir).resolve()
-    if not d.is_dir():
-        raise SystemExit(f"--op-dir not found: {d}")
+    try:
+        native_root = validate_operator_layout(d)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     ref = d / "reference.py"
-    if not ref.is_file():
-        raise SystemExit(f"--op-dir has no reference.py: {d}")
-    atrex_bench_root = ""
+    atrex_bench_root = str(native_root) if native_root is not None else ""
     provided_problem = has_agent_problem(d)
     shapes_path = d / "shapes.json"
     generalized = should_use_generalized_problem(d, optimization_mode)
@@ -401,18 +404,6 @@ def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-    if not is_sol_op(d) and shapes_path.is_file():
-        try:
-            validate_private_shapes(shapes_path)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        native_root = find_atrex_bench_root(d)
-        if native_root is None:
-            raise SystemExit(
-                "native Atrex-Bench operator requires its canonical scripts/run_eval.py and "
-                f"src/atrex_bench runtime in an ancestor directory: {d}"
-            )
-        atrex_bench_root = str(native_root)
     return {
         "name": d.name,
         "reference": str(ref),
@@ -529,6 +520,35 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     ap.add_argument(
+        "--agent-sandbox",
+        choices=("auto", "bwrap", "none"),
+        default=os.environ.get("ATREX_AKA_AGENT_SANDBOX", "auto"),
+        help=(
+            "Coding-agent filesystem isolation: auto enables Bubblewrap on Linux when "
+            "available; Git-backed Agent workspaces require it and fail closed otherwise. "
+            "none is only for trusted non-Git tool tests (default: auto)."
+        ),
+    )
+    ap.add_argument(
+        "--bwrap-executable",
+        default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"),
+        help="Bubblewrap executable used for coding-agent isolation (default: bwrap).",
+    )
+    skills = ap.add_mutually_exclusive_group()
+    skills.add_argument(
+        "--agent-skill", action="append", choices=tuple(SKILL_PATHS),
+        help=("Expose this Skill (repeatable). Replaces default optional Skills; "
+              "gpu-measurement, runtime-records, and KernelWiki are always mounted."),
+    )
+    skills.add_argument(
+        "--no-agent-skills", dest="agent_skill", action="store_const", const=[],
+        help="Disable optional Skills; gpu-measurement, runtime-records, and KernelWiki stay mounted.",
+    )
+    ap.add_argument(
+        "--agent-reference-projects", action="store_true",
+        help="Expose installed reference-projects read-only (default: hidden).",
+    )
+    ap.add_argument(
         "--agent-cli",
         choices=AGENT_CLI_CHOICES,
         default="claude",
@@ -544,7 +564,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     )
     for stage, stage_label in (
         ("v1", "V1 framework-baseline"),
-        ("fast-episode", "fast episodes"),
         ("full-episode", "full episodes"),
     ):
         default_enabled = stage == "full-episode"
@@ -585,24 +604,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Hard cap on canonical optimization versions/episodes.",
     )
     ap.add_argument(
-        "--fast-episodes",
-        type=int,
-        default=DEFAULT_FAST_EPISODES,
-        help=(
-            "Use the lightweight fast path for the first N optimization episodes after "
-            "baseline (default: 2; 0 disables)."
-        ),
-    )
-    ap.add_argument(
-        "--fast-trials",
-        type=int,
-        default=DEFAULT_FAST_TRIALS,
-        help=(
-            "Number of reviewed plan->implement->evaluator trials in each fast episode "
-            "(default: 5)."
-        ),
-    )
-    ap.add_argument(
         "--token-budget",
         type=int,
         default=0,
@@ -615,7 +616,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Peak-utilization %% short-circuit (default stop condition).",
     )
     ap.add_argument(
-        "--setup-timeout", type=int, default=7200, help="Baseline session timeout (s)."
+        "--problem-generation-timeout",
+        type=int,
+        default=1800,
+        help="Public operator contract authoring session timeout (s).",
     )
     ap.add_argument(
         "--handoff-resumes",
@@ -647,7 +651,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "--framework-baseline",
         choices=FRAMEWORK_BASELINE_MODES,
         default="auto",
-        help="Run one dedicated session after V0 setup that "
+        help="Run one dedicated session after Supervisor V0 initialization that "
         "replaces the V0 PyTorch wrapper with the first self-contained framework "
         "kernel, recorded as v1 (so optimization episodes start at v2). Production "
         "auto = production mode only; always = leaderboard too; "
@@ -703,10 +707,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         )
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
-    if args.fast_episodes < 0:
-        ap.error("--fast-episodes must be non-negative")
-    if args.fast_trials <= 0:
-        ap.error("--fast-trials must be positive")
     if args.handoff_resumes < 0:
         ap.error("--handoff-resumes must be non-negative")
     if args.verify_repeats <= 0:
@@ -865,7 +865,11 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
                 file=sys.stderr,
                 flush=True,
             )
-    ensure_submodules(args.platform, arch or "")
+    agent_skills = tuple(args.agent_skill) if args.agent_skill is not None else DEFAULT_AGENT_SKILLS
+    ensure_submodules(
+        args.platform, arch or "", agent_skills=agent_skills,
+        agent_reference_projects=args.agent_reference_projects,
+    )
     frameworks = (
         (args.framework,)
         if args.framework
@@ -878,12 +882,11 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         f"sandbox_hardware={sandbox_hardware} "
         "sandbox_endpoint="
         f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
+        f"agent_sandbox={args.agent_sandbox} "
         f"frameworks={','.join(frameworks)} "
         "reviewers="
         f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
         f"qoder={'on' if args.v1_ask_qoder else 'off'}],"
-        f"fast[codex={'on' if args.fast_episode_ask_codex else 'off'},"
-        f"qoder={'on' if args.fast_episode_ask_qoder else 'off'}],"
         f"full[codex={'on' if args.full_episode_ask_codex else 'off'},"
         f"qoder={'on' if args.full_episode_ask_qoder else 'off'}] "
         "runtime_arch="
@@ -924,15 +927,15 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
         agent_cli=args.agent_cli,
+        agent_skills=agent_skills,
+        agent_reference_projects=args.agent_reference_projects,
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters,
-        fast_episodes=args.fast_episodes,
-        fast_trials=args.fast_trials,
         token_budget=args.token_budget,
         target_util=args.target_util,
-        setup_timeout=args.setup_timeout,
+        problem_generation_timeout=args.problem_generation_timeout,
         max_stall=args.max_stall,
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
@@ -943,11 +946,31 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         long_reviewer_session=args.long_reviewer_session,
         v1_ask_codex=args.v1_ask_codex,
         v1_ask_qoder=args.v1_ask_qoder,
-        fast_episode_ask_codex=args.fast_episode_ask_codex,
-        fast_episode_ask_qoder=args.fast_episode_ask_qoder,
         full_episode_ask_codex=args.full_episode_ask_codex,
         full_episode_ask_qoder=args.full_episode_ask_qoder,
         convert_after=args.convert_after,
+    )
+    supervisor_config = SupervisorRuntimeConfig(
+        repository_root=Path(__file__).resolve().parent.parent,
+        hardware=sandbox_hardware,
+        sandbox_timeout=args.sandbox_timeout,
+        sandbox_url=args.sandbox_url,
+        sandbox_profile=args.sandbox_profile,
+        sandbox_ssh=args.sandbox_ssh,
+        sandbox_ssh_init=args.sandbox_ssh_init,
+        sandbox_ssh_gpu=args.sandbox_ssh_gpu,
+        sandbox_health_command=args.sandbox_health_command,
+        sandbox_ssh_runtime_binds=tuple(args.sandbox_ssh_runtime_bind or ()),
+        private_reference_dir=campaign.private_reference_dir,
+        atrex_bench_root=(
+            Path(campaign.atrex_bench_root)
+            if campaign.atrex_bench_root
+            else None
+        ),
+        agent_sandbox=args.agent_sandbox,
+        bwrap_executable=args.bwrap_executable,
+        agent_skills=agent_skills,
+        agent_reference_projects=args.agent_reference_projects,
     )
     trace_status = "failed"
     handled_signals = (signal.SIGTERM, signal.SIGHUP)
@@ -964,30 +987,35 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     for handled_signal in handled_signals:
         signal.signal(handled_signal, interrupt_campaign)
     try:
-        if latest_version(campaign.workspace) < 0:
-            campaign.setup_baseline()
-        else:
-            print(
-                f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
-                flush=True,
+        with (
+            SupervisorRuntime(supervisor_config) as supervisor_runtime,
+            activate_supervisor_runtime(supervisor_runtime),
+        ):
+            if latest_version(campaign.workspace) < 0:
+                campaign.setup_baseline()
+            else:
+                print(
+                    f"[orchestrator] resuming workspace at "
+                    f"v{latest_version(campaign.workspace)}",
+                    flush=True,
+                )
+                campaign._link_runtime()
+            baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
+                read_memory(campaign.workspace, 0)
             )
-            campaign._link_runtime()
-        baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
-            read_memory(campaign.workspace, 0)
-        )
-        if baseline_coverage_problem:
-            raise RuntimeError(
-                "generalized campaign baseline is incompatible with authoritative per-shape "
-                f"memory: {baseline_coverage_problem}; start a fresh workspace"
-            )
-        if args.sandbox_ssh:
-            # A recovery monitor may declare success only after operator resolution,
-            # architecture/submodule setup, campaign construction, and workspace resume.
-            signal_restart_ready()
-        campaign.ensure_framework_baseline()
-        campaign.run()
-        trace_status = "completed"
-        return 0
+            if baseline_coverage_problem:
+                raise RuntimeError(
+                    "generalized campaign baseline is incompatible with authoritative "
+                    f"per-shape memory: {baseline_coverage_problem}; start a fresh workspace"
+                )
+            if args.sandbox_ssh:
+                # A recovery monitor may declare success only after operator resolution,
+                # architecture/submodule setup, campaign construction, and workspace resume.
+                signal_restart_ready()
+            campaign.ensure_framework_baseline()
+            campaign.run()
+            trace_status = "completed"
+            return 0
     except KeyboardInterrupt:
         trace_status = "interrupted"
         raise

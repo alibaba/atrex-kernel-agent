@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Optional, cast
 
-
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
 AGENT_PROBLEM_SCHEMA_VERSION = "atrex.agent_problem.v1"
 GENERATED_AGENT_PROBLEM_FIELDS = frozenset(
@@ -54,6 +53,32 @@ def find_atrex_bench_root(op_dir: Path) -> Optional[Path]:
         ).is_dir():
             return candidate
     return None
+
+
+def validate_operator_layout(op_dir: Path) -> Optional[Path]:
+    """Validate V0 inputs before launch; return the native evaluator root, or None for SOL."""
+    if not op_dir.is_dir():
+        raise ValueError(f"operator directory not found: {op_dir}")
+    if not (op_dir / "reference.py").is_file():
+        raise ValueError(f"operator directory has no reference.py: {op_dir}")
+    if is_sol_op(op_dir):
+        return None
+    missing = [name for name in ("input.py", "shapes.json") if not (op_dir / name).is_file()]
+    if missing:
+        raise ValueError(
+            f"incomplete native Atrex-Bench operator: missing {', '.join(missing)} in {op_dir}. "
+            "Supply reference.py, input.py, and shapes.json in an Atrex-Bench checkout, "
+            "or a SOL operator with reference.py, definition.json, and workload.jsonl. "
+            "The Setup Agent fallback has been removed."
+        )
+    validate_private_shapes(op_dir / "shapes.json")
+    native_root = find_atrex_bench_root(op_dir)
+    if native_root is None:
+        raise ValueError(
+            "native Atrex-Bench operator requires its canonical scripts/run_eval.py and "
+            f"src/atrex_bench runtime in an ancestor directory: {op_dir}"
+        )
+    return native_root
 
 
 def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:

@@ -250,7 +250,13 @@ def emit(payload, human: bool) -> int:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    from supervisor_runtime_proxy import maybe_proxy
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    proxied = maybe_proxy("query_hardware", arguments)
+    if proxied is not None:
+        return proxied
+    args = build_parser().parse_args(arguments)
     store = Path(args.store).resolve() if args.store else STORE
     entries = load_index(store)["records"]
 

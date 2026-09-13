@@ -215,7 +215,7 @@ def initialize(
 
 def load(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2}:
         raise ValueError("unsupported episode journal")
     return value
 
@@ -859,6 +859,29 @@ def finalize(
         raise ValueError("a terminal journal requires at least one experiment")
     if state == "candidate_ready" and not candidate_commit.strip():
         raise ValueError("candidate_ready requires candidate_commit")
+    if state == "candidate_ready":
+        selected = outcome.get("selected_experiment_index")
+        if (
+            isinstance(selected, bool)
+            or not isinstance(selected, int)
+            or not 1 <= selected <= len(experiments)
+        ):
+            raise ValueError(
+                "candidate_ready outcome.selected_experiment_index must identify an "
+                "existing one-based experiment"
+            )
+        experiment = experiments[selected - 1]
+        experiment = experiment if isinstance(experiment, dict) else {}
+        evaluation = experiment.get("evaluation")
+        evaluation = evaluation if isinstance(evaluation, dict) else {}
+        if evaluation.get("correctness") != "pass":
+            raise ValueError(
+                "selected candidate experiment must report evaluation.correctness=pass"
+            )
+        if experiment.get("decision") not in {"promote", "keep_as_best"}:
+            raise ValueError(
+                "selected candidate experiment decision must be promote or keep_as_best"
+            )
     if "accepted_ppu_diagnostics" in outcome:
         normalized, errors = normalize_accepted_ppu_diagnostics(
             outcome["accepted_ppu_diagnostics"]
@@ -899,7 +922,10 @@ def validate_terminal(
     if value.get("state") != state:
         return "episode journal state does not match handoff"
     experiments = value.get("experiments")
-    if not isinstance(experiments, list) or not experiments:
+    runtime_managed = value.get("runtime_managed") is True
+    if not isinstance(experiments, list) or (
+        not experiments and (not runtime_managed or state == "candidate_ready")
+    ):
         return "episode journal has no structured experiments"
     outcome = value.get("outcome")
     if not isinstance(outcome, dict) or not str(outcome.get("summary", "")).strip():
@@ -907,6 +933,74 @@ def validate_terminal(
     directions = outcome.get("next_directions", [])
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         return "episode journal next_directions is invalid"
+    if runtime_managed:
+        events = value.get("direction_events")
+        if not isinstance(events, list):
+            return "Runtime Journal direction_events is invalid"
+        direction_status: dict[str, str] = {}
+        for event in events:
+            if not isinstance(event, dict):
+                return "Runtime Journal contains an invalid Direction event"
+            direction_id = event.get("direction_id")
+            action = event.get("action")
+            if not isinstance(direction_id, str) or action not in {
+                "propose", "start", "complete", "abandon", "block", "defer"
+            }:
+                return "Runtime Journal contains an invalid Direction event"
+            direction_status[direction_id] = {
+                "propose": "proposed",
+                "start": "in_progress",
+                "complete": "completed",
+                "abandon": "abandoned",
+                "block": "blocked",
+                "defer": "deferred",
+            }[action]
+        active = sorted(
+            direction_id
+            for direction_id, direction_state in direction_status.items()
+            if direction_state == "in_progress"
+        )
+        if active:
+            return f"Runtime Journal has in-progress Directions: {active}"
+        if state == "candidate_ready":
+            selected_id = outcome.get("selected_experiment_id")
+            selected = next(
+                (
+                    experiment
+                    for experiment in experiments
+                    if isinstance(experiment, dict)
+                    and experiment.get("experiment_id") == selected_id
+                ),
+                None,
+            )
+            if selected is None:
+                return "Runtime Journal selected Experiment is missing"
+        if not value.get("finalized_at"):
+            return "episode journal is not finalized"
+        if state == "candidate_ready" and value.get("candidate_commit") != candidate_commit:
+            return "episode journal candidate_commit does not match handoff"
+        return ""
+    if state == "candidate_ready":
+        selected = outcome.get("selected_experiment_index")
+        if (
+            isinstance(selected, bool)
+            or not isinstance(selected, int)
+            or not 1 <= selected <= len(experiments)
+        ):
+            return (
+                "candidate_ready outcome.selected_experiment_index must identify an "
+                "existing one-based experiment"
+            )
+        experiment = experiments[selected - 1]
+        experiment = experiment if isinstance(experiment, dict) else {}
+        evaluation = experiment.get("evaluation")
+        evaluation = evaluation if isinstance(evaluation, dict) else {}
+        if evaluation.get("correctness") != "pass":
+            return "selected candidate experiment must report evaluation.correctness=pass"
+        if experiment.get("decision") not in {"promote", "keep_as_best"}:
+            return (
+                "selected candidate experiment decision must be promote or keep_as_best"
+            )
     if "accepted_ppu_diagnostics" in outcome:
         normalized, errors = normalize_accepted_ppu_diagnostics(
             outcome["accepted_ppu_diagnostics"]

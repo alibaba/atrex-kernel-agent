@@ -19,23 +19,61 @@ agent in this repository to translate the task into that command and start the c
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
 The orchestrator verifies required submodules before starting and initializes missing ones
-automatically; the large `reference-projects/` collection remains optional. On PPU hardware the
-t-head projects in that collection are the only PPU-specific implementation references available, and
-they clone over SSH (`git@github.com:t-head/...`), so initialize them with an SSH key that can reach
-that org. `reference-projects/README.md` indexes every project by vendor, DSL, and operator.
+automatically. The Supervisor Wiki corpus is required; NCU Skill dependencies are initialized only
+when selected. Agent resources are controlled by these optional flags:
 
-The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
-configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
-repository evidence. V1, fast episodes, and full episodes each have independent Codex and Qoder
-switches. V1 and fast reviewers default off; full reviewers default on. A Codex- or Qoder-owned
-episode performs an enabled matching review in the current session to avoid recursion. The campaign
-probes a reviewer only when
-it is first enabled for an episode mode, caches that decision under `.atrex_long_horizon/`, reuses it
-after restarts, and never retries a reviewer that failed the probe. Reviews are non-persistent by
-default; an optional campaign-private Codex reviewer thread may span episodes. Disabled and
-unavailable reviewers are recorded explicitly without discarding available reviews. Enabled
-external consultations always run with maximum reasoning effort, independently of the primary
-episode's configured effort.
+```bash
+# Add these to orchestrator/optimize.py; explicit selection replaces default optional Skills.
+--agent-skill ncu-report-skill
+# Other choices: autonomous-gpu-kernel-timeline, ppu-acu-joint-profile
+--no-agent-skills             # mandatory gpu-measurement + runtime-records + KernelWiki only
+--agent-reference-projects    # expose installed source references read-only
+```
+
+`gpu-measurement` (GPU measurement), `runtime-records`, and `KernelWiki` are always mounted in the Agent workspace,
+including with `--no-agent-skills` or an explicit Skill selection. `autonomous-gpu-kernel-timeline`
+is optional and enabled by default. `gpu-measurement` documents GPU operations through the existing
+HTTP client. `runtime-records` documents historical result/source lookup, Journal operations, and
+Episode reports, including request/response examples and their ID linkage. Prompts only state the
+required behavior and point to these Skills. They add no execution layer or host-level Skill installation.
+Reference projects and the entire `reference/` source
+directory are hidden; Agent `tools/` contains only the self-contained `sandbox.py` HTTP client. Existing
+managed symlinks are updated. A real, unmanaged resource directory causes an explicit migration
+error rather than deleting its contents. On PPU, opting into reference projects initializes the
+t-head references over SSH (`git@github.com:t-head/...`), requiring repository access.
+
+Agent `memory/` exposes read-only canonical `vN.json` reports. Full promotion audits are private at
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/promotions/long_horizon_eNNNN.json`.
+Existing committed audits are copied there automatically; their Git history is preserved but their
+files are hidden in the Agent sandbox. No manual migration or additional Agent action is needed.
+
+The CLI starts with `HOME=$PWD=/home/agent/workspace`. Full conversations and Provider usage,
+including exported subagent transcripts, are captured automatically outside the Agent view:
+
+```text
+<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/workspaces/<scope>/sessions/
+└── run-<uuid>/
+    ├── conversation.jsonl
+    ├── token-usage.json
+    └── provider/                 # stdout, stderr, and native transcript deltas
+```
+
+These files update during execution, not just at Episode completion. Each retry has its own capture;
+the usage file identifies its Episode/invocation through `context`. Missing Provider counts are
+marked unavailable or partial; Qoder credits are not converted to tokens. For reconciliation rules,
+see [Session capture](../long_horizon/README.md).
+
+Auxiliary sessions have their own bounded workspace projection. A policy Reviewer receives
+read-only `review_request.json` and `candidate/`, and returns only `dependency_review.json`.
+Problem authoring receives its staged reference inputs and returns `agent_problem.json`;
+baseline correctness and exit reviewers receive `context/` or `candidate/` plus crash metadata,
+and return `correctness_review.md` or `resume.json`. These roles do not expose the Campaign's
+private ledger, and their outputs are validated by the Supervisor before use.
+
+Episode plans live in Runtime Direction records, and conclusions live in Experiments referencing
+Gateway Records. Separate plan drafts, profile-analysis files, and phase markers are not required.
+Legacy plan-generation and memory-writing tools are not installed for the Agent; Supervisor
+correctness, performance, and policy checks remain independent of its final report.
 
 ## 1. Clone the Repository
 
@@ -68,7 +106,11 @@ fresh workspace when resuming an older production campaign that exposed exact sh
 For native Atrex-Bench and SOL operators, V0 does not launch a coding Agent. The supervisor commits
 the verbatim reference wrapper, runs exactly one official full-workload base-seed evaluator, writes
 README/memory/report programmatically, and records measurement metadata in a second commit whose
-memory points to the stable source SHA. A setup Agent is retained only for derived legacy inputs.
+memory points to the stable source SHA. There is no Setup Agent fallback: native inputs require
+`reference.py`, `input.py`, and `shapes.json` within an Atrex-Bench checkout containing
+`scripts/run_eval.py` and `src/atrex_bench`; SOL inputs require `reference.py`, `definition.json`, and
+`workload.jsonl`. Incomplete inputs are rejected before launch. Production public-contract authoring
+and Framework Baseline sessions remain separate from this mechanical V0 initialization.
 
 ## 2. Launch the Orchestrated Loop
 
@@ -229,19 +271,21 @@ verifying any deferred remote cleanup.
    framework-native V1 in production mode. When enabled, read-only reviewers provide bounded
    correctness guidance; the coding Agent implements and smoke-tests, while the supervisor owns full
    evaluation, policy review, memory, and the final commit.
-5. **Run isolated optimization episodes.** Each episode owns one candidate direction in a private
-   Git branch and worktree. By default, the first two episodes run five
-   `plan -> implement -> evaluator` trials at maximum primary-Agent reasoning effort without
-   profiling, multi-seed validation, or ABBA. Later episodes use the full
-   profile/research/plan/edit/repair loop.
-6. **Verify and promote.** Fast mode compares the fastest passing hash-matched trial with canonical
-   incumbent memory. Full mode runs an independent incumbent/candidate ABBA comparison in one
-   isolated GPU allocation. Production also applies its fail-closed policy review. Only a strict
+5. **Run isolated optimization episodes.** Each Episode explores a bounded number of Directions,
+   one at a time, in a private Git branch and worktree. Every Episode uses maximum primary-Agent
+   reasoning effort and the same research/implementation/validation loop, with no fixed Trial count.
+   Direction and Experiment updates go through scoped Runtime
+   tools: the Supervisor immediately stores them, validates the explicitly cited Gateway Record IDs,
+   and makes prior Episode history queryable without exposing the private Journal files.
+   All operations use `python3 tools/sandbox.py --kind <operation>`; see the CLI reference below.
+6. **Verify and promote.** The Supervisor obtains an incumbent/candidate ABBA comparison from Runtime,
+   reusing a matching completed record or measuring in an isolated GPU allocation. Production also
+   applies its fail-closed policy review. Only a strict
    passing improvement is squash-promoted.
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
+GPU evaluations and profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
 
@@ -271,15 +315,12 @@ python orchestrator/optimize.py \
 ```
 
 Each Codex episode starts with `codex exec --json`; bounded handoff recovery resumes that same thread.
-Its native rollout is read incrementally for token and marker accounting. Non-episode Codex
-orchestrator phases use a fresh thread in an isolated temporary `CODEX_HOME` that links existing auth,
-config, and skills; newly written rollout and state files stay there, and the directory is removed
-after normalization or terminal-only fallback. The orchestrator uses `session_meta` only to recover
-the exact workspace or thread when stdout omits it, verifies every available usage component against
-`turn.completed.usage`, and records ledger or cleanup errors without failing the Agent run. If ledger
-observation fails during an episode resume, consecutive cumulative stdout totals still provide a
-non-duplicated invocation total while phase attribution is disabled. Optimization and
-plan-generation skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
+Its native rollouts, including exported child rollouts, are copied and read incrementally for
+accounting. In Supervisor-managed sandbox sessions, `CODEX_HOME` points to `~/.codex`, backed by
+session-scoped persistent storage. Non-sandbox trusted invocations retain the temporary-Home ledger
+fallback. Missing native accounting is explicitly reported rather than inventing per-response
+counters. Selected
+Skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
 Codex installation is not modified. Optional Codex config overrides use a JSON object or an array of
 literal `key=value` values:
 
@@ -375,16 +416,11 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 
 ```text
 --max-iters N                    Hard cap on canonical versions/episodes
---fast-episodes N                Fast post-baseline episodes (default: 2; 0 disables)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
 --long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex, qoder)
 --v1-ask-codex / --no-v1-ask-codex                 Configure ask-codex for V1 (default: off)
 --v1-ask-qoder / --no-v1-ask-qoder                 Configure ask-qoder for V1 (default: off)
---fast-episode-ask-codex / --no-fast-episode-ask-codex
-                                                    Configure fast ask-codex (default: off)
---fast-episode-ask-qoder / --no-fast-episode-ask-qoder
-                                                    Configure fast ask-qoder (default: off)
 --full-episode-ask-codex / --no-full-episode-ask-codex
                                                     Configure full ask-codex (default: on)
 --full-episode-ask-qoder / --no-full-episode-ask-qoder
@@ -394,7 +430,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
+--problem-generation-timeout S   Public contract authoring session timeout (default: 1800)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
 --sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
@@ -407,9 +443,9 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
---verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
---verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 120)
---min-improvement-pct PCT        Strict gain required in fast or full verification
+--verify-repeats N               ABBA repeat pairs (default: 2)
+--verify-run-timeout S           Evaluator budget per ABBA run (default: 120)
+--min-improvement-pct PCT        Strict gain required in verification
 --arch ARCH                      Override runtime architecture detection
 ```
 
@@ -423,32 +459,194 @@ episode, while canonical `memory/vN.json` is written only after the episode reac
 The supervisor validates that this numbered record is both parseable and committed at `HEAD` before
 it advances campaign state, including failed, pivoted, blocked, and interrupted rounds.
 
-### Direct sandbox and profiling
+### Sandbox and profiling inside an Agent Session
 
-The sandbox boundary can also be used directly for validation and profiling:
+Within a running Campaign Agent Session, use the scoped HTTP facade for validation and profiling:
 
 ```bash
-python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
-  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+python3 tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync
+python3 tools/sandbox.py --kind profile --hardware REMOTE_GPU --profile-source
+python tools/sandbox.py --kind check --no-sync
+python tools/sandbox.py --kind check --sanitize memcheck --no-sync
+python tools/sandbox.py --kind profile --requirement 'package==1' \
+  --deps-mode freeze_installed --no-sync
+python tools/sandbox.py --kind check --requirement 'package==1' \
+  --deps-mode no_deps --no-sync
+python tools/sandbox.py --kind disassemble --format isa --no-sync
+python tools/sandbox.py --kind env --env-gpu REMOTE_GPU --env-capabilities
+python tools/sandbox.py --kind profile --profile-shape-id 0 \
+  --kernel-name candidate_kernel --profile-source \
+  --launch-skip 1 --launch-count 5 --no-sync
+python tools/sandbox.py --kind run --mode correctness_only --no-sync
+python tools/sandbox.py --kind run \
+  --input-path scratch/custom-input.py \
+  --shapes-path scratch/custom-shapes.json --no-sync
+python tools/sandbox.py --kind run --mode full \
+  --baseline-path scratch/baseline.py --comparison-repeats 2 --no-sync
+python tools/sandbox.py --kind record-read \
+  --record-id gateway-<timestamp>-<kernel-prefix>
+python tools/sandbox.py --kind record-read \
+  --record-id kernel-<timestamp>-<opaque-id> \
+  --view gateway-records
+python tools/sandbox.py --kind record-read \
+  --record-id kernel-<timestamp>-<opaque-id> \
+  --view source \
+  --output-path scratch/restored-kernel.py
 python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
   --ssh-gpu 0 \
   --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
-  --no-sync -- python test_kernel.py --no-memory
+  --kind run --no-sync
 ```
 
-Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,
-edits, and Git state remain on the coordinator.
+Only code and evaluator/profile inputs cross the remote GPU boundary. Agents edit source locally;
+Git metadata, commits, canonical memory, structured plans/analysis, and Gateway Records are
+Supervisor-owned. Agent workspaces require Linux Bubblewrap and contain no `.git`; `auto` fails closed
+when this isolation is unavailable. A candidate report supplies `selected_experiment_id` and leaves
+the matching measured source in `kernel.py`; it does not supply Git commit IDs.
+
+These commands fail closed outside a Supervisor-managed Agent Session because no Runtime
+capability is present. Operators configure the endpoint on `orchestrator/optimize.py`; they do not
+pass credentials or endpoint overrides through the Agent facade.
+
+`--requirement SPEC` is repeatable for `profile`, `check`, and `disassemble`. `--deps-mode freeze_installed`
+reuses compatible packages already present in the worker image, while `--deps-mode no_deps`
+installs only the explicitly named requirements. Both policies are scoped to that Gateway job.
+
+For `--kind run`, `--mode correctness_only` performs correctness without timing. A custom public
+input constructor may be supplied with `--input-path`; a custom Shape JSON object may be supplied
+with `--shapes-path`, independently or together. Paths must name regular UTF-8 files inside the
+Agent workspace. The constructor must define `_make_inputs(**input_kwargs)`, Shape IDs must be
+integer strings, and each Shape value must be an object. These calls are exploratory and cannot
+support a claimed measured improvement without a standard full evaluator result.
+
+Profile accepts an exact `--kernel-name` or `--kernel-regex`, source correlation, launch skip/count,
+and one opaque evaluator `--profile-shape-id`. An Agent-requested `--baseline-path` comparison runs
+the baseline and current `kernel.py` in alternating AB/BA order within the same allocation for each
+Shape; it records evidence but does not replace the orchestrator's promotion decision.
+
+### Agent-facing errors
+
+Runtime validation failures return a compact error rather than a full schema or CLI usage dump:
+
+```json
+{
+  "ok": false,
+  "repairable": true,
+  "error": {
+    "code": "invalid_arguments",
+    "message": "argument --launch-count: invalid int value: 'oops'",
+    "next_action": "Correct the indicated input before retrying. Use python3 tools/sandbox.py --kind OPERATION --help for CLI options and the session instructions for JSON fields."
+  }
+}
+```
+
+`repairable` means the Agent can correct its input or Journal state, not that replaying the same
+request is safe. JSON field mismatches include `missing_fields`, `unexpected_fields`, and the small
+set of `allowed_fields`. Direction conflicts include the blocking ID; the advancement limit explains
+how to resume an already-started direction or finish the Episode.
+
+Missing/corrupt private Journal data and missing Supervisor dependencies are infrastructure blockers,
+not Agent repair tasks. An unhandled Runtime failure returns an `error_id` correlated with the private
+service log and warns that the operation's outcome is unknown. Verify existing records before replaying
+mutations; never repair private files, install Supervisor dependencies, or change credentials.
+
+Terminal Gateway job failures retain `error_class`, `reason`, a bounded `message`, and `next_action`.
+Failed Dev jobs preserve this information both immediately and through `record-read`, including when
+Agate has no `result` or only partial logs. Hidden case inputs and raw error `details` remain private.
+This changes error reporting, not the configured Gateway retry policy. HTTP errors are printed to
+stderr; Journal/Gateway result errors appear on stdout with a nonzero exit status. The CLI does not
+automatically replay either.
+
+### Unified Agent CLI
+
+GPU calls, Wiki queries, record queries, Journal operations, and terminal reports share one entry point:
+
+```bash
+python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind wiki-query "Target B200, runtime sm_100. BF16 Triton RMSNorm reaches 75% DRAM peak. Which fusion strategies apply?" --brief
+python3 tools/sandbox.py --kind wiki-query --file scratch/research-request.txt
+python3 tools/sandbox.py --kind wiki-search --arch sm_100 --dsl triton --coverage
+python3 tools/sandbox.py --kind wiki-hardware --product b200 --field peak_compute.bf16.dense
+python3 tools/sandbox.py --kind record-read --record-id gateway-...
+python3 tools/sandbox.py --kind record-read --record-id kernel-... --view gateway-records
+python3 tools/sandbox.py --kind record-read --record-id kernel-... --view source --output-path scratch/old.py
+python3 tools/sandbox.py --kind update-direction --request-file scratch/direction.json
+python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
+python3 tools/sandbox.py --kind list-directions --output-path scratch/directions.json
+python3 tools/sandbox.py --kind load-direction --record-id direction_...
+python3 tools/sandbox.py --kind list-experiments --output-path scratch/experiments.json
+python3 tools/sandbox.py --kind load-experiment --record-id experiment_...
+python3 tools/sandbox.py --kind episode-report --request-file scratch/episode-report.json
+```
+
+`wiki-query` accepts natural language, `wiki-search` provides structured experience retrieval,
+and `wiki-hardware` looks up exact hardware facts. Their query flags and result formats are
+preserved; use `--kind <operation> --help` for details. Wiki queries use the same scoped Runtime
+capability as other operations. The Supervisor owns store selection, credentials, and output
+bounds; the Agent cannot override the store or retain the private query workspace. The selected
+KernelWiki Skill documents these commands; there is no separate `gpu-wiki/` directory in the sandbox.
+
+Natural-language query events persist under
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/wiki-profile/`
+(`run.json` and `raw/query_events/<date>/*.json`). The Supervisor fixes that path and strips it
+from the Agent environment. Events survive Episode worktree cleanup and Runtime restarts;
+query results and `query_id` still return normally to the Agent. At Campaign completion,
+collect the private Campaign's `trace-retention-manifest.json` relative to that private root,
+in addition to the workspace manifest. No query-event copies are written back to the workspace.
+Existing `.gpu_wiki_profile` files are left untouched and are not included as trusted private
+evidence; new queries do not append to them.
+
+Each Experiment cites the Gateway results used in its analysis:
+
+```json
+{
+  "gateway_record_ids": ["gateway-...", "gateway-..."]
+}
+```
+
+The Supervisor verifies that all cited Gateway records are visible in the current Campaign and
+stores exactly those references. They may refer to different Kernels or operation types; no
+before/after or Kernel identity fields are needed. `record-read --record-id gateway-...` returns the
+Kernel ID; use that ID with `--view source --output-path scratch/old.py` to retrieve the source.
+IDs are placeholders here; use the actual IDs returned by Gateway calls or `record-read`. The complete
+Direction, Experiment, and report formats are in the mandatory Agent Skill
+[`runtime-records`](../orchestrator/agent_skills/runtime-records/SKILL.md), which the Episode prompt references.
+
+Direction proposals optionally accept `relationship` (`retry`, `refinement`, `reimplementation`,
+`correction`, `port`, `combination`), `derived_from_direction_ids`, `derived_from_experiment_ids`, and
+`supersedes_direction_id`. Explain the link in the existing `rationale`. Parent lists allow up to 32
+unique visible IDs each; an Experiment implies its owning Direction as a parent. A relation needs a
+parent, a combination needs two distinct parents, and only correction may supersede a parent. The
+Supervisor validates before writing, leaves parent lifecycle untouched, and rejects later ancestry
+rewrites. Continue an unchanged unfinished Direction with its ID; propose a new one for a revised
+hypothesis. Old Journals have no inferred ancestry.
+
+`list-directions` and `load-direction` return declared ancestry alongside the current lifecycle
+state. Follow referenced Experiment IDs with `load-experiment` to retrieve Gateway Record references.
+Relationships are Agent interpretations, not causal proof of performance gains. This feature does
+not add the main Runtime's Pool scheduler to AKA.
+
+Evaluate responses and record reads omit `measurement_aggregation`; the three-call per-Shape median
+policy and its full internal evidence are unchanged. Journal writes return the new record ID, list
+operations confirm the written file and item count, and load operations return the requested record.
+Report validation failures are repairable: correct the request or Direction state and submit again.
 
 ## 3. Inspect Outputs
 
 Each optimization workspace records the full optimization trail:
 
-- `kernel.py`: current best kernel at Git `HEAD`
-- `memory/live.json`: ignored, non-canonical progress for the active Long Horizon episode
+- `kernel.py`: current editable candidate; the Supervisor owns its committed version
+- `memory/live.json`: Supervisor-side, ignored non-canonical progress; not mounted into the Agent
 - `memory/v<N>.json`: canonical episode/version records
-- `memory/long_horizon_e<NNNN>.json`: promoted-episode evidence
-- `plans/`: evidence-based optimization plans
-- `profiles/`: profiler artifacts and extracted bottleneck evidence
+- `<private-campaign-root>/promotions/long_horizon_e<NNNN>.json`: full promotion audit, not Agent-visible
+
+- `scratch/`: temporary requests and optional diagnostics, ignored by Git; empty at each new
+  Episode, preserved when resuming the same interrupted Episode
+- Runtime Journal: structured Directions/plans and Experiments/analysis, read through Runtime tools
+- Gateway Records: exact Kernel snapshots and measurements, read through `--kind record-read`
 - `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
 - `submission.json`: SOL-ExecBench submission output for SOL campaigns
+
+`memory/v<N>.json` combines the terminal report, Journal, and authoritative outcome; it contains no
+`git_commit_hash` or `candidate_commit`. Agents submit no Commit IDs. The Supervisor tracks source
+provenance and recovery in Git and its internal state.

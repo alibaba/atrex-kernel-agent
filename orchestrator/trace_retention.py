@@ -1,7 +1,7 @@
-"""Declare the minimal workspace evidence needed for offline Wiki mining.
+"""Declare minimal workspace and Supervisor-private evidence for Wiki mining.
 
 This module does not archive or upload anything.  It publishes an exact list of
-small, semantically relevant files for a consumer-owned completion hook.  The
+small, semantically relevant files in separate manifests for a completion hook. The
 hook remains authoritative for path validation, secret scanning and size limits.
 """
 from __future__ import annotations
@@ -11,22 +11,19 @@ import os
 import re
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .constants import FRAMEWORK_BASELINE_FILE
+from .supervisor_runtime import supervisor_campaign_root
+from long_horizon.promotion_audit import AUDIT_FILENAME_RE
 
 MANIFEST_NAME = "trace-retention-manifest.json"
 MANIFEST_SCHEMA = "atrex-trace-retention-manifest-v1"
 TERMINAL_STATUSES = {"completed", "interrupted", "failed"}
 MEMORY_RE = re.compile(r"v[0-9]+\.json")
-LONG_MEMORY_RE = re.compile(r"long_horizon_e[0-9]+\.json")
-PROFILE_RE = re.compile(r"v[0-9]+(?:[_-].+)?")
 ROOT_FILES = ("kernel.py", "definition.json", "solution.json", "workload.jsonl")
-PROFILE_FILES = (
-    "summary.txt", "REPORT.md", "iteration_report.md", "evidence.md",
-    "analysis/metrics_key_run.json",
-)
 
 
 def _safe_relative(workspace: Path, value: str) -> str | None:
@@ -92,31 +89,21 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
         for path in memory.glob("*.json"):
             if MEMORY_RE.fullmatch(path.name):
                 add(path, "canonical-memory")
-            elif LONG_MEMORY_RE.fullmatch(path.name):
-                add(path, "long-horizon-outcome")
 
     runtime = workspace / ".atrex_long_horizon"
     add(runtime / "state.json", "long-horizon-state")
     add(runtime / "evaluations.jsonl", "authoritative-evaluation")
     episodes = runtime / "episodes"
     if episodes.is_dir():
-        for episode in episodes.glob("e*/episode_runtime"):
-            add(episode / "journal.json", "episode-journal")
-            add(episode / "evaluations.jsonl", "episode-evaluation")
-
-    profile = workspace / ".gpu_wiki_profile"
-    add(profile / "run.json", "wiki-run-identity")
-    query_root = profile / "raw" / "query_events"
-    if query_root.is_dir():
-        for path in query_root.glob("*/*.json"):
-            add(path, "wiki-query-event")
-
-    profiles = workspace / "profiles"
-    if profiles.is_dir():
-        for directory in profiles.iterdir():
-            if directory.is_dir() and PROFILE_RE.fullmatch(directory.name):
-                for relative in PROFILE_FILES:
-                    add(directory / relative, "compact-profiler-evidence")
+        for episode_dir in episodes.glob("e*"):
+            add(
+                episode_dir / "supervisor_runtime/journal.json",
+                "runtime-journal",
+            )
+            add(
+                episode_dir / "supervisor_runtime/evaluations.jsonl",
+                "episode-evaluation",
+            )
 
     return [
         {"path": path, "role": files[path]}
@@ -124,27 +111,51 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
     ]
 
 
-def write_trace_retention_manifest(
-    workspace: Path,
+def collect_private_evidence_files(root: Path) -> list[dict[str, str]]:
+    """Collect baseline, promotion, and Wiki evidence outside the workspace."""
+    if root.is_symlink():
+        return []
+    candidates = [(root / FRAMEWORK_BASELINE_FILE, "framework-baseline-pin")]
+    promotions = root / "promotions"
+    if not promotions.is_symlink() and promotions.is_dir():
+        candidates.extend(
+            (path, "promotion-audit") for path in sorted(promotions.iterdir())
+            if AUDIT_FILENAME_RE.fullmatch(path.name)
+        )
+    profile = root / "wiki-profile"
+    if not profile.is_symlink() and profile.is_dir():
+        candidates.append((profile / "run.json", "wiki-run-identity"))
+        candidates.extend(
+            (path, "wiki-query-event")
+            for path in sorted((profile / "raw" / "query_events").glob("*/*.json"))
+        )
+    files: list[dict[str, str]] = []
+    for path, role in candidates:
+        relative = _safe_relative(root, path.relative_to(root).as_posix())
+        if relative:
+            files.append({"path": relative, "role": role})
+    return files
+
+
+def _write_manifest(
+    root: Path,
     status: str,
+    files: list[dict[str, str]],
     *,
     hardware: dict[str, str] | None = None,
 ) -> Path | None:
-    """Atomically publish terminal evidence; never change optimization outcome."""
-    if status not in TERMINAL_STATUSES:
-        raise ValueError(f"unsupported trace retention status: {status}")
-    workspace = Path(workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        return None
-    path = workspace / MANIFEST_NAME
+    path = root / MANIFEST_NAME
     temporary = path.with_suffix(f".json.tmp-{os.getpid()}-{uuid.uuid4()}")
     try:
+        if root.is_symlink() or path.is_symlink():
+            raise ValueError("trace retention destination cannot be a symlink")
+        root.mkdir(parents=True, mode=0o700, exist_ok=True)
         document: dict[str, Any] = {
             "schema_version": MANIFEST_SCHEMA,
             "producer": "atrex-kernel-agent",
             "status": status,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "files": collect_evidence_files(workspace),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "files": files,
             "excluded_families": [
                 "coding-agent-session-transcripts",
                 "stdout-stderr-logs",
@@ -164,6 +175,7 @@ def write_trace_retention_manifest(
             json.dumps(document, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        temporary.chmod(0o600)
         temporary.replace(path)
     except Exception as exc:
         temporary.unlink(missing_ok=True)
@@ -173,3 +185,39 @@ def write_trace_retention_manifest(
         )
         return None
     return path
+
+
+def write_trace_retention_manifest(
+    workspace: Path,
+    status: str,
+    *,
+    hardware: dict[str, str] | None = None,
+) -> Path | None:
+    """Publish two root-relative manifests, even after the Runtime has stopped.
+
+    The workspace manifest contains no private paths or Wiki audit events.
+    The private Campaign manifest declares baseline, promotion, and Wiki evidence in place; completion
+    hooks must collect it from that root without restoring it into the workspace.
+    """
+    if status not in TERMINAL_STATUSES:
+        raise ValueError(f"unsupported trace retention status: {status}")
+    workspace = Path(workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        return None
+    try:
+        private_root = supervisor_campaign_root(workspace)
+        _write_manifest(
+            private_root, status, collect_private_evidence_files(private_root), hardware=hardware
+        )
+    except Exception as exc:
+        print(
+            f"WARNING private trace retention manifest could not be written: {exc}",
+            file=sys.stderr,
+        )
+    try:
+        return _write_manifest(
+            workspace, status, collect_evidence_files(workspace), hardware=hardware
+        )
+    except Exception as exc:
+        print(f"WARNING workspace evidence could not be collected: {exc}", file=sys.stderr)
+        return None

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SOL-ExecBench correctness + benchmark harness for a kernel-opt workspace.
+"""Supervisor-private SOL-ExecBench correctness + benchmark harness.
 
 This is the IMMUTABLE ground-truth harness. It runs the *real* SOL-ExecBench
 evaluator (`sol-execbench`) against this workspace's `solution.json` over EVERY
@@ -210,6 +210,7 @@ def _record_memory(workspace: Path, version: str, s: dict) -> Path:
     mem_dir.mkdir(parents=True, exist_ok=True)
     path = mem_dir / f"{version}.json"
     mem = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    mem.pop("git_commit_hash", None)
 
     mem.setdefault("version", version)
     mem.setdefault("masked", False)

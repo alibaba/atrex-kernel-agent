@@ -13,9 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
-ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
-PROFILE_DRIVER = REPO_ROOT / "reference" / "profile_driver.py"
-SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
+ATREX_BENCH_RUNTIME_ENV = "ATREX_AKA_ATREX_BENCH_RUNTIME_ROOT"
+SANDBOX_TOOL = REPO_ROOT / "supervisor" / "gateway.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
 CONVERT_PERF_TOL = (
@@ -25,8 +24,6 @@ DEFAULT_CONVERT_AFTER = (
     3  # mandatory Triton->Gluon escalation after three consecutive stalls
 )
 DEFAULT_HANDOFF_RESUMES = 2
-DEFAULT_FAST_EPISODES = 2
-DEFAULT_FAST_TRIALS = 5
 DEFAULT_VERIFY_REPEATS = 2
 DEFAULT_VERIFY_RUN_TIMEOUT = 120
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
@@ -42,7 +39,6 @@ DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
 AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 IMMUTABLE_BASELINE_PATHS = (
-    "test_kernel.py",
     "reference.py",
     "input.py",
     "agent_problem.json",
@@ -52,9 +48,6 @@ IMMUTABLE_BASELINE_PATHS = (
     "workload.jsonl",
     "definition.json",
     "valid.py",
-    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
-    # remove the ability to profile; it is ground truth like the evaluator harness.
-    "profile_driver.py",
     "memory/v0.json",
 )
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="

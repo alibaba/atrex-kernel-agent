@@ -3,20 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import shlex
 import shutil
 import subprocess
-import tempfile
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event
 from typing import Any
 
-from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
 from orchestrator.hardware import hardware_vendor
+from orchestrator.supervisor_runtime import (
+    supervisor_evidence_root,
+    supervisor_journal_path,
+)
+from supervisor.journal import initialize_journal
 
 from . import main_adapter
 from .git_episode import (
@@ -27,7 +27,6 @@ from .git_episode import (
     record_episode_outcome,
     working_changes,
 )
-from .journal import initialize as initialize_journal
 from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
 from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_terminal
@@ -35,18 +34,17 @@ from .models import (
     EpisodeHandoff,
     SupervisorState,
     VerificationResult,
-    VerificationRun,
 )
 from .protocol import read_handoff
+from .promotion_audit import committed_promotion_audit
 from .session import LongSessionRunner
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
 
 MODULE_ROOT = Path(__file__).resolve().parent.parent
-PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
-FAST_PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "fast_episode.md"
-EVIDENCE_PREFIXES = ("plans/", "profiles/")
+PROMPTS_DIR = MODULE_ROOT / "orchestrator" / "prompts"
+PROMPT_PATH = PROMPTS_DIR / "episode.md"
 MEMORY_EXPERIMENT_FIELDS = (
     "name",
     "hypothesis",
@@ -57,12 +55,11 @@ MEMORY_EXPERIMENT_FIELDS = (
     "timestamp",
 )
 MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
-EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
-FAST_POLICY_REVIEW_REQUEST_PATH = Path(
-    ".atrex_long_horizon/policy_review_request.json"
-)
-FAST_REASONING_EFFORT = "max"
-FULL_REASONING_EFFORT = "max"
+EPISODE_REASONING_EFFORT = "max"
+
+
+def _episode_evaluations_path(workspace: Path) -> Path:
+    return supervisor_evidence_root(workspace) / "evaluations.jsonl"
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -224,7 +221,7 @@ def _latest_complete_episode_performance(
     """Read the latest complete supervisor-independent measurement from an episode."""
     if episode_workspace is None:
         return None
-    path = episode_workspace / EPISODE_EVALUATIONS_PATH
+    path = _episode_evaluations_path(episode_workspace)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         kernel_path = episode_workspace / "kernel.py"
@@ -303,24 +300,6 @@ def _latest_complete_episode_performance(
     return None
 
 
-def _episode_evaluation_count(episode_workspace: Path) -> int:
-    """Count durable evaluator results emitted by one episode."""
-    path = episode_workspace / EPISODE_EVALUATIONS_PATH
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
-        return 0
-    count = 0
-    for line in lines:
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-            count += 1
-    return count
-
-
 def _episode_head_matches_incumbent(
     workspace: Path, episode_workspace: Path | None
 ) -> bool:
@@ -356,6 +335,26 @@ def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
     experiments: list[dict[str, Any]] = []
     for index, raw in enumerate(raw_experiments, start=1):
         if not isinstance(raw, dict):
+            continue
+        if journal.get("runtime_managed") is True:
+            compact = {
+                key: raw[key]
+                for key in (
+                    "experiment_id",
+                    "direction_id",
+                    "name",
+                    "hypothesis",
+                    "change",
+                    "gateway_record_ids",
+                    "evidence",
+                    "analysis",
+                    "action",
+                    "recorded_at",
+                )
+                if key in raw
+            }
+            compact["index"] = index
+            experiments.append(compact)
             continue
         compact: dict[str, Any] = {"index": index}
         for field in MEMORY_EXPERIMENT_FIELDS:
@@ -426,25 +425,12 @@ def _memory_profile_evidence(
     journal: dict[str, Any],
     *,
     version: int,
-    fast_mode: bool,
-    fast_trial_count: int,
     is_ppu: bool,
     promoted: bool,
     episode_workspace: Path | None,
 ) -> dict[str, Any]:
     """Build canonical profile memory without changing non-PPU behavior."""
     experiment_count = len(journal.get("experiments", []))
-    if fast_mode:
-        return {
-            "tool_used": "none (fast mode)",
-            "evidence_summary": f"{experiment_count} structured experiments",
-            "bottleneck_type": "not_profiled_fast_mode",
-            "evidence_chain": (
-                f"{fast_trial_count} reviewed plan -> implementation -> evaluator "
-                "trials -> "
-                + ("best-candidate promotion" if promoted else "no promotion")
-            ),
-        }
     if not is_ppu:
         return {
             "tool_used": (
@@ -495,8 +481,6 @@ class LongHorizonCampaign:
     base_campaign: main_adapter.Campaign
     max_episodes: int = 8
     max_version: int | None = None
-    fast_episodes: int = DEFAULT_FAST_EPISODES
-    fast_trials: int = DEFAULT_FAST_TRIALS
     episode_limit: int = 0
     token_budget: int = 0
     handoff_resumes: int = 2
@@ -505,37 +489,9 @@ class LongHorizonCampaign:
     session_runner: LongSessionRunner | None = None
     worktree_root: Path | None = None
 
-    def __post_init__(self) -> None:
-        if self.fast_episodes < 0:
-            raise ValueError("fast_episodes must be non-negative")
-        if self.fast_trials < 1:
-            raise ValueError("fast_trials must be positive")
-
     @property
     def workspace(self) -> Path:
         return self.base_campaign.workspace
-
-    def _is_fast_episode(self, episode: int) -> bool:
-        """Use the lightweight path for the first N optimization episodes."""
-        return self.fast_episodes > 0 and 1 <= episode <= self.fast_episodes
-
-    def _active_fast_trials(
-        self, active: dict[str, Any], *, fast_mode: bool
-    ) -> int:
-        """Keep an in-flight fast episode's original trial contract across restarts."""
-        value = active.get("fast_trials")
-        if (
-            fast_mode
-            and isinstance(value, int)
-            and not isinstance(value, bool)
-            and value > 0
-        ):
-            return value
-        return self.fast_trials
-
-    @staticmethod
-    def _episode_reasoning_effort(*, fast_mode: bool) -> str:
-        return FAST_REASONING_EFFORT if fast_mode else FULL_REASONING_EFFORT
 
     def _expected_shape_ids(self) -> set[str] | None:
         private_reference_dir = self.base_campaign.private_reference_dir
@@ -547,277 +503,67 @@ class LongHorizonCampaign:
             )
         )
 
-    def _fast_evaluator_command(self, version: int) -> str:
-        command = ["python", "tools/sandbox.py", "--kind", "run"]
-        if self.base_campaign.sandbox_hardware:
-            command += ["--hardware", self.base_campaign.sandbox_hardware]
-        if self.base_campaign.sandbox_ssh:
-            command += ["--ssh", self.base_campaign.sandbox_ssh]
-        elif self.base_campaign.sandbox_url:
-            command += ["--url", self.base_campaign.sandbox_url]
-        elif self.base_campaign.sandbox_profile:
-            command += ["--gateway-profile", self.base_campaign.sandbox_profile]
-        command += [
-            "--no-sync",
-            "--",
-            "python",
-            "test_kernel.py",
-            "--version",
-            f"v{version}",
-            "--no-memory",
-        ]
-        return shlex.join(command)
-
-    def _review_fast_candidate_snapshot(
-        self,
-        worktree: EpisodeWorktree,
-        candidate_commit: str,
-        *,
-        require_gluon: bool,
-    ) -> None:
-        """Prewarm the production-review cache from an immutable candidate commit."""
-        resolved = git_text(
-            worktree.path,
-            "rev-parse",
-            "--verify",
-            f"{candidate_commit}^{{commit}}",
-            check=False,
-        )
-        if not resolved:
-            return
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", worktree.base_commit, resolved],
-            cwd=str(worktree.path),
-            capture_output=True,
-            check=False,
-        )
-        if ancestor.returncode != 0:
-            return
-        with tempfile.TemporaryDirectory(prefix="atrex-fast-policy-snapshot-") as value:
-            snapshot = Path(value)
-            for relative in ("kernel.py", "solution.json"):
-                blob = subprocess.run(
-                    ["git", "show", f"{resolved}:{relative}"],
-                    cwd=str(worktree.path),
-                    capture_output=True,
-                    check=False,
-                )
-                if blob.returncode != 0:
-                    if relative == "kernel.py":
-                        return
-                    continue
-                (snapshot / relative).write_bytes(blob.stdout)
-            print(
-                "[long-horizon] fast candidate "
-                f"{resolved[:12]}: starting policy review alongside evaluator",
-                flush=True,
-            )
-            # The campaign reviewer caches by the exact bounded candidate digest. The
-            # final call on the live worktree therefore only persists/reuses this verdict.
-            main_adapter.candidate_policy_violations(
-                self.base_campaign,
-                snapshot,
-                require_gluon=require_gluon,
-            )
-
-    def _prewarm_fast_policy_reviews(
-        self,
-        worktree: EpisodeWorktree,
-        *,
-        require_gluon: bool,
-        stop_event: Event,
-    ) -> None:
-        """Review each atomically submitted fast candidate while its evaluator runs."""
-        request_path = worktree.path / FAST_POLICY_REVIEW_REQUEST_PATH
-        reviewed: set[str] = set()
-
-        def review_latest_request() -> None:
-            try:
-                payload = json.loads(request_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                return
-            candidate_commit = (
-                payload.get("candidate_commit") if isinstance(payload, dict) else None
-            )
-            if (
-                not isinstance(payload, dict)
-                or payload.get("schema_version") != 1
-                or not isinstance(candidate_commit, str)
-                or not candidate_commit.strip()
-            ):
-                return
-            candidate_commit = candidate_commit.strip()
-            if candidate_commit in reviewed:
-                return
-            reviewed.add(candidate_commit)
-            self._review_fast_candidate_snapshot(
-                worktree,
-                candidate_commit,
-                require_gluon=require_gluon,
-            )
-
-        while not stop_event.wait(0.1):
-            review_latest_request()
-        # Close the race where the final request is renamed immediately before the
-        # episode agent exits and the supervisor signals this watcher to stop.
-        review_latest_request()
-
     def _prompt(
         self,
         *,
         episode: int,
         version: int,
         worktree: EpisodeWorktree,
-        journal_path: Path,
-        handoff_path: Path,
-        live_memory_path: Path,
         conversion_pending: bool,
-        fast_mode: bool,
-        fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
         directives = main_adapter.episode_directives(
-            self.base_campaign, version, fast=fast_mode
+            self.base_campaign, version
         )
-        fast_trial_count = fast_trials or self.fast_trials
-        journal_command = (
-            f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
-            f"--live-path {json.dumps(str(live_memory_path))}"
-        )
-        fast_trial_plan_paths = "\n".join(
-            f"- Trial {trial}: `plans/v{version}_trial{trial}_draft.md` -> "
-            f"`plans/v{version}_trial{trial}_plan.md`"
-            for trial in range(1, fast_trial_count + 1)
-        )
+        fragments = {
+            "RUNTIME_JOURNAL_CONTRACT": "runtime_journal.md",
+            "WIKI_DIRECTIVE": "episode_wiki.md",
+            "CONVERSION_DIRECTIVE": "",
+            "PPU_DIRECTIVE": "",
+        }
+        if conversion_pending:
+            fragments["CONVERSION_DIRECTIVE"] = "episode_conversion.md"
+            fragments["WIKI_DIRECTIVE"] = ""  # Conversion has its own initial query.
+        if (
+            hardware_vendor(self.base_campaign.platform, self.base_campaign.arch) == "ppu"
+            and "ppu-acu-joint-profile" in self.base_campaign.agent_skills
+        ):
+            fragments["PPU_DIRECTIVE"] = "episode_ppu.md"
+        template = PROMPT_PATH.read_text(encoding="utf-8")
+        # Insert fragments before substituting values so nested task placeholders resolve too.
+        for marker, name in fragments.items():
+            template = template.replace(
+                "{{" + marker + "}}",
+                (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else "",
+            )
         return _render(
-            (FAST_PROMPT_PATH if fast_mode else PROMPT_PATH).read_text(
-                encoding="utf-8"
-            ),
+            template,
             {
                 "EPISODE": episode,
                 "VERSION": version,
                 "WORKSPACE": worktree.path,
                 "OPERATOR": self.base_campaign.name,
                 "PLATFORM": self.base_campaign.platform,
+                "ARCH": self.base_campaign.arch or "<authoritative runtime architecture>",
                 "FRAMEWORK": self.base_campaign.framework,
-                "BASE_COMMIT": worktree.base_commit,
-                "EPISODE_BRANCH": worktree.branch,
-                "JOURNAL_PATH": journal_path,
-                "JOURNAL_PATH_SHELL": json.dumps(str(journal_path)),
-                "HANDOFF_PATH": handoff_path,
                 "NOTES": self.base_campaign.notes,
                 "MODE_POLICY": directives["mode_policy"],
                 "EVALUATOR": directives["evaluator"],
                 "HARDWARE": directives["hardware"],
                 "SANDBOX": directives["sandbox"],
                 "AGENT_RUNTIME": directives["agent_runtime"],
-                "PLAN_GENERATOR": directives["plan_generator"],
-                "JOURNAL_COMMAND": journal_command,
-                "FAST_TRIALS": fast_trial_count,
-                "FAST_TRIAL_PLAN_PATHS": fast_trial_plan_paths,
-                "FAST_EVALUATOR_COMMAND": self._fast_evaluator_command(version),
                 "RESUME_DIRECTIVE": (
                     "This episode is resuming after a supervisor restart. Keep and reuse the "
-                    "existing worktree, checkpoints, journal, plans, profiles, generated files, "
-                    "and source edits. Inspect them before acting; do not reset, clean, or stash "
-                    "them. If the journal is already finalized and consistent, republish its "
-                    "matching handoff. Otherwise continue the in-progress engineering work."
+                    "existing workspace, scratch files, and source "
+                    "edits. Inspect them before acting; do not discard them. Use the "
+                    "Runtime Journal list/load tools to inspect durable state, then continue the "
+                    "in-progress work or repair and resubmit its terminal report."
                     if resumed
-                    else "This is a new episode worktree with no interrupted work to recover."
+                    else "This is a new episode worktree. `scratch/` starts empty; files from "
+                    "earlier Episodes are not inherited."
                 ),
-                "CONVERSION_DIRECTIVE": (
-                    "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
-                    "submit another Triton kernel. A candidate must be a committed Gluon kernel, "
-                    f"pass correctness, and stay within {main_adapter.CONVERT_PERF_TOL:.0%} of "
-                    "the incumbent latency."
-                    if conversion_pending
-                    else "No mandatory framework conversion is currently latched."
-                ),
+                "CONVERSION_TOLERANCE": f"{main_adapter.CONVERT_PERF_TOL:.0%}",
             },
-        )
-
-    def _fast_verification_result(
-        self, episode_workspace: Path, *, memory_version: int
-    ) -> VerificationResult:
-        """Score the final recorded evaluator result without launching ABBA.
-
-        ``tools/sandbox.py`` fingerprints ``kernel.py`` in every episode result.  The
-        reader below selects a complete passing trial result whose fingerprint matches
-        the final selected candidate, then compares that measurement with canonical
-        incumbent memory.  This deliberately trades statistical rigor for turnaround.
-        """
-        artifact = str(episode_workspace / EPISODE_EVALUATIONS_PATH)
-        expected_shape_ids = self._expected_shape_ids()
-        candidate_result = _latest_complete_episode_performance(
-            episode_workspace,
-            expected_shape_ids=expected_shape_ids,
-            required_performance_objective="shape_speedup_arithmetic_mean",
-        )
-        if candidate_result is None:
-            return VerificationResult(
-                "FAIL",
-                None,
-                None,
-                None,
-                error=(
-                    "fast mode requires one complete passing evaluator result for the "
-                    "final kernel.py"
-                ),
-                artifact=artifact,
-            )
-        candidate_latency = float(candidate_result["latency_us_geomean"])
-        candidate_score = float(candidate_result["performance_score"])
-        run = VerificationRun(
-            revision="candidate",
-            repeat=0,
-            exit_code=0,
-            result=candidate_result,
-        )
-        incumbent = _latest_complete_canonical_performance(
-            self.workspace,
-            before_version=memory_version,
-            expected_shape_ids=expected_shape_ids,
-            required_performance_objective="shape_speedup_arithmetic_mean",
-        )
-        if incumbent is None:
-            return VerificationResult(
-                "FAIL",
-                candidate_latency,
-                None,
-                None,
-                runs=[run],
-                error="fast mode could not find complete canonical incumbent performance",
-                artifact=artifact,
-            )
-        incumbent_performance, _incumbent_version = incumbent
-        incumbent_latency = float(incumbent_performance["latency_us_geomean"])
-        incumbent_score = float(incumbent_performance["performance_score"])
-        improvement = (candidate_score / incumbent_score - 1.0) * 100.0
-        threshold = float(self.base_campaign.min_improvement_pct)
-        if improvement <= threshold:
-            return VerificationResult(
-                "FAIL",
-                candidate_latency,
-                incumbent_latency,
-                improvement,
-                runs=[run],
-                error=(
-                    "fast evaluator performance-score improvement "
-                    f"{improvement:.6f}% did not exceed {threshold:.3f}%"
-                ),
-                artifact=artifact,
-                candidate_performance_score=candidate_score,
-                incumbent_performance_score=incumbent_score,
-            )
-        return VerificationResult(
-            "PASS",
-            candidate_latency,
-            incumbent_latency,
-            improvement,
-            runs=[run],
-            artifact=artifact,
-            candidate_performance_score=candidate_score,
-            incumbent_performance_score=incumbent_score,
         )
 
     def _require_canonical_memory(self, version: int) -> None:
@@ -847,9 +593,6 @@ class LongHorizonCampaign:
         worktree: EpisodeWorktree,
         journal_path: Path,
         handoff: EpisodeHandoff,
-        *,
-        fast_mode: bool = False,
-        fast_trials: int | None = None,
     ) -> str:
         candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
@@ -864,25 +607,6 @@ class LongHorizonCampaign:
         )
         if diagnosis:
             return diagnosis
-        if fast_mode and handoff.status != "blocked":
-            required_fast_trials = fast_trials or self.fast_trials
-            try:
-                journal = load_journal(journal_path)
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                return f"cannot validate fast trial evidence: {exc}"
-            experiments = journal.get("experiments")
-            experiment_count = len(experiments) if isinstance(experiments, list) else 0
-            if experiment_count < required_fast_trials:
-                return (
-                    f"fast episode requires {required_fast_trials} recorded trial experiments; "
-                    f"found {experiment_count}"
-                )
-            evaluation_count = _episode_evaluation_count(worktree.path)
-            if evaluation_count < required_fast_trials:
-                return (
-                    f"fast episode requires {required_fast_trials} evaluator results; "
-                    f"found {evaluation_count}"
-                )
         if handoff.status != "candidate_ready":
             return ""
         violation, _ = worktree.validate_candidate(candidate)
@@ -911,6 +635,13 @@ class LongHorizonCampaign:
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
+        evidence = supervisor_evidence_root(worktree.path)
+        legacy_evidence = worktree.path / RUNTIME_DIR
+        if evidence.is_dir() and evidence.resolve() != legacy_evidence.resolve():
+            destination = episode_dir / "supervisor_runtime"
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(evidence, destination)
         verification = worktree.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
@@ -922,14 +653,10 @@ class LongHorizonCampaign:
         self,
         *,
         version: int,
-        candidate_commit: str,
         journal: dict[str, Any],
         verification: VerificationResult,
         episode_workspace: Path,
-        fast_mode: bool = False,
-        fast_trials: int | None = None,
     ) -> dict[str, Any]:
-        fast_trial_count = fast_trials or self.fast_trials
         representative = _representative_candidate_result(verification)
         by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
         expected_shapes = self._expected_shape_ids()
@@ -967,16 +694,8 @@ class LongHorizonCampaign:
                 ),
                 "shape_measurement_repeats": shape_measurement_repeats,
                 "measurement_subject": "candidate",
-                "measurement_source": (
-                    "episode_evaluator_result"
-                    if fast_mode
-                    else "authoritative_verification"
-                ),
-                "comparison_method": (
-                    "single_candidate_vs_canonical_incumbent"
-                    if fast_mode
-                    else "same_allocation_abba"
-                ),
+                "measurement_source": "authoritative_verification",
+                "comparison_method": "same_allocation_abba",
                 "carried_from_version": None,
                 "performance_objective": representative.get("performance_objective"),
                 "performance_score": verification.candidate_performance_score,
@@ -1001,25 +720,18 @@ class LongHorizonCampaign:
                 "authoritative_improvement_pct": verification.improvement_pct,
             },
             "optimization": {
-                "action_category": (
-                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
-                ),
+                "action_category": "long_horizon_episode",
                 "action_description": str(
                     outcome.get("summary", "verified long-horizon candidate")
                 ),
                 "expected_impact": (
-                    f"best of {fast_trial_count} evaluator-backed trials against "
-                    "canonical incumbent"
-                    if fast_mode
-                    else "independently verified incumbent/candidate latency reduction"
+                    "independently verified incumbent/candidate latency reduction"
                 ),
                 "risks_and_rollback": "candidate retained on isolated episode branch",
             },
             "profile_evidence": _memory_profile_evidence(
                 journal,
                 version=version,
-                fast_mode=fast_mode,
-                fast_trial_count=fast_trial_count,
                 is_ppu=(
                     hardware_vendor(
                         self.base_campaign.platform, self.base_campaign.arch
@@ -1044,12 +756,10 @@ class LongHorizonCampaign:
                 for value in directions
                 if isinstance(value, str)
             ],
-            "git_commit_hash": candidate_commit,
             "long_horizon": {
                 "status": "candidate_ready",
-                "mode": "fast" if fast_mode else "full",
-                "verification": "single_evaluator" if fast_mode else "abba",
-                "fast_trials": fast_trial_count if fast_mode else None,
+                "mode": "full",
+                "verification": "abba",
             },
         }
 
@@ -1060,13 +770,9 @@ class LongHorizonCampaign:
         status: str,
         violation: str,
         journal: dict[str, Any],
-        candidate_commit: str,
         verification: VerificationResult | None = None,
         episode_workspace: Path | None = None,
-        fast_mode: bool = False,
-        fast_trials: int | None = None,
     ) -> dict[str, Any]:
-        fast_trial_count = fast_trials or self.fast_trials
         outcome = (
             journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
         )
@@ -1214,9 +920,7 @@ class LongHorizonCampaign:
                 ),
             },
             "optimization": {
-                "action_category": (
-                    "fast_long_horizon_episode" if fast_mode else "long_horizon_episode"
-                ),
+                "action_category": "long_horizon_episode",
                 "action_description": str(outcome.get("summary", status)),
                 "expected_impact": "episode exploration did not produce a promotable improvement",
                 "risks_and_rollback": "incumbent kernel was preserved",
@@ -1224,8 +928,6 @@ class LongHorizonCampaign:
             "profile_evidence": _memory_profile_evidence(
                 journal,
                 version=version,
-                fast_mode=fast_mode,
-                fast_trial_count=fast_trial_count,
                 is_ppu=(
                     hardware_vendor(
                         self.base_campaign.platform, self.base_campaign.arch
@@ -1254,12 +956,9 @@ class LongHorizonCampaign:
                 for value in directions
                 if isinstance(value, str)
             ],
-            "git_commit_hash": None,
             "long_horizon": {
                 "status": status,
-                "candidate_commit": candidate_commit or None,
-                "mode": "fast" if fast_mode else "full",
-                "fast_trials": fast_trial_count if fast_mode else None,
+                "mode": "full",
             },
         }
 
@@ -1270,8 +969,6 @@ class LongHorizonCampaign:
         worktree: EpisodeWorktree,
         handoff: EpisodeHandoff,
         *,
-        memory_version: int,
-        fast_mode: bool,
         conversion_pending: bool,
         verifier: GatewayABBAValidator,
     ) -> tuple[str, list[str], VerificationResult | None, bool]:
@@ -1304,26 +1001,14 @@ class LongHorizonCampaign:
         verification: VerificationResult | None = None
         accepted = False
         if not violation:
-            active["phase"] = (
-                "checking_fast_evaluator" if fast_mode else "verifying"
-            )
+            active["phase"] = "verifying"
             store.save_active(active)
-            if fast_mode:
-                verification = self._fast_verification_result(
-                    worktree.path,
-                    memory_version=memory_version,
-                )
-            else:
-                verification = verifier.verify(
-                    worktree.path,
-                    base_commit=worktree.base_commit,
-                    candidate_commit=candidate_commit,
-                    changed_paths=[
-                        path
-                        for path in paths
-                        if not path.startswith(EVIDENCE_PREFIXES)
-                    ],
-                )
+            verification = verifier.verify(
+                worktree.path,
+                base_commit=worktree.base_commit,
+                candidate_commit=candidate_commit,
+                changed_paths=paths,
+            )
             if (
                 conversion_pending
                 and not verification.passed
@@ -1342,6 +1027,8 @@ class LongHorizonCampaign:
                     incumbent_performance_score=(
                         verification.incumbent_performance_score
                     ),
+                    gateway_record_id=verification.gateway_record_id,
+                    reused=verification.reused,
                 )
             accepted = verification.passed
         return violation, paths, verification, accepted
@@ -1354,7 +1041,6 @@ class LongHorizonCampaign:
         worktree: EpisodeWorktree,
         *,
         memory_version: int,
-        fast_mode: bool,
         status: str,
         candidate_commit: str,
         violation: str,
@@ -1366,19 +1052,15 @@ class LongHorizonCampaign:
         tokens: int = 0,
         tokens_accounted: bool = False,
         invocations: tuple[Any, ...] = (),
-        fast_trials: int | None = None,
         recovered_after_supervisor_interruption: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
         """Archive and commit one terminal episode exactly once."""
         episode = worktree.episode
         base_commit = worktree.base_commit
-        journal_path = worktree.path / RUNTIME_DIR / "journal.json"
+        journal_path = supervisor_journal_path(worktree.path)
         state.episodes = max(state.episodes, episode)
         if not tokens_accounted:
             state.tokens += max(0, int(tokens))
-        fast_trial_count = fast_trials or self._active_fast_trials(
-            active, fast_mode=fast_mode
-        )
 
         episode_dir = store.episode_dir(episode)
         worktree.archive(episode_dir / "archive", "HEAD")
@@ -1395,8 +1077,7 @@ class LongHorizonCampaign:
         attempt = {
             "episode": episode,
             "version": memory_version,
-            "mode": "fast" if fast_mode else "full",
-            "fast_trials": fast_trial_count if fast_mode else None,
+            "mode": "full",
             "status": status,
             "accepted": accepted,
             "violation": violation or None,
@@ -1460,12 +1141,9 @@ class LongHorizonCampaign:
             evidence = {**attempt, "journal": journal}
             memory = self._memory_record(
                 version=memory_version,
-                candidate_commit=candidate_commit,
                 journal=journal,
                 episode_workspace=worktree.path,
                 verification=verification,
-                fast_mode=fast_mode,
-                fast_trials=fast_trial_count,
             )
             promotion_commit = promote_candidate(
                 self.workspace,
@@ -1492,11 +1170,8 @@ class LongHorizonCampaign:
                 status=status,
                 violation=violation,
                 journal=journal,
-                candidate_commit=candidate_commit,
                 verification=verification,
                 episode_workspace=worktree.path,
-                fast_mode=fast_mode,
-                fast_trials=fast_trial_count,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1545,7 +1220,7 @@ class LongHorizonCampaign:
             " recovered=true" if recovered_after_supervisor_interruption else ""
         )
         print(
-            f"[long-horizon] episode={episode} mode={'fast' if fast_mode else 'full'} "
+            f"[long-horizon] episode={episode} "
             f"status={status} accepted={accepted} "
             f"version=v{memory_version} tokens={max(0, int(tokens))} "
             f"commit={promotion_commit or outcome_commit or '-'}{recovery_label}",
@@ -1559,7 +1234,15 @@ class LongHorizonCampaign:
     ) -> dict[str, Any]:
         candidates: list[Path] = []
         if worktree_path is not None:
-            candidates.append(worktree_path / RUNTIME_DIR / "journal.json")
+            candidates.extend(
+                [
+                    supervisor_journal_path(worktree_path),
+                    worktree_path / RUNTIME_DIR / "journal.json",
+                ]
+            )
+        candidates.append(
+            store.episode_dir(episode) / "supervisor_runtime" / "journal.json"
+        )
         candidates.append(
             store.episode_dir(episode) / "episode_runtime" / "journal.json"
         )
@@ -1584,14 +1267,10 @@ class LongHorizonCampaign:
         handoff = read_handoff(runtime / "handoff.json")
         if handoff is None:
             return False
-        fast_mode = active.get("mode") == "fast"
-        fast_trials = self._active_fast_trials(active, fast_mode=fast_mode)
         diagnosis = self._completion_check(
             worktree,
-            runtime / "journal.json",
+            supervisor_journal_path(worktree.path),
             handoff,
-            fast_mode=fast_mode,
-            fast_trials=fast_trials,
         )
         if diagnosis:
             print(
@@ -1614,8 +1293,6 @@ class LongHorizonCampaign:
             active,
             worktree,
             handoff,
-            memory_version=memory_version,
-            fast_mode=fast_mode,
             conversion_pending=conversion_pending,
             verifier=verifier,
         )
@@ -1625,14 +1302,12 @@ class LongHorizonCampaign:
             active,
             worktree,
             memory_version=memory_version,
-            fast_mode=fast_mode,
             status=handoff.status,
             candidate_commit=handoff.candidate_commit,
             violation=violation,
             paths=paths,
             verification=verification,
             accepted=accepted,
-            fast_trials=fast_trials,
             recovered_after_supervisor_interruption=True,
         )
         return True
@@ -1647,6 +1322,13 @@ class LongHorizonCampaign:
         active = store.load_active()
         if active is None:
             return None
+        # Retire the old execution selector without changing completed Episode history.
+        previous_mode = active.get("mode", "full")
+        active["mode"] = "full"
+        active.pop("fast_trials", None)
+        if active.get("phase") == "checking_fast_evaluator":
+            active["phase"] = "verifying"
+        store.save_active(active)
         episode = int(active.get("episode", 0))
         base_commit = str(active.get("base_commit", ""))
         branch = str(active.get("episode_branch", ""))
@@ -1658,7 +1340,6 @@ class LongHorizonCampaign:
         )
         phase = str(active.get("phase", ""))
         memory_version = int(active.get("memory_version", 0) or 0)
-        fast_mode = active.get("mode") == "fast"
         terminal_status = str(active.get("terminal_status", ""))
         already_recorded = any(
             attempt.get("episode") == episode
@@ -1719,6 +1400,10 @@ class LongHorizonCampaign:
                     stderr=subprocess.DEVNULL,
                 )
             worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path)
+            if phase == "preparing":
+                # Preparation may have stopped between checkout and scratch initialization.
+                # No Agent has started in this phase; later recovery must retain its files.
+                worktree.reset_scratch()
             CampaignStore.ensure_excluded(worktree.path)
             if self._recover_completed_handoff(
                 store,
@@ -1742,18 +1427,15 @@ class LongHorizonCampaign:
         if git_head(self.workspace) != base_commit:
             message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
             parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
-            evidence = git_text(
-                self.workspace,
-                "show",
-                f"HEAD:memory/long_horizon_e{episode:04d}.json",
-                check=False,
-            )
             promoted = (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
                 and message
                 == f"episode {episode}: promote verified long-horizon candidate"
-                and bool(evidence)
+                and committed_promotion_audit(
+                    self.workspace, episode=episode, base_commit=base_commit,
+                    branch=branch, version=memory_version,
+                ) is not None
             )
             outcome_recorded = (
                 phase in {"recording", "recorded"}
@@ -1786,7 +1468,7 @@ class LongHorizonCampaign:
                     "violation": None,
                     "base_commit": base_commit,
                     "episode_branch": branch,
-                    "mode": "fast" if fast_mode else "full",
+                    "mode": previous_mode if promoted or outcome_recorded else "full",
                     "recovered_after_supervisor_interruption": True,
                 }
                 if promoted:
@@ -1859,10 +1541,7 @@ class LongHorizonCampaign:
                 status="interrupted",
                 violation="supervisor process interrupted",
                 journal=journal,
-                candidate_commit=candidate_commit,
                 episode_workspace=worktree_path,
-                fast_mode=fast_mode,
-                fast_trials=self._active_fast_trials(active, fast_mode=fast_mode),
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1884,7 +1563,7 @@ class LongHorizonCampaign:
                 "violation": "supervisor process interrupted",
                 "base_commit": base_commit,
                 "episode_branch": branch,
-                "mode": "fast" if fast_mode else "full",
+                "mode": "full",
                 "candidate_commit": candidate_commit or None,
                 "summary": outcome.get("summary"),
                 "next_directions": outcome.get("next_directions"),
@@ -1995,26 +1674,12 @@ class LongHorizonCampaign:
                 episode = worktree.episode
                 memory_version = int(active["memory_version"])
                 base_commit = worktree.base_commit
-                mode = active.get("mode")
-                fast_mode = (
-                    mode == "fast"
-                    if mode in {"fast", "full"}
-                    else self._is_fast_episode(episode)
-                )
             else:
                 episode = state.episodes + 1
-                fast_mode = self._is_fast_episode(episode)
-
-            episode_mode = "fast" if fast_mode else "full"
-            self.base_campaign.ensure_plan_reviewer_availability(
-                episode_mode=episode_mode
-            )
+            self.base_campaign.ensure_plan_reviewer_availability(episode_mode="full")
 
             if resumed:
-                active.setdefault("mode", "fast" if fast_mode else "full")
-                active.setdefault(
-                    "fast_trials", self.fast_trials if fast_mode else None
-                )
+                active["mode"] = "full"
                 if active.get("resumed_from_phase") == "preparing":
                     main_adapter.link_episode_runtime(
                         self.base_campaign, worktree.path
@@ -2031,8 +1696,7 @@ class LongHorizonCampaign:
                     "base_commit": base_commit,
                     "episode_branch": worktree.branch,
                     "worktree": str(worktree.path),
-                    "mode": "fast" if fast_mode else "full",
-                    "fast_trials": self.fast_trials if fast_mode else None,
+                    "mode": "full",
                     "phase": "preparing",
                 }
                 store.save_active(active)
@@ -2052,12 +1716,27 @@ class LongHorizonCampaign:
                         "runtime linking dirtied the episode boundary: "
                         + ", ".join(unexpected)
                     )
-            fast_trial_count = self._active_fast_trials(
-                active, fast_mode=fast_mode
-            )
             runtime = worktree.path / RUNTIME_DIR
-            journal_path = runtime / "journal.json"
+            journal_path = supervisor_journal_path(worktree.path)
             handoff_path = runtime / "handoff.json"
+            legacy_journal_path = runtime / "journal.json"
+            if resumed and not journal_path.is_file() and legacy_journal_path.is_file():
+                journal_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+                try:
+                    legacy = json.loads(legacy_journal_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    legacy = None
+                if (
+                    isinstance(legacy, dict)
+                    and legacy.get("schema_version") == 2
+                    and legacy.get("runtime_managed") is True
+                ):
+                    shutil.copy2(legacy_journal_path, journal_path)
+                else:
+                    shutil.copy2(
+                        legacy_journal_path,
+                        journal_path.parent / "legacy-journal.json",
+                    )
             if not resumed or not journal_path.is_file():
                 initialize_journal(
                     journal_path,
@@ -2071,12 +1750,7 @@ class LongHorizonCampaign:
                 episode=episode,
                 version=memory_version,
                 worktree=worktree,
-                journal_path=journal_path,
-                handoff_path=handoff_path,
-                live_memory_path=store.live_memory_path,
                 conversion_pending=conversion_pending,
-                fast_mode=fast_mode,
-                fast_trials=fast_trial_count,
                 resumed=resumed,
             )
             store.write_brief(episode, prompt)
@@ -2089,71 +1763,28 @@ class LongHorizonCampaign:
                 "ATREX_TELEMETRY_ATTEMPT_ID": "invocation",
             }
             telemetry_environment.update(
-                self.base_campaign.agent_environment(episode_mode=episode_mode)
+                self.base_campaign.agent_environment(episode_mode="full")
             )
-            policy_stop: Event | None = None
-            policy_executor: ThreadPoolExecutor | None = None
-            policy_future: Future[None] | None = None
-            if (
-                fast_mode
-                and getattr(self.base_campaign, "optimization_mode", "")
-                == "production"
-            ):
-                policy_stop = Event()
-                policy_executor = ThreadPoolExecutor(
-                    max_workers=1,
-                    thread_name_prefix=f"fast-policy-e{episode:04d}",
-                )
-                policy_future = policy_executor.submit(
-                    self._prewarm_fast_policy_reviews,
-                    worktree,
-                    require_gluon=(
-                        conversion_pending
-                        or main_adapter.candidate_is_gluon(self.workspace)
-                    ),
-                    stop_event=policy_stop,
-                )
             usage_receipt = uuid.uuid4().hex
-            try:
-                result = runner.run(
-                    worktree.path,
-                    prompt,
-                    handoff_path=handoff_path,
-                    handoff_resumes=self.handoff_resumes,
-                    completion_check=lambda handoff: self._completion_check(
-                        worktree,
-                        journal_path,
-                        handoff,
-                        fast_mode=fast_mode,
-                        fast_trials=fast_trial_count,
-                    ),
-                    reasoning_effort=self._episode_reasoning_effort(
-                        fast_mode=fast_mode
-                    ),
-                    telemetry_environment=telemetry_environment,
-                    record_usage=lambda tokens: store.record_usage(
-                        state, usage_receipt, tokens
-                    ),
-                )
-                # Also persist before verification: a GPU outage there must not
-                # discard the coding session's usage. Receipt replay is harmless.
-                store.record_usage(state, usage_receipt, result.tokens)
-            finally:
-                if policy_stop is not None:
-                    policy_stop.set()
-                if policy_future is not None:
-                    try:
-                        policy_future.result()
-                    except Exception as exc:
-                        # The final synchronous policy gate below remains authoritative
-                        # and fail-closed; prewarming is only a latency optimization.
-                        print(
-                            "[long-horizon] WARNING: fast policy prewarm failed: "
-                            f"{type(exc).__name__}: {exc}",
-                            flush=True,
-                        )
-                if policy_executor is not None:
-                    policy_executor.shutdown()
+            result = runner.run(
+                worktree.path,
+                prompt,
+                handoff_path=handoff_path,
+                handoff_resumes=self.handoff_resumes,
+                completion_check=lambda handoff: self._completion_check(
+                    worktree,
+                    journal_path,
+                    handoff,
+                ),
+                reasoning_effort=EPISODE_REASONING_EFFORT,
+                telemetry_environment=telemetry_environment,
+                record_usage=lambda tokens: store.record_usage(
+                    state, usage_receipt, tokens
+                ),
+            )
+            # Also persist before verification: a GPU outage there must not
+            # discard the coding session's usage. Receipt replay is harmless.
+            store.record_usage(state, usage_receipt, result.tokens)
             handoff = result.handoff
             status = handoff.status if handoff else "invalid_handoff"
             violation = ""
@@ -2175,8 +1806,6 @@ class LongHorizonCampaign:
                         active,
                         worktree,
                         handoff,
-                        memory_version=memory_version,
-                        fast_mode=fast_mode,
                         conversion_pending=conversion_pending,
                         verifier=verifier,
                     )
@@ -2188,7 +1817,6 @@ class LongHorizonCampaign:
                 active,
                 worktree,
                 memory_version=memory_version,
-                fast_mode=fast_mode,
                 status=status,
                 candidate_commit=candidate_commit,
                 violation=violation,

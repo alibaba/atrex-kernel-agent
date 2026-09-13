@@ -13,20 +13,18 @@ budgets, state transitions, sandbox execution, correctness and performance gates
 policy, rollback, aggregation, and final packaging.
 
 Each canonical optimization version is one multi-experiment episode in a private Git worktree.
-The internal `long_horizon/` engine supplies worktree isolation, journals, handoff recovery,
-fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
+The internal `long_horizon/` engine supplies worktree isolation, Supervisor-owned journals, handoff recovery,
+same-allocation ABBA verification, and squash
 promotion; it is not a second CLI.
-
-![Atrex Kernel Agent architecture and workflow](../assets/atrex-architecture-current.png)
 
 ## Design Goals
 
 - **Mechanical control**: termination and acceptance are decided by code rather than Agent
   self-assessment.
-- **Tiered optimization**: early fast episodes run five reviewed plan/implement/evaluator trials
-  without profiling or ABBA; later full episodes are supported by official profiler evidence.
-- **Reproducible state**: Git HEAD is the incumbent kernel; structured memory and artifacts
-  preserve the reasoning and measurements behind each attempt.
+- **Evidence-driven optimization**: every Episode uses the same Direction/Experiment workflow,
+  with targeted research or profiling when needed and Runtime-backed ABBA before promotion.
+- **Reproducible state**: Git HEAD is the incumbent kernel; stable Direction and Experiment IDs,
+  immutable Kernel/Gateway records, and canonical memory preserve intent separately from facts.
 - **Execution isolation**: GPU work crosses `tools/sandbox.py`; campaign memory, plans, edits,
   and Git state remain local.
 - **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
@@ -53,12 +51,13 @@ promotion; it is not a second CLI.
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
 │   ├── telemetry/                     # Phase timing and token telemetry
 │   ├── optimization_policy.py         # leaderboard/production policy gates
-│   └── prompts/                       # Setup, inspection, baseline, and episode prompts
+│   └── prompts/                       # Inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
+├── supervisor/                        # Agent-invisible Gateway/Agate execution engine
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
 ├── skills/                            # Backend-local workflows, including adaptive PPU profiling
 ├── tools/
-│   ├── sandbox.py                     # Remote packaging and execution boundary
+│   ├── sandbox.py                     # Unified HTTP CLI: Gateway, Journal, terminal reports
 │   ├── memory_manager.py              # Structured iteration memory manager
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
@@ -67,17 +66,16 @@ promotion; it is not a second CLI.
 └── 3rdparty/                          # Profiler-analysis dependencies
 ```
 
-The `skills/` and `agents/` directories are internal runtime assets. The orchestrator links or
-installs them into generated campaign workspaces; they are not standalone repository entry
-points.
+The source tree contains Supervisor assets as well as optional Agent Skills. Only explicitly
+selected Agent assets are installed in a campaign workspace; the full source tree is not mounted.
 
 ### Authority boundaries
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
-| Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
-| GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
+| Episode exploration | Agent proposes Directions and analysis; Supervisor owns the Journal | Direction events, Experiments, handoff, archived attempt, and telemetry |
+| GPU execution | Agent-facing `tools/sandbox.py` HTTP facade plus the Supervisor-private gateway engine | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
@@ -111,7 +109,14 @@ Both launch surfaces converge before campaign initialization. The orchestrator c
 Git-worktree episode for each optimization version. A fresh Agent thread may perform several related
 profile/research/edit/validate cycles. Claude and Codex
 support bounded same-thread recovery when the terminal handoff is incomplete; canonical state
-crosses episode boundaries through Git, structured memory, journals, plans, and profiles.
+crosses episode boundaries through Git, structured memory, Runtime Journals, and Gateway Records.
+
+The Supervisor Journal also preserves optional Direction genealogy as immutable proposal metadata.
+Retry, refinement, reimplementation, correction, port, and combination references are validated
+against visible earlier/current Episode Journals before persistence. `list-directions` and
+`load-direction` expose the declarations; `load-experiment` supplies their Experiment/Gateway
+references. No relationship is invented for legacy records, and no Agent interpretation changes
+authoritative Gate policy.
 
 The main workspace name is deterministic. Leaderboard mode uses
 `kernel_opt_<op>_<framework>_<platform>`; production mode appends `_production` so a strict
@@ -127,15 +132,14 @@ runtime-detected GPU vendor.
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
-3. Create one private branch/worktree per canonical version. The first two optimization episodes use
-   five fast `plan -> implement -> evaluator` trials per episode by default; later episodes use the
-   full evidence loop. The primary Agent uses maximum reasoning effort in both modes.
-4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
+3. Create one private branch/worktree per canonical version and run the ordinary evidence loop.
+   The primary Agent uses maximum reasoning effort, without a fixed per-Episode Trial count.
+4. Validate its Supervisor-owned Direction/Experiment Journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
    bounded same-thread recovery for Claude and Codex.
 5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
    uncommitted intermediate artifacts to remain in the episode worktree.
-6. Select the fastest passing hash-matched result from each fast episode's five trials and compare it
-   with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
+6. Obtain incumbent/candidate ABBA facts through the shared Runtime measurement service, reusing
+   a matching completed result or measuring when none exists.
 7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
    failure/pivot/block evidence.
 8. Stop on version budget, token budget, optional stall budget, or target utilization.
@@ -160,30 +164,146 @@ direct host GPU execution, and profiler use outside the sandbox.
 
 ### Workspace runtime assets
 
-`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/`
-inside each campaign workspace. It also prepares backend-specific project-local discovery trees:
+Inside Bubblewrap, HOME and CWD are both `/home/agent/workspace`; CLI configuration and native
+sessions are scoped below this Home. A Supervisor-owned live copy captures the initial prompt,
+complete conversation, tool I/O, and subagent transcripts. Per-invocation `token-usage.json` records
+Provider counters and reconciliation status. Neither capture directory is Agent-writable. See
+[Session capture and workspace isolation](../long_horizon/README.md) for layout and accounting.
 
-- `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
-- `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
-- The repository-native `gen-plan` skill is linked into every backend's local discovery tree. It
-  freezes a concrete candidate proposal and independently obtains the Codex and Qoder reviews enabled
-  for the current episode mode against that proposal and the same bounded evidence. A matching primary
-  backend reviews in its current session to avoid recursion. The campaign probes each reviewer when it
-  is first enabled, caches the result in private runtime state, and disables later calls to reviewers
-  that were unavailable.
+`link_runtime()` publishes content-keyed asset seeds. Agent sessions use them as follows:
+
+- `tools/` is a writable, Episode-local directory, initially containing only `sandbox.py`, a
+  self-contained standard-library HTTP client. Additions, edits, and deletions survive same-Episode
+  recovery; a new Episode gets its own seed copy. Existing read-only links are migrated without
+  modifying shared assets. Supervisor implementations and authorization remain private.
+- `skills/` always contains `gpu-measurement`, `runtime-records`, and `KernelWiki`. The optional
+  `autonomous-gpu-kernel-timeline` is enabled by default. Repeatable `--agent-skill NAME` replaces
+  optional defaults; `--no-agent-skills` disables optional Skills only. Neither option removes the
+  mandatory Skills. `.claude/skills`, `.qoder/skills`, and `.agents/skills` all
+  point to the same selection. Skill execution guidance preserves the current Runtime boundary.
+- `gpu-measurement` and `runtime-records` are Agent-facing Skill templates under
+  `orchestrator/agent_skills/`, not host/developer Skill installations. Their snapshots appear under
+  sandbox `skills/`. GPU requests and Journal/history/report examples load on demand from the
+  corresponding Skill; the injected Prompt retains only behavior requirements and routing. Execution, retrying,
+  evidence persistence, and result projection remain in the Supervisor.
+- `reference-projects/` is absent unless `--agent-reference-projects` is supplied.
+- Wiki guidance lives only in the mandatory `KernelWiki` Skill; there is no `gpu-wiki/` mount.
+- `reference/`, the full `tools/`, and Supervisor Python packages are not exposed. Root README
+  and CLAUDE instructions are generated separately; no Agent needs the source templates.
+
+Agent instructions have three owners: `reference/CLAUDE.md` defines stable correctness and
+measurement-integrity constraints; the injected phase Prompt defines the task, implementation
+policy, execution boundary, validation scope, and finish procedure; mounted Skills provide
+tool schemas and examples on demand. Baseline shares the execution boundary without inheriting
+the optimization workflow. Baseline ends after its prescribed smoke;
+optimization Episodes submit repairable `episode-report` requests backed by a passing Evaluate
+for the exact candidate. Report acceptance is not promotion: the Supervisor reuses matching
+Runtime measurements or requests missing ones, and ordinary Evaluate cannot replace required ABBA.
+
+The full Episode Prompt offers a lightweight workflow: understand the starting point, choose a
+Direction, research a concrete question, implement and validate a candidate, then record and decide.
+This is guidance within the existing phase constraints, not an additional enforced stage machine.
+Plans stay in the Direction Journal; no separate draft/plan files are required. Baseline retains
+its separate implementation-and-smoke procedure.
+
+The sandbox restores only these assets, not their private parent directory. Existing sessions retain
+their asset snapshot. Supervisor profiling helpers and evaluator inputs are still injected into
+GPU jobs when required. Directions, Experiments, and Episode reports use the HTTP client; Agents
+do not call memory writers, Git helpers, plan validators, or phase-marker scripts.
+
+Request failures carry an error code, cause, and next action. Agent-fixable validation/state failures
+are distinguished from Supervisor infrastructure failures; `repairable` is not a replay-safety flag.
+Terminal Gateway errors, including Dev failures without a result, survive the historical Record
+projection. HTTP failures with uncertain outcomes must not trigger blind mutation replay. See
+[Agent-facing errors](quickstart.md#agent-facing-errors) for the response contract.
 
 ### Sandbox execution
 
-All correctness, benchmark, and profiling work crosses
-`tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
-submits evaluator or profiler work to the configured remote executor, and synchronizes only the
-requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
-the coordinator.
+All correctness, benchmark, and profiling work crosses the Agent-side `tools/sandbox.py` HTTP
+facade. The Supervisor-private gateway engine builds an explicit input allowlist, omits
+optimizer-only state, submits evaluator or profiler work to the configured remote executor, and
+synchronizes only the requested result artifacts. Campaign memory, plans, edits, episode state,
+and Git history stay on the coordinator.
+
+The same boundary owns output projection and the Runtime Journal. The Agent registers a Direction
+before exploring it and records each decisive Experiment with a `gateway_record_ids` list. Records
+may concern several Kernels or different GPU operations; no before/after pairing is required. The
+Supervisor validates the references against visible Gateway history, stores
+the Journal outside the Agent mount, and exposes bounded list/load tools across Episodes. The Agent
+cannot edit factual bindings or terminal state directly. Its final report is accepted only when all
+in-progress Directions are closed and a selected Experiment cites a passing Evaluate record for the
+exact current `kernel.py`. Only after validation does the Supervisor commit that source and publish
+the internal handoff. Git metadata and shared object/ref stores are absent from the Agent's Bubblewrap
+namespace; report requests do not contain commit IDs. Kernel/source bindings remain in Gateway records rather than being
+duplicated in the Journal; a malformed report remains repairable in the same session.
+
+All Agent operations use `tools/sandbox.py --kind <operation>`. JSON mutations use `--request-file`,
+single-record reads use `--record-id`, and index exports use `--output-path` under `scratch/`.
+Wiki uses `wiki-query` for natural language, `wiki-search` for structured experience retrieval,
+and `wiki-hardware` for hardware facts. These dispatch to the existing scoped Wiki HTTP endpoint;
+the underlying retrieval scripts and stores remain Supervisor-private. The selected KernelWiki
+Skill contains the unified CLI guide; no duplicate Wiki directory is installed.
+
+Evaluate returns only correctness, aggregate and
+opaque-per-shape latency, bounded diagnostics, and the immutable record/source identities. Profile
+uses an explicit allowlist of summary, clock-lock, Kernel-duration, SOL, resource, and requested
+counter fields; raw Job/transport output, request echoes, signed artifact locations, and source
+correlation embedded in the Job envelope remain private. Typed Check returns bounded compiler,
+launch, resource, and optional sanitizer diagnostics without claiming correctness. Typed
+Disassemble returns bounded SASS/PTX text and Kernel resource facts. Both operate on the exact
+`kernel.py`, inherit Runtime-selected constructor arguments, retry infrastructure failures, and
+store their complete Gateway Jobs only in private evidence. Explicitly requested profile artifacts
+are still synchronized into the workspace. Wiki retrieval is forced through its brief,
+byte-bounded view. Dev is the sole intentionally open-text operation because its stdout is produced
+by the Agent's own probe, but the Runtime bounds both output channels and marks truncation.
+Arbitrary Dev probes are recorded as Dev—not Evaluate—with their command, exit code, bounded
+stdout/stderr, synchronized paths, and workspace Kernel digest. Before applying those views, the
+Runtime stores the exact command channels beside its request audit so observability does not require
+sending raw infrastructure output back into the model context.
+
+Wiki query telemetry is stored at
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/wiki-profile/`, alongside
+the private per-worktree evidence. The Supervisor selects this path for every Wiki subprocess;
+neither inherited environment variables nor Agent requests can override it. It is not mounted
+into the Agent sandbox. All Episodes and resumed Sessions share the Campaign's persistent query
+history. Completion writes a separate private `trace-retention-manifest.json` with root-relative
+Wiki evidence paths; it does not copy those files or private paths into the Agent workspace.
+
+Each exact full Evaluate or ABBA task from an Agent is accepted only once per workspace. The first
+accepted task performs three independent, semantically identical logical Agate calls. The Runtime
+takes the median latency independently for every Shape, recomputes aggregate latency and ABBA
+speedup, and returns only the final aggregate and per-Shape Baseline/Candidate values. Repetitions,
+batch counts, and aggregation mechanics stay in private evidence. A later request with the same exact Kernel, Baseline when present, input domain,
+and measurement parameters is rejected before Agate execution and names the previous
+`gateway_record_id`. The Agent can read any visible Evaluate, ABBA, Profile, Dev, Check, or
+Disassemble record through the same HTTP facade without another Agate call. Reads return the
+operation-specific bounded projection and opaque per-Shape facts. ABBA exposes separate Incumbent
+and Candidate Kernel IDs rather than an ambiguous single ID. Every record binds its exact Candidate
+Kernel directly. One explicit Kernel view lists its Gateway records; a separate source view restores
+privately digest-verified source only under `scratch/`. An explicit correctness failure
+in any repetition is retained rather than being hidden by a successful repetition.
+
+Supervisor verification uses this same measurement service, not a second ABBA driver or result
+store. A trusted request may reuse a completed record from the current or archived Episode.
+The match covers operation, exact Candidate and Incumbent source, evaluator/input contract,
+hardware/endpoint, environment, seeds, iteration counts, ABBA schedule, and timeouts. Output paths
+and version labels do not identify a measurement. Ordinary Evaluate, custom-input tests, and
+partial-Shape ABBA are not substitutes for the required full-contract comparison. Unmatched
+requests execute through the same batching, infrastructure retry, and three-call per-Shape median
+logic. In-flight requests are not submitted twice; an infrastructure failure releases the task
+reservation. Corrupt cached evidence fails closed.
+
+The Supervisor consumes the complete persisted result, while Agents receive the bounded projection
+and retain their existing duplicate-request response. Verification records the original
+`gateway_record_id`, its artifact path, and whether it was reused. Production policy, committed-source
+validation, and strict performance-score promotion remain independent Supervisor decisions; reusing
+a measurement never means automatically accepting its Kernel. V0 and ordinary Supervisor validation
+use the same completed-result reuse rule.
 
 The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
 profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
 `/tmp/atrex-sandbox.*` directory and uploads the allowlisted bundle with `scp`, but never executes a
-candidate in the login account's ordinary shell. `tools/sandbox.py` always enters a Bubblewrap
+candidate in the login account's ordinary shell. The Supervisor gateway always enters a Bubblewrap
 namespace that exposes a minimal read-only system tree, explicitly configured read-only runtime
 directories, one assigned physical NVIDIA GPU, and the one writable job directory. Runtime bind
 sources are denied when broad/sensitive, resolved on the remote host, and validated again so a
@@ -371,11 +491,11 @@ an isolated branch and Git worktree from the incumbent for each episode. The Age
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
 
-A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
-satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
-Fast candidates must have one complete passing evaluator record whose `kernel.py` hash matches the
-final candidate and whose latency strictly improves on canonical incumbent memory. Full candidates
-must pass the exact same-allocation ABBA schedule. Accepted candidates are squash-promoted with
+The Supervisor commits only the measured `kernel.py` selected by a valid report, checks protected
+paths, and enforces production policy. The Agent never manages Git; scratch source copies and the
+Gateway Kernel reader provide rollback. Temporary artifacts may remain in the worktree.
+Candidates must have passing Evaluate evidence for the exact source and then pass the required
+same-allocation ABBA policy using the Runtime record. Accepted candidates are squash-promoted with
 canonical memory; rejected and non-candidate episodes advance memory without changing the incumbent.
 Every round's numbered memory is checked against committed `HEAD` before state advances. Active
 episode state supports crash recovery.
@@ -395,7 +515,9 @@ SOL and native Atrex-Bench operators receive a mechanically seeded PyTorch refer
 immutable evaluator inputs. The supervisor writes the README, commits the source baseline, runs one
 official full-workload base-seed evaluator, writes `memory/v0.json` plus a concise report, and commits
 that measurement separately. Memory points to the stable source commit, so no commit-hash amend loop
-is possible. Only the non-canonical derived legacy boundary retains a bounded setup Agent fallback.
+is possible. Unsupported or incomplete operator layouts fail validation before launch; there is no
+Setup Agent or Setup recovery session. Public contract authoring, when required by production mode,
+remains a separate step with its own `--problem-generation-timeout`.
 V0 profiling, multi-seed validation, and ABBA are intentionally deferred.
 
 ### 3. Establish the framework baseline
@@ -426,39 +548,26 @@ preserves the interrupted worktree and restores the latest candidate snapshot wh
 
 ### 4. Explore one episode per version
 
-By default, optimization episodes 1 and 2 use the fast loop:
+Every post-baseline Episode uses the same evidence loop. The Agent may advance up to three
+Directions, one at a time; there is no fixed number of candidate trials per Episode:
 
 ```text
-repeat five times:
-  reviewed plan -> implement -> one full-workload base-seed evaluator
-select fastest passing hash-matched trial -> handoff
+understand -> choose Direction -> targeted research/diagnostics when needed
+           -> implement -> Evaluate -> record Experiment -> continue or handoff
 ```
 
-Fast mode uses the normal `gen-plan` synthesis with the reviewers enabled for fast episodes inside its
-planning phase. Those reviewers default off. Fast mode does not run a separate research phase,
-profile, run multi-seed correctness, or run ABBA. The
-sandbox records the evaluator result with the final `kernel.py` hash. The supervisor uses that result
-for correctness and compares it with the latest complete passing canonical incumbent measurement.
-`--fast-episodes 0` disables this path; another non-negative value changes its window.
-
-Episode 3 and later use the full evidence loop as many times as needed:
-
-```text
-profile -> research -> plan -> edit/compile/repair
-        -> correctness -> benchmark -> journal/checkpoint -> repeat or handoff
-```
-
-GPU commands run remotely while plans, source edits, journals, and Git remain local. A
+GPU commands run remotely; the Supervisor persists Journals and Gateway Records, while source edits
+and Git remain local. A
 `candidate_ready` handoff is not authoritative: the supervisor validates protected paths, policy,
-the worktree's exact committed `kernel.py`, and the candidate commit, then applies the current mode's
-fast comparison or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
+the worktree's exact committed `kernel.py`, and the candidate commit, then applies the
+incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
 advances canonical memory without changing the incumbent. Active episode state is restart-safe and
 reuses the registered worktree with its intermediate files after a supervisor restart.
 
 For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
 journal command refreshes it after every decisive experiment. This live view is explicitly
 non-canonical; a numbered `memory/v<N>.json` is written after terminal handoff processing and
-mode-appropriate verification, then checked for valid committed contents before state advances.
+verification, then checked for valid committed contents before state advances.
 
 ### 5. Finalize
 
@@ -470,19 +579,52 @@ output.
 ```text
 kernel_opt_<name>_<framework>_<platform>[_production]/
 ├── kernel.py
-├── test_kernel.py
 ├── README.md
 ├── memory/v<N>.json
-├── memory/long_horizon_e<NNNN>.json  # Evidence for promoted episodes
-├── plans/
-├── profiles/
-├── framework_baseline.json
+├── scratch/                         # Temporary requests and optional diagnostics
 └── .atrex_long_horizon/               # Episode state, journals, telemetry, verification
 ```
 
 Not every campaign uses every artifact. Git plus unmasked `memory/v<N>.json` files are the durable
 optimization history. `.atrex_long_horizon/` and temporary verification payloads are excluded
 from main-workspace commits; their recoverable local state remains on disk.
+
+V0 measurements are recorded in `memory/v0.json`; no separate baseline report is generated.
+`episode-report` submits the Agent's terminal intent; the Supervisor combines it with the Journal
+and verification outcome to generate `memory/vN.json`. Neither report carries Git commit fields.
+Source provenance, candidate commits, promotion, and recovery remain Supervisor-owned Git/state data.
+Promotion audits are stored only at
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/promotions/long_horizon_e<NNNN>.json`.
+The Supervisor durably writes the audit before committing and binds its SHA-256 in the promotion
+Commit message. Recovery validates that binding plus the Episode identity and parent Commit;
+an audit file alone is not proof of promotion. The private retention manifest includes these files.
+Legacy committed audits are copied to private storage without rewriting Git history. The Agent's
+read-only `memory/` mount exposes only canonical `vN.json` reports, never old audit files or the
+Supervisor's live progress mirror.
+The accepted framework baseline's commit, Kernel blob, and version are pinned privately in
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/framework_baseline.json`.
+The Supervisor validates this pin during recovery and shares it across Episode worktrees.
+Generated workspaces have no `.gitignore`: the Supervisor installs shared exclusion rules in
+Git `info/exclude`, which is hidden from Agents along with all other Git metadata.
+
+The Agent mounts a persistent, Git-free file view rather than the Supervisor's worktree. It has
+no `.git` placeholder, `.orchestrator_mode.json`, or `gpu-wiki/` entry. Gateway and Journal queries
+use this view directly, including atomic replacements of `kernel.py` and live `scratch/` files.
+Report submission publishes candidate files to the private worktree before the Supervisor validates
+and commits them; session exit also saves candidate files and scratch diagnostics there for audit.
+An interrupted session retains its file view for recovery. A trusted change to the worktree's
+candidate replaces the corresponding draft on next start. Only candidate files and scratch can
+be published: fabricated Git metadata, policies, or internal handoffs are never imported.
+Mode, DSL, and backend identity are stored in private `optimization-policy.json`, shared across
+Episode worktrees. The Supervisor supplies that policy to Gateway privately; Agent rules remain
+in the generated Prompt and `CLAUDE.md`. Legacy untracked mode files are migrated on resume.
+
+Evaluation and profile drivers live in Supervisor-private `supervisor/runners/`, not in the Agent
+workspace. The Supervisor injects them only into remote command bundles
+(including ABBA and OpenSSH). Typed Evaluate/Profile submit source contracts directly. Agent calls
+use `python3 tools/sandbox.py --kind run` or `--kind profile`; no driver filename is required.
+Profile results are returned directly and persisted in Gateway Records. Downloads are opt-in with
+`--sync scratch/<destination>`; neither plans nor profiles require a dedicated workspace directory.
 
 ## Profiling and Telemetry
 
@@ -507,7 +649,7 @@ from main-workspace commits; their recoverable local state remains on disk.
   from the same read, while raw artifact hashes are streamed. The supervisor then adds stable
   memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
   decide whether to reuse the bounded conclusion without loading the raw episode archive.
-- `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.
+- Supervisor-private `tools/memory_manager.py` manages iteration records; it is not an Agent tool.
 - Episodes attribute wall time and token usage to profile, research, planning, implementation,
   correctness, benchmark, and recording phases when the backend emits complete markers and usage
   deltas.
@@ -517,9 +659,8 @@ from main-workspace commits; their recoverable local state remains on disk.
 ## Critical Constraints
 
 - Hardware specifications must come from `gpu-wiki` with auditable source references.
-- Official profiler evidence is required before full-mode optimization changes; fast mode explicitly
-  substitutes five reviewed plans plus hash-matched evaluator results and best-candidate selection.
-  PPU is the scoped exception: follow `ppu-acu-joint-profile` and collect new PPU profiler evidence
+- Profile when it resolves an uncertainty that can inform the next edit. On PPU, follow
+  `ppu-acu-joint-profile` and collect new PPU profiler evidence
   only when its per-iteration decision rule says the unresolved fact can change the next edit.
 - Ground-truth evaluator inputs are immutable.
 - Correctness must pass before performance conclusions or promotion.

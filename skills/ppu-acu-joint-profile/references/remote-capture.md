@@ -9,7 +9,7 @@ creates one temporary instrumented snapshot, and uploads only the selected skill
 Keep one self-contained attempt below the episode profile directory:
 
 ```text
-profiles/episode_N/timeline/attempt-N/
+scratch/timeline/attempt-N/
 ├── clean-source/
 ├── instrumented-source/
 ├── events.json
@@ -34,7 +34,7 @@ When the configured sandbox exposes the PPU target, upload the complete PPU skil
 harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
-ATTEMPT=profiles/episode_N/timeline/attempt-N
+ATTEMPT=scratch/timeline/attempt-N
 python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   --input skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
@@ -55,7 +55,7 @@ The wrapper first runs capture/decode, then invokes `timeline.py measure` with a
 instrumented commands before returning:
 
 ```bash
-ATTEMPT=profiles/episode_N/timeline/attempt-N
+ATTEMPT=scratch/timeline/attempt-N
 python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   --input skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
@@ -63,8 +63,8 @@ python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
       PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
-        --baseline-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_a.py"]' \
-        --instrumented-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_b.py"]' \
+        --baseline-command '["python","scratch/timeline/attempt-N/harness/run_a.py"]' \
+        --instrumented-command '["python","scratch/timeline/attempt-N/harness/run_b.py"]' \
         --output "$ATTEMPT/evidence/fine.perturbation-a-b.json"
 ```
 

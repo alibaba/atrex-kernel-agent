@@ -18,10 +18,13 @@
 The server intentionally implements the subset used by ``tools/sandbox.py``:
 
 * ``GET /healthz``
-* ``GET /v1/env`` and ``GET /v1/env/local``
+* ``GET /v1/env``, ``GET /v1/env/local``, and
+  ``GET /v1/env/local/capabilities``
 * ``POST /v1/jobs/eval`` (``agate run``)
 * ``POST /v1/jobs/profile``
 * ``POST /v1/jobs/dev``
+* ``POST /v1/jobs/compile``
+* ``POST /v1/jobs/disassemble``
 * ``GET /v1/jobs`` and ``GET /v1/jobs/<job_id>``
 * ``POST /v1/jobs/<job_id>/cancel``
 
@@ -61,8 +64,8 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 VALID_STATUSES = frozenset({"queued", "running", *TERMINAL_STATUSES})
-SUPPORTED_KINDS = frozenset({"eval", "profile", "dev"})
-KNOWN_KINDS = frozenset({"eval", "profile", "dev", "disassemble"})
+SUPPORTED_KINDS = frozenset({"eval", "profile", "dev", "compile", "disassemble"})
+KNOWN_KINDS = SUPPORTED_KINDS
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_BODY_LIMIT = 32 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 32 * 1024 * 1024
@@ -95,7 +98,13 @@ def _error(reason: str, message: str, trace_id: str | None = None, **details: An
 
 
 def _job_prefix(kind: str) -> str:
-    return {"dev": "dv", "eval": "ev", "profile": "pf", "disassemble": "ds"}.get(kind, "jb")
+    return {
+        "dev": "dv",
+        "eval": "ev",
+        "profile": "pf",
+        "compile": "ck",
+        "disassemble": "ds",
+    }.get(kind, "jb")
 
 
 class JobStore:
@@ -398,6 +407,69 @@ def _validate_requirements(value: Any) -> list[str]:
     return requirements
 
 
+def _validate_dependencies(payload: dict[str, Any]) -> None:
+    _validate_env_vars(payload.get("env_vars"))
+    _validate_requirements(payload.get("requirements"))
+    deps_mode = payload.get("deps_mode")
+    if deps_mode is not None and deps_mode not in {"freeze_installed", "no_deps"}:
+        raise ValueError("deps_mode must be 'freeze_installed' or 'no_deps'")
+
+
+def _validate_diagnostic_request(payload: Any, kind: str) -> dict[str, Any]:
+    """Validate Agate diagnostics plus the localhost real-launch extension."""
+    payload = _validate_payload_object(payload)
+    _validate_target(payload)
+    candidate = payload.get("candidate")
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise ValueError("candidate must be a non-empty Python source string")
+    if len(candidate.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise ValueError("candidate exceeds the 24 MiB source limit")
+    init_kwargs = payload.get("init_kwargs", {})
+    if not isinstance(init_kwargs, dict):
+        raise ValueError("init_kwargs must be an object")
+    if len(_json_dumps(init_kwargs).encode("utf-8")) > 64 * 1024:
+        raise ValueError("init_kwargs exceed the 64 KiB limit")
+    diagnostic_reference = payload.get("diagnostic_reference")
+    if diagnostic_reference is not None:
+        if not isinstance(diagnostic_reference, dict):
+            raise ValueError("diagnostic_reference must be an object")
+        input_py = diagnostic_reference.get("input_py")
+        shapes = diagnostic_reference.get("shapes")
+        if not isinstance(input_py, str) or not input_py.strip():
+            raise ValueError("diagnostic_reference.input_py must be non-empty Python source")
+        if not isinstance(shapes, dict) or not shapes:
+            raise ValueError("diagnostic_reference.shapes must be a non-empty object")
+        if len(input_py.encode("utf-8")) + len(_json_dumps(shapes).encode("utf-8")) > MAX_SOURCE_BYTES:
+            raise ValueError("diagnostic_reference exceeds the source limit")
+        shape_id = payload.get("shape_id")
+        if not isinstance(shape_id, str) or shape_id not in shapes:
+            raise ValueError("shape_id must identify one diagnostic_reference Shape")
+    _validate_dependencies(payload)
+    _validate_idempotency_key(payload)
+    if kind == "compile":
+        arch = payload.get("arch")
+        if arch is not None and (
+            not isinstance(arch, str) or not arch.strip() or len(arch) > 100
+        ):
+            raise ValueError("arch must be a non-empty string of at most 100 characters")
+        sanitize = payload.get("sanitize")
+        if sanitize is not None and sanitize not in {
+            "memcheck",
+            "racecheck",
+            "initcheck",
+            "synccheck",
+        }:
+            raise ValueError(
+                "sanitize must be one of: memcheck, racecheck, initcheck, synccheck"
+            )
+    elif kind == "disassemble":
+        if payload.get("fmt", "auto") not in {"auto", "sass", "ptx", "isa"}:
+            raise ValueError("fmt must be one of: auto, sass, ptx, isa")
+    else:
+        raise ValueError(f"unsupported diagnostic kind {kind!r}")
+    return payload
+
+
 def _validate_dev_request(payload: Any) -> dict[str, Any]:
     payload = _validate_payload_object(payload)
     _validate_target(payload)
@@ -485,8 +557,7 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
         _number_option(options, "correctness_max_rel_l2", 0.0)
     _validate_timeout(options.get("timeout_s", DEFAULT_JOB_TIMEOUT), "options.timeout_s")
 
-    _validate_env_vars(payload.get("env_vars"))
-    _validate_requirements(payload.get("requirements"))
+    _validate_dependencies(payload)
     _validate_idempotency_key(payload)
     lock_clocks = payload.get("lock_clocks", False)
     if not isinstance(lock_clocks, bool):
@@ -519,8 +590,39 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
                 re.compile(kernel_regex)
             except re.error as exc:
                 raise ValueError(f"kernel_regex is invalid: {exc}") from exc
-        if level == "deep" and not kernel_regex:
-            raise ValueError("level='deep' requires kernel_regex")
+        kernel_name = payload.get("kernel_name")
+        if kernel_name is not None and (
+            not isinstance(kernel_name, str)
+            or not kernel_name
+            or len(kernel_name) > 1024
+        ):
+            raise ValueError("kernel_name must be a non-empty string of at most 1024 characters")
+        if kernel_regex and kernel_name:
+            raise ValueError("kernel_regex and kernel_name are mutually exclusive")
+        source = payload.get("source", False)
+        if not isinstance(source, bool):
+            raise ValueError("source must be a boolean")
+        launch_skip = payload.get("launch_skip")
+        if launch_skip is not None and (
+            isinstance(launch_skip, bool)
+            or not isinstance(launch_skip, int)
+            or launch_skip < 0
+        ):
+            raise ValueError("launch_skip must be a non-negative integer")
+        launch_count = payload.get("launch_count")
+        if launch_count is not None and (
+            isinstance(launch_count, bool)
+            or not isinstance(launch_count, int)
+            or launch_count <= 0
+        ):
+            raise ValueError("launch_count must be a positive integer")
+        shape_id = payload.get("shape_id")
+        if shape_id is not None and (
+            not isinstance(shape_id, str) or shape_id not in shapes
+        ):
+            raise ValueError("shape_id must identify one uploaded opaque Shape")
+        if level == "deep" and not (kernel_regex or kernel_name):
+            raise ValueError("level='deep' requires kernel_regex or kernel_name")
         top_kernels = payload.get("top_kernels")
         if top_kernels is not None and (
             isinstance(top_kernels, bool)
@@ -720,6 +822,227 @@ with torch.inference_mode():
     candidate(*current.args, **current.kwargs)
     sync_device(device)
     torch.cuda.cudart().cudaProfilerStop()
+'''
+
+
+DIAGNOSTIC_DRIVER = r'''#!/usr/bin/env python3
+import hashlib
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+request = json.loads((root / "diagnostic-request.json").read_text(encoding="utf-8"))
+result_path = root / "diagnostic-result.json"
+text_limit = 512 * 1024
+
+
+def finish(value):
+    result_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+def exported(text):
+    raw = text.encode("utf-8", errors="replace")
+    return {
+        "text": raw[:text_limit].decode("utf-8", errors="ignore"),
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "truncated": len(raw) > text_limit,
+    }
+
+
+def binaries():
+    suffixes = {".so", ".cubin", ".fatbin", ".ptx", ".hsaco"}
+    paths = []
+    roots = {
+        root,
+        Path(os.environ.get("TORCH_EXTENSIONS_DIR", root)),
+        Path(os.environ.get("TRITON_CACHE_DIR", root)),
+        Path(os.environ.get("CUDA_CACHE_PATH", root)),
+        Path(os.environ.get("CUTE_DSL_CACHE_DIR", root)),
+        Path(os.environ.get("CUTE_DSL_DUMP_DIR", root)),
+    }
+    for base in roots:
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file() and path.suffix.casefold() in suffixes:
+                paths.append(path)
+    return sorted(set(paths))
+
+
+def run_tool(argv):
+    completed = subprocess.run(argv, capture_output=True, text=True, errors="replace", check=False)
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout or "tool failed")[-4000:]
+        raise RuntimeError(detail)
+    return completed.stdout
+
+
+def load_module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import {path.name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def invoke(model, values):
+    if isinstance(values, dict):
+        return model(**values)
+    args = getattr(values, "args", None)
+    kwargs = getattr(values, "kwargs", None)
+    if isinstance(args, (tuple, list)) and isinstance(kwargs, dict):
+        return model(*args, **kwargs)
+    if isinstance(values, (tuple, list)):
+        return model(*values)
+    return model(values)
+
+
+try:
+    stage = "import"
+    module = load_module(root / "candidate.py", "atrex_local_candidate")
+    model_class = getattr(module, "Model", None)
+    if not isinstance(model_class, type):
+        raise TypeError("candidate must define a top-level class Model")
+    stage = "construction"
+    model = model_class(**(request.get("init_kwargs") or {}))
+    if hasattr(model, "eval"):
+        model.eval()
+    torch = None
+    try:
+        import torch
+        if torch.cuda.is_available():
+            requested_arch = request.get("arch")
+            if requested_arch:
+                major, minor = torch.cuda.get_device_capability(0)
+                actual_arch = f"sm_{major}{minor}"
+                if requested_arch.replace("compute_", "sm_") != actual_arch:
+                    raise ValueError(
+                        f"requested arch {requested_arch!r} does not match local {actual_arch!r}"
+                    )
+            torch.cuda.synchronize()
+    except ImportError:
+        pass
+
+    operation = request["operation"]
+    if request.get("capability_error"):
+        finish({
+            "status": "error",
+            "passed": False,
+            "compile_ok": True,
+            "launch_ok": False,
+            "correctness_checked": False,
+            "sanitize": request.get("sanitize"),
+            "sanitizer_passed": False,
+            "scope": "one_shape_launch_probe",
+            "shape_id": request.get("shape_id"),
+            "failure_stage": "capability",
+            "error": request["capability_error"],
+        })
+        raise SystemExit(0)
+    if not request.get("has_inputs"):
+        finish({
+            "status": "error",
+            "passed": False,
+            "compile_ok": True,
+            "launch_ok": False,
+            "correctness_checked": False,
+            "sanitize": request.get("sanitize"),
+            "sanitizer_passed": False if request.get("sanitize") else None,
+            "scope": "model_import_and_construction",
+            "shape_id": request.get("shape_id"),
+            "failure_stage": "inputs",
+            "error": "real launch requires diagnostic input source and one Shape",
+        })
+        raise SystemExit(0)
+    stage = "inputs"
+    input_module = load_module(root / "diagnostic-input.py", "atrex_local_diagnostic_input")
+    shapes = json.loads((root / "diagnostic-shapes.json").read_text(encoding="utf-8"))
+    shape_id = str(request["shape_id"])
+    shape = shapes[shape_id]
+    values = input_module._make_inputs(**(shape.get("input_kwargs") or {}))
+    stage = "launch"
+    if torch is not None:
+        with torch.inference_mode():
+            invoke(model, values)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+    else:
+        invoke(model, values)
+    artifacts = binaries()
+    if operation == "check":
+        sanitize = request.get("sanitize")
+        finish({
+            "status": "succeeded",
+            "passed": True,
+            "compile_ok": True,
+            "launch_ok": True,
+            "asm_available": bool(artifacts),
+            "correctness_checked": False,
+            "sanitize": sanitize,
+            "sanitizer_passed": True if sanitize else None,
+            "scope": "one_shape_launch_probe",
+            "shape_id": shape_id,
+        })
+    else:
+        fmt = request.get("fmt", "auto")
+        if fmt == "auto":
+            fmt = "isa" if any(path.suffix.casefold() == ".hsaco" for path in artifacts) else "sass"
+        text = None
+        if fmt == "ptx":
+            ptx = next((path for path in artifacts if path.suffix.casefold() == ".ptx"), None)
+            if ptx is not None:
+                text = ptx.read_text(encoding="utf-8", errors="replace")
+        if text is None and fmt in {"sass", "ptx"}:
+            tool = shutil.which("cuobjdump")
+            binary = next(
+                (path for path in artifacts if path.suffix.casefold() in {".so", ".cubin", ".fatbin"}),
+                None,
+            )
+            if tool and binary:
+                text = run_tool([tool, "--dump-sass" if fmt == "sass" else "--dump-ptx", str(binary)])
+        if text is None and fmt == "isa":
+            binary = next((path for path in artifacts if path.suffix.casefold() == ".hsaco"), None)
+            tool = shutil.which("llvm-objdump") or shutil.which("roc-objdump")
+            if tool and binary:
+                text = run_tool([tool, "-d", str(binary)])
+        if not text:
+            finish({
+                "status": "error",
+                "passed": False,
+                "format": fmt,
+                "failure_stage": "collection",
+                "error": (
+                    "candidate launch/JIT produced no compatible GPU binary in the job-local "
+                    "Torch, Triton, CUDA, or CuteDSL caches"
+                ),
+            })
+        else:
+            finish({
+                "status": "succeeded",
+                "passed": True,
+                "format": fmt,
+                "shape_id": shape_id,
+                "kernels": [],
+                "exports": {f"{fmt}.txt": exported(text)},
+            })
+except Exception as error:
+    finish({
+        "status": "error",
+        "passed": False,
+        "compile_ok": stage not in {"import", "construction"},
+        "launch_ok": False,
+        "shape_id": request.get("shape_id"),
+        "failure_stage": stage,
+        "error": f"{type(error).__name__}: {error}"[:4000],
+    })
 '''
 
 
@@ -1054,6 +1377,16 @@ class LocalScheduler:
                 torch_extensions = workdir / ".torch_extensions"
                 torch_extensions.mkdir(mode=0o700)
                 env["TORCH_EXTENSIONS_DIR"] = str(torch_extensions)
+            for name, directory in (
+                ("TRITON_CACHE_DIR", ".triton_cache"),
+                ("CUDA_CACHE_PATH", ".cuda_cache"),
+                ("CUTE_DSL_CACHE_DIR", ".cute_cache"),
+                ("CUTE_DSL_DUMP_DIR", ".cute_dump"),
+            ):
+                if name not in request_env:
+                    path = workdir / directory
+                    path.mkdir(mode=0o700)
+                    env[name] = str(path)
             env["ATREX_LOCAL_JOB_ID"] = job_id
             argv, timeout_s = self._prepare_job(kind, request, workdir, env)
             argv = self._install_requirements_argv(argv, request, workdir, env)
@@ -1172,6 +1505,8 @@ class LocalScheduler:
             return self._eval_argv(request, workdir, timeout_s), timeout_s
         if kind == "profile":
             return self._profile_argv(request, workdir, env), timeout_s
+        if kind in {"compile", "disassemble"}:
+            return self._diagnostic_argv(kind, request, workdir), timeout_s
         raise ValueError(f"unsupported job kind {kind!r}")
 
     @staticmethod
@@ -1184,8 +1519,22 @@ class LocalScheduler:
         return target
 
     def _materialize_typed_bundle(self, request: dict[str, Any], workdir: Path) -> None:
-        reference = request["reference"]
         self._write_text(workdir, "candidate.py", request["candidate"])
+        diagnostic_reference = request.get("diagnostic_reference")
+        if isinstance(diagnostic_reference, dict):
+            self._write_text(
+                workdir,
+                "diagnostic-input.py",
+                diagnostic_reference["input_py"],
+            )
+            self._write_text(
+                workdir,
+                "diagnostic-shapes.json",
+                _json_dumps(diagnostic_reference["shapes"]),
+            )
+        if "reference" not in request:
+            return
+        reference = request["reference"]
         self._write_text(workdir, "reference/reference.py", reference["reference_py"])
         self._write_text(workdir, "reference/input.py", reference["input_py"])
         self._write_text(workdir, "reference/shapes.json", _json_dumps(reference["shapes"]))
@@ -1196,6 +1545,58 @@ class LocalScheduler:
             self._write_text(
                 workdir, "reference/roofline.json", _json_dumps(reference["roofline"])
             )
+
+    def _diagnostic_argv(
+        self,
+        kind: str,
+        request: dict[str, Any],
+        workdir: Path,
+    ) -> list[str]:
+        self._write_text(
+            workdir,
+            "diagnostic-driver.py",
+            DIAGNOSTIC_DRIVER,
+            executable=True,
+        )
+        diagnostic_request = {
+            "operation": "check" if kind == "compile" else "disassemble",
+            "init_kwargs": request.get("init_kwargs") or {},
+            "shape_id": request.get("shape_id"),
+            "has_inputs": isinstance(request.get("diagnostic_reference"), dict),
+        }
+        for field in ("arch", "sanitize", "fmt"):
+            if field in request:
+                diagnostic_request[field] = request[field]
+        self._write_text(
+            workdir,
+            "diagnostic-request.json",
+            _json_dumps(diagnostic_request),
+        )
+        command = [sys.executable, str(workdir / "diagnostic-driver.py")]
+        sanitizer = request.get("sanitize") if kind == "compile" else None
+        if sanitizer:
+            executable = shutil.which("compute-sanitizer")
+            if executable is None:
+                diagnostic_request.update(
+                    capability_error="compute-sanitizer is not installed in this environment"
+                )
+                self._write_text(
+                    workdir,
+                    "diagnostic-request.json",
+                    _json_dumps(diagnostic_request),
+                )
+            else:
+                command = [
+                    executable,
+                    "--tool",
+                    str(sanitizer),
+                    "--error-exitcode",
+                    "86",
+                    "--target-processes",
+                    "all",
+                    *command,
+                ]
+        return command
 
     def _eval_argv(self, request: dict[str, Any], workdir: Path, timeout_s: int) -> list[str]:
         runner = _find_atrex_bench_runner(self.atrex_bench_root)
@@ -1265,6 +1666,10 @@ class LocalScheduler:
         level = request.get("level", "sol")
         counters = request.get("counters") or []
         kernel_regex = request.get("kernel_regex")
+        kernel_name = request.get("kernel_name")
+        shape_id = request.get("shape_id")
+        if isinstance(shape_id, str):
+            env["ATREX_PROFILE_SHAPE_ID"] = shape_id
         if profiler == "ncu":
             argv = [
                 executable,
@@ -1273,6 +1678,8 @@ class LocalScheduler:
                 "--profile-from-start", "off",
                 "--target-processes", "all",
                 "--kernel-name-base", "demangled",
+                "--launch-skip", str(request.get("launch_skip") or 0),
+                "--launch-count", str(request.get("launch_count") or 1),
             ]
             if counters:
                 argv += ["--metrics", ",".join(counters)]
@@ -1283,6 +1690,10 @@ class LocalScheduler:
                 argv += ["--metrics", ",".join(metrics)]
             if kernel_regex:
                 argv += ["--kernel-name", f"regex:{kernel_regex}"]
+            elif kernel_name:
+                argv += ["--kernel-name", f"regex:^{re.escape(kernel_name)}$"]
+            if request.get("source"):
+                argv += ["--section", "SourceCounters", "--import-source", "yes"]
             argv += [sys.executable, str(driver)]
             return argv
 
@@ -1296,6 +1707,8 @@ class LocalScheduler:
             argv += ["--pmc", *counters]
         if kernel_regex:
             argv += ["--kernel-include-regex", kernel_regex]
+        elif kernel_name:
+            argv += ["--kernel-include-regex", f"^{re.escape(kernel_name)}$"]
         argv += ["--", sys.executable, str(driver)]
         return argv
 
@@ -1323,8 +1736,10 @@ class LocalScheduler:
             "--disable-pip-version-check",
             "--target",
             str(target),
-            *requirements,
         ]
+        if request.get("deps_mode") == "no_deps":
+            install.append("--no-deps")
+        install.extend(requirements)
         return ["bash", "-c", f"{shlex.join(install)} && exec {shlex.join(argv)}"]
 
     @staticmethod
@@ -1460,7 +1875,66 @@ class LocalScheduler:
                 result = _parse_rocprof_csv(
                     workdir / "profile_output", level=level, top_kernels=top_kernels
                 )
+            shape_id = request.get("shape_id")
+            if not isinstance(shape_id, str):
+                shapes = (request.get("reference") or {}).get("shapes") or {}
+                if isinstance(shapes, dict) and shapes:
+                    shape_id = sorted(shapes, key=lambda value: (0, int(value)) if str(value).isdigit() else (1, str(value)))[0]
+            if isinstance(shape_id, str):
+                result["shape_id"] = shape_id
             self.store.complete(job_id, status="succeeded", result=result, error=None)
+            return
+        if kind in {"compile", "disassemble"}:
+            result_path = workdir / "diagnostic-result.json"
+            if result_path.is_file():
+                try:
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    self.store.complete(
+                        job_id,
+                        status="failed",
+                        result=command_result,
+                        error=_error(
+                            "invalid_diagnostic_result",
+                            f"cannot read diagnostic-result.json: {exc}",
+                        ),
+                    )
+                    return
+                if isinstance(result, dict) and isinstance(result.get("passed"), bool):
+                    if (
+                        kind == "compile"
+                        and request.get("sanitize")
+                        and command_result["exit_code"] != 0
+                    ):
+                        result = {
+                            **result,
+                            "status": "error",
+                            "passed": False,
+                            "launch_ok": False,
+                            "sanitizer_passed": False,
+                            "failure_stage": "sanitize",
+                            "error": (
+                                command_result.get("stderr")
+                                or "compute-sanitizer reported an error"
+                            )[-4000:],
+                        }
+                    # The worker ran successfully even when the candidate diagnostic did not.
+                    self.store.complete(
+                        job_id,
+                        status="succeeded",
+                        result=result,
+                        error=None,
+                    )
+                    return
+            self.store.complete(
+                job_id,
+                status="failed",
+                result=command_result,
+                error=_error(
+                    "diagnostic_failed",
+                    f"{kind} driver exited without a structured result",
+                ),
+            )
             return
         raise ValueError(f"unsupported job kind {kind!r}")
 
@@ -1540,7 +2014,11 @@ class LocalGateway:
         request = (
             _validate_dev_request(payload)
             if kind == "dev"
-            else _validate_typed_request(payload, kind)
+            else (
+                _validate_diagnostic_request(payload, kind)
+                if kind in {"compile", "disassemble"}
+                else _validate_typed_request(payload, kind)
+            )
         )
         targets = request["spec"]["target_hardware"]
         if not any(target in self.gpu_aliases for target in targets):
@@ -1569,6 +2047,41 @@ class LocalGateway:
             result = dict(self._env_cache)
             result["aliases"] = sorted(self.gpu_aliases)
             return result
+
+    def capabilities(self, force: bool = False) -> dict[str, Any]:
+        """Return the same high-level capability groups as remote Agate."""
+        environment = self.environment(force=force)
+        toolchain = environment.get("toolchain") or {}
+        frameworks: dict[str, Any] = {}
+        for name, import_path in (
+            ("torch", "torch"),
+            ("triton", "triton"),
+            ("cutedsl", "cutlass"),
+        ):
+            version = toolchain.get(name) if isinstance(toolchain, dict) else None
+            frameworks[name] = {
+                "available": version is not None,
+                "version": version,
+                "import_path": import_path,
+            }
+        profilers = {}
+        for name in ("ncu", "nsys", "rocprofv3"):
+            executable = shutil.which(name)
+            profilers[name] = {
+                "available": executable is not None,
+                "path": executable,
+            }
+        return {
+            "gpu": "local",
+            "environment": environment,
+            "frameworks": frameworks,
+            "profilers": profilers,
+            "limits": {
+                "max_job_timeout_s": MAX_JOB_TIMEOUT,
+                "max_source_bytes": MAX_SOURCE_BYTES,
+                "max_profile_counters": MAX_PROFILE_COUNTERS,
+            },
+        }
 
 
 def _probe_environment() -> dict[str, Any]:
@@ -1647,7 +2160,7 @@ def _probe_environment() -> dict[str, Any]:
 class GatewayRequestHandler(BaseHTTPRequestHandler):
     gateway: LocalGateway
     body_limit = DEFAULT_BODY_LIMIT
-    server_version = "atrex-local-gateway/0.2"
+    server_version = "atrex-local-gateway/0.3"
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         parsed = urlsplit(self.path)
@@ -1662,13 +2175,19 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"env": [env]})
             return
         if path.startswith("/v1/env/"):
-            gpu = unquote(path.removeprefix("/v1/env/"))
+            suffix = unquote(path.removeprefix("/v1/env/"))
+            capabilities = suffix.endswith("/capabilities")
+            gpu = suffix.removesuffix("/capabilities") if capabilities else suffix
             if gpu != "local":
                 self._not_found("environment_not_found", f"environment {gpu!r} not found", trace_id)
                 return
             self._send_json(
                 HTTPStatus.OK,
-                self.gateway.environment(force=self._bool_query(query, "force")),
+                (
+                    self.gateway.capabilities(force=self._bool_query(query, "force"))
+                    if capabilities
+                    else self.gateway.environment(force=self._bool_query(query, "force"))
+                ),
             )
             return
         if path == "/v1/jobs":
@@ -1726,7 +2245,9 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(HTTPStatus.OK, job)
             return
-        kind_match = re.fullmatch(r"/v1/jobs/(eval|profile|dev)", path)
+        kind_match = re.fullmatch(
+            r"/v1/jobs/(eval|profile|dev|compile|disassemble)", path
+        )
         if kind_match or path == "/v1/evals":
             kind = kind_match.group(1) if kind_match else "eval"
             try:
@@ -1742,16 +2263,6 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(HTTPStatus.ACCEPTED, accepted)
-            return
-        if path == "/v1/jobs/disassemble":
-            self._send_json(
-                HTTPStatus.NOT_IMPLEMENTED,
-                _error(
-                    "kind_not_supported",
-                    "community localhost scheduler does not implement disassemble jobs",
-                    trace_id,
-                ),
-            )
             return
         self._not_found("route_not_found", f"route {path!r} not found", trace_id)
 
@@ -1845,7 +2356,10 @@ def _default_state_dir() -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Queue agate run/profile/dev jobs on a trusted localhost GPU."
+        description=(
+            "Queue Agate-compatible eval/profile/dev/compile/disassemble jobs "
+            "on a trusted localhost GPU."
+        )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     serve = subparsers.add_parser("serve", help="start the localhost-compatible HTTP server")

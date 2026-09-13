@@ -397,7 +397,6 @@ class QoderAdapter(ClaudeLikeAdapter):
             "stream-json",
             "--session-id",
             session_id,
-            "--no-session-persistence",
             "--reasoning-effort",
             reasoning_effort,
         ]
@@ -534,6 +533,7 @@ class CodexAdapter(AgentBackendAdapter):
         command = [
             "codex",
             "exec",
+            "--skip-git-repo-check",
             "--json",
             "--color",
             "never",

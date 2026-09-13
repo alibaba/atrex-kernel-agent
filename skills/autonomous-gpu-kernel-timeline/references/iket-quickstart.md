@@ -57,14 +57,14 @@ existing run directory:
 
 ```bash
 python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
-  --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
-  --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
+  --run-dir scratch/timeline/attempt-N/iket-run \
+  --evidence-dir scratch/timeline/attempt-N/evidence \
   --kernel-regex '^exact_generated_kernel_name$' \
-  --dictionary profiles/episode_N/timeline/attempt-N/events.json \
-  --clean-source profiles/episode_N/timeline/attempt-N/clean_kernel.py \
-  --instrumented-source profiles/episode_N/timeline/attempt-N/instrumented_kernel.py \
+  --dictionary scratch/timeline/attempt-N/events.json \
+  --clean-source scratch/timeline/attempt-N/clean_kernel.py \
+  --instrumented-source scratch/timeline/attempt-N/instrumented_kernel.py \
   --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-  python profiles/episode_N/timeline/attempt-N/harness/profile_target.py
+  python scratch/timeline/attempt-N/harness/profile_target.py
 ```
 
 For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
@@ -72,16 +72,16 @@ For a remote campaign command, pass the skill as an explicit sandbox input and s
 ```bash
 python tools/sandbox.py --kind profile \
   --input skills/autonomous-gpu-kernel-timeline \
-  --sync profiles/episode_N/timeline/attempt-N -- \
+  --sync scratch/timeline/attempt-N -- \
   python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
-    --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
-    --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
+    --run-dir scratch/timeline/attempt-N/iket-run \
+    --evidence-dir scratch/timeline/attempt-N/evidence \
     --kernel-regex '^exact_generated_kernel_name$' \
-    --dictionary profiles/episode_N/timeline/attempt-N/events.json \
-    --clean-source profiles/episode_N/timeline/attempt-N/clean_kernel.py \
-    --instrumented-source profiles/episode_N/timeline/attempt-N/instrumented_kernel.py \
+    --dictionary scratch/timeline/attempt-N/events.json \
+    --clean-source scratch/timeline/attempt-N/clean_kernel.py \
+    --instrumented-source scratch/timeline/attempt-N/instrumented_kernel.py \
     --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-    python profiles/episode_N/timeline/attempt-N/harness/profile_target.py
+    python scratch/timeline/attempt-N/harness/profile_target.py
 ```
 
 Use `capture-iket` and `export-iket` separately only for local debugging. Export succeeds only when a
@@ -89,8 +89,9 @@ non-empty native Perfetto trace exists, the target launch is present, all declar
 with the declared kind, locations are valid, and range timestamps are ordered. It emits the common
 deterministic Perfetto JSON gzip, summary, manifest, binary identity, native-capture index, and receipt.
 The commands above create exploration evidence. Before requesting `--stage final`, run the immutable
-AKA evaluator against the instrumented snapshot and pass its sandbox-owned
-`.atrex_long_horizon/evaluations.jsonl` to `export-iket` as `--correctness-evidence`; the text
+AKA evaluator against the instrumented snapshot and pass the opaque Runtime alias
+`.atrex_long_horizon/evaluations.jsonl` to `export-iket` as
+`--correctness-evidence`; the Supervisor injects the private file remotely, and the text
 `--correctness passed` alone cannot produce `decision_grade`.
 
 Do not run IKeT in the same process as NSYS or NCU. `--enabled-cluster X,Y,Z` can reduce output for a

@@ -56,13 +56,14 @@ snapshot until the evaluator records a canonical source-set digest.
 
 An exploration receipt may use `--correctness passed` as an explicit agent report. A final
 `decision_grade` receipt additionally requires `--correctness-evidence` pointing to the
-sandbox-owned `.atrex_long_horizon/evaluations.jsonl` produced by the immutable evaluator for the
+opaque Runtime alias `.atrex_long_horizon/evaluations.jsonl`; the Supervisor injects the
+immutable evaluator-owned file into the remote bundle for the
 instrumented `kernel.py`.
 
 Campaign workspaces expose `skills/` as a local symlink that is not uploaded implicitly. Add
 `--input skills/autonomous-gpu-kernel-timeline/backends/cuda_backend` to a sandbox command that reads
 the header or adapter at runtime. This deliberately selects the sandbox's custom dev-compatible
-transport while preserving evaluator inputs; it does not authorize changing `profile_driver.py`.
+transport while preserving evaluator inputs; it does not authorize changing the Supervisor's profiling methodology.
 
 Use the tool's structural verdict as a fact check. Interpret the resulting phases yourself.
 `backends/cuda_backend/test_backend.cu` is the compact runnable example for allocation, launch,

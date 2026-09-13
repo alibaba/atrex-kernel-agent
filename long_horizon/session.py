@@ -31,12 +31,20 @@ CommandExecutor = Callable[
 
 
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
+_CLAUDE_TRANSIENT_API_ERROR_FRAGMENTS = (
+    "connection lost mid-response",
+    "can't reach the api server",
+    "cannot reach the api server",
+    "enotfound",
+)
 
 
 def _claude_retryable_api_error(message: str) -> bool:
     """Return whether a bounded same-session retry can preserve useful work."""
     normalized = message.strip().casefold()
     if normalized in _CLAUDE_TRANSIENT_API_ERRORS:
+        return True
+    if any(fragment in normalized for fragment in _CLAUDE_TRANSIENT_API_ERROR_FRAGMENTS):
         return True
     return (
         "request rejected (429)" in normalized
@@ -131,7 +139,11 @@ class LongSessionRunner:
         telemetry_attempt_prefix = environment.get("ATREX_TELEMETRY_ATTEMPT_ID")
         codex_observer = None
         codex_setup_errors: tuple[str, ...] = ()
-        if is_codex:
+        from orchestrator.supervisor_runtime import active_supervisor_runtime
+
+        supervisor = active_supervisor_runtime()
+        managed_home = supervisor is not None and supervisor.config.agent_sandbox != "none"
+        if is_codex and not managed_home:
             try:
                 codex_observer = CodexSessionLedgerObserver(
                     codex_home(environment)
@@ -182,10 +194,12 @@ class LongSessionRunner:
                 turn_prompt = (
                     "Continue the same long-horizon optimization episode. The previous turn did "
                     f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
-                    "work from the current Git worktree. Candidate commits may contain only "
-                    "kernel.py; leave all evidence uncommitted. Do not merely explain the problem. "
-                    "Before stopping, finalize the episode journal and atomically publish a valid "
-                    "handoff."
+                    "work from the current workspace. Do not run Git or access .git; the "
+                    "Supervisor commits the selected measured kernel.py after report validation. "
+                    "Do not merely explain the problem. "
+                    "Before stopping, fix the reported field and rerun the terminal report "
+                    "command; it may be submitted repeatedly until it validates and publishes "
+                    "the handoff."
                 )
                 command = (
                     main_adapter.resume_session_command(

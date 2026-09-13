@@ -98,9 +98,7 @@ def kernel_is_gluon(workspace: Path) -> bool:
 
 
 def head_kernel_is_gluon(workspace: Path) -> bool:
-    """True when the COMMITTED HEAD kernel.py is Gluon. Authoritative accept signal for a convert
-    session — more reliable than memory's git_commit_hash, which a session may leave unset even after
-    committing."""
+    """Read committed kernel.py to determine whether Gluon conversion was accepted."""
     try:
         out = subprocess.run(["git", "show", "HEAD:kernel.py"], cwd=str(workspace),
                              capture_output=True, text=True)
@@ -154,7 +152,8 @@ def hardware_directive(platform: str, arch: str) -> str:
         "vendor or generation than the detected one.\n"
         "- In every natural-language GPU Wiki request, state the true target product exactly as "
         f"**{platform}** and the authoritative runtime architecture exactly as {real}. Explicitly ask "
-        "`query_nl.py` for the full product hardware specification plus any architecture or ISA facts "
+        "`python3 tools/sandbox.py --kind wiki-query` for the full product specification plus "
+        "any architecture or ISA facts "
         "needed by the optimization, so the response includes isolated `hardware_wiki` and "
         "`kernel_wiki` records. Query-side normalization may ignore case and separators only; it must "
         "never substitute one hardware identity for another.\n"

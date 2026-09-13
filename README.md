@@ -22,7 +22,9 @@ supervisor control.
 The repository has one supported entry point, `orchestrator/optimize.py`. The internal
 `long_horizon/` package supplies the episode engine; it is not a second CLI.
 
-![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
+After baseline construction, every optimization Episode uses the same evidence-driven workflow:
+explore Directions, implement and evaluate candidates, record Experiments, and submit a report.
+The Supervisor applies correctness, policy, and same-allocation ABBA gates before promotion.
 
 AKA supports:
 

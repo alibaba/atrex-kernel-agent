@@ -9,14 +9,44 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from .git_metadata import install_git_excludes
+from .durable_state import durable_write_json
+
 
 OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
 MODE_STATE_FILE = ".orchestrator_mode.json"
+MODE_STATE_ENV = "ATREX_AKA_MODE_STATE_FILE"
 POLICY_BEGIN = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_BEGIN -->"
 POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
 
 
 ProductionReviewer = Callable[[Path, str, bool], list[str]]
+
+
+def workspace_policy_path(workspace: Path) -> Path:
+    from .supervisor_runtime import supervisor_campaign_root
+
+    return supervisor_campaign_root(workspace) / "optimization-policy.json"
+
+
+def read_workspace_policy(workspace: Path) -> dict:
+    """Read trusted policy; malformed private state must not disable private cases."""
+    path = workspace_policy_path(workspace)
+    return read_policy_file(path)
+
+
+def read_policy_file(path: Path) -> dict:
+    if path.is_symlink():
+        raise RuntimeError("optimization-mode state cannot be a symlink")
+    if not path.exists():
+        return {}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid optimization-mode state: {path}") from exc
+    if not isinstance(state, dict) or state.get("mode") not in OPTIMIZATION_MODE_CHOICES:
+        raise RuntimeError(f"invalid optimization-mode state: {path}")
+    return state
 
 
 def _framework_key(framework: str) -> str:
@@ -67,49 +97,33 @@ def source_uses_gluon(source: str) -> bool:
 
 
 def optimization_mode_directive(mode: str, framework: str) -> str:
-    """Self-contained policy block injected into every coding-agent prompt."""
+    """Describe legal implementations without exposing Supervisor gate mechanics."""
     if mode == "leaderboard":
         return (
-            "## Optimization mode: leaderboard\n\n"
-            "Follow the workspace `CLAUDE.md` exactly. Its existing framework guidance remains "
-            "unchanged: the requested framework is a recommended direction, compatible mixed/alternate "
-            "implementations are allowed when evidence supports them, and third-party helper/kernel "
-            "libraries may be used.\n"
+            "## Implementation constraints\n\n"
+            f"Prefer {framework}; compatible mixed/alternate implementations and preinstalled "
+            "third-party libraries are allowed when supported by evidence.\n"
         )
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
     if _framework_key(framework) == "triton":
         framework_rule = (
-            "- The initial implementation framework is exactly **Triton**. After the orchestrator "
-            "enters its mandatory Triton-to-Gluon conversion phase, a direct implementation in "
-            "`triton.experimental.gluon` is allowed and becomes the required framework for later "
-            "iterations. Do not switch early, switch back, mix Triton and Gluon compute kernels, "
-            "or use any other DSL.\n"
+            "- Use Triton until the session explicitly requires Gluon; after conversion, stay in "
+            "Gluon. Do not mix their compute kernels or use another DSL.\n"
         )
-        candidate_framework = "the active Triton/Gluon phase"
     else:
         framework_rule = (
-            f"- The implementation framework is exactly **{framework}**. It is a hard constraint, "
-            "not a recommendation. Do not switch to another DSL, mix another kernel framework "
-            "into the candidate, or replace the implementation with a prebuilt operator.\n"
+            f"- Implement GPU computation in {framework} only; do not switch or mix DSLs.\n"
         )
-        candidate_framework = framework
     return (
-        "## Optimization mode: production (hard gate)\n\n"
-        "This generated section overrides any conflicting permissive framework or third-party-library "
-        "guidance elsewhere in `CLAUDE.md`.\n\n"
+        "## Implementation constraints\n\n"
         f"{framework_rule}"
-        "- The V0 PyTorch reference wrapper is the only baseline exception. Every optimized candidate "
-        f"committed after V0 must implement the GPU computation directly in **{candidate_framework}**.\n"
-        "- The supervisor sends every production candidate to a separate, read-only policy reviewer. "
-        "The reviewer judges the complete candidate by actual use, not package names: compiler bindings, "
-        "header discovery, ABI/launch plumbing, and ordinary non-compute support utilities may be accepted "
-        "when they only build or launch the candidate's self-authored kernel. Prebuilt kernels/operators/math "
-        "implementations, alternate DSLs, hidden dispatch, PyTorch compute fallbacks, and external "
-        "implementation loading remain forbidden. Ambiguous evidence is rejected.\n"
-        "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
-        "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
-        "evidence-backed production-policy verdict, even if it is faster and correct.\n"
+        "- Write the compute kernels yourself. No prebuilt operators/math implementations, PyTorch "
+        "compute fallbacks, hidden dispatch, or external implementation loading. The original V0 "
+        "reference is the baseline exception, not an optimized candidate.\n"
+        "- Preinstalled compiler bindings, header discovery, ABI/launch helpers, and non-compute "
+        "utilities are allowed only to support your own kernels.\n"
+        "- Keep `solution.json`, when present, consistent with the implementation.\n"
     )
 
 
@@ -140,13 +154,14 @@ def install_workspace_policy(
         raise ValueError("agent_runtime must be a non-empty runtime id")
 
     workspace.mkdir(parents=True, exist_ok=True)
-    state_path = workspace / MODE_STATE_FILE
+    state_path = workspace_policy_path(workspace)
+    legacy_path = workspace / MODE_STATE_FILE
     state_changed = False
-    if state_path.exists():
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"invalid optimization-mode state: {state_path}") from exc
+    state = read_policy_file(state_path)
+    if not state and legacy_path.exists():
+        state = read_policy_file(legacy_path)
+        state_changed = True
+    if state:
         existing_mode = state.get("mode")
         existing_framework = state.get("framework")
         if existing_mode != mode or existing_framework != framework:
@@ -172,10 +187,16 @@ def install_workspace_policy(
         state_changed = True
 
     if state_changed:
-        state_path.write_text(
-            json.dumps(state, indent=2) + "\n",
-            encoding="utf-8",
+        durable_write_json(state_path, state, indent=2)
+
+    # Retain tracked legacy files in Git history, but never project them into an Agent.
+    if legacy_path.is_file() and not legacy_path.is_symlink():
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", MODE_STATE_FILE],
+            cwd=workspace, capture_output=True, check=False,
         )
+        if tracked.returncode:
+            legacy_path.unlink()
 
     claude_path = workspace / "CLAUDE.md"
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
@@ -188,15 +209,7 @@ def install_workspace_policy(
         current = current.rstrip() + ("\n\n" if current.strip() else "") + generated
     claude_path.write_text(current, encoding="utf-8")
 
-    gitignore = workspace / ".gitignore"
-    ignored = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
-    entry = f"/{MODE_STATE_FILE}"
-    if entry not in ignored.splitlines():
-        with gitignore.open("a", encoding="utf-8") as handle:
-            if ignored and not ignored.endswith("\n"):
-                handle.write("\n")
-            handle.write("\n# orchestrator optimization-mode identity (local policy state)\n")
-            handle.write(entry + "\n")
+    install_git_excludes(workspace)
 
 
 _SUPPORTED_PRODUCTION_FRAMEWORKS = frozenset(
@@ -342,7 +355,7 @@ def reject_production_commit(
     memory_path.parent.mkdir(parents=True, exist_ok=True)
     memory["version"] = f"v{version}"
     memory["masked"] = False
-    memory["git_commit_hash"] = None
+    memory.pop("git_commit_hash", None)
     memory["quality_gate"] = {
         "result": "FAIL",
         "failure_reason": "production policy violation: " + "; ".join(violations),

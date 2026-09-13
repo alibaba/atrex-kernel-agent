@@ -1045,6 +1045,12 @@ def merge_store_records(
 
 
 def main(argv=None) -> int:
+    from supervisor_runtime_proxy import maybe_proxy
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    proxied = maybe_proxy("query_nl", arguments)
+    if proxied is not None:
+        return proxied
     query_id = "wiki-query-%s" % uuid.uuid4().hex
     started_at = datetime.now(timezone.utc)
     started = time.perf_counter()
@@ -1081,7 +1087,7 @@ def main(argv=None) -> int:
     ap.add_argument("--keep-workspace", action="store_true")
     # Kept for command compatibility; full isolated payloads are always served.
     ap.add_argument("--brief", action="store_true", help=argparse.SUPPRESS)
-    args = ap.parse_args(argv)
+    args = ap.parse_args(arguments)
     # The environment value is an operator policy, not merely a default. This
     # lets a campaign require one audited bridge runtime even if an episode
     # copies an old command line that names another CLI explicitly.

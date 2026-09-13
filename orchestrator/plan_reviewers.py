@@ -7,10 +7,11 @@ import json
 import os
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .agent_runtime.process import run_bounded
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_REVIEWER_CACHE = Path(".atrex_long_horizon/plan_reviewer_availability.json")
@@ -79,12 +80,13 @@ def _probe_reviewer(
     helper = REPO_ROOT / "skills" / "gen-plan" / "scripts" / helper_name
     environment = os.environ.copy()
     environment["ATREX_AGENT_CLI"] = agent_cli
+    environment["ATREX_AGENT_SANDBOX_BACKEND"] = matching_backend
     # A parent campaign's decision must never suppress a fresh campaign's one-time probe.
     for enabled_name, reason_name in REVIEWER_ENVIRONMENT.values():
         environment.pop(enabled_name, None)
         environment.pop(reason_name, None)
     try:
-        completed = subprocess.run(
+        stdout, stderr, returncode, timed_out = run_bounded(
             [
                 "bash",
                 str(helper),
@@ -95,12 +97,15 @@ def _probe_reviewer(
                 "--timeout",
                 str(timeout_s),
             ],
-            cwd=str(workspace),
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_s + 15,
+            workspace,
+            timeout_s + 15,
+            environment,
+        )
+        completed = subprocess.CompletedProcess(
+            args=["bash", str(helper)],
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -115,6 +120,12 @@ def _probe_reviewer(
             "reason": _single_line(f"startup probe could not start: {exc}"),
         }
 
+    if timed_out:
+        return {
+            "available": False,
+            "status": "timeout",
+            "reason": f"startup probe exceeded {timeout_s} seconds",
+        }
     if completed.returncode == 0:
         return {
             "available": True,
@@ -196,14 +207,18 @@ def discover_plan_reviewers(
     if not missing_names:
         return {
             "schema_version": PLAN_REVIEWER_CACHE_SCHEMA_VERSION,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
             "agent_cli": agent_cli,
             "probe_timeout_seconds": _probe_timeout(),
             "reviewers": cached_reviewers,
         }, False
 
     timeout_s = _probe_timeout()
-    with tempfile.TemporaryDirectory(prefix="atrex-plan-reviewer-probe-") as directory:
+    probe_root = workspace / ".atrex_long_horizon" / "plan-reviewer-probes"
+    probe_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="probe-", dir=probe_root
+    ) as directory:
         draft = Path(directory) / "availability_probe.md"
         draft.write_text(
             "# Plan reviewer availability probe\n\n"
@@ -244,7 +259,7 @@ def discover_plan_reviewers(
 
     value = {
         "schema_version": PLAN_REVIEWER_CACHE_SCHEMA_VERSION,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "checked_at": datetime.now(UTC).isoformat(),
         "agent_cli": agent_cli,
         "probe_timeout_seconds": timeout_s,
         "reviewers": cached_reviewers,

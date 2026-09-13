@@ -30,9 +30,11 @@ answers the question.
    same episode worktree. This snapshot is not a handoff candidate and must not enter promotion or
    stall accounting.
 3. Run representative correctness through the immutable evaluator and capture through the campaign
-   sandbox. For final evidence, pass the sandbox-owned `.atrex_long_horizon/evaluations.jsonl` as
-   `--correctness-evidence`; a model-supplied `--correctness passed` is only an exploration note and
-   cannot produce `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
+   sandbox. For final evidence, pass the opaque Runtime alias
+   `.atrex_long_horizon/evaluations.jsonl` as `--correctness-evidence`; it intentionally does not
+   exist in the local Agent workspace. The Supervisor resolves and injects its private contents only
+   into the remote command bundle. A model-supplied `--correctness passed` is only an exploration
+   note and cannot produce `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
    evidence. If the remote command reads backend files, pass
    `--input skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
    the attempt-specific directory.
@@ -63,9 +65,9 @@ record required for final evidence.
 
 ## Hard boundaries
 
-- Never modify `profile_driver.py`, evaluators, ground truth, or other protected paths.
-- Never hand off or promote an instrumented snapshot. Only a probe-free kernel may become the
-  episode `candidate_commit == HEAD`.
+- Never modify evaluation methodology, ground truth, or other protected paths.
+- Never hand off an instrumented snapshot. Leave only the probe-free candidate in `kernel.py`;
+  the Supervisor handles Git commits after report validation.
 - Do not combine events from different launches into one apparent execution.
 - Construct exactly one recorder per selected owner per launch and reuse it for that owner's events;
   duplicate ownership is a capture failure, not a sampling policy.

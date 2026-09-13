@@ -40,7 +40,7 @@
         "finding": "<bounded profiler conclusion>",
         "decision_impact": "<how the conclusion changed the optimization decision>",
         "evidence": {
-          "artifact": "profiles/episode_N/<route>/attempt-N/<accepted-artifact>.json",
+          "artifact": "scratch/<route>/attempt-N/<accepted-artifact>.json",
           "sha256": "<lowercase SHA-256 of the exact artifact>",
           "schema": "<route-compatible artifact schema>",
           "evidence_id": "<evidence_id from that artifact>"
@@ -111,6 +111,5 @@
       "direction": "<candidate optimization lever for the NEXT session to try, most-promising first; max 3>",
       "rationale": "<evidence/intuition for why this is promising, incl. unfinished-but-promising threads>"
     }
-  ],
-  "git_commit_hash": null
+  ]
 }

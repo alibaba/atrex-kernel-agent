@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External profiling driver for a kernel-opt workspace.
+"""Supervisor-private profiling driver, injected only into remote GPU jobs.
 
 Both profiler wrappers (`tools/profile_nvidia.sh`, `tools/profile_kernel.sh`) run
 `python <file>`, so the profiled file must be runnable on its own. `kernel.py` is not:
@@ -157,7 +157,7 @@ def _legacy_shape(root: Path) -> tuple[dict, str]:
 
 def _run_atrex_bench(root: Path, device: str) -> None:
     """Drive an Atrex-Bench candidate through its `Model` entry point."""
-    if (root / "agent_problem.json").is_file():
+    if (root / PRIVATE_PROFILE_CASE_FILENAME).is_file():
         entry, label = _private_real_shape(root)
     else:
         entry, label = _legacy_shape(root)

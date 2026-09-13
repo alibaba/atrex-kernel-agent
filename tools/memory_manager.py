@@ -100,7 +100,6 @@ SCHEMA_TEMPLATE = {
         "failure_reason": None,
     },
     "open_directions": [],
-    "git_commit_hash": None,
 }
 
 

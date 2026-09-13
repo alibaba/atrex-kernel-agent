@@ -80,8 +80,8 @@ def speedup_vs_reference(
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────
 # A real win is a commit that CHANGES kernel.py. A dead-end "record" commit leaves kernel.py
 # identical to its parent. Everything (stall counter, target-met, convert incumbent) keys off
-# this git fact, NOT off the LLM-filled git_commit_hash / quality_gate in memory (which can drift
-# from what actually got committed). One primitive, reused everywhere: commit_changed_kernel().
+# this Git fact, not summary fields in memory. One primitive, reused everywhere:
+# commit_changed_kernel().
 
 
 def git_head(workspace: Path) -> str:
@@ -132,8 +132,8 @@ def git_worktree_blob(workspace: Path, path: str) -> str:
 def v0_baseline_commit(workspace: Path) -> str:
     """The commit that introduced ``kernel.py`` — the campaign's V0 baseline.
 
-    A setup session may commit campaign scaffolding (README, profile driver) before V0, so the
-    repository root commit is not necessarily V0 and may carry no kernel at all.
+    Locate the kernel's introduction rather than assuming the repository root commit is V0;
+    imported workspaces may contain earlier scaffolding commits with no kernel.
     """
     result = subprocess.run(
         ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
@@ -158,7 +158,7 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
 
     Once the framework-baseline stage lands v1 this returns False, because the
     accepted framework kernel is a real kernel change.  The framework baseline
-    is tracked by ``framework_baseline.json``, not by this predicate.
+    is tracked by the Supervisor-private baseline marker, not by this predicate.
     """
     baseline_commit = v0_baseline_commit(workspace)
     if not baseline_commit:
@@ -177,39 +177,56 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     )
 
 
-def read_framework_baseline(workspace: Path) -> Optional[dict]:
-    """Read the framework-baseline marker from committed HEAD, never from the worktree.
+def framework_baseline_path(workspace: Path) -> Path:
+    """One persistent private Campaign marker shared by all Episode worktrees."""
+    from .supervisor_runtime import supervisor_campaign_root
 
-    An interrupted session can leave an unstaged marker behind; trusting it would pin a kernel
-    that was never validated.
-    """
-    show = subprocess.run(
-        ["git", "show", f"HEAD:{FRAMEWORK_BASELINE_FILE}"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if show.returncode != 0:
+    return supervisor_campaign_root(workspace) / FRAMEWORK_BASELINE_FILE
+
+
+def read_framework_baseline(workspace: Path) -> Optional[dict]:
+    """Read the private pin; never trust a writable workspace marker."""
+    if not workspace.is_dir():
         return None
+    path = framework_baseline_path(workspace)
+    if path.is_symlink():
+        raise RuntimeError("Private framework-baseline marker cannot be a symlink")
     try:
-        marker = json.loads(show.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} is not valid JSON: {exc}") from exc
+        payload = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Read-only compatibility for old committed pins. New campaigns never
+        # generate these files; an uncommitted workspace marker is not trusted.
+        show = subprocess.run(
+            ["git", "show", f"HEAD:{FRAMEWORK_BASELINE_FILE}"],
+            cwd=workspace, capture_output=True, text=True,
+        )
+        if show.returncode:
+            return None
+        payload = show.stdout
+    try:
+        marker = json.loads(payload)
+    except (ValueError, UnicodeError) as exc:
+        raise RuntimeError("Invalid private framework-baseline JSON") from exc
     if not isinstance(marker, dict):
-        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} must contain a JSON object")
+        raise RuntimeError("Private framework-baseline marker must contain a JSON object")
     return marker
 
 
 def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
     """Return the pinned (commit, version) of the framework baseline, or ("", 0) when unpinned.
 
-    Verification is fail-closed and never consults HEAD's tree, so the pin survives HEAD
+    Verification is fail-closed and resolves the pinned commit, so the pin survives HEAD
     advancing through later optimization versions. A broken marker is an error rather than a
     silent fallback to the root commit.
     """
     marker = read_framework_baseline(workspace)
     if marker is None:
         return "", 0
+    return validate_framework_baseline_marker(workspace, marker)
+
+
+def validate_framework_baseline_marker(workspace: Path, marker: dict) -> tuple[str, int]:
+    """A private pin must still reference an existing, ancestral, exact Kernel."""
     commit = _normalize_commit_hash(marker.get("commit"))
     if not commit:
         raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has no usable commit hash")
@@ -244,13 +261,12 @@ def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
 
 
 def _normalize_commit_hash(ref: object) -> str:
-    """Return a safe git commit hash from an LLM-authored memory value.
+    """Return a safe Git commit ID from persisted Supervisor state.
 
     A short SHA containing only decimal digits can be serialized as a JSON
     number (for example ``7847485``).  Preserve that valid value by converting
     integers back to strings, while rejecting booleans, floats, and arbitrary
-    git revisions/options.  Memory records are expected to contain commit
-    hashes, not general revision expressions.
+    git revisions/options. These references must be commit hashes, not general revision expressions.
     """
     if isinstance(ref, bool):
         return ""
@@ -266,9 +282,8 @@ def commit_changed_kernel(workspace: Path, ref: object) -> bool:
     """True iff commit `ref` changed kernel.py vs its parent (i.e. a real win, not a dead-end
     record commit). The one git primitive the win/stall/incumbent logic all share.
 
-    ``git_commit_hash`` is written by agents, so normalize it before passing it
-    to subprocess.  In particular, all-decimal short SHAs may round-trip
-    through JSON as integers.
+    Normalize persisted commit IDs before passing them to subprocess. All-decimal short SHAs
+    may round-trip through JSON as integers.
     """
     commit_hash = _normalize_commit_hash(ref)
     if not commit_hash:

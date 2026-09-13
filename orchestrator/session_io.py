@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Optional
 
 from . import agent_runtime as _agent_runtime
+from .agent_assets import DEFAULT_AGENT_SKILLS
 from .constants import (
+    ATREX_BENCH_RUNTIME_ENV,
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     REPO_ROOT,
@@ -82,13 +84,15 @@ def _render(template_path: Path, **kw: str) -> str:
     return text
 
 
-def ensure_submodules(platform: str = "", arch: str = "") -> None:
+def ensure_submodules(
+    platform: str = "", arch: str = "", *,
+    agent_skills: tuple[str, ...] = DEFAULT_AGENT_SKILLS,
+    agent_reference_projects: bool = False,
+) -> None:
     """Initialize submodules required by the optimization pipeline.
 
-    Always covers gpu-wiki/3rdparty (KernelWiki) and 3rdparty/ncu-report-skill.
-    PPU campaigns also require their vendor reference projects: without those
-    working trees the framework-baseline catalog silently contains no usable
-    PPU implementation sources.
+    Always covers the Supervisor Wiki corpus; optional Agent assets are fetched
+    only when selected. PPU reference projects require explicit opt-in.
     Idempotent: already-initialized submodules are untouched.
     """
     needed = [
@@ -96,12 +100,10 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
             "gpu-wiki/3rdparty/",
             REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md",
         ),
-        (
-            "3rdparty/ncu-report-skill",
-            REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
-        ),
     ]
-    if hardware_vendor(platform, arch) == "ppu":
+    if "ncu-report-skill" in agent_skills:
+        needed.append(("3rdparty/ncu-report-skill", REPO_ROOT / "3rdparty/ncu-report-skill/SKILL.md"))
+    if agent_reference_projects and hardware_vendor(platform, arch) == "ppu":
         needed.extend(
             (path, REPO_ROOT / path / "README.md")
             for path in (
@@ -160,11 +162,15 @@ def run_session(
     sandbox_ssh: str = "",
     sandbox_ssh_init: str = "",
     sandbox_health_command: str = "",
+    workspace_role: str = "optimizer",
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
     # workspace-local skill rather than a process-level plugin.
     del agent_plugins
+    from .agent_workspace import WORKSPACE_ROLE_ENV
+
+    extra_environment = {**(extra_environment or {}), WORKSPACE_ROLE_ENV: workspace_role}
     session_id = str(uuid.uuid4())
     runtime = _agent_runtime.build_agent_runtime(
         agent_cli,
@@ -435,7 +441,7 @@ def sandbox_directive(
     url: str = "",
     ssh: str = "",
 ) -> str:
-    """Mandatory safety boundary plus full-mode workflow for full episodes."""
+    """Shared safety boundary plus the ordinary Episode measurement workflow."""
     endpoint = _sandbox_endpoint(profile, url, ssh)
     safety = _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
@@ -446,18 +452,13 @@ def sandbox_directive(
     return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
 
 
-def fast_sandbox_directive(
+def sandbox_boundary_directive(
     hardware: str,
     profile: str = "",
     url: str = "",
     ssh: str = "",
 ) -> str:
-    """Mandatory safety boundary for fast episodes.
-
-    The fast episode prompt already describes the fast-specific execution
-    contract (single evaluator, no multi-seed, no profile, supervisor-owned
-    memory), so only the invariant safety boundary is injected here.
-    """
+    """Invariant execution boundary for phases that supply their own workflow."""
     endpoint = _sandbox_endpoint(profile, url, ssh)
     return _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
@@ -480,8 +481,11 @@ def _sandbox_command(
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
     preflight: bool = False,
+    gateway_options: tuple[str, ...] = (),
+    reuse_completed: bool = False,
+    comparison_run_timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    """Run one command through the Supervisor gateway and capture projected output."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
         raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
     cmd = [
@@ -511,14 +515,46 @@ def _sandbox_command(
             cmd += ["--sync", path]
     else:
         cmd.append("--no-sync")
+    cmd.extend(gateway_options)
     if preflight:
         cmd.append("--preflight")
     else:
         cmd += ["--", *command]
     environment = os.environ.copy()
+    # Only trusted callers may request cache reuse/private result receipts. HTTP Agent
+    # requests never inherit these switches and retain their duplicate-request errors.
+    environment.pop("ATREX_AKA_REUSE_GATEWAY_RESULTS", None)
+    environment.pop("ATREX_AKA_COMPARISON_RUN_TIMEOUT", None)
+    if reuse_completed:
+        environment["ATREX_AKA_REUSE_GATEWAY_RESULTS"] = "1"
+    if comparison_run_timeout is not None:
+        environment["ATREX_AKA_COMPARISON_RUN_TIMEOUT"] = str(comparison_run_timeout)
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
+    # Supervisor-owned evaluations (V0 and final verification) use the same
+    # private evaluator/runtime state as Agent-originated HTTP requests.
+    from .supervisor_runtime import (  # local import keeps the launch seam acyclic
+        SUPERVISOR_EVIDENCE_ROOT_ENV,
+        active_supervisor_runtime,
+    )
+
+    supervisor_runtime = active_supervisor_runtime()
+    if supervisor_runtime is not None:
+        environment[SUPERVISOR_EVIDENCE_ROOT_ENV] = str(
+            supervisor_runtime.evidence_root(workspace)
+        )
+        from .supervisor_runtime import SUPERVISOR_HISTORY_ROOT_ENV
+
+        # Completed Episode records remain eligible across recovery/next-Episode boundaries.
+        campaign_root, _ = supervisor_runtime._private_scope_for(workspace.resolve())
+        environment[SUPERVISOR_HISTORY_ROOT_ENV] = str(
+            campaign_root / ".atrex_long_horizon" / "episodes"
+        )
+        if supervisor_runtime.atrex_bench_runtime is not None:
+            environment[ATREX_BENCH_RUNTIME_ENV] = str(
+                supervisor_runtime.atrex_bench_runtime
+            )
     effective_timeout = wall_timeout if wall_timeout is not None else timeout + 240
     raise_if_environment_blocked()
     process = spawn_owned_session(
@@ -538,7 +574,7 @@ def _sandbox_command(
             except ProcessLookupError:
                 pass
         try:
-            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # The Supervisor gateway handles SIGTERM with bounded SSH cleanup;
             # allow that 15-second cleanup window to persist a retry marker.
             return process.communicate(timeout=20)
         except subprocess.TimeoutExpired:
@@ -601,6 +637,14 @@ def check_ssh_environment(
 
 def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
+    from supervisor.gateway import SUPERVISOR_MEASUREMENT_PREFIX
+
+    # Trusted callers consume the persisted full result, not the Agent's bounded projection.
+    for line in reversed(stdout.splitlines()):
+        if line.startswith(SUPERVISOR_MEASUREMENT_PREFIX):
+            receipt = json.loads(line.removeprefix(SUPERVISOR_MEASUREMENT_PREFIX))
+            if receipt.get("gateway_kind") == "run" and isinstance(receipt.get("result"), dict):
+                return receipt["result"]
     for line in reversed(stdout.splitlines()):
         if line.startswith(TEST_RESULT_PREFIX):
             result = json.loads(line[len(TEST_RESULT_PREFIX) :])
@@ -618,6 +662,7 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
         data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, json.JSONDecodeError):
         data = {}
+    data.pop("git_commit_hash", None)
     data.setdefault("version", version)
     data.setdefault("masked", False)
     data["timestamp"] = datetime.now(timezone.utc).isoformat()

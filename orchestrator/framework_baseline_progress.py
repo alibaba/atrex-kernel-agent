@@ -79,7 +79,6 @@ def _sha256(path: Path) -> str:
 def _capture_paths(workspace: Path) -> Iterable[Path]:
     for relative in ("kernel.py", "solution.json", "memory/v1.json"):
         yield workspace / relative
-    yield from sorted((workspace / "plans").glob("v1_*.md"))
     for pattern in ("debug*.py", "probe*.py", "smoke*.py"):
         yield from sorted(workspace.glob(pattern))
 

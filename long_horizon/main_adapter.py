@@ -27,7 +27,6 @@ from orchestrator.campaign import Campaign
 from orchestrator.constants import DEFAULT_CONVERT_AFTER
 from orchestrator.hardware import (
     hardware_directive,
-    hardware_vendor,
     head_kernel_is_gluon,
     should_convert_to_gluon,
 )
@@ -35,7 +34,6 @@ from orchestrator.optimization_policy import install_workspace_policy
 from orchestrator.session_io import _sandbox_command
 from orchestrator.workspace_runtime import (
     _agent_runtime_directive,
-    _plan_generator_directive,
     link_runtime,
 )
 from orchestrator.workspace_state import (
@@ -49,7 +47,7 @@ from orchestrator.workspace_state import (
 
 
 def prepare_campaign(campaign: Campaign) -> None:
-    """Run current main's complete setup/resume prelude, excluding only its loop."""
+    """Initialize or resume V0, then establish the configured Framework Baseline."""
     if latest_version(campaign.workspace) < 0:
         campaign.setup_baseline()
     else:
@@ -82,32 +80,27 @@ def prepare_campaign(campaign: Campaign) -> None:
 
 
 def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
-    native = Path(campaign.atrex_bench_root) if campaign.atrex_bench_root else None
     link_runtime(
         workspace,
-        native,
-        is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
+        agent_skills=campaign.agent_skills,
+        agent_reference_projects=campaign.agent_reference_projects,
     )
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
 def episode_directives(
-    campaign: Campaign, version: int, *, fast: bool = False
+    campaign: Campaign, version: int
 ) -> dict[str, str]:
     agent_cli = getattr(campaign, "agent_cli", "claude")
     return {
         "hardware": hardware_directive(campaign.platform, campaign.arch),
-        "sandbox": (
-            campaign._fast_sandbox_directive()
-            if fast
-            else campaign._sandbox_directive()
-        ),
+        "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(
-            agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
+            agent_cli, agent_skills=campaign.agent_skills,
+            agent_reference_projects=campaign.agent_reference_projects,
         ),
-        "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 
 
@@ -217,6 +210,11 @@ def normalize_stream(
         adapter.capabilities,
         usage_delta_observed=any(event.kind == "usage_delta" for event in events),
     )
+    from orchestrator.session_capture import captured_observation
+
+    captured = captured_observation(stdout, events, capabilities)
+    if captured is not None:
+        return captured
     if agent_cli == "codex" and codex_observer is not None and session_id:
         try:
             (
@@ -246,6 +244,9 @@ def run_sandbox(
     wall_timeout: int | None = None,
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
+    gateway_options: tuple[str, ...] = (),
+    reuse_completed: bool = False,
+    comparison_run_timeout: int | None = None,
 ):
     """Use main's sandbox command builder and queue/timeout semantics verbatim."""
     return _sandbox_command(
@@ -262,6 +263,9 @@ def run_sandbox(
         wall_timeout=wall_timeout,
         gateway_kind=gateway_kind,
         private_reference_dir=private_reference_dir,
+        gateway_options=gateway_options,
+        reuse_completed=reuse_completed,
+        comparison_run_timeout=comparison_run_timeout,
     )
 
 

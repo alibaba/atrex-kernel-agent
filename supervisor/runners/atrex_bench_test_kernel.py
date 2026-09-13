@@ -2,10 +2,12 @@
 """Optimizer transport adapter for the official Atrex-Bench ``run_eval``.
 
 This file deliberately contains no candidate execution, correctness comparison,
-or timing implementation.  Native ``shapes.json`` campaigns copy it to
-``test_kernel.py``; it invokes the bundled, canonical Atrex-Bench
+or timing implementation. The Supervisor injects it as ``test_kernel.py``
+only into remote evaluation jobs; it invokes the bundled, canonical Atrex-Bench
 ``scripts/run_eval.py`` and converts that evaluator's raw ``eval_result.json``
-into the small ``RESULT_JSON`` contract consumed by the optimizer.
+into the small ``RESULT_JSON`` contract consumed by the optimizer. The local
+Agent workspace intentionally has no ``atrex-bench/`` directory; the Supervisor
+injects that private runtime only into the remote evaluator bundle.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"

@@ -165,7 +165,11 @@ them from mapping keys. Evidence, retrieval metadata, rank decomposition, bridge
 commentary, and other engine-side fields are deliberately not served, so they
 cannot anchor AKA's judgement.
 
-AKA sets `ATREX_WIKI_PROFILE_ROOT` to the incumbent campaign workspace. After
+AKA's Supervisor sets `ATREX_WIKI_PROFILE_ROOT` only in the Wiki subprocess, to
+`<campaign-parent>/.atrex-supervisor-runtime/<campaign-key>/wiki-profile/`.
+This persistent Campaign directory is not mounted into the Agent sandbox;
+Episodes share it, and the private completion manifest declares its events in place.
+After
 CLI and request validation, `query_nl.py` writes one immutable, compact JSON
 event from its cleanup path, including dry-run and bridge-failure statuses plus
 compact per-store retrieval-failure diagnostics. Argument-parse errors and

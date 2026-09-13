@@ -193,7 +193,11 @@ class CliAgentRuntime:
         pre_observation_errors: tuple[str, ...] = ()
         original_codex_home = environment.get("CODEX_HOME")
         isolated_home_ready = False
-        if self.id == "codex":
+        from ..supervisor_runtime import active_supervisor_runtime
+
+        supervisor = active_supervisor_runtime()
+        managed_home = supervisor is not None and supervisor.config.agent_sandbox != "none"
+        if self.id == "codex" and not managed_home:
             try:
                 codex_temporary_home = CodexTemporaryHome(codex_home(environment))
                 isolated_home = codex_temporary_home.open()
@@ -242,7 +246,13 @@ class CliAgentRuntime:
             self._adapter.capabilities,
             usage_delta_observed=any(event.kind == "usage_delta" for event in events),
         )
-        if codex_observer is not None:
+        from ..session_capture import captured_observation
+
+        captured = captured_observation(stdout, events, capabilities)
+        if captured is not None:
+            events, terminal_usage, capabilities, capture_errors = captured
+            observation_errors += capture_errors
+        elif codex_observer is not None:
             observed_session_id = codex_thread_id_from_stream(stdout)
             try:
                 if not observed_session_id:

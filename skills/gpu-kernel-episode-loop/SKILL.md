@@ -8,26 +8,15 @@ description: Run the evidence loop of one long-horizon GPU kernel optimization e
 ## When to Use
 
 Use this skill when an orchestrator episode prompt hands you one optimization episode in an isolated
-Git worktree and points here for the evidence loop. It does not apply to the V0 baseline session
-(`gpu-kernel-baseline`) or to a workspace without an episode journal.
+workspace and points here for the evidence loop. It does not apply to Supervisor V0 initialization,
+the dedicated Framework Baseline session, or a workspace without an episode journal.
 
-## Episode bindings
+## Evidence ownership
 
-The episode prompt supplies a concrete value for every ALL-CAPS bracketed name below. Substitute them
-before running any command; never invent a path. Lowercase bracketed names in the command examples are
-values you fill in from the campaign, or a choice among the listed alternatives, not bindings.
-
-| Placeholder | Meaning |
-| --- | --- |
-| `<PROFILE_DIR>` | profile output directory for this episode |
-| `<PLAN_DRAFT>` | evidence draft for the canonical version |
-| `<PLAN_FILE>` | generated plan for the canonical version |
-| `<PLAN_GENERATOR>` | backend-native plan generator invocation |
-| `<JOURNAL_CLI>` | episode journal command prefix |
-| `<JOURNAL_PATH>` | episode journal path, already shell-quoted |
-
-The episode prompt's ownership rules, execution boundary, mode policy, and framework-escalation
-directive outrank this skill. Where they conflict, follow the prompt.
+The Episode prompt supplies the execution boundary, mode policy, and framework-escalation rules.
+These outrank this skill. Use the Runtime Journal for plans and analysis and Gateway Records for
+measurements. No separate plan draft, synthesized plan, or profile-analysis file is required.
+`scratch/` is for temporary requests and optional diagnostic files, not durable conclusions.
 
 ## Telemetry
 
@@ -51,7 +40,7 @@ steps map onto the telemetry phases above: `profile`, `research`, `planning`, `i
 
 ### 1. Reconstruct the incumbent and choose a hypothesis
 
-Read the workspace goal, unmasked `memory/v*.json`, and prior plans/profiles. Prior-episode summaries
+Read the workspace goal, unmasked `memory/v*.json`, and relevant Directions, Experiments, and Gateway Records through the Runtime tools. Prior-episode summaries
 are carried only by canonical memory and are not injected into the episode prompt. Identify attempted
 dead ends and open directions from those records, including each record's compact
 `experience.experiments`. For PPU, also inspect
@@ -66,37 +55,23 @@ For a PPU target, do not apply the NVIDIA/AMD default below. Read
 whether new PPU profiler evidence is needed. That route may use source or compiler inspection, the
 probe-free benchmark, or still-valid PPU evidence instead of collecting a new profile.
 
-Reuse a profile only when it matches the current committed kernel. Otherwise profile through the
-sandbox using the vendor-appropriate tooling. Both wrappers run `python <file>`, so the profiled file
-is the immutable `profile_driver.py` seeded next to `kernel.py` — never `kernel.py` itself, which the
-evaluator only ever imports:
+Reuse a profile only when it matches the current Kernel. Otherwise request a profile:
 
 ```bash
-# NVIDIA
-python tools/sandbox.py --kind profile --sync <PROFILE_DIR> -- \
-  bash tools/profile_nvidia.sh profile_driver.py --output-dir <PROFILE_DIR> --source
-
-# AMD
-python tools/sandbox.py --kind profile --sync <PROFILE_DIR> -- \
-  bash tools/profile_kernel.sh profile_driver.py --output-dir <PROFILE_DIR>
+python3 tools/sandbox.py --kind profile --profile-level sol
 ```
 
-`profile_driver.py` imports the current `kernel.py`, builds real inputs from the campaign contract
-(`definition.json` + `workload.jsonl`, a privately injected generalized Atrex-Bench real shape,
-or legacy `shapes.json` + `input.py`), warms up, and then
-invokes the candidate repeatedly. Select what it drives with environment variables rather than editing
-it — it is a protected path and a candidate that modifies it is rejected:
-
-```bash
-PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python tools/sandbox.py ...   # SOL: one workload
-PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python tools/sandbox.py ...       # generalized or legacy Atrex-Bench
-```
+The Supervisor owns the profiler driver and real input construction. Select an opaque case with
+`--profile-shape-id ID`, and use `--profile-source` when source correlation is needed.
+For SOL command profiles, `--env PROFILE_WORKLOAD_IDX=2` selects a workload and
+`--env PROFILE_ITERS=30` changes driver iterations. No driver is installed in this workspace.
 
 When several shapes or workloads need profiling, run one sandbox command per id in waves of at most
-four concurrent jobs. Give every job its own `<PROFILE_DIR>/shape-<index>` sync/output directory and
-wait for the whole wave before starting the next one.
+four concurrent jobs and wait for the whole wave before starting the next one. Read the returned
+facts or retrieve the stored Gateway Record by ID. No download is required. If a specific diagnostic
+file is needed, opt in with a distinct `--sync scratch/profile-<id>` destination for that job.
 
-For generalized Atrex-Bench tasks, choose `PROFILE_SHAPE_ID` from the previous canonical memory's
+For generalized Atrex-Bench tasks, choose `--profile-shape-id` from the previous canonical memory's
 complete opaque-id `performance.latency_us_by_shape` map. The sandbox privately resolves that id and
 injects only its real input case into the ephemeral remote profile job; the driver deletes the case
 JSON before importing candidate code. Profile the highest-cost ids and additional ids representing
@@ -109,16 +84,16 @@ changes before obtaining usable evidence.
 When ordinary profiling has isolated one kernel but cannot distinguish a specific in-kernel timing
 hypothesis, read `skills/autonomous-gpu-kernel-timeline/SKILL.md` and run its autonomous loop. Use
 standalone CUDA/inline PTX through its CUDA backend and CuTe DSL through IKeT. Keep every attempt
-under `<PROFILE_DIR>/timeline/attempt-N`; when the remote command reads backend files, pass that
+under `scratch/timeline/attempt-N`; when the remote command reads backend files, pass that
 specific skill path with sandbox `--input` and sync only the attempt output directory.
 
 For PPU, use the routing and capture contracts in the PPU skill linked above.
 
-Timeline instrumentation is a temporary working snapshot on this episode's single HEAD line, not a
+Timeline instrumentation is a temporary working snapshot in `scratch/`, not a
 candidate. Preserve the clean source and each useful instrumented source or reversible patch before
 replacing it. After the evidence answers the question, restore or rewrite a probe-free `kernel.py`
-before correctness/performance validation, commit, journal finalization, and handoff. Never submit a
-profiling snapshot as `candidate_commit`; its latency and failures do not count as promotion attempts
+before correctness/performance validation, Journal finalization, and handoff. Never submit a
+profiling snapshot as the terminal candidate; its latency and failures do not count as promotion attempts
 or framework-stall events.
 
 Escalate through the typed profile funnel instead of collecting everything at once: `--profile-level
@@ -128,23 +103,23 @@ that name verbatim from the survey/SOL result; never guess a substring. Raw `.nc
 stay remote unless `--include-raw-profile` is justified.
 
 On NVIDIA, `summary.txt` carries a `LOCALIZE` line naming the analysis files that pin a symptom to
-source lines. Those files exist only on a `--source` run: never pin a source-level claim to a profile
+source lines. Those files exist only on a `--profile-source` run: never pin a source-level claim to a profile
 collected without it.
 
-#### When the seeded driver cannot represent the work
+#### Custom diagnostic workloads
 
-Build a local fallback driver at `<PROFILE_DIR>/harness/profile_driver.py` and profile that file
-instead when the seeded driver cannot express the case — a multi-kernel sequence, a new synthetic
+Build a diagnostic driver at `scratch/harness/probe.py` and run it through
+`--kind dev` when standard profiling cannot express the case — a multi-kernel sequence, a new synthetic
 case inside the public domain, or a driver that needs sibling helper modules. It must import `kernel.py` plus the
 immutable input module, select a representative workload, warm up, invoke the entry point repeatedly,
-and never write memory files. Because it lives below `<PROFILE_DIR>/harness/`, Python does not put the
+and never write memory files. Because it lives below `scratch/harness/`, Python does not put the
 workspace root on its import path; add it before importing anything local:
 
 ```python
 import sys
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 ```
@@ -162,8 +137,8 @@ Search in this order and stop when one actionable direction is supported:
    evidence selected by `ppu-acu-joint-profile`, whether or not it required a new profile:
 
    ```bash
-   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
-   python3 gpu-wiki/tools/query_nl.py --file research_request.txt
+   python3 tools/sandbox.py --kind wiki-query "<your description>" --brief
+   python3 tools/sandbox.py --kind wiki-query --file scratch/research_request.txt
    ```
 
    Include the true target product and authoritative runtime architecture exactly as supplied. Ask for
@@ -178,27 +153,27 @@ Search in this order and stop when one actionable direction is supported:
    `store` distinguishes `gpu_wiki` from namespaced `internal_gpu_wiki` records,
    `match.arch` states its reach, and `notes` reports deterministic normalization, widening, truncation,
    or store gaps. Pass `--exclude <ids-already-read>` on later queries and use `--max-bytes` for a hard
-   context bound. The structured `query_wiki.py` and `query_hardware.py` tools remain available when the
+   context bound. `sandbox.py --kind wiki-search` and `sandbox.py --kind wiki-hardware` remain available when the
    exact address is already known; never drop architecture scope to manufacture a match.
-   Copy the response's top-level `query_id` and each used record's own emitted canonical `wiki_id`
-   exactly so the decisive experiment can declare its Wiki attribution in the native journal. Never
-   reconstruct them from response mapping keys or prose.
+   Treat the returned content as a hypothesis and verify it against the current source and Gateway
+   facts. Do not copy Wiki transport metadata into the Runtime Journal.
 2. `reference-projects/` only when the local wiki is insufficient.
 3. Public primary sources only when local sources do not answer the question.
 
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
-repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-action chain.
+repeating local parameter tweaks. Record the evidence-to-action chain in the Experiment analysis.
 
 ### 4. Plan a coherent direction
 
-Write or update `<PLAN_DRAFT>` with profile evidence, research findings, concrete edits, risks,
-rollback points, and measurable acceptance criteria. For a PPU iteration that did not need a new
-profile, record the decisive PPU evidence selected by its routing skill instead. Then produce
-`<PLAN_FILE>` with the backend-native plan generator `<PLAN_GENERATOR>`.
+Propose the Direction through `update-direction` with its hypothesis, rationale, structured `plan`,
+`success_criteria`, and `stop_conditions`. Start it before exploration. Use existing Gateway facts
+and relevant research to choose concrete edits, risks, and rollback criteria; no separate plan
+generator or file is required. For each measured change, record the actual edit and conclusions
+through `record-experiment`, citing the supporting Gateway Records.
 
 The episode may contain multiple related experiments, but they must advance one coherent engineering
-direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
-the whole direction.
+direction. Preserve useful intermediate source copies in `scratch/` or retrieve captured Kernels by
+ID, so failed sub-steps can be reverted without losing the whole direction. Do not use Git.
 
 ### 5. Implement and repair
 
@@ -216,10 +191,8 @@ unattributable. When the evidence localizes a symptom to specific lines, change 
 Use the immutable evaluator for development measurements:
 
 ```bash
-python tools/sandbox.py --kind run --no-sync -- \
-  python test_kernel.py --version vlong --no-memory
-python tools/sandbox.py --kind run --no-sync -- \
-  python test_kernel.py --version vlong --multi-seed 5 --no-memory
+python3 tools/sandbox.py --kind run --version vlong --no-sync
+python3 tools/sandbox.py --kind run --version vlong --multi-seed 5 --no-sync
 ```
 
 All workloads and all additional seeds must pass. Never depend on tensor values, pointer identity,
@@ -227,26 +200,23 @@ cached outputs, evaluator ordering, or hidden workload IDs. Shape/dtype/layout d
 and pre-converting stable weights (transpose, contiguous) is allowed because weights do not change
 during evaluation.
 
-Before trusting a large delta — especially a regression beyond roughly 30% — re-run the same command
-on the same sandbox hardware and compare. GPU selection belongs to the gateway; never set a local
-`CUDA_VISIBLE_DEVICES` to steer it. Repeated development measurements are not promotion authority;
-the supervisor reruns incumbent and candidate in one ABBA allocation.
+For a surprising delta, inspect the per-shape facts and compare the relevant stored Gateway Records.
+Do not resubmit an identical operation for identical Kernel bytes: the Supervisor owns repeated
+measurement and infrastructure retries. GPU selection belongs to the gateway; never set a local
+`CUDA_VISIBLE_DEVICES` to steer it. The supervisor independently compares incumbent and candidate
+in one ABBA allocation for promotion.
 
 ### 7. Record every decisive experiment immediately
 
-Immediately after each decisive experiment, append it to the single episode journal. Do not batch
-these writes at the end of the episode: every append refreshes the non-canonical `memory/live.json`
-progress view in the incumbent workspace.
+Immediately after each decisive measured change, use the Supervisor-backed Runtime Journal tools
+defined in the Episode prompt. Do not batch these writes at the end of the Episode. Register a
+Direction before active exploration, record the Experiment with a `gateway_record_ids` list citing
+the results used in your analysis, then update the Direction lifecycle. The results already identify
+their exact Kernels; the Experiment does not need Kernel IDs or a before/after pair.
 
 ```bash
-<JOURNAL_CLI> append --path <JOURNAL_PATH> \
-  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":""},"decision":"keep_as_best|promote|reject_and_continue|revert|pivot|blocked","wiki_usage_status":"declared","wiki_query_ids":["<emitted-query-id>"],"wiki_usage":[{"query_id":"<emitted-query-id>","wiki_id":"<emitted-canonical-wiki-id>","disposition":"applied|partially_applied|reference_only|rejected","use":"...","evidence":"..."}]}'
+python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
 ```
-
-Use `declared` only with non-empty `wiki_usage`. Include `wiki_query_ids` for both `declared` and
-`no_material_use`; omit both arrays for `not_queried`.
-Do not invent ids and do not collapse repeated use across experiments. Invalid Wiki rows are omitted
-with `wiki_usage_errors`; this diagnostic field never blocks the experiment or handoff.
 
 ## Leaving the loop
 

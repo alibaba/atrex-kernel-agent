@@ -232,7 +232,7 @@ def dependency_process_violation(argv: list[str]) -> str | None:
         ):
             return True
         if executable in {"curl", "wget"} and any(
-            "/v1/jobs/" in token and "/cancel" in token for token in lowered[1:]
+            "/v1/jobs" in token or "/v1/wiki" in token for token in lowered[1:]
         ):
             return True
         return False
@@ -249,6 +249,8 @@ def dependency_process_violation(argv: list[str]) -> str | None:
             return None
         lowered = [token.lower() for token in tokens]
         executable = Path(lowered[0]).name
+        if executable == "agate":
+            return "Agate invoked outside the Supervisor Runtime proxy"
         info_only = (
             any(token in {"--help", "-h", "--version"} for token in lowered[1:])
             or (executable == "nvcc" and "-V" in tokens[1:])
@@ -409,20 +411,43 @@ def run_bounded(
     env: dict | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    proc = spawn_owned_session(
-        command,
-        role="coding-agent",
-        environment=env,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    from ..session_capture import clear_capture
+    from ..supervisor_runtime import active_supervisor_runtime
+
+    clear_capture()
+    guard_environment = os.environ if env is None else env
+    runtime = active_supervisor_runtime()
+    lease = None
+    if runtime is not None:
+        lease = runtime.prepare_session(
+            command,
+            cwd,
+            dict(os.environ if env is None else env),
+        )
+        command = list(lease.command)
+        env = lease.environment
+    try:
+        proc = spawn_owned_session(
+            command,
+            role="coding-agent",
+            environment=env,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except BaseException:
+        if lease is not None:
+            try:
+                lease.capture.finish(interrupted=True)
+            finally:
+                lease.close()
+        raise
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
-    environment_values = os.environ if env is None else env
+    environment_values = guard_environment
     environment_state_file = str(
         environment_values.get("ATREX_ENVIRONMENT_STATE_FILE", "")
     )
@@ -440,25 +465,44 @@ def run_bounded(
     )
     guard.start()
     timed_out = False
+    interrupted = False
+    communicate = (
+        (lambda timeout=None: lease.capture.communicate(proc, timeout))
+        if lease else proc.communicate
+    )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         process_groups = descendant_process_groups(proc.pid)
         signal_process_groups(process_groups, signal.SIGKILL)
-        stdout, stderr = proc.communicate()
+        stdout, stderr = communicate()
     except BaseException:
+        interrupted = True
         process_groups = descendant_process_groups(proc.pid)
         signal_process_groups(process_groups, signal.SIGTERM)
         try:
-            proc.communicate(timeout=5)
+            communicate(timeout=5)
         except subprocess.TimeoutExpired:
             signal_process_groups(process_groups, signal.SIGKILL)
-            proc.communicate()
+            communicate()
         raise
     finally:
         guard_stop.set()
         guard.join(timeout=1)
+        if lease is not None:
+            try:
+                lease.capture.finish(
+                    exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
+                )
+            except Exception as error:
+                # A capture failure must not hide the actual CLI failure.
+                print(
+                    f"[orchestrator] session capture failed at {lease.capture.root}: {error}",
+                    flush=True,
+                )
+            finally:
+                lease.close()
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (

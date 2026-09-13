@@ -46,7 +46,7 @@ echo "  Kernel:     $KERNEL_DEMO"
 echo "=========================================="
 
 # Step 1: Create workspace directory structure
-mkdir -p "$WORKSPACE"/{memory,plans,profiles}
+mkdir -p "$WORKSPACE"/{memory,scratch}
 
 # Step 2: Initialize git
 cd "$WORKSPACE"
@@ -59,16 +59,8 @@ fi
 # Step 3: Copy kernel demo as kernel.py
 cp "$KERNEL_DEMO" "$WORKSPACE/kernel.py"
 
-# Step 4: Create .gitignore
-cat > "$WORKSPACE/.gitignore" << 'EOF'
-__pycache__/
-*.pyc
-*.ncu-rep
-profiles/*/att/*.att
-profiles/*/att/*.out
-profiles/*/att/*.pftrace
-profiles/*/att/*.otf2
-EOF
+# Step 4: Install private Git excludes (no Agent-facing .gitignore).
+PYTHONPATH="$SCRIPT_DIR/..${PYTHONPATH:+:$PYTHONPATH}" python3 -m orchestrator.git_metadata "$WORKSPACE"
 
 # Step 5: Deploy the orchestrator's Agent behavior constraints.
 if [[ ! -f "$SCRIPT_DIR/CLAUDE.md" ]]; then
@@ -84,13 +76,8 @@ echo "Directory structure:"
 echo "  $WORKSPACE/"
 echo "  ├── kernel.py          (copied from kernel_demo)"
 echo "  ├── CLAUDE.md          (agent behavior constraints)"
-echo "  ├── .gitignore"
 echo "  ├── memory/            (iteration JSON files)"
-echo "  ├── plans/             (optimization plans)"
-echo "  └── profiles/          (profiling artifacts)"
+echo "  └── scratch/           (temporary requests and optional diagnostics)"
 echo ""
-echo "Next steps:"
-echo "  1. Parse user input (platform, framework, dtype, shapes)"
-echo "  2. Run Step 0: Hardware spec lookup + Roofline analysis"
-echo "  3. Write README.md with Stop Conditions"
-echo "  4. Enter Stage 1: Baseline Implementation"
+echo "Supervisor will write README.md, measure V0, and record the baseline."
+echo "Framework Baseline and optimization sessions follow according to campaign settings."
