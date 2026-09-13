@@ -39,9 +39,10 @@ python3 tools/sandbox.py --kind env
 
 These typed operations need no local evaluation or profiling driver. `kernel.py` is
 selected automatically. Keep its measured contents unchanged until the request completes.
-Standard full Run and ABBA tasks are deduplicated by exact task identity: the Supervisor
-runs an accepted task three times and aggregates per-Shape medians. A duplicate reports
-the prior Gateway Record ID without launching another job.
+Standard full Run and ABBA tasks are deduplicated by exact task identity across this Episode
+and visible earlier Episodes of the same Campaign. The Supervisor runs a new task three times
+and aggregates per-Shape medians. A duplicate returns `duplicate_gateway_task` with the prior
+`gateway_record_id` without launching another job; use `record-read` to retrieve that result.
 Shape IDs are opaque labels; they do not disclose the hidden evaluation inputs.
 
 For custom inputs, correctness-only runs, ABBA, focused profiling, dependencies, or Dev

@@ -251,12 +251,96 @@ class MeasurementReuseTest(unittest.TestCase):
         history = self.root / "episodes"
         old_evidence = history / "e0001" / "supervisor_runtime"
         with patch.dict(os.environ, {gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(old_evidence)}):
-            self.measure()
+            _, original = self.measure()
+        public = json.loads(next(
+            line.removeprefix(gateway.ABBA_RESULT_PUBLIC_PREFIX)
+            for line in original.splitlines()
+            if line.startswith(gateway.ABBA_RESULT_PUBLIC_PREFIX)
+        ))
         with patch.dict(os.environ, {gateway.SUPERVISOR_HISTORY_ROOT_ENV: str(history)}):
+            with self.assertRaises(SystemExit) as duplicate:
+                self.measure()
+            response = json.loads(duplicate.exception.code)
+            self.assertEqual(response["error"]["code"], "duplicate_gateway_task")
+            self.assertEqual(response["error"]["gateway_record_id"], public["gateway_record_id"])
+            self.assertIn("--kind record-read", response["error"]["next_action"])
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(gateway._read_gateway_record(
+                    self.workspace, response["error"]["gateway_record_id"],
+                ), 0)
+            self.assertIn(public["gateway_record_id"], output.getvalue())
             result = self.verify()
         self.assertTrue(result.passed, result.error)
         self.assertTrue(result.reused)
+        self.assertEqual(result.gateway_record_id, public["gateway_record_id"])
         self.assertEqual(self.calls, 3)
+
+    def test_agent_historical_evaluate_duplicate_returns_original_record_without_submission(self) -> None:
+        args = copy.copy(self.args)
+        args.baseline_path = None
+        request = {
+            "candidate": self.candidate.decode(),
+            "mode": "full",
+            "reference": {"shapes": {"0": {}}},
+        }
+        digest = gateway._gateway_task_digest(
+            "run", hashlib.sha256(self.candidate).hexdigest(),
+            {"request": request, "execution": gateway._gateway_execution_identity(args)},
+        )
+        history = self.root / "episodes"
+        old_evidence = history / "e0001" / "supervisor_runtime"
+        with patch.dict(os.environ, {gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(old_evidence)}):
+            owner, _ = gateway._reserve_gateway_task(self.workspace, digest)
+            record = gateway._record_episode_evaluation(
+                self.workspace, {"all_pass": True, "latency_us_by_shape": {"0": 5.0}},
+                gateway_kind="run", gateway_task_digest=digest,
+            )
+            gateway._complete_gateway_task(self.workspace, digest, owner, record["record_id"])
+        with (
+            patch.dict(os.environ, {gateway.SUPERVISOR_HISTORY_ROOT_ENV: str(history)}),
+            patch.object(gateway, "_find_agate", return_value="/unused/agate"),
+            patch.object(gateway, "_typed_request", return_value=request),
+            patch.object(gateway, "_execute_typed_processes") as execute,
+        ):
+            with self.assertRaises(SystemExit) as duplicate:
+                gateway._run_typed_gateway(args, self.workspace, [], "run", [], 0)
+            response = json.loads(duplicate.exception.code)
+            self.assertEqual(response["error"]["code"], "duplicate_gateway_task")
+            self.assertEqual(response["error"]["gateway_record_id"], record["record_id"])
+            execute.assert_not_called()
+            self.assertEqual(
+                gateway._load_gateway_record(self.workspace, record["record_id"])["result"],
+                {"all_pass": True, "latency_us_by_shape": {"0": 5.0}},
+            )
+        self.assertFalse((self.root / "private" / "gateway-tasks" / f"{digest}.json").exists())
+
+    def test_historical_abba_does_not_block_changed_task_or_unrelated_campaign(self) -> None:
+        history = self.root / "other-campaign" / "episodes"
+        old_evidence = history / "e0001" / "supervisor_runtime"
+        with patch.dict(os.environ, {gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(old_evidence)}):
+            self.measure()
+        # Historical records are consulted only through the Supervisor-selected history root.
+        self.assertEqual(self.measure()[0], 0)
+        self.assertEqual(self.calls, 6)
+        with patch.dict(os.environ, {gateway.SUPERVISOR_HISTORY_ROOT_ENV: str(history)}):
+            (self.workspace / "kernel.py").write_text("class Model: value = 2\n")
+            self.assertEqual(self.measure()[0], 0)
+        self.assertEqual(self.calls, 9)
+
+    def test_incomplete_historical_tasks_do_not_block_new_measurement(self) -> None:
+        history = self.root / "episodes"
+        old_tasks = history / "e0001" / "supervisor_runtime" / "gateway-tasks"
+        old_tasks.mkdir(parents=True)
+        with patch.dict(os.environ, {gateway.SUPERVISOR_HISTORY_ROOT_ENV: str(history)}):
+            for index, status in enumerate(("running", "failed", "completed")):
+                with self.subTest(status=status):
+                    digest = f"{index:064x}"
+                    # A terminal marker without a recorded result is not a completed measurement.
+                    (old_tasks / f"{digest}.json").write_text(json.dumps({"status": status}))
+                    owner, record_id = gateway._reserve_gateway_task(self.workspace, digest)
+                    self.assertIsNotNone(owner)
+                    self.assertIsNone(record_id)
 
     def test_inflight_is_not_submitted_again(self) -> None:
         digest = "a" * 64

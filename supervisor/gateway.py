@@ -4769,15 +4769,16 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
                     return None, None
                 else:
                     return None, None
-        if os.environ.get(REUSE_GATEWAY_RESULTS_ENV) == "1":
-            for evidence in reversed(_historical_evidence_roots()):
-                previous = evidence / "gateway-tasks" / f"{task_digest}.json"
-                if previous.is_file() and not previous.is_symlink():
-                    state = _read_json_file(previous, max_bytes=4096)
-                    if state.get("status") == "completed" and isinstance(
-                        state.get("gateway_record_id"), str
-                    ):
-                        return None, state["gateway_record_id"]
+        # Duplicate detection is shared by Agents and trusted consumers. The reuse
+        # flag controls the response, not visibility of completed historical tasks.
+        for evidence in reversed(_historical_evidence_roots()):
+            previous = evidence / "gateway-tasks" / f"{task_digest}.json"
+            if previous.is_file() and not previous.is_symlink():
+                state = _read_json_file(previous, max_bytes=4096)
+                if state.get("status") == "completed" and isinstance(
+                    state.get("gateway_record_id"), str
+                ):
+                    return None, state["gateway_record_id"]
         durable_write_json(
             marker,
             {

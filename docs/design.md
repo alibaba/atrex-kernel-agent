@@ -269,13 +269,15 @@ into the Agent sandbox. All Episodes and resumed Sessions share the Campaign's p
 history. Completion writes a separate private `trace-retention-manifest.json` with root-relative
 Wiki evidence paths; it does not copy those files or private paths into the Agent workspace.
 
-Each exact full Evaluate or ABBA task from an Agent is accepted only once per workspace. The first
-accepted task performs three independent, semantically identical logical Agate calls. The Runtime
+Each full Evaluate or ABBA request checks for an exact completed task in the current Episode and
+visible archived Episodes of the same Campaign. A new task performs three independent,
+semantically identical logical Agate calls. The Runtime
 takes the median latency independently for every Shape, recomputes aggregate latency and ABBA
 speedup, and returns only the final aggregate and per-Shape Baseline/Candidate values. Repetitions,
 batch counts, and aggregation mechanics stay in private evidence. A later request with the same exact Kernel, Baseline when present, input domain,
 and measurement parameters is rejected before Agate execution and names the previous
-`gateway_record_id`. The Agent can read any visible Evaluate, ABBA, Profile, Dev, Check, or
+`gateway_record_id`, including when it was measured in an earlier Episode. This historical
+duplicate check does not require the Supervisor-only result-reuse flag. The Agent can read any visible Evaluate, ABBA, Profile, Dev, Check, or
 Disassemble record through the same HTTP facade without another Agate call. Reads return the
 operation-specific bounded projection and opaque per-Shape facts. ABBA exposes separate Incumbent
 and Candidate Kernel IDs rather than an ambiguous single ID. Every record binds its exact Candidate

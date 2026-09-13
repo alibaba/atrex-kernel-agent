@@ -100,12 +100,12 @@ python tools/sandbox.py --kind profile --profile-shape-id 0 \
   --kernel-name candidate_kernel --profile-source --launch-skip 1 --launch-count 5
 ```
 
-Each exact full Evaluate or exploratory ABBA task is accepted once per workspace. Its first request
-runs three independent identical logical Agate calls; the Supervisor takes the median per Shape and
-recomputes the aggregate result. Evaluate reports its aggregation summary; ABBA returns only final
-aggregate and per-Shape Baseline/Candidate values. Raw repetitions and ABBA batching details remain
-in private evidence. Repeating the
-same Kernel task is rejected before Agate execution and reports the previous `gateway_record_id` so
+Full Evaluate and exploratory ABBA check completed tasks in the current Episode and visible archived
+Episodes of the same Campaign. A new task runs three independent identical logical Agate calls;
+the Supervisor takes the median per Shape and recomputes the aggregate result. Evaluate returns final
+aggregate and per-Shape latencies; ABBA returns aggregate and per-Shape Baseline/Candidate values.
+Raw repetitions and batching details remain in private evidence. Repeating the same exact task,
+including one measured in an earlier Episode, is rejected before Agate execution and reports the previous `gateway_record_id` so
 the existing result can be reused. Read it without another Gateway job:
 
 ```bash
