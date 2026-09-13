@@ -269,9 +269,9 @@ into the Agent sandbox. All Episodes and resumed Sessions share the Campaign's p
 history. Completion writes a separate private `trace-retention-manifest.json` with root-relative
 Wiki evidence paths; it does not copy those files or private paths into the Agent workspace.
 
-Each full Evaluate or ABBA request checks for an exact completed task in the current Episode and
-visible archived Episodes of the same Campaign. A new task performs three independent,
-semantically identical logical Agate calls. The Runtime
+Evaluate (including correctness-only), ABBA, Profile, Check, Disassemble, and Dev check for an
+exact completed task in the current Episode and visible archived Episodes of the same Campaign.
+A new full Evaluate or ABBA task performs three independent, semantically identical logical Agate calls. The Runtime
 takes the median latency independently for every Shape, recomputes aggregate latency and ABBA
 speedup, and returns only the final aggregate and per-Shape Baseline/Candidate values. Repetitions,
 batch counts, and aggregation mechanics stay in private evidence. A later request with the same exact Kernel, Baseline when present, input domain,
@@ -285,14 +285,25 @@ Kernel directly. One explicit Kernel view lists its Gateway records; a separate 
 privately digest-verified source only under `scratch/`. An explicit correctness failure
 in any repetition is retained rather than being hidden by a successful repetition.
 
+Deduplication does not change execution counts: correctness-only, Profile, Check, Disassemble,
+and Dev execute once. Profile selectors/counters, diagnostic options, inputs, and dependencies
+are part of task identity. Dev additionally hashes the executed command and the actual uploaded
+file contents, permissions, private runner/evaluator inputs, and output-collection configuration.
+Host paths and archive timestamps do not identify those files; unselected scratch files do not
+affect the task. Changing a Probe script is a new task even when kernel.py is unchanged. Kernel
+records bind the uploaded snapshot, not a later workspace edit. Environment queries and record
+reads remain repeatable. Older records without a task identity remain readable but cannot be
+safely matched retroactively. ABBA's internal Dev executions belong to its outer measurement
+task and are not deduplicated against Agent Dev requests.
+
 Supervisor verification uses this same measurement service, not a second ABBA driver or result
 store. A trusted request may reuse a completed record from the current or archived Episode.
 The match covers operation, exact Candidate and Incumbent source, evaluator/input contract,
 hardware/endpoint, environment, seeds, iteration counts, ABBA schedule, and timeouts. Output paths
 and version labels do not identify a measurement. Ordinary Evaluate, custom-input tests, and
 partial-Shape ABBA are not substitutes for the required full-contract comparison. Unmatched
-requests execute through the same batching, infrastructure retry, and three-call per-Shape median
-logic. In-flight requests are not submitted twice; an infrastructure failure releases the task
+measurement requests execute through the same batching, infrastructure retry, and three-call per-Shape median
+logic. In-flight requests are not submitted twice; an infrastructure failure or unfinished execution releases the task
 reservation. Corrupt cached evidence fails closed.
 
 The Supervisor consumes the complete persisted result, while Agents receive the bounded projection

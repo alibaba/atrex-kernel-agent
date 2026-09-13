@@ -100,6 +100,7 @@ import urllib.request
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
@@ -327,6 +328,7 @@ GATEWAY_RECORDS_PATH = ".atrex_long_horizon/gateway-records"
 SUPERVISOR_EVIDENCE_ROOT_ENV = "ATREX_AKA_SUPERVISOR_EVIDENCE_ROOT"
 SUPERVISOR_HISTORY_ROOT_ENV = "ATREX_AKA_SUPERVISOR_HISTORY_ROOT"
 REUSE_GATEWAY_RESULTS_ENV = "ATREX_AKA_REUSE_GATEWAY_RESULTS"
+INTERNAL_MEASUREMENT_ENV = "ATREX_AKA_INTERNAL_MEASUREMENT"
 COMPARISON_RUN_TIMEOUT_ENV = "ATREX_AKA_COMPARISON_RUN_TIMEOUT"
 SUPERVISOR_MEASUREMENT_PREFIX = "__ATREX_SUPERVISOR_MEASUREMENT__="
 GATEWAY_RECORD_ID_RE = re.compile(r"gateway-[0-9]+-[0-9a-f]{12}")
@@ -3654,6 +3656,11 @@ def _typed_agate_command(
     request_sidecar_dir: Path | None = None,
 ) -> list[str]:
     """Build an Agate CLI invocation for one typed request."""
+    candidate_path = workspace / "kernel.py"
+    if request_sidecar_dir is not None:
+        request_sidecar_dir.mkdir(parents=True, exist_ok=True)
+        candidate_path = request_sidecar_dir / "kernel.py"
+        candidate_path.write_text(request["candidate"], encoding="utf-8")
     agate_kind = "check" if kind == "check" else kind
     command = [executable, agate_kind]
     if args.url:
@@ -3666,7 +3673,7 @@ def _typed_agate_command(
         request_sidecar_dir.mkdir(parents=True, exist_ok=True)
         command += ["--gpu", args.hardware]
         if kind == "check":
-            command.append(str(workspace / "kernel.py"))
+            command.append(str(candidate_path))
             if args.arch:
                 command += ["--arch", args.arch]
             if args.sanitize:
@@ -3674,7 +3681,7 @@ def _typed_agate_command(
         else:
             command += [
                 "--candidate",
-                str(workspace / "kernel.py"),
+                str(candidate_path),
                 "--fmt",
                 args.disassembly_format,
             ]
@@ -3712,7 +3719,7 @@ def _typed_agate_command(
         command += ["--num-gpus", str(num_gpus)]
     command += [
         "--candidate",
-        str(workspace / "kernel.py"),
+        str(candidate_path),
         "--reference-dir",
         str(reference_dir),
         "--operator",
@@ -4707,11 +4714,12 @@ def _gateway_task_digest(
     request_identity: object,
     *,
     baseline_sha256: str | None = None,
+    measurement_repetitions: int = MEASUREMENT_REPETITIONS,
 ) -> str:
     payload = json.dumps(
         {
             "measurement_contract": 2,
-            "measurement_repetitions": MEASUREMENT_REPETITIONS,
+            "measurement_repetitions": measurement_repetitions,
             "gateway_kind": gateway_kind,
             "kernel_sha256": kernel_sha256,
             "baseline_sha256": baseline_sha256,
@@ -4829,6 +4837,65 @@ def _abandon_gateway_task(workspace: Path, task_digest: str, owner: str) -> None
         if isinstance(state, dict) and state.get("owner") == owner:
             marker.unlink(missing_ok=True)
             fsync_directory(root)
+
+
+@dataclass
+class _GatewayTask:
+    workspace: Path
+    digest: str | None
+    kernel_bytes: bytes
+    owner: str | None
+    previous_record_id: str | None
+    record_id: str | None = None
+
+    def record(self, result: dict[str, Any], *, cache: bool = True, **metadata: Any) -> dict[str, str]:
+        record = _record_episode_evaluation(
+            self.workspace, result, gateway_task_digest=self.digest,
+            kernel_bytes=self.kernel_bytes, **metadata,
+        )
+        if record is None:
+            raise RuntimeError("Gateway task could not preserve its measured Kernel")
+        self.record_id = record["record_id"]
+        if cache and self.digest is not None and self.owner is not None:
+            _complete_gateway_task(self.workspace, self.digest, self.owner, self.record_id)
+        return record
+
+
+@contextmanager
+def _gateway_task(
+    workspace: Path, digest: str | None, kernel_bytes: bytes,
+) -> Iterator[_GatewayTask]:
+    owner, previous = _reserve_gateway_task(workspace, digest) if digest is not None else (None, None)
+    try:
+        yield _GatewayTask(workspace, digest, kernel_bytes, owner, previous)
+    finally:
+        # Completed markers no longer contain owner, so this only releases unfinished work.
+        if digest is not None and owner is not None:
+            _abandon_gateway_task(workspace, digest, owner)
+
+
+def _bundle_task_inputs(bundle: str | None) -> tuple[dict[str, Any], bytes | None]:
+    """Hash the uploaded file contents, not tar/gzip timestamps or host paths."""
+    if bundle is None:
+        return {}, None
+    inputs: dict[str, Any] = {}
+    kernel_bytes = None
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(bundle)), mode="r:gz") as archive:
+        for member in archive:
+            if not member.isfile():
+                raise ValueError("Gateway input bundle contains a non-file entry")
+            stream = archive.extractfile(member)
+            if stream is None or member.name in inputs:
+                raise ValueError("Gateway input bundle contains an invalid or repeated entry")
+            with stream:
+                content = stream.read()
+            inputs[member.name] = {
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "mode": member.mode,
+            }
+            if member.name == "kernel.py":
+                kernel_bytes = content
+    return inputs, kernel_bytes
 
 
 def _bounded_text(value: object, limit: int = 1000) -> str:
@@ -5362,6 +5429,21 @@ def _reusable_gateway_record(
     return record
 
 
+def _record_exit_code(record: dict[str, Any]) -> int:
+    result = record["result"]
+    if result.get("status") in {"failed", "cancelled", "error"} or result.get("error"):
+        return 1
+    if record["gateway_kind"] == "run":
+        return 0 if result.get("all_pass") is True else 1
+    if record["gateway_kind"] == "same_allocation_abba":
+        return 0 if result.get("correct") is True else 1
+    for key in ("all_pass", "correct", "passed", "ok"):
+        if result.get(key) is False:
+            return 1
+    code = result.get("exit_code")
+    return code if isinstance(code, int) and not isinstance(code, bool) else 0
+
+
 def _emit_supervisor_measurement(
     workspace: Path, record_id: str, *, reused: bool,
 ) -> None:
@@ -5764,7 +5846,10 @@ def _agent_retry_notes(stderr: str) -> str:
     return "\n".join(retained)
 
 
-def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> str:
+def _record_result_lines(
+    workspace: Path, stdout: str, *, gateway_kind: str, task: _GatewayTask | None = None,
+    job: dict[str, Any] | None = None,
+) -> str:
     """Record and compact ordinary RESULT_JSON emitted by a dev evaluator."""
     lines = stdout.splitlines()
     for index in range(len(lines) - 1, -1, -1):
@@ -5776,7 +5861,12 @@ def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> 
         except json.JSONDecodeError:
             return stdout
         if isinstance(result, dict):
-            record = _record_episode_evaluation(workspace, result, gateway_kind=gateway_kind)
+            record = (
+                task.record(result, gateway_kind=gateway_kind, private_result=job,
+                            job_id=job.get("job_id") if job else None)
+                if task is not None else
+                _record_episode_evaluation(workspace, result, gateway_kind=gateway_kind)
+            )
             lines[index] = TEST_RESULT_PREFIX + json.dumps(
                 _agent_evaluation_result(result, record),
                 ensure_ascii=False,
@@ -6352,6 +6442,8 @@ def _run_agent_abba(
             environment.pop("ATREX_AKA_RUNTIME_URL", None)
             environment.pop("ATREX_AKA_RUNTIME_TOKEN", None)
             environment.pop(REUSE_GATEWAY_RESULTS_ENV, None)
+            # This is one constituent measurement of the outer reserved ABBA task.
+            environment[INTERNAL_MEASUREMENT_ENV] = "1"
             environment.pop(COMPARISON_RUN_TIMEOUT_ENV, None)
             # The staging tree already contains the exact private/custom input contract.
             environment.pop(PRIVATE_REFERENCE_ENV, None)
@@ -6599,7 +6691,6 @@ def _run_typed_gateway(
     endpoint lacks their source contract. Check/Disassemble fail closed because
     treating a diagnostic as an arbitrary shell command changes its semantics.
     """
-    generalized = _is_generalized_workspace(workspace)
     custom_input_scope = bool(args.evaluation_input_path or args.evaluation_shapes_path)
     strict_evaluation = kind == "run" and bool(args.evaluation_mode or custom_input_scope)
     try:
@@ -6647,8 +6738,6 @@ def _run_typed_gateway(
         if kind == "run" and request.get("mode") != "correctness_only"
         else [expected_shape_ids]
     )
-    batched = len(shape_batches) > 1
-
     if args.dry_run:
         print(
             json.dumps(
@@ -6696,19 +6785,45 @@ def _run_typed_gateway(
         if kind in DIAGNOSTIC_KINDS
         else None
     )
-    task_digest: str | None = None
-    task_owner: str | None = None
-    if kind == "run" and request.get("mode") != "correctness_only":
-        kernel_sha256 = hashlib.sha256(request["candidate"].encode("utf-8")).hexdigest()
-        task_digest = _gateway_task_digest("run", kernel_sha256, {
-            "request": request,
-            "execution": _gateway_execution_identity(args),
-        })
-        task_owner, previous_record_id = _reserve_gateway_task(workspace, task_digest)
-        if task_owner is None:
-            previous = _reusable_gateway_record(workspace, task_digest, previous_record_id)
+    repetitions = MEASUREMENT_REPETITIONS if kind == "run" and request.get("mode") != "correctness_only" else 1
+    kernel_bytes = request["candidate"].encode("utf-8")
+    identity = {key: value for key, value in request.items() if key != "name"}
+    if kind in DIAGNOSTIC_KINDS:
+        # Compile/disassembly timeouts are CLI execution options, not source payload fields.
+        identity["execution_timeout_s"] = args.timeout
+    task_digest = _gateway_task_digest(kind, hashlib.sha256(kernel_bytes).hexdigest(), {
+        "request": identity,
+        "execution": _gateway_execution_identity(args),
+    }, measurement_repetitions=repetitions)
+    with _gateway_task(workspace, task_digest, kernel_bytes) as task:
+        if task.owner is None:
+            previous = _reusable_gateway_record(workspace, task_digest, task.previous_record_id)
             _emit_supervisor_measurement(workspace, previous["record_id"], reused=True)
-            return 0 if previous["result"].get("all_pass") is True else 1
+            return _record_exit_code(previous)
+        return _execute_typed_gateway(
+            args, workspace, kind, request, shape_batches, sync_paths, queue_wait_grace,
+            diagnostic_url, repetitions, task,
+        )
+
+
+def _execute_typed_gateway(
+    args: argparse.Namespace,
+    workspace: Path,
+    kind: str,
+    request: dict[str, Any],
+    shape_batches: list[list[str]],
+    sync_paths: list[str],
+    queue_wait_grace: int,
+    diagnostic_url: str | None,
+    repetitions: int,
+    task: _GatewayTask,
+) -> int | None:
+    generalized = _is_generalized_workspace(workspace)
+    custom_input_scope = bool(args.evaluation_input_path or args.evaluation_shapes_path)
+    strict_evaluation = kind == "run" and bool(args.evaluation_mode or custom_input_scope)
+    expected_shape_ids = [shape for batch in shape_batches for shape in batch]
+    batched = len(shape_batches) > 1
+    task_digest, task_owner = task.digest, task.owner
     try:
         process_groups = [
             _execute_typed_processes(
@@ -6721,14 +6836,11 @@ def _run_typed_gateway(
                 diagnostic_url,
                 phase=(
                     f"measurement-{ordinal}"
-                    if task_digest is not None
+                    if repetitions > 1
                     else "primary"
                 ),
             )
-            for ordinal in range(
-                1,
-                (MEASUREMENT_REPETITIONS if task_digest is not None else 1) + 1,
-            )
+            for ordinal in range(1, repetitions + 1)
         ]
     except GatewayHTTPError as exc:
         if task_digest is not None and task_owner is not None:
@@ -6808,26 +6920,15 @@ def _run_typed_gateway(
                     "status": job.get("status"),
                     "error": job.get("error"),
                 }
-                record = _record_episode_evaluation(
-                    workspace,
+                error = job.get("error")
+                infrastructure = isinstance(error, dict) and error.get("error_class") == "infra"
+                record = task.record(
                     failure,
                     gateway_kind=kind,
                     job_id=job.get("job_id"),
                     private_result=job,
-                    gateway_task_digest=task_digest,
-                    kernel_bytes=request["candidate"].encode("utf-8"),
+                    cache=not infrastructure and job.get("status") in {"failed", "cancelled"},
                 )
-                error = job.get("error")
-                infrastructure = (
-                    isinstance(error, dict) and error.get("error_class") == "infra"
-                )
-                if task_digest is not None and task_owner is not None:
-                    if record is not None and not infrastructure:
-                        _complete_gateway_task(
-                            workspace, task_digest, task_owner, record["record_id"]
-                        )
-                    else:
-                        _abandon_gateway_task(workspace, task_digest, task_owner)
                 if record is not None and not infrastructure:
                     _emit_supervisor_measurement(workspace, record["record_id"], reused=False)
                 print(
@@ -6909,27 +7010,19 @@ def _run_typed_gateway(
             result["latency_us_by_shape"] = {}
             result.pop("performance_score", None)
             result.pop("performance_objective", None)
-        record = _record_episode_evaluation(
-            workspace,
+        record = task.record(
             result,
             gateway_kind=kind,
             job_id=",".join(
                 str(job.get("job_id")) for jobs in job_groups for job in jobs
             ),
             private_result=private_result,
-            gateway_task_digest=task_digest,
             measurement_repetitions=[
                 result for result, _jobs in normalized_repetitions
             ]
-            if task_digest is not None
+            if repetitions > 1
             else None,
-            kernel_bytes=request["candidate"].encode("utf-8"),
         )
-        if task_digest is not None and task_owner is not None:
-            if record is None:
-                _abandon_gateway_task(workspace, task_digest, task_owner)
-                raise SystemExit("sandbox: Evaluate could not preserve the measured Kernel")
-            _complete_gateway_task(workspace, task_digest, task_owner, record["record_id"])
         if record is not None:
             _emit_supervisor_measurement(workspace, record["record_id"], reused=False)
         print(
@@ -6950,8 +7043,7 @@ def _run_typed_gateway(
             if kind == "check"
             else _agent_disassembly_result(raw_result, None)
         )
-        diagnostic_record = _record_episode_evaluation(
-            workspace,
+        diagnostic_record = task.record(
             public_result,
             gateway_kind=kind,
             job_id=jobs[0].get("job_id"),
@@ -6968,8 +7060,7 @@ def _run_typed_gateway(
         return 0 if passed is not False else 1
 
     jobs = job_groups[0]
-    profile_record = _record_episode_evaluation(
-        workspace,
+    profile_record = task.record(
         jobs[0]["result"],
         gateway_kind=kind,
         job_id=jobs[0].get("job_id"),
@@ -7495,406 +7586,437 @@ def _main(argv: list[str] | None = None) -> int:
         "include_raw_profile": args.include_raw_profile,
         "transport": output_transport,
     }
-    with tempfile.TemporaryDirectory(prefix="atrex-sandbox-") as temp_dir:
-        temp = Path(temp_dir)
-        command_path = temp / "command.sh"
-        collector_path = temp / "collect.py"
-        outputs_path = temp / "outputs.json"
-        runtime_part_paths: list[Path] = []
-        workspace_part_paths: list[Path] = []
-        # Chunk workspace bundle when it exceeds MAX_ARG_STRLEN safe limit
-        # (same pattern as runtime chunking). The runner concatenates parts.
-        if not args.ssh and not oss_workspace and len(bundle) > WORKSPACE_CHUNK_BYTES:
-            for index, offset in enumerate(range(0, len(bundle), WORKSPACE_CHUNK_BYTES)):
-                part_path = temp / f"atrex_workspace.part{index:03d}"
-                part_path.write_text(
-                    bundle[offset : offset + WORKSPACE_CHUNK_BYTES],
-                    encoding="ascii",
-                )
-                workspace_part_paths.append(part_path)
-        else:
-            bundle_path = temp / "workspace.tar.gz.b64"
-            bundle_path.write_text(bundle, encoding="ascii")
-        command_path.write_text(
-            "#!/usr/bin/env bash\nset -o pipefail\n" + command + "\n", encoding="utf-8"
-        )
-        collector_path.write_text(REMOTE_COLLECTOR, encoding="utf-8")
-        outputs_path.write_text(json.dumps(output_cfg), encoding="utf-8")
-        if runtime_bundle:
-            runtime_chunk_bytes = len(runtime_bundle) if args.ssh else RUNTIME_CHUNK_BYTES
-            for index, offset in enumerate(range(0, len(runtime_bundle), runtime_chunk_bytes)):
-                part_path = temp / f"atrex_runtime.part{index:03d}"
-                part_path.write_text(
-                    runtime_bundle[offset : offset + runtime_chunk_bytes],
-                    encoding="ascii",
-                )
-                runtime_part_paths.append(part_path)
+    inputs, kernel_bytes = _bundle_task_inputs(bundle)
+    runtime_inputs, _ = _bundle_task_inputs(runtime_bundle)
+    if kernel_bytes is None:
+        kernel_bytes = (workspace / "kernel.py").read_bytes()
+    task_digest = None if os.environ.get(INTERNAL_MEASUREMENT_ENV) == "1" else _gateway_task_digest(
+        "dev", hashlib.sha256(kernel_bytes).hexdigest(), {
+            "command": command,
+            "inputs": inputs,
+            "runtime_inputs": runtime_inputs,
+            "execution": _gateway_execution_identity(args),
+            "environment": _parse_env_items(gateway_environment),
+            "num_gpus": num_gpus,
+            "timeout": args.timeout,
+            "keep_pod": args.keep_pod,
+            "outputs": output_cfg,
+            "profile_request": profile_request,
+            "evaluator_command": evaluator_command,
+            "runner_sha256": hashlib.sha256(_runner_source().encode()).hexdigest(),
+            "collector_sha256": hashlib.sha256(REMOTE_COLLECTOR.encode()).hexdigest(),
+        }, measurement_repetitions=1,
+    )
+    with _gateway_task(workspace, task_digest, kernel_bytes) as task:
+        if task_digest is not None and task.owner is None:
+            previous = _reusable_gateway_record(workspace, task_digest, task.previous_record_id)
+            _emit_supervisor_measurement(workspace, previous["record_id"], reused=True)
+            return _record_exit_code(previous)
+        with tempfile.TemporaryDirectory(prefix="atrex-sandbox-") as temp_dir:
+            temp = Path(temp_dir)
+            command_path = temp / "command.sh"
+            collector_path = temp / "collect.py"
+            outputs_path = temp / "outputs.json"
+            runtime_part_paths: list[Path] = []
+            workspace_part_paths: list[Path] = []
+            # Chunk workspace bundle when it exceeds MAX_ARG_STRLEN safe limit
+            # (same pattern as runtime chunking). The runner concatenates parts.
+            if not args.ssh and not oss_workspace and len(bundle) > WORKSPACE_CHUNK_BYTES:
+                for index, offset in enumerate(range(0, len(bundle), WORKSPACE_CHUNK_BYTES)):
+                    part_path = temp / f"atrex_workspace.part{index:03d}"
+                    part_path.write_text(
+                        bundle[offset : offset + WORKSPACE_CHUNK_BYTES],
+                        encoding="ascii",
+                    )
+                    workspace_part_paths.append(part_path)
+            else:
+                bundle_path = temp / "workspace.tar.gz.b64"
+                bundle_path.write_text(bundle, encoding="ascii")
+            command_path.write_text(
+                "#!/usr/bin/env bash\nset -o pipefail\n" + command + "\n", encoding="utf-8"
+            )
+            collector_path.write_text(REMOTE_COLLECTOR, encoding="utf-8")
+            outputs_path.write_text(json.dumps(output_cfg), encoding="utf-8")
+            if runtime_bundle:
+                runtime_chunk_bytes = len(runtime_bundle) if args.ssh else RUNTIME_CHUNK_BYTES
+                for index, offset in enumerate(range(0, len(runtime_bundle), runtime_chunk_bytes)):
+                    part_path = temp / f"atrex_runtime.part{index:03d}"
+                    part_path.write_text(
+                        runtime_bundle[offset : offset + runtime_chunk_bytes],
+                        encoding="ascii",
+                    )
+                    runtime_part_paths.append(part_path)
 
-        if args.kind == "profile":
-            dev_intent = "profile_adhoc"
-        elif args.kind == "run":
-            dev_intent = "custom_harness"
-        else:
-            dev_intent = "other"
-        agate = [
-            agate_executable or "agate",
-            "dev",
-            "--intent",
-            dev_intent,
-            "--note",
-            f"tools/sandbox.py {args.kind} compatibility path",
-        ]
-        if args.url:
-            agate += ["--url", args.url]
-        elif args.gateway_profile:
-            agate += ["--profile", args.gateway_profile]
-        agate += ["--gpu", args.hardware]
-        if num_gpus > 1:
-            agate += ["--num-gpus", str(num_gpus)]
-        agate += [
-            "--dev-timeout",
-            str(args.timeout),
-            "--http-timeout",
-            str(MAX_HTTP_REQUEST_TIMEOUT),
-            "--wait-timeout",
-            str(args.timeout + queue_wait_grace),
-            "--job-timeout",
-            str(_dev_gateway_job_timeout(args.timeout)),
-        ]
-        if oss_workspace:
-            agate += ["--oss-file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
-        elif workspace_part_paths:
-            for index, part_path in enumerate(workspace_part_paths):
-                agate += [
-                    "--file",
-                    f"__atrex_workspace.tar.gz.b64.part{index:03d}={part_path}",
-                ]
-        else:
-            agate += ["--file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
-        agate += [
-            "--file",
-            f"__atrex_command.sh={command_path}",
-            "--file",
-            f"__atrex_collect.py={collector_path}",
-            "--file",
-            f"__atrex_outputs.json={outputs_path}",
-        ]
-        for index, part_path in enumerate(runtime_part_paths):
+            if args.kind == "profile":
+                dev_intent = "profile_adhoc"
+            elif args.kind == "run":
+                dev_intent = "custom_harness"
+            else:
+                dev_intent = "other"
+            agate = [
+                agate_executable or "agate",
+                "dev",
+                "--intent",
+                dev_intent,
+                "--note",
+                f"tools/sandbox.py {args.kind} compatibility path",
+            ]
+            if args.url:
+                agate += ["--url", args.url]
+            elif args.gateway_profile:
+                agate += ["--profile", args.gateway_profile]
+            agate += ["--gpu", args.hardware]
+            if num_gpus > 1:
+                agate += ["--num-gpus", str(num_gpus)]
+            agate += [
+                "--dev-timeout",
+                str(args.timeout),
+                "--http-timeout",
+                str(MAX_HTTP_REQUEST_TIMEOUT),
+                "--wait-timeout",
+                str(args.timeout + queue_wait_grace),
+                "--job-timeout",
+                str(_dev_gateway_job_timeout(args.timeout)),
+            ]
+            if oss_workspace:
+                agate += ["--oss-file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
+            elif workspace_part_paths:
+                for index, part_path in enumerate(workspace_part_paths):
+                    agate += [
+                        "--file",
+                        f"__atrex_workspace.tar.gz.b64.part{index:03d}={part_path}",
+                    ]
+            else:
+                agate += ["--file", f"__atrex_workspace.tar.gz.b64={bundle_path}"]
             agate += [
                 "--file",
-                f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}={part_path}",
+                f"__atrex_command.sh={command_path}",
+                "--file",
+                f"__atrex_collect.py={collector_path}",
+                "--file",
+                f"__atrex_outputs.json={outputs_path}",
             ]
-        for item in gateway_environment:
-            if "=" not in item or item.startswith("="):
-                raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
-            agate += ["--env-var", item]
-        if args.keep_pod:
-            agate.append("--no-recycle")
-        if output_transport == "oss":
-            agate += ["--oss-output", OSS_OUTPUT_ARCHIVE]
-        agate.append("bash __atrex_runner.sh")
+            for index, part_path in enumerate(runtime_part_paths):
+                agate += [
+                    "--file",
+                    f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}={part_path}",
+                ]
+            for item in gateway_environment:
+                if "=" not in item or item.startswith("="):
+                    raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
+                agate += ["--env-var", item]
+            if args.keep_pod:
+                agate.append("--no-recycle")
+            if output_transport == "oss":
+                agate += ["--oss-output", OSS_OUTPUT_ARCHIVE]
+            agate.append("bash __atrex_runner.sh")
 
-        # The runner is uploaded separately after the command has been assembled.
-        runner_path = temp / "runner.sh"
-        runner_path.write_text(_runner_source(), encoding="utf-8")
-        agate[-1:-1] = ["--file", f"__atrex_runner.sh={runner_path}"]
+            # The runner is uploaded separately after the command has been assembled.
+            runner_path = temp / "runner.sh"
+            runner_path.write_text(_runner_source(), encoding="utf-8")
+            agate[-1:-1] = ["--file", f"__atrex_runner.sh={runner_path}"]
 
-        if args.ssh:
-            upload_dir = temp / "ssh-upload"
-            upload_dir.mkdir()
-            uploads: list[tuple[Path, str]] = [
-                (command_path, "__atrex_command.sh"),
-                (collector_path, "__atrex_collect.py"),
-                (outputs_path, "__atrex_outputs.json"),
-                (runner_path, "__atrex_runner.sh"),
-            ]
-            uploads.extend(
-                (path, f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}")
-                for index, path in enumerate(runtime_part_paths)
-            )
-            uploads.extend(
-                (path, f"__atrex_workspace.tar.gz.b64.part{index:03d}")
-                for index, path in enumerate(workspace_part_paths)
-            )
-            if not workspace_part_paths:
-                uploads.append((bundle_path, "__atrex_workspace.tar.gz.b64"))
-            upload_paths = []
-            for source, remote_name in uploads:
-                destination = upload_dir / remote_name
-                shutil.copy2(source, destination)
-                upload_paths.append(destination)
-            try:
-                ssh_result = _run_ssh_job(
-                    target=args.ssh,
-                    init_command=args.ssh_init,
-                    runtime_binds=args.ssh_runtime_bind,
-                    gpu_index=args.ssh_gpu,
-                    timeout=args.timeout,
-                    env_items=gateway_environment,
-                    upload_paths=upload_paths,
-                    temp=temp,
-                    workspace=workspace,
-                    sync_outputs=bool(sync_paths),
+            if args.ssh:
+                upload_dir = temp / "ssh-upload"
+                upload_dir.mkdir()
+                uploads: list[tuple[Path, str]] = [
+                    (command_path, "__atrex_command.sh"),
+                    (collector_path, "__atrex_collect.py"),
+                    (outputs_path, "__atrex_outputs.json"),
+                    (runner_path, "__atrex_runner.sh"),
+                ]
+                uploads.extend(
+                    (path, f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}")
+                    for index, path in enumerate(runtime_part_paths)
                 )
-            except SSHTransportError as exc:
-                _record_environment_failure(
-                    target=args.ssh,
-                    stage="transport",
-                    detail=str(exc),
+                uploads.extend(
+                    (path, f"__atrex_workspace.tar.gz.b64.part{index:03d}")
+                    for index, path in enumerate(workspace_part_paths)
                 )
-                print(f"sandbox: SSH environment unavailable: {exc}", file=sys.stderr)
-                return ENVIRONMENT_TEMPFAIL
-            if ssh_result.returncode != 0:
+                if not workspace_part_paths:
+                    uploads.append((bundle_path, "__atrex_workspace.tar.gz.b64"))
+                upload_paths = []
+                for source, remote_name in uploads:
+                    destination = upload_dir / remote_name
+                    shutil.copy2(source, destination)
+                    upload_paths.append(destination)
                 try:
-                    health = _run_ssh_health(
-                        args.ssh,
-                        args.ssh_init,
-                        args.health_command,
-                        args.ssh_runtime_bind,
-                        args.ssh_gpu,
+                    ssh_result = _run_ssh_job(
+                        target=args.ssh,
+                        init_command=args.ssh_init,
+                        runtime_binds=args.ssh_runtime_bind,
+                        gpu_index=args.ssh_gpu,
+                        timeout=args.timeout,
+                        env_items=gateway_environment,
+                        upload_paths=upload_paths,
+                        temp=temp,
+                        workspace=workspace,
+                        sync_outputs=bool(sync_paths),
                     )
                 except SSHTransportError as exc:
-                    health = subprocess.CompletedProcess(
-                        args=["ssh", args.ssh],
-                        returncode=1,
-                        stdout="",
-                        stderr=str(exc),
-                    )
-                if health.returncode != 0:
-                    detail = (health.stderr or health.stdout or "health probe failed")[-2000:]
                     _record_environment_failure(
                         target=args.ssh,
-                        stage="post-command-health",
-                        detail=detail,
-                        health_status=health.returncode,
+                        stage="transport",
+                        detail=str(exc),
                     )
-                    print(
-                        "sandbox: remote command failed and the GPU environment health "
-                        "probe also failed; optimization recovery requested",
-                        file=sys.stderr,
-                    )
+                    print(f"sandbox: SSH environment unavailable: {exc}", file=sys.stderr)
                     return ENVIRONMENT_TEMPFAIL
-            job = {
-                "job_id": f"ssh-{os.getpid()}",
-                "status": "succeeded" if ssh_result.returncode == 0 else "failed",
-                "result": {
-                    "stdout": ssh_result.stdout,
-                    "stderr": ssh_result.stderr,
-                    "exit_code": ssh_result.returncode,
-                },
-            }
-            proc = subprocess.CompletedProcess(
-                args=ssh_result.args,
-                returncode=ssh_result.returncode,
-                stdout=json.dumps(job),
-                stderr="",
-            )
-        elif direct_http:
-            print(
-                "[sandbox] agate CLI not found; using direct gateway HTTP API",
-                file=sys.stderr,
-            )
-            try:
-                direct_files = {
-                    "__atrex_command.sh": command_path,
-                    "__atrex_collect.py": collector_path,
-                    "__atrex_outputs.json": outputs_path,
-                    "__atrex_runner.sh": runner_path,
+                if ssh_result.returncode != 0:
+                    try:
+                        health = _run_ssh_health(
+                            args.ssh,
+                            args.ssh_init,
+                            args.health_command,
+                            args.ssh_runtime_bind,
+                            args.ssh_gpu,
+                        )
+                    except SSHTransportError as exc:
+                        health = subprocess.CompletedProcess(
+                            args=["ssh", args.ssh],
+                            returncode=1,
+                            stdout="",
+                            stderr=str(exc),
+                        )
+                    if health.returncode != 0:
+                        detail = (health.stderr or health.stdout or "health probe failed")[-2000:]
+                        _record_environment_failure(
+                            target=args.ssh,
+                            stage="post-command-health",
+                            detail=detail,
+                            health_status=health.returncode,
+                        )
+                        print(
+                            "sandbox: remote command failed and the GPU environment health "
+                            "probe also failed; optimization recovery requested",
+                            file=sys.stderr,
+                        )
+                        return ENVIRONMENT_TEMPFAIL
+                job = {
+                    "job_id": f"ssh-{os.getpid()}",
+                    "status": "succeeded" if ssh_result.returncode == 0 else "failed",
+                    "result": {
+                        "stdout": ssh_result.stdout,
+                        "stderr": ssh_result.stderr,
+                        "exit_code": ssh_result.returncode,
+                    },
                 }
-                if workspace_part_paths:
+                proc = subprocess.CompletedProcess(
+                    args=ssh_result.args,
+                    returncode=ssh_result.returncode,
+                    stdout=json.dumps(job),
+                    stderr="",
+                )
+            elif direct_http:
+                print(
+                    "[sandbox] agate CLI not found; using direct gateway HTTP API",
+                    file=sys.stderr,
+                )
+                try:
+                    direct_files = {
+                        "__atrex_command.sh": command_path,
+                        "__atrex_collect.py": collector_path,
+                        "__atrex_outputs.json": outputs_path,
+                        "__atrex_runner.sh": runner_path,
+                    }
+                    if workspace_part_paths:
+                        direct_files.update(
+                            {
+                                f"__atrex_workspace.tar.gz.b64.part{index:03d}": path
+                                for index, path in enumerate(workspace_part_paths)
+                            }
+                        )
+                    else:
+                        direct_files["__atrex_workspace.tar.gz.b64"] = bundle_path
                     direct_files.update(
                         {
-                            f"__atrex_workspace.tar.gz.b64.part{index:03d}": path
-                            for index, path in enumerate(workspace_part_paths)
+                            f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}": path
+                            for index, path in enumerate(runtime_part_paths)
                         }
                     )
-                else:
-                    direct_files["__atrex_workspace.tar.gz.b64"] = bundle_path
-                direct_files.update(
-                    {
-                        f"__atrex_bench_runtime.tar.gz.b64.part{index:03d}": path
-                        for index, path in enumerate(runtime_part_paths)
-                    }
-                )
-                proc = _run_direct_gateway(
-                    url=args.url,
-                    hardware=args.hardware,
-                    timeout=args.timeout,
-                    queue_wait_grace=queue_wait_grace,
-                    env_items=gateway_environment,
-                    files=direct_files,
-                    command="bash __atrex_runner.sh",
-                    num_gpus=num_gpus,
-                )
-            except (OSError, RuntimeError, TimeoutError) as exc:
-                raise RuntimeStateError(
-                    "The Supervisor could not complete the Gateway transport request.",
-                    code="gateway_unavailable",
-                ) from exc
-        else:
-            try:
-                proc = _run_agate_with_cancel_retry(
-                    agate=agate,
-                    executable=agate_executable or "agate",
-                    url=args.url,
-                    gateway_profile=args.gateway_profile,
-                    command_timeout=_dev_gateway_job_timeout(args.timeout),
-                    wait_budget=args.timeout + queue_wait_grace,
-                )
-            except FileNotFoundError as exc:
-                raise RuntimeStateError(
-                    "The Supervisor's Agate client or endpoint is unavailable; "
-                    "this is not an Agent dependency.",
-                    code="gateway_dependency_unavailable",
-                ) from exc
+                    proc = _run_direct_gateway(
+                        url=args.url,
+                        hardware=args.hardware,
+                        timeout=args.timeout,
+                        queue_wait_grace=queue_wait_grace,
+                        env_items=gateway_environment,
+                        files=direct_files,
+                        command="bash __atrex_runner.sh",
+                        num_gpus=num_gpus,
+                    )
+                except (OSError, RuntimeError, TimeoutError) as exc:
+                    raise RuntimeStateError(
+                        "The Supervisor could not complete the Gateway transport request.",
+                        code="gateway_unavailable",
+                    ) from exc
+            else:
+                try:
+                    proc = _run_agate_with_cancel_retry(
+                        agate=agate,
+                        executable=agate_executable or "agate",
+                        url=args.url,
+                        gateway_profile=args.gateway_profile,
+                        command_timeout=_dev_gateway_job_timeout(args.timeout),
+                        wait_budget=args.timeout + queue_wait_grace,
+                    )
+                except FileNotFoundError as exc:
+                    raise RuntimeStateError(
+                        "The Supervisor's Agate client or endpoint is unavailable; "
+                        "this is not an Agent dependency.",
+                        code="gateway_dependency_unavailable",
+                    ) from exc
 
-    hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
-    if proc.stderr and not hide_evaluator_details:
-        visible_stderr = (
-            _agent_retry_notes(proc.stderr)
-            if evaluator_command or profile_request
-            else proc.stderr.rstrip()
-        )
-        if visible_stderr:
-            print(visible_stderr, file=sys.stderr)
-    try:
-        job = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        print(json.dumps(error_response(
-            "Gateway returned no valid job response; the execution outcome is unknown.",
-            code="gateway_response_invalid", repairable=False, next_action=ESCALATE_RUNTIME,
-        )))
-        return proc.returncode or 2
-    if not isinstance(job, dict):
-        raise RuntimeStateError(
-            "Gateway returned a non-object job response.", code="gateway_response_invalid"
-        )
+        hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
+        if proc.stderr and not hide_evaluator_details:
+            visible_stderr = (
+                _agent_retry_notes(proc.stderr)
+                if evaluator_command or profile_request
+                else proc.stderr.rstrip()
+            )
+            if visible_stderr:
+                print(visible_stderr, file=sys.stderr)
+        try:
+            job = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            print(json.dumps(error_response(
+                "Gateway returned no valid job response; the execution outcome is unknown.",
+                code="gateway_response_invalid", repairable=False, next_action=ESCALATE_RUNTIME,
+            )))
+            return proc.returncode or 2
+        if not isinstance(job, dict):
+            raise RuntimeStateError(
+                "Gateway returned a non-object job response.", code="gateway_response_invalid"
+            )
 
-    if job.get("status") != "succeeded" and (
-        isinstance(job.get("error"), dict) or not isinstance(job.get("result"), dict)
-    ):
-        failure = {"status": job.get("status"), "error": job.get("error") or {}}
-        if not evaluator_command and not profile_request:
-            remote = job.get("result")
-            remote = remote if isinstance(remote, dict) else {}
-            failure.update({
-                "command": command,
-                "exit_code": remote.get("exit_code", proc.returncode or 1),
-                "stdout": remote.get("stdout", ""),
-                "stderr": remote.get("stderr", ""),
-            })
-        record = _record_episode_evaluation(
-            workspace, failure, gateway_kind="profile" if profile_request else "dev",
-            job_id=job.get("job_id"), private_result=job,
-        )
-        public = _agent_gateway_failure(job, record, generalized=hide_evaluator_details)
-        if not evaluator_command and not profile_request:
-            public.update(_agent_dev_probe_result(failure))
-        print(json.dumps(public, ensure_ascii=False))
-        return proc.returncode or 1
+        if job.get("status") != "succeeded" and (
+            isinstance(job.get("error"), dict) or not isinstance(job.get("result"), dict)
+        ):
+            failure = {"status": job.get("status"), "error": job.get("error") or {}}
+            if not evaluator_command and not profile_request:
+                remote = job.get("result")
+                remote = remote if isinstance(remote, dict) else {}
+                failure.update({
+                    "command": command,
+                    "exit_code": remote.get("exit_code", proc.returncode or 1),
+                    "stdout": remote.get("stdout", ""),
+                    "stderr": remote.get("stderr", ""),
+                })
+            error = job.get("error")
+            infrastructure = isinstance(error, dict) and error.get("error_class") == "infra"
+            record = task.record(
+                failure, gateway_kind="profile" if profile_request else "dev",
+                job_id=job.get("job_id"), private_result=job,
+                cache=not infrastructure and job.get("status") in {"failed", "cancelled"},
+            )
+            public = _agent_gateway_failure(job, record, generalized=hide_evaluator_details)
+            if not evaluator_command and not profile_request:
+                public.update(_agent_dev_probe_result(failure))
+            print(json.dumps(public, ensure_ascii=False))
+            return proc.returncode or 1
 
-    result = job.get("result") or {}
-    remote_stdout = str(result.get("stdout") or "")
-    remote_stderr = str(result.get("stderr") or "")
-    try:
-        if output_transport == "oss":
-            artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
-            with tempfile.TemporaryDirectory(prefix="atrex-oss-output-") as temp_dir:
-                archive = Path(temp_dir) / OSS_OUTPUT_ARCHIVE
-                _download_oss_artifact(artifact, archive)
-                _extract_output_archive(archive, workspace)
-            command_stdout = remote_stdout.rstrip("\n")
-        elif output_transport == "inline":
-            command_stdout = _extract_outputs(remote_stdout, workspace)
-        elif output_transport == "ssh":
-            command_stdout = remote_stdout.rstrip("\n")
-        else:
-            command_stdout = remote_stdout.rstrip("\n")
-    except (RuntimeError, ValueError, tarfile.TarError) as exc:
-        if remote_stdout and not hide_evaluator_details:
-            print(remote_stdout.rstrip())
-        if remote_stderr and not hide_evaluator_details:
-            print(remote_stderr.rstrip(), file=sys.stderr)
-        print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
-        return int(result.get("exit_code") or proc.returncode or 2)
-    if profile_request:
-        profile_result = dict(result)
-        profile_result["status"] = job.get("status")
-        if command_stdout:
-            profile_result["summary"] = _bounded_text(command_stdout[-4000:], 2000)
-        profile_record = _record_episode_evaluation(
-            workspace,
-            profile_result,
-            gateway_kind="profile",
-            job_id=job.get("job_id"),
-            private_result=job,
-        )
-        command_stdout = PROFILE_RESULT_PREFIX + json.dumps(
-            _agent_profile_result(profile_result, profile_record),
-            ensure_ascii=False,
-        )
-    if evaluator_command:
-        command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
-        command_stdout = _hydrate_result_lines(workspace, command_stdout)
-        command_stdout = _record_result_lines(workspace, command_stdout, gateway_kind="dev")
-    remote_rc = result.get("exit_code")
-    dev_record: dict[str, str] | None = None
-    if not profile_request and not evaluator_command:
-        dev_result = _agent_dev_probe_result(
-            {
-                "status": job.get("status"),
-                "command": command,
-                "exit_code": (
-                    remote_rc
-                    if isinstance(remote_rc, int) and not isinstance(remote_rc, bool)
-                    else proc.returncode
-                ),
-                "stdout": command_stdout,
-                "stderr": remote_stderr,
-                "synced_paths": sync_paths,
-            }
-        )
-        dev_record = _record_episode_evaluation(
-            workspace,
-            dev_result,
-            gateway_kind="dev",
-            job_id=job.get("job_id"),
-            private_result=job,
-        )
-    if hide_evaluator_details:
-        command_stdout = "\n".join(
-            line
-            for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
-        )
-    if command_stdout:
-        print(command_stdout)
-    if dev_record is not None:
-        print(
-            DEV_RECORD_RESULT_PREFIX
-            + json.dumps(
-                {
-                    "gateway_record_id": dev_record["record_id"],
-                    "kernel_id": dev_record["kernel_id"],
-                },
+        result = job.get("result") or {}
+        remote_stdout = str(result.get("stdout") or "")
+        remote_stderr = str(result.get("stderr") or "")
+        try:
+            if output_transport == "oss":
+                artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
+                with tempfile.TemporaryDirectory(prefix="atrex-oss-output-") as temp_dir:
+                    archive = Path(temp_dir) / OSS_OUTPUT_ARCHIVE
+                    _download_oss_artifact(artifact, archive)
+                    _extract_output_archive(archive, workspace)
+                command_stdout = remote_stdout.rstrip("\n")
+            elif output_transport == "inline":
+                command_stdout = _extract_outputs(remote_stdout, workspace)
+            elif output_transport == "ssh":
+                command_stdout = remote_stdout.rstrip("\n")
+            else:
+                command_stdout = remote_stdout.rstrip("\n")
+        except (RuntimeError, ValueError, tarfile.TarError) as exc:
+            if remote_stdout and not hide_evaluator_details:
+                print(remote_stdout.rstrip())
+            if remote_stderr and not hide_evaluator_details:
+                print(remote_stderr.rstrip(), file=sys.stderr)
+            print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
+            return int(result.get("exit_code") or proc.returncode or 2)
+        if profile_request:
+            profile_result = dict(result)
+            profile_result["status"] = job.get("status")
+            if command_stdout:
+                profile_result["summary"] = _bounded_text(command_stdout[-4000:], 2000)
+            profile_record = task.record(
+                profile_result,
+                gateway_kind="profile",
+                job_id=job.get("job_id"),
+                private_result=job,
+            )
+            command_stdout = PROFILE_RESULT_PREFIX + json.dumps(
+                _agent_profile_result(profile_result, profile_record),
                 ensure_ascii=False,
             )
-        )
-    if remote_stderr and not hide_evaluator_details:
-        has_result = any(
-            line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
-            for line in command_stdout.splitlines()
-        )
+        if evaluator_command:
+            command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
+            command_stdout = _hydrate_result_lines(workspace, command_stdout)
+            command_stdout = _record_result_lines(
+                workspace, command_stdout, gateway_kind="dev", task=task, job=job,
+            )
         remote_rc = result.get("exit_code")
-        if (
-            (evaluator_command and not has_result)
-            or (profile_request and isinstance(remote_rc, int) and remote_rc != 0)
-            or (not evaluator_command and not profile_request)
+        dev_record: dict[str, str] | None = None
+        if not profile_request and (
+            not evaluator_command or (task.digest is not None and task.record_id is None)
         ):
-            print(_bounded_text(remote_stderr.rstrip(), 2000), file=sys.stderr)
-    if isinstance(remote_rc, int):
-        return remote_rc
-    return 0 if job.get("status") == "succeeded" else (proc.returncode or 1)
+            dev_result = _agent_dev_probe_result(
+                {
+                    "status": job.get("status"),
+                    "command": command,
+                    "exit_code": (
+                        remote_rc
+                        if isinstance(remote_rc, int) and not isinstance(remote_rc, bool)
+                        else proc.returncode
+                    ),
+                    "stdout": command_stdout,
+                    "stderr": remote_stderr,
+                    "synced_paths": sync_paths,
+                }
+            )
+            dev_record = task.record(
+                dev_result,
+                gateway_kind="dev",
+                job_id=job.get("job_id"),
+                private_result=job,
+            )
+        if hide_evaluator_details:
+            command_stdout = "\n".join(
+                line
+                for line in command_stdout.splitlines()
+                if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
+            )
+        if command_stdout:
+            print(command_stdout)
+        if dev_record is not None:
+            print(
+                DEV_RECORD_RESULT_PREFIX
+                + json.dumps(
+                    {
+                        "gateway_record_id": dev_record["record_id"],
+                        "kernel_id": dev_record["kernel_id"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if remote_stderr and not hide_evaluator_details:
+            has_result = any(
+                line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
+                for line in command_stdout.splitlines()
+            )
+            remote_rc = result.get("exit_code")
+            if (
+                (evaluator_command and not has_result)
+                or (profile_request and isinstance(remote_rc, int) and remote_rc != 0)
+                or (not evaluator_command and not profile_request)
+            ):
+                print(_bounded_text(remote_stderr.rstrip(), 2000), file=sys.stderr)
+        if isinstance(remote_rc, int):
+            return remote_rc
+        return 0 if job.get("status") == "succeeded" else (proc.returncode or 1)
 
 
 def _sandbox_telemetry_category(arguments: list[str]) -> str:

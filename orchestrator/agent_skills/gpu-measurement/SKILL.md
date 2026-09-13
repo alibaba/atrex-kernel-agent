@@ -39,10 +39,15 @@ python3 tools/sandbox.py --kind env
 
 These typed operations need no local evaluation or profiling driver. `kernel.py` is
 selected automatically. Keep its measured contents unchanged until the request completes.
-Standard full Run and ABBA tasks are deduplicated by exact task identity across this Episode
-and visible earlier Episodes of the same Campaign. The Supervisor runs a new task three times
-and aggregates per-Shape medians. A duplicate returns `duplicate_gateway_task` with the prior
-`gateway_record_id` without launching another job; use `record-read` to retrieve that result.
+All GPU job operations, including correctness-only, Profile, Check, Disassemble, and Dev,
+are deduplicated by exact task identity across this Episode and visible earlier Episodes of
+the same Campaign. A duplicate returns `duplicate_gateway_task` with the prior
+`gateway_record_id` without launching another job; follow the returned recovery instruction
+and the `runtime-records` Skill to retrieve the saved result.
+Profile/diagnostic parameters matter; Dev also compares the command and uploaded scripts/input
+contents. A changed probe is a new task even if kernel.py is unchanged. Full Run and ABBA use
+three measurements with per-Shape medians; other operations run once. Environment queries and
+record reads are repeatable.
 Shape IDs are opaque labels; they do not disclose the hidden evaluation inputs.
 
 For custom inputs, correctness-only runs, ABBA, focused profiling, dependencies, or Dev

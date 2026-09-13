@@ -110,6 +110,7 @@ class MeasurementReuseTest(unittest.TestCase):
             return self.real_run(command, **kwargs)
         index = self.calls % 3
         self.calls += 1
+        self.assertEqual(kwargs["env"][gateway.INTERNAL_MEASUREMENT_ENV], "1")
         schedule = verifier.verification_schedule(2)
         runs = []
         for step in schedule:

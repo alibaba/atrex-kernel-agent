@@ -740,6 +740,7 @@ class GatewayRecordTest(unittest.TestCase):
                 workspace,
                 "disassemble",
                 {
+                    "candidate": (workspace / "kernel.py").read_text(),
                     "init_kwargs": {"width": 128},
                     "requirements": ["custom-kernel-package==1"],
                     "deps_mode": "no_deps",
@@ -773,6 +774,7 @@ class GatewayRecordTest(unittest.TestCase):
                 workspace,
                 "profile",
                 {
+                    "candidate": (workspace / "kernel.py").read_text(),
                     "spec": {"target_hardware": ["L20N"]},
                     "reference": {"operator": "example"},
                     "options": {

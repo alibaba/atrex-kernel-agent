@@ -100,13 +100,18 @@ python tools/sandbox.py --kind profile --profile-shape-id 0 \
   --kernel-name candidate_kernel --profile-source --launch-skip 1 --launch-count 5
 ```
 
-Full Evaluate and exploratory ABBA check completed tasks in the current Episode and visible archived
-Episodes of the same Campaign. A new task runs three independent identical logical Agate calls;
+Evaluate (including correctness-only), ABBA, Profile, Check, Disassemble, and Dev check completed
+tasks in the current Episode and visible archived Episodes of the same Campaign. A new full
+Evaluate or ABBA task runs three independent identical logical Agate calls;
 the Supervisor takes the median per Shape and recomputes the aggregate result. Evaluate returns final
 aggregate and per-Shape latencies; ABBA returns aggregate and per-Shape Baseline/Candidate values.
 Raw repetitions and batching details remain in private evidence. Repeating the same exact task,
 including one measured in an earlier Episode, is rejected before Agate execution and reports the previous `gateway_record_id` so
-the existing result can be reused. Read it without another Gateway job:
+the existing result can be reused. Other operations still execute once: deduplication does not
+turn diagnostics or Dev probes into repeated measurements. Dev identity includes the command,
+actual uploaded files and dependencies, environment, and output-collection settings; changing
+the probe is a new task. Infrastructure failures release the reservation. Environment queries
+and record reads are not subject to duplicate rejection. Read a saved result without another Gateway job:
 
 ```bash
 python tools/sandbox.py --kind record-read \

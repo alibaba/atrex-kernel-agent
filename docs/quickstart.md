@@ -627,7 +627,12 @@ Relationships are Agent interpretations, not causal proof of performance gains. 
 not add the main Runtime's Pool scheduler to AKA.
 
 Evaluate responses and record reads omit `measurement_aggregation`; the three-call per-Shape median
-policy and its full internal evidence are unchanged. Journal writes return the new record ID, list
+policy for full Evaluate/ABBA and its full internal evidence are unchanged. All GPU job operations
+(including correctness-only, Profile, Check, Disassemble, and Dev) reject exact completed duplicates
+from this Episode or visible earlier Episodes with `duplicate_gateway_task` and the original
+`gateway_record_id`. Use `record-read` to retrieve it. Dev compares the command and uploaded file
+contents, not just kernel.py. This does not add repetitions to diagnostics or Dev, and does not
+restrict environment queries or record reads. Journal writes return the new record ID, list
 operations confirm the written file and item count, and load operations return the requested record.
 Report validation failures are repairable: correct the request or Direction state and submit again.
 

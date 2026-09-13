@@ -63,6 +63,7 @@ _RUNTIME_ENVIRONMENT_KEYS = frozenset(
         SUPERVISOR_HISTORY_ROOT_ENV,
         "ATREX_AKA_MODE_STATE_FILE",
         "ATREX_AKA_REUSE_GATEWAY_RESULTS",
+        "ATREX_AKA_INTERNAL_MEASUREMENT",
         "ATREX_AKA_COMPARISON_RUN_TIMEOUT",
     }
 )
@@ -847,6 +848,7 @@ class SupervisorRuntime:
         environment = dict(self._environment)
         environment.update(capability.request_environment)
         environment.pop("ATREX_AKA_REUSE_GATEWAY_RESULTS", None)
+        environment.pop("ATREX_AKA_INTERNAL_MEASUREMENT", None)
         environment.pop("ATREX_AKA_COMPARISON_RUN_TIMEOUT", None)
         from .optimization_policy import MODE_STATE_ENV
 

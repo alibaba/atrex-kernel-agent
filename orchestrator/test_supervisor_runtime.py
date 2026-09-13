@@ -401,6 +401,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 "ATREX_TELEMETRY_ATTEMPT_ID": "attempt-7",
                 "ATREX_WIKI_TASK_ID": "campaign-1",
                 "ATREX_AKA_REUSE_GATEWAY_RESULTS": "1",
+                "ATREX_AKA_INTERNAL_MEASUREMENT": "1",
                 "ATREX_AKA_COMPARISON_RUN_TIMEOUT": "999",
             }
             completed = subprocess.CompletedProcess(
@@ -416,6 +417,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 self.assertNotIn("AGATE_SK", lease.environment)
                 self.assertNotIn("ATREX_PRIVATE_REFERENCE_DIR", lease.environment)
                 self.assertNotIn("ATREX_AKA_REUSE_GATEWAY_RESULTS", lease.environment)
+                self.assertNotIn("ATREX_AKA_INTERNAL_MEASUREMENT", lease.environment)
                 self.assertEqual(lease.environment[RUNTIME_URL_ENV], runtime.url)
 
                 capability = runtime.authorize(lease.token)
@@ -457,6 +459,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 self.assertIn("https://gateway.example.test", command)
                 request_environment = run.call_args.kwargs["env"]
                 self.assertNotIn("ATREX_AKA_REUSE_GATEWAY_RESULTS", request_environment)
+                self.assertNotIn("ATREX_AKA_INTERNAL_MEASUREMENT", request_environment)
                 self.assertNotIn("ATREX_AKA_COMPARISON_RUN_TIMEOUT", request_environment)
                 self.assertEqual(request_environment["ATREX_TELEMETRY_ATTEMPT_ID"], "attempt-7")
                 self.assertEqual(request_environment["ATREX_WIKI_TASK_ID"], "campaign-1")

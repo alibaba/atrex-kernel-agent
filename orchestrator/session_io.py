@@ -524,6 +524,7 @@ def _sandbox_command(
     # Only trusted callers may request cache reuse/private result receipts. HTTP Agent
     # requests never inherit these switches and retain their duplicate-request errors.
     environment.pop("ATREX_AKA_REUSE_GATEWAY_RESULTS", None)
+    environment.pop("ATREX_AKA_INTERNAL_MEASUREMENT", None)
     environment.pop("ATREX_AKA_COMPARISON_RUN_TIMEOUT", None)
     if reuse_completed:
         environment["ATREX_AKA_REUSE_GATEWAY_RESULTS"] = "1"
