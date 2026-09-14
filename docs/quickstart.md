@@ -650,6 +650,16 @@ restrict environment queries or record reads. Journal writes return the new reco
 operations confirm the written file and item count, and load operations return the requested record.
 Report validation failures are repairable: correct the request or Direction state and submit again.
 
+ABBA now resumes at physical Shape-batch granularity. After an interruption, rerun the unchanged
+comparison: completed batches are reused, and only missing batches are submitted. The Supervisor
+prints `ABBA measurement-N batch M: reusing completed measurement` when this happens. Checkpoints
+remain private under `abba-batches/`, retain all physical results, and survive a failed final result
+write. Each of the three measurement repetitions has its own identity. A completed correctness
+failure is retained, while an incomplete or infrastructure-failed batch is not treated as a result.
+Changing Kernel bytes, evaluation inputs, hardware, schedule or measurement options starts a new
+comparison. Once the complete result exists, an Agent duplicate still returns its Gateway record ID
+as an error; only trusted Supervisor callers automatically reuse it.
+
 ## 3. Inspect Outputs
 
 Each optimization workspace records the full optimization trail:

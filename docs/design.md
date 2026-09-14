@@ -314,6 +314,22 @@ measurement requests execute through the same batching, infrastructure retry, an
 logic. In-flight requests are not submitted twice; an infrastructure failure or unfinished execution releases the task
 reservation. Corrupt cached evidence fails closed.
 
+Each completed physical ABBA Shape batch is also checkpointed immediately under the private
+`abba-batches/` store. Its identity combines the exact comparison task, requested schedule, Shape
+batch and measurement repetition; the three repetitions never reuse each other's samples. The store
+preserves the payload, stdout/stderr and completion timestamp with an integrity digest. A restart
+reuses completed batches from the current or authorized archived Episode and submits only missing
+batches. Failure during final aggregation or record publication does not discard those measurements.
+Explicit correctness failures remain evidence and fail the comparison; incomplete, malformed or
+infrastructure-failed executions are not completed checkpoints. Existing Agate retry handling submits
+fresh jobs for infrastructure failures. Missing checkpoints do not authorize bypassing the overall
+comparison or its three-repetition requirement.
+
+Unlike the main Runtime's revision-pair Registry index, AKA keeps the existing source-and-contract
+identity so Supervisor verification can reuse an exact Agent measurement even across Commit labels.
+No additional database or Agent tool is introduced. The final private Gateway record includes every
+physical batch; the Agent-facing result and duplicate-request error remain unchanged.
+
 The Supervisor consumes the complete persisted result, while Agents receive the bounded projection
 and retain their existing duplicate-request response. Verification records the original
 `gateway_record_id`, its artifact path, and whether it was reused. Production policy, committed-source
@@ -387,6 +403,9 @@ durably recorded after each coding invocation, before propagating an environment
 GPU verification. Cumulative per-run receipts and token totals share one atomic state replacement:
 replaying a receipt does not double count, and recovery retains actual token usage without consuming
 an episode outcome. Partial reported usage is counted; unavailable usage is not fabricated.
+Claude `system/task_progress` and `system/task_notification` counters are not new response usage.
+Adapters exclude them from response deltas while preserving tool phase receipts; native subagent
+responses remain included in the unified Session usage report.
 
 ```mermaid
 flowchart TD

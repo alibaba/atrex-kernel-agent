@@ -62,6 +62,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
             if parsed.total_tokens is not None:
                 terminal = parsed
             continue
+        if event.get("type") == "system":
+            # Claude subagent progress carries cumulative task usage, not a response delta.
+            continue
         usage = event.get("usage")
         message = event.get("message")
         if usage is None and isinstance(message, Mapping):

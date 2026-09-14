@@ -279,7 +279,9 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
             message = event.get("message")
             if usage is None and isinstance(message, Mapping):
                 usage = message.get("usage")
-            parsed = token_usage_from_mapping(usage)
+            # Task progress/notification counters are cumulative, not new model responses.
+            # Still process non-assistant tool receipts below for phase attribution.
+            parsed = token_usage_from_mapping(usage if event_type == "assistant" else None)
             message_id = (
                 message.get("id")
                 if isinstance(message, Mapping)

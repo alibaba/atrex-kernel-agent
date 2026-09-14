@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from orchestrator.agent_runtime.adapter import ClaudeAdapter
+from orchestrator.agent_runtime.runtime import terminal_usage_from_stream
 from orchestrator.session_capture import SessionCapture
 from orchestrator.session_usage import summarize_usage
 
@@ -48,6 +50,51 @@ def lines(*events):
 
 
 class UsageTests(unittest.TestCase):
+    def test_task_progress_counters_are_not_response_usage(self):
+        stream = lines(
+            assistant(),
+            *[
+                {"type": "system", "subtype": subtype, "usage": usage(1000, 200)}
+                for subtype in ("task_progress", "task_notification")
+            ],
+            assistant("msg-child", agent="child"),
+        )
+        events, total = ClaudeAdapter().normalize_stream(stream)
+        self.assertEqual(len([event for event in events if event.kind == "usage_delta"]), 2)
+        self.assertEqual(total.total_tokens, 38)
+        self.assertEqual(total.measurement, "partial")
+        self.assertEqual(terminal_usage_from_stream(stream).total_tokens, 38)
+        complete = stream + lines({"type": "result", "usage": usage(20, 4, 6, 8)})
+        self.assertEqual(ClaudeAdapter().normalize_stream(complete)[1].measurement, "exact")
+        self.assertEqual(terminal_usage_from_stream(complete).total_tokens, 38)
+        report = summarize_usage(
+            "claude", complete,
+            {"main": lines(assistant()), "subagents/child": lines(assistant("msg-child", agent="child"))},
+            finished=True,
+        )
+        self.assertEqual(report["response_count"], 2)
+        self.assertEqual(report["total"]["total_tokens"], 38)
+        self.assertEqual(report["total"]["measurement"], "exact")
+
+    def test_progress_without_responses_does_not_fabricate_usage(self):
+        stream = lines({"type": "system", "subtype": "task_progress", "usage": usage(1000)})
+        events, total = ClaudeAdapter().normalize_stream(stream)
+        self.assertEqual(events, ())
+        self.assertIsNone(total.total_tokens)
+        self.assertIsNone(terminal_usage_from_stream(stream).total_tokens)
+
+    def test_ignoring_non_response_usage_keeps_tool_phase_receipts(self):
+        receipt = "ATREX_TRACE_EVENT=" + json.dumps({
+            "schema": "atrex.iteration_trace.v1", "kind": "phase_marker",
+            "action": "start", "phase": "benchmark", "marker_id": "marker-1",
+        })
+        events, total = ClaudeAdapter().normalize_stream(lines({
+            "type": "user", "usage": usage(1000),
+            "message": {"content": [{"type": "tool_result", "content": receipt}]},
+        }))
+        self.assertEqual([(event.kind, event.marker_id) for event in events], [("phase_marker", "marker-1")])
+        self.assertIsNone(total.total_tokens)
+
     def test_native_last_response_usage_and_children_not_double_charged(self):
         for terminal in (usage(), usage(20, 4, 6, 8)):
             with self.subTest(terminal=terminal):

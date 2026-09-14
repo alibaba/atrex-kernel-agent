@@ -6385,8 +6385,29 @@ def _run_agent_abba(
             _emit_supervisor_measurement(workspace, previous["record_id"], reused=True)
             return 0 if previous["result"].get("correct") is True else 1
 
+        from supervisor.abba_checkpoints import AbbaBatchStore, validate_batch
+
+        checkpoints = AbbaBatchStore(
+            _supervisor_evaluations_path(workspace).parent, _historical_evidence_roots(),
+        )
+
         def run_batch(item: tuple[str, int, list[str]]) -> dict[str, Any]:
             phase, index, batch = item
+            identity = {
+                "checkpoint_contract": 1,
+                "comparison_task_digest": task_digest,
+                "measurement_repetition": phase,
+                "batch_index": index,
+                "shape_ids": batch,
+                "schedule": schedule,
+            }
+            cached = checkpoints.load(identity)
+            if cached is not None:
+                print(
+                    f"[sandbox] ABBA {phase} batch {index + 1}: reusing completed measurement",
+                    file=sys.stderr,
+                )
+                return cached
             request_path = control / f"request-{phase}-{index:04d}.json"
             result_path = control / f"result-{phase}-{index:04d}.json"
             command = list(evaluator_command)
@@ -6434,6 +6455,10 @@ def _run_agent_abba(
                     nested += ["--ssh-runtime-bind", bind]
             for item in args.env:
                 nested += ["--env", item]
+            for requirement in args.requirement or []:
+                nested += ["--requirement", requirement]
+            if args.deps_mode:
+                nested += ["--deps-mode", args.deps_mode]
             nested += [
                 "--",
                 "python3",
@@ -6464,7 +6489,10 @@ def _run_agent_abba(
                     "ABBA batch failed: "
                     + _bounded_text(completed.stderr or completed.stdout, 3000)
                 )
-            return _payload_from_stdout(completed.stdout)
+            payload = validate_batch(_payload_from_stdout(completed.stdout), schedule, batch)
+            return checkpoints.save(
+                identity, payload, stdout=completed.stdout, stderr=completed.stderr,
+            )
 
         def execute(selected_shape_ids: list[str], phase: str) -> dict[str, Any]:
             selected_batches = (
@@ -6473,19 +6501,25 @@ def _run_agent_abba(
             with ThreadPoolExecutor(
                 max_workers=1 if args.ssh else min(DEFAULT_ABBA_BATCH_WORKERS, len(selected_batches))
             ) as executor:
-                payloads = list(
+                batches = list(
                     executor.map(
                         run_batch,
                         [(phase, index, batch) for index, batch in enumerate(selected_batches)],
                     )
                 )
-            return _merge_batch_payloads(payloads, schedule, selected_shape_ids)
+            return {
+                "batches": batches,
+                "payload": _merge_batch_payloads(
+                    [batch["payload"] for batch in batches], schedule, selected_shape_ids,
+                ),
+            }
 
         try:
-            raw_repetitions = [
+            repetition_checkpoints = [
                 execute(shape_ids, f"measurement-{ordinal}")
                 for ordinal in range(1, MEASUREMENT_REPETITIONS + 1)
             ]
+            raw_repetitions = [item["payload"] for item in repetition_checkpoints]
             public_repetitions = [
                 _agent_abba_public_result(
                     payload,
@@ -6507,10 +6541,15 @@ def _run_agent_abba(
                     code="abba_comparison_unavailable", repairable=False,
                     next_action=(
                         "Do not interpret a missing comparison as a Kernel regression. "
+                        "Completed Shape batches are saved; retrying the unchanged comparison "
+                        "will reuse them and submit only missing batches. "
                         + ESCALATE_RUNTIME
                     ),
                 ))
             ) from exc
+        except BaseException:
+            _abandon_gateway_task(workspace, task_digest, task_owner)
+            raise
     try:
         baseline_kernel = _store_kernel_artifact(
             workspace, baseline_source.encode("utf-8")
@@ -6523,6 +6562,11 @@ def _run_agent_abba(
             private_result={
                 "measurement_payloads": raw_repetitions,
                 "measurement_results": public_repetitions,
+                "physical_batches": [
+                    batch
+                    for repetition in repetition_checkpoints
+                    for batch in repetition["batches"]
+                ],
                 "baseline_source": baseline_source,
                 "baseline_sha256": baseline_sha256,
             },
@@ -6545,6 +6589,9 @@ def _run_agent_abba(
                 code="gateway_record_unavailable", repairable=False, next_action=ESCALATE_RUNTIME,
             ))
         ) from exc
+    except BaseException:
+        _abandon_gateway_task(workspace, task_digest, task_owner)
+        raise
     _add_gateway_record_identity(agent_public, record)
     _emit_supervisor_measurement(workspace, record["record_id"], reused=False)
     agent_public["kernels"] = {
