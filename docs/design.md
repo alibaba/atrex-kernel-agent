@@ -230,6 +230,14 @@ before exploring it and records each decisive Experiment with a `gateway_record_
 may concern several Kernels or different GPU operations; no before/after pairing is required. The
 Supervisor validates the references against visible Gateway history, stores
 the Journal outside the Agent mount, and exposes bounded list/load tools across Episodes. The Agent
+must cite at least one actual Kernel-bound Gateway Record per Experiment, including diagnostic dead
+ends. Direction lifecycle and hypothesis assessment are independent: every closure selects explicit
+supporting Experiments and declares unresolved/supported/refuted. Supported/refuted requires a completed
+observation in every selected Experiment, not just Agent prose. Runtime validates bindings, not causal
+relevance. Late Experiments extend associations without changing selected closure support. Restarting
+an unchanged Direction resets its current assessment, while append-only events and canonical memory
+preserve prior judgments. Legacy notes stay readable but unmeasured notes cannot justify new closures.
+The Agent
 cannot edit factual bindings or terminal state directly. Its final report is accepted only when all
 in-progress Directions are closed and a selected Experiment cites a passing Evaluate record for the
 exact current `kernel.py`. Only after validation does the Supervisor commit that source and publish

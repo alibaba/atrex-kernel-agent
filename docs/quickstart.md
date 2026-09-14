@@ -606,7 +606,10 @@ Each Experiment cites the Gateway results used in its analysis:
 
 The Supervisor verifies that all cited Gateway records are visible in the current Campaign and
 stores exactly those references. They may refer to different Kernels or operation types; no
-before/after or Kernel identity fields are needed. `record-read --record-id gateway-...` returns the
+before/after or Kernel identity fields are needed. Every Experiment, including `abandon_direction`,
+needs at least one real Kernel-bound Gateway Record. Failed diagnostics may document blockers;
+Env/Wiki responses or a transport error without a saved record are not evidence.
+`record-read --record-id gateway-...` returns the
 Kernel ID; use that ID with `--view source --output-path scratch/old.py` to retrieve the source.
 IDs are placeholders here; use the actual IDs returned by Gateway calls or `record-read`. The complete
 Direction, Experiment, and report formats are in the mandatory Agent Skill
@@ -621,8 +624,19 @@ Supervisor validates before writing, leaves parent lifecycle untouched, and reje
 rewrites. Continue an unchanged unfinished Direction with its ID; propose a new one for a revised
 hypothesis. Old Journals have no inferred ancestry.
 
-`list-directions` and `load-direction` return declared ancestry alongside the current lifecycle
-state. Follow referenced Experiment IDs with `load-experiment` to retrieve Gateway Record references.
+`list-directions` and `load-direction` return declared ancestry, lifecycle `status` and an independent
+`hypothesis_status` (`unresolved`, `supported`, `refuted`). Every closure (`complete`, `abandon`,
+`block`, `defer`) explicitly selects 1–32 unique `supporting_experiment_ids` from the Direction's
+visible history and declares its assessment. Supported/refuted requires a completed Gateway
+observation in every selected Experiment; Runtime verifies bindings, not scientific truth.
+`load-direction` also returns all `associated_experiment_ids`. Late Experiments may append to closed
+Directions without changing their status or selected support. Restarting an unchanged closed Direction
+resets the assessment to unresolved and clears selected support; old events remain immutable.
+No in-progress Direction may remain at report handoff. Empty blocked/pivot reports are possible only
+when no Direction needs closing. Without any actual evidence, closure is blocked; do not fabricate it.
+Old unmeasured notes remain readable but cannot support a new closure. Missing historical
+assessments mean unresolved; old automatically associated IDs are not explicit hypothesis support.
+Follow referenced Experiment IDs with `load-experiment` to retrieve Gateway Record references.
 Relationships are Agent interpretations, not causal proof of performance gains. This feature does
 not add the main Runtime's Pool scheduler to AKA.
 

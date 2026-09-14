@@ -39,9 +39,26 @@ class AgentErrorsTest(unittest.TestCase):
         })["direction_id"]
 
     def update(self, direction_id: str, action: str) -> dict:
+        closure = {}
+        if action != "start":
+            (self.workspace / "kernel.py").write_text("def run(x): return x\n")
+            with patch.dict(os.environ, {gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(self.evidence)}):
+                record = gateway._record_episode_evaluation(
+                    self.workspace, {"passed": True}, gateway_kind="check",
+                )
+            receipt = self.service.execute({
+                "operation": "experiment_record",
+                "request": {
+                    "direction_id": direction_id, "name": "check", "hypothesis": "compiles",
+                    "change": "check the candidate", "gateway_record_ids": [record["record_id"]],
+                    "evidence": "compiled", "analysis": "performance untested",
+                    "action": "abandon_direction",
+                },
+            })
+            closure = {"hypothesis_status": "unresolved", "supporting_experiment_ids": [receipt["experiment_id"]]}
         return self.service.execute({
             "operation": "direction_update",
-            "request": {"action": action, "direction_id": direction_id, "analysis": "test"},
+            "request": {"action": action, "direction_id": direction_id, "analysis": "test", **closure},
         })
 
     def test_missing_and_extra_fields_are_separate_and_rejection_is_nonmutating(self) -> None:

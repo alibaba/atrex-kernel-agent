@@ -50,21 +50,23 @@ Save as `scratch/start.json`:
 python3 tools/sandbox.py --kind update-direction --request-file scratch/start.json
 ```
 
-Response is `{"status":"recorded","direction_id":"..."}`. Lifecycle updates accept exactly these
-three fields. At most one Direction can be `in_progress`; at most three distinct Directions can be
-started in an Episode, including inherited ones. Resuming an already-started deferred Direction in
+Response is `{"status":"recorded","direction_id":"..."}`. `start` accepts exactly these three
+fields; closure actions also require `hypothesis_status` and `supporting_experiment_ids` below.
+At most one Direction can be `in_progress`; at most three distinct Directions can be
+started in an Episode, including inherited ones. Restarting an already-started Direction in
 the same Episode does not consume another slot.
 
 | Action | Allowed prior status | New status | Extra condition |
 | --- | --- | --- | --- |
-| `start` | `proposed`, `deferred` | `in_progress` | No other active Direction; advancement limit |
-| `complete` | `in_progress` | `completed` | A supporting Experiment in this Episode |
-| `abandon` | `in_progress` | `abandoned` | A supporting Experiment in this Episode |
-| `block` | `in_progress` | `blocked` | Explain the blocker in `analysis` |
-| `defer` | `in_progress` | `deferred` | Explain why exploration is paused |
+| `start` | `proposed` or closed | `in_progress` | No other active Direction; advancement limit |
+| `complete` | `in_progress` or closed | `completed` | Explicit evidence selection and hypothesis assessment |
+| `abandon` | `in_progress` or closed | `abandoned` | Explicit evidence selection and hypothesis assessment |
+| `block` | `in_progress` or closed | `blocked` | Evidence-backed blocker; assessment can remain unresolved |
+| `defer` | `in_progress` or closed | `deferred` | Evidence-backed pause; assessment can remain unresolved |
 
-Completed, abandoned, and blocked Directions cannot be restarted; propose a derived hypothesis if
-new evidence warrants revisiting one. Only deferred Directions can resume.
+Closed means completed, abandoned, blocked, or deferred. Restarting resets the current assessment
+to unresolved and clears selected support; prior events remain immutable. Reuse the ID only for the
+same hypothesis; propose a derived Direction when the hypothesis changes.
 
 ## Measure and record an Experiment
 
@@ -101,8 +103,10 @@ Response:
 {"status":"recorded","experiment_id":"experiment_22222222222222222222222222222222"}
 ```
 
-All fields are required; textual fields must be non-empty. The Direction must be `in_progress`.
-`gateway_record_ids` is a duplicate-free list of visible Gateway IDs: Evaluate, ABBA, Profile, Dev,
+All fields are required; textual fields must be non-empty. The Direction must be in progress or closed;
+not merely proposed. Late records can attach already obtained evidence after closure, even while
+another Direction is active. This does not restart exploration or change previous closure support.
+`gateway_record_ids` is a non-empty, duplicate-free list of visible Kernel-bound Gateway IDs: Evaluate, ABBA, Profile, Dev,
 Check, and Disassemble are all valid evidence. It may span different Kernels; order does not mean
 before/after. Do not submit Kernel IDs, Job IDs, digests, or result payloads instead of these IDs.
 When asserting improvement over another measurement, cite that result too and explain the comparison.
@@ -113,9 +117,11 @@ When asserting improvement over another measurement, cite that result too and ex
 | `keep_after` | Keep the tested implementation |
 | `restore_before` | Restore an earlier implementation |
 | `adopt` | Reuse an existing implementation |
-| `abandon_direction` | Explain a dead end; may have no Gateway records if no GPU operation ran |
+| `abandon_direction` | Document an investigation or blocker using actual Gateway records; no performance claim is required |
 
-Only `abandon_direction` permits an empty record list. An Experiment action records your decision;
+No action permits an empty record list. Failed diagnostics may document an unresolved blocker;
+Env/Health/Wiki responses, unbound Dev outputs and transport errors without a saved Gateway Record
+are not Experiment evidence. An Experiment action records your decision;
 it does not copy source or update Direction lifecycle. Restore source yourself through the Kernel
 reader when needed, and call `update-direction` separately to close the Direction.
 
@@ -127,7 +133,9 @@ Save as `scratch/close.json`:
 {
   "action": "complete",
   "direction_id": "direction_11111111111111111111111111111111",
-  "analysis": "The measured candidate is ready for verification"
+  "analysis": "The measured candidate is ready for verification",
+  "hypothesis_status": "supported",
+  "supporting_experiment_ids": ["experiment_22222222222222222222222222222222"]
 }
 ```
 
@@ -136,7 +144,23 @@ python3 tools/sandbox.py --kind update-direction --request-file scratch/close.js
 ```
 
 Response is `{"status":"recorded","direction_id":"..."}`. Use `abandon`, `block`, or `defer`
-instead when that describes the outcome. No in-progress Direction may remain at terminal handoff;
+instead when that describes the outcome. All four closure actions require exactly these five fields.
+Select 1–32 unique Experiment IDs from this Direction's visible history. `hypothesis_status` means:
+
+- `unresolved`: evidence is insufficient to settle the hypothesis; use this for untested claims or infrastructure failures.
+- `supported`: the cited evidence supports your hypothesis.
+- `refuted`: the cited evidence contradicts your hypothesis.
+
+Lifecycle does not imply a verdict: completing work is not proving a hypothesis, and abandoning it
+is not refuting it. For supported/refuted, every selected Experiment must cite at least one completed
+Gateway observation. A completed correctness failure can refute a correctness claim; a failed job
+cannot settle a performance claim. Runtime verifies records and Kernel bindings, not the scientific
+truth or relevance of your interpretation. Do not use unrelated measurements to justify a claim.
+
+`associated_experiment_ids` includes all linked Experiments; `supporting_experiment_ids` is only the
+latest explicit closure selection. Late records extend associations without rewriting that selection.
+To revise a conclusion, explicitly submit another closure with its assessment and selected evidence.
+No in-progress Direction may remain at terminal handoff;
 proposed/deferred Directions may remain for later exploration.
 
 ## Candidate report
@@ -176,7 +200,7 @@ If exploration found no candidate to advance, use:
 {"status":"pivot","summary":"The explored change did not improve the incumbent; try a different direction"}
 ```
 
-At least one current-Episode Experiment is required. Omit `selected_experiment_id` and `blocker`.
+Omit `selected_experiment_id` and `blocker`. Journals may be empty if no Direction needs closing.
 Save to the same report path and call `episode-report` as above; the response is
 `{"status":"accepted","message":"Report accepted and recorded"}`.
 
@@ -189,7 +213,9 @@ If infrastructure or missing authority prevents progress:
 ```
 
 Both text fields must be non-empty; omit `selected_experiment_id`. A blocked report can be submitted
-without an Experiment if no experiment was possible; first block/defer any in-progress Direction.
+without an Experiment only if no Direction needs closing. Otherwise record actual Kernel-bound
+diagnostic evidence, then block/defer with an unresolved assessment. If no Gateway Record exists,
+closure remains blocked and normal session recovery handles the failure; never fabricate evidence.
 Use the same report command and acknowledgement as for pivot. For all statuses, malformed reports
 can be corrected and resubmitted; do not mistake a rejected report for a completed Episode.
 
@@ -211,7 +237,7 @@ Each command returns an acknowledgement, not the index itself:
 
 Read the named local file. It contains `{"directions":[...]}` or `{"experiments":[...]}` across the
 current and visible earlier Episodes, not just this Episode. A Direction index entry has
-`direction_id`, `name`, `status`, and any declared ancestry. An Experiment index entry has
+`direction_id`, `name`, `status`, `hypothesis_status`, and any declared ancestry. An Experiment index entry has
 `experiment_id`, `name`, `hypothesis`, `change`, `gateway_record_ids`, `evidence`, `analysis`, `action`.
 These exports do not update automatically; invoke list again when you need a fresh snapshot.
 
@@ -221,14 +247,17 @@ python3 tools/sandbox.py --kind load-experiment --record-id experiment_222222222
 ```
 
 Load returns the record directly as JSON, not a file or `result` wrapper. A loaded Direction includes
-the proposal, current `status`/`analysis`, timestamps, declared ancestry, and automatically linked
-`supporting_experiment_ids`. A loaded Experiment contains its submitted fields plus `experiment_id`
+the proposal, current `status`/`analysis`/`hypothesis_status`, timestamps, declared ancestry,
+all `associated_experiment_ids`, and explicitly selected `supporting_experiment_ids`.
+Old closures without an explicit assessment read as unresolved; their old automatic support is
+association only. Old unmeasured notes remain readable but cannot support new closures.
+A loaded Experiment contains its submitted fields plus `experiment_id`
 and `recorded_at`; no `sequence`. Use its `gateway_record_ids` with `record-read` for measurements
-and exact Kernel identity. Subsequent reads of a Direction include newly recorded supporting Experiments.
+and exact Kernel identity. Subsequent reads of a Direction include newly associated Experiments.
 
 ## Derived Directions
 
-Reuse the same ID for an unchanged deferred hypothesis. A proposal for a revised hypothesis may add
+Reuse the same ID for an unchanged hypothesis. A proposal for a revised hypothesis may add
 `relationship`: `retry`, `refinement`, `reimplementation`, `correction`, `port`, or `combination`, plus
 `derived_from_direction_ids` and/or `derived_from_experiment_ids` from visible history. Each list
 allows at most 32 unique IDs. Explain the derivation in `rationale`.

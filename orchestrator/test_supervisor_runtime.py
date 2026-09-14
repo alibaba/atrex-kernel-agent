@@ -290,6 +290,13 @@ class SupervisorRuntimeTest(unittest.TestCase):
                     expected_code=2,
                 )
                 self.assertTrue(rejected["repairable"])
+                from supervisor import gateway
+
+                (workspace / "kernel.py").write_text("def run(x): return x\n")
+                with patch.dict(os.environ, {gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(capability.evidence_root)}):
+                    diagnostic = gateway._record_episode_evaluation(
+                        workspace, {"passed": False, "status": "completed"}, gateway_kind="check",
+                    )
                 experiment = call(
                     "record-experiment",
                     request={
@@ -297,7 +304,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                         "name": "structural dead end",
                         "hypothesis": "fusion",
                         "change": "investigated fusion",
-                        "gateway_record_ids": [],
+                        "gateway_record_ids": [diagnostic["record_id"]],
                         "evidence": "incompatible layouts",
                         "analysis": "abandon this path",
                         "action": "abandon_direction",
@@ -309,6 +316,8 @@ class SupervisorRuntimeTest(unittest.TestCase):
                         "action": "abandon",
                         "direction_id": direction,
                         "analysis": "dead end",
+                        "hypothesis_status": "unresolved",
+                        "supporting_experiment_ids": [experiment],
                     },
                 )
                 self.assertEqual(

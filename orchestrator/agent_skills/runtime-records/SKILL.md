@@ -13,13 +13,16 @@ procedure: a framework-baseline session still uses its injected smoke-and-exit p
 
 ## Use the records while working
 
-- Before exploring a hypothesis, inspect relevant history, then propose/start a Direction or resume
-  an existing deferred one. A Direction is a research avenue, not each individual code edit.
+- Before exploring a hypothesis, inspect relevant history, then propose/start a Direction or explicitly
+  restart an unchanged closed one. A Direction is a research avenue, not each individual code edit.
 - Record each decisive experiment promptly, citing the actual `gateway_record_ids`. Record measured
   facts in `evidence` and your interpretation in `analysis`; earlier interpretations may be wrong.
 - Reuse saved measurements and exact source instead of repeating an identical completed task.
   Changing the probe or measurement question can be a different task; do not change it merely to
   evade deduplication.
+- At closure, select `supporting_experiment_ids` and declare `hypothesis_status` independently of
+  lifecycle. Every selected Experiment needs real Gateway evidence; supported/refuted needs a
+  completed observation. Untested claims remain unresolved; never fabricate evidence to finish.
 - Before `episode-report`, close all in-progress Directions and select the Experiment supporting
   the exact candidate left in `kernel.py`. An accepted report is a handoff, not final Kernel promotion.
 

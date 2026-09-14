@@ -375,6 +375,10 @@ def _memory_experience(journal: dict[str, Any]) -> dict[str, Any]:
         "experiment_count": len(raw_experiments),
         "recorded_experiment_count": len(experiments),
         "experiments": experiments,
+        **(
+            {"direction_events": journal.get("direction_events", [])}
+            if journal.get("runtime_managed") is True else {}
+        ),
     }
 
 

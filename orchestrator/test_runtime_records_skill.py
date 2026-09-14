@@ -116,7 +116,9 @@ class RuntimeRecordsSkillTest(unittest.TestCase):
             self.assertEqual(loaded[key], value)
         self.assertNotIn("sequence", loaded)
         direction = self.journal_cli("load-direction", None, "--record-id", loaded["direction_id"])
-        self.assertEqual(direction["supporting_experiment_ids"], [experiment_id])
+        self.assertEqual(direction["associated_experiment_ids"], [experiment_id])
+        self.assertEqual(direction["supporting_experiment_ids"], [])
+        self.assertEqual(direction["hypothesis_status"], "unresolved")
         self.assertEqual(direction["status"], "in_progress")
         for kind, key in (("list-directions", "directions"), ("list-experiments", "experiments")):
             path = f"scratch/{key}.json"
@@ -164,16 +166,22 @@ class RuntimeRecordsSkillTest(unittest.TestCase):
             self.assertEqual(actual, expected)
         self.assertEqual((self.workspace / "scratch/previous.py").read_bytes(), self.source)
 
-    def test_documented_pivot_requires_experiment(self) -> None:
-        with self.assertRaisesRegex(ValueError, "at least one"):
-            self.journal_cli("episode-report", example("journal.md", "Pivot report"))
+    def test_documented_pivot_after_exploration_requires_closed_direction(self) -> None:
         self.prepare_experiment()
+        with self.assertRaisesRegex(ValueError, "in progress"):
+            self.journal_cli("episode-report", example("journal.md", "Pivot report"))
         self.journal_cli("update-direction", example("journal.md", "Close the Direction"))
         self.assertEqual(
             self.journal_cli(
                 "episode-report",
                 example("journal.md", "Pivot report"),
             )["status"],
+            "accepted",
+        )
+
+    def test_documented_pivot_can_have_empty_journal_before_exploration(self) -> None:
+        self.assertEqual(
+            self.journal_cli("episode-report", example("journal.md", "Pivot report"))["status"],
             "accepted",
         )
 

@@ -4374,6 +4374,9 @@ def _record_episode_evaluation(
         "kernel_artifact_digest": kernel_artifact_digest,
         "result": result,
     }
+    if isinstance(private_result, dict) and isinstance(private_result.get("status"), str):
+        # Preserve execution completion independently of correctness/probe payloads.
+        record_value["execution_status"] = private_result["status"]
     if kernel_subjects:
         record_value["kernel_subjects"] = kernel_subjects
         record_value["kernel_subject_ids"] = kernel_subject_ids

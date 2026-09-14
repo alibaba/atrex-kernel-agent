@@ -221,6 +221,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 {
                     "gateway_kind": "profile",
                     "kernel_id": kernel_id,
+                    "kernel_artifact_digest": "sha256:" + hashlib.sha256(source).hexdigest(),
                     "result": {},
                 },
             )
@@ -261,6 +262,8 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                         "action": "complete",
                         "direction_id": direction_id,
                         "analysis": "measurement supports the hypothesis",
+                        "hypothesis_status": "supported",
+                        "supporting_experiment_ids": [experiment_id],
                     },
                 }
             )
@@ -477,6 +480,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             workspace = Path(directory)
             evidence = workspace / "evidence"
             kernel_id, evaluate_id = _record_kernel(evidence, b"def run(x): return x\n")
+            digest = "sha256:" + hashlib.sha256(b"def run(x): return x\n").hexdigest()
             profile_id = "gateway-101-0123456789ab"
             abba_id = "gateway-102-0123456789ab"
             _write_json(
@@ -484,6 +488,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 {
                     "gateway_kind": "profile",
                     "kernel_id": kernel_id,
+                    "kernel_artifact_digest": digest,
                     "result": {},
                 },
             )
@@ -492,6 +497,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 {
                     "gateway_kind": "same_allocation_abba",
                     "kernel_id": "kernel-200-aaaaaaaaaaaa",
+                    "kernel_artifact_digest": digest,
                     "kernel_subject_ids": {
                         "incumbent": kernel_id,
                         "candidate": "kernel-200-aaaaaaaaaaaa",
@@ -508,6 +514,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                     {
                         "gateway_kind": kind,
                         "kernel_id": kernel_id,
+                        "kernel_artifact_digest": digest,
                         "result": {},
                     },
                 )

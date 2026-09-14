@@ -694,12 +694,15 @@ class SupervisorRuntime:
                     ),
                     "direction_update": (
                         "Correct the request or Direction lifecycle as indicated, then resubmit "
-                        "update-direction. Use load-direction to inspect its current status."
+                        "update-direction. Use load-direction for associated_experiment_ids. "
+                        "Every closure requires explicit supporting_experiment_ids and "
+                        "hypothesis_status=unresolved|supported|refuted; lifecycle is not a verdict."
                     ),
                     "experiment_record": (
                         "Correct the indicated field or referenced state, then resubmit "
                         "record-experiment. Use record-read for Gateway IDs and load-direction "
-                        "for lifecycle state."
+                        "for lifecycle state. Cite at least one real Kernel-bound Gateway Record. "
+                        "Late evidence may attach to a closed Direction without restarting it."
                     ),
                     "episode_report": (
                         "Correct the report or indicated Journal state, then call episode-report "
