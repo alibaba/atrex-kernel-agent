@@ -46,7 +46,7 @@ they do not prove that the chosen site is semantically correct. Set `kind` to `r
 Use `allocation_bytes` and `initialize_host_buffer` from the same header to allocate and initialize
 the exact host-visible layout; the Python/Torch equivalents are in `adapter.py`. Pass the device
 pointer through the candidate's existing launch path, synchronize after the target launch, and save
-the bytes below the episode profile directory. Run `scripts/timeline.py decode` with the raw file,
+the bytes below this diagnostic attempt's `scratch/` directory. Run `scripts/timeline.py decode` with the raw file,
 manifest, event dictionary, clean source, instrumented source, workload identity, and optional
 measurement artifact. For a multi-file kernel/wrapper change, point each source argument at a small
 snapshot directory containing every changed source; directory hashes include relative names and file

@@ -1,7 +1,8 @@
 # CuTe DSL / IKeT route
 
-Use this route only for CuTe DSL. Do not substitute the CUDA header. First confirm `run-iket --help`
-works and the target is SM90, SM100, SM103, SM110, or SM120. The instrumented kernel must JIT-compile
+Use this route only for CuTe DSL. Do not substitute the CUDA header. Confirm `run-iket --help`
+inside a Gateway Dev allocation and check the injected target against IKeT's supported architectures
+(SM90, SM100, SM103, SM110, or SM120). The instrumented kernel must JIT-compile
 inside the profiled process; a cached binary compiled before `run-iket` will not acquire events.
 
 ## Choose the smallest useful API
@@ -55,25 +56,15 @@ Use fresh, attempt-owned directories. `profile-iket` captures and normalizes bef
 so native `.pftrace` does not have to cross the sandbox boundary. The wrapper refuses to overwrite an
 existing run directory:
 
-```bash
-python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
-  --run-dir scratch/timeline/attempt-N/iket-run \
-  --evidence-dir scratch/timeline/attempt-N/evidence \
-  --kernel-regex '^exact_generated_kernel_name$' \
-  --dictionary scratch/timeline/attempt-N/events.json \
-  --clean-source scratch/timeline/attempt-N/clean_kernel.py \
-  --instrumented-source scratch/timeline/attempt-N/instrumented_kernel.py \
-  --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-  python scratch/timeline/attempt-N/harness/profile_target.py
-```
-
-For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
+Submit the custom capture command as Dev. Explicitly upload the Skill, Kernel, driver, source
+snapshots, and event dictionary; sync only this diagnostic attempt's directory:
 
 ```bash
-python tools/sandbox.py --kind profile \
+python3 tools/sandbox.py --kind dev \
   --input skills/autonomous-gpu-kernel-timeline \
+  --input kernel.py --input scratch/timeline/attempt-N \
   --sync scratch/timeline/attempt-N -- \
-  python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
+  python3 skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
     --run-dir scratch/timeline/attempt-N/iket-run \
     --evidence-dir scratch/timeline/attempt-N/evidence \
     --kernel-regex '^exact_generated_kernel_name$' \
@@ -81,10 +72,11 @@ python tools/sandbox.py --kind profile \
     --clean-source scratch/timeline/attempt-N/clean_kernel.py \
     --instrumented-source scratch/timeline/attempt-N/instrumented_kernel.py \
     --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-    python scratch/timeline/attempt-N/harness/profile_target.py
+    python3 scratch/timeline/attempt-N/harness/profile_target.py
 ```
 
-Use `capture-iket` and `export-iket` separately only for local debugging. Export succeeds only when a
+Use `capture-iket` and `export-iket` separately only when debugging the capture pipeline; capture
+still runs through Dev. Export succeeds only when a
 non-empty native Perfetto trace exists, the target launch is present, all declared events are observed
 with the declared kind, locations are valid, and range timestamps are ordered. It emits the common
 deterministic Perfetto JSON gzip, summary, manifest, binary identity, native-capture index, and receipt.

@@ -6,7 +6,7 @@ creates one temporary instrumented snapshot, and uploads only the selected skill
 
 ## Attempt layout
 
-Keep one self-contained attempt below the episode profile directory:
+Keep one self-contained diagnostic attempt below `scratch/`:
 
 ```text
 scratch/timeline/attempt-N/
@@ -35,17 +35,18 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
 ATTEMPT=scratch/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
+python3 tools/sandbox.py --kind dev \
   --input skills/ppu-acu-joint-profile \
+  --input kernel.py \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
       PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
-      python "$ATTEMPT/harness/capture_ppu.py"
+      python3 "$ATTEMPT/harness/capture_ppu.py"
 ```
 
-Custom `--input` selects the sandbox's isolated dev-compatible transport. It packages the explicitly
-named skill and attempt command inputs, chooses inline or OSS transport according to payload size,
+`--kind dev` runs the custom command on the Supervisor-selected hardware. It packages the explicitly
+named Skill and diagnostic command inputs, chooses inline or OSS transport according to payload size,
 and synchronizes only the declared attempt directory. Keep raw captures below the attempt; raise
 `--max-output-file-mb` only when an expected evidence file exceeds the default bound.
 
@@ -56,15 +57,16 @@ instrumented commands before returning:
 
 ```bash
 ATTEMPT=scratch/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
+python3 tools/sandbox.py --kind dev \
   --input skills/ppu-acu-joint-profile \
+  --input kernel.py \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
       PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
-      python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
-        --baseline-command '["python","scratch/timeline/attempt-N/harness/run_a.py"]' \
-        --instrumented-command '["python","scratch/timeline/attempt-N/harness/run_b.py"]' \
+      python3 "$ATTEMPT/harness/capture_and_measure_ppu.py" \
+        --baseline-command '["python3","scratch/timeline/attempt-N/harness/run_a.py"]' \
+        --instrumented-command '["python3","scratch/timeline/attempt-N/harness/run_b.py"]' \
         --output "$ATTEMPT/evidence/fine.perturbation-a-b.json"
 ```
 

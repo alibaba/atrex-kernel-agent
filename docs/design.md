@@ -185,6 +185,11 @@ Provider counters and reconciliation status. Neither capture directory is Agent-
   optional defaults; `--no-agent-skills` disables optional Skills only. Neither option removes the
   mandatory Skills. `.claude/skills`, `.qoder/skills`, and `.agents/skills` all
   point to the same selection. Skill execution guidance preserves the current Runtime boundary.
+- `agent_skill_manifest.py` lists every installed file, including imported helper dependencies.
+  Unlisted files are excluded; missing files and symlink sources are rejected. Optional NCU uses
+  adapted diagnosis/metric/report-analysis guidance and four upstream helpers, not the upstream
+  installation instructions or mandatory harness/Profile/report workflow. See the
+  [Skill asset inventory](../orchestrator/agent_skills/README.md) for ownership and update rules.
 - `gpu-measurement` and `runtime-records` are Agent-facing Skill templates under
   `orchestrator/agent_skills/`, not host/developer Skill installations. Their snapshots appear under
   sandbox `skills/`. GPU requests and Journal/history/report examples load on demand from the

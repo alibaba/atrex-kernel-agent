@@ -41,17 +41,18 @@ If the probe-free benchmark already answers the question, do not profile. After 
 stop when its evidence answers the question. Do not collect timeline merely because ACU ran, collect
 ACU merely because timeline ran, or invoke `merge.py` merely because both artifacts exist.
 
-Keep mode-specific attempts separate, for example under `<PROFILE_DIR>/acu/attempt-N`,
-`<PROFILE_DIR>/timeline/attempt-N`, and `<PROFILE_DIR>/joint/attempt-N`. Never combine events from
+Keep mode-specific diagnostic attempts separate, for example under `scratch/acu/attempt-N`,
+`scratch/timeline/attempt-N`, and `scratch/joint/attempt-N`. Never combine events from
 different launches into one apparent execution.
 
 ## Persist only terminal-reusable evidence
 
-In a long-horizon episode, add `accepted_ppu_diagnostics` to the terminal journal outcome only for
+Include `accepted_ppu_diagnostics` in the `episode-report` request only for
 ACU, timeline, joint, comparison, or envelope conclusions that still apply to the terminal probe-free kernel. Omit an
 invalidated intermediate capture. Each row records the question and finding, the exact comparison
 identity, how it affected the optimization decision, and the conditions that require collection of
-new evidence:
+new evidence. The Runtime records the accepted entries in the terminal Journal outcome; do not edit
+the Journal or `memory/vN.json` directly. See `skills/runtime-records/SKILL.md` for report submission:
 
 ```json
 {
@@ -124,7 +125,7 @@ any timeline manifest or instrumented source. Do not default to FP8: select Tens
 they match the kernel's actual dtype, and use no Tensor metric when it is irrelevant. Treat the
 reference's verified metric list as selectable examples rather than one required bundle:
 
-Use the collection reference for the exact export commands and the single-device GPM retry.
+Use the collection reference for export commands and handling unavailable collection services.
 
 Read the compact validation and metric summaries in `profile.extract.json`, then inspect the relevant
 original rows in `profile.raw.csv` and `profile.samples.csv`; the summary never replaces those raw
@@ -141,7 +142,7 @@ cache, and clock identities. The comparison recomputes launch and PM deltas from
 artifact graphs:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/profile_report.py" compare-acu \
+python3 "$PPU_PROFILE_SKILL/scripts/profile_report.py" compare-acu \
   --incumbent incumbent.extract.json --candidate candidate.extract.json \
   --output candidate-vs-incumbent.json
 ```
@@ -153,9 +154,9 @@ at least one raw JSON benchmark artifact. Each measurement declares `kind`, `uni
 rather than trusting a copied scalar:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/profile_report.py" seal-calibration \
+python3 "$PPU_PROFILE_SKILL/scripts/profile_report.py" seal-calibration \
   --spec calibration.spec.json --output calibration.receipt.json
-python "$PPU_PROFILE_SKILL/scripts/profile_report.py" envelope \
+python3 "$PPU_PROFILE_SKILL/scripts/profile_report.py" envelope \
   --current candidate.extract.json --calibration calibration.receipt.json \
   --kind compute \
   --current-pointer '/metric_summaries/packet_0:cu__inst_executed.avg.pct_of_peak_sustained_elapsed/time_weighted_mean' \
@@ -240,7 +241,7 @@ entire allocation back. Emit manifest v5 and the event dictionary from actual la
 facts, then decode:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/timeline.py" decode \
+python3 "$PPU_PROFILE_SKILL/scripts/timeline.py" decode \
   --raw coarse.timeline.bin \
   --manifest coarse.timeline.manifest.json \
   --event-dictionary coarse.timeline.events.json \
@@ -268,21 +269,25 @@ attempt instead of pretending unsynchronized owner clocks share an axis.
 
 ### Bound probe effects when the claim needs it
 
+Run the following measurement commands inside a single Gateway Dev allocation, as in
+[remote capture](references/remote-capture.md). Unlike the file-only analysis commands, they launch
+GPU work and must not run directly on the coordinator.
+
 Preserve A (clean), B (minimal useful probes), and, only when density sensitivity matters, C (denser
 nearby probes). Each timing command must warm up, iterate, synchronize, validate the representative
 output, and emit one `__PPU_TIMELINE_SAMPLE__=...` JSON line:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
-  --baseline-command '["python","run_a.py"]' \
-  --instrumented-command '["python","run_b.py"]' \
+python3 "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
+  --baseline-command '["python3","run_a.py"]' \
+  --instrumented-command '["python3","run_b.py"]' \
   --workload-identity case-id --warmup 10 --iterations 100 \
   --max-relative-change 0.03 \
   --output fine.perturbation-a-b.json
 
-python "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
-  --baseline-command '["python","run_b.py"]' \
-  --instrumented-command '["python","run_c.py"]' \
+python3 "$PPU_PROFILE_SKILL/scripts/timeline.py" measure \
+  --baseline-command '["python3","run_b.py"]' \
+  --instrumented-command '["python3","run_c.py"]' \
   --workload-identity case-id --warmup 10 --iterations 100 \
   --max-relative-change 0.03 \
   --output fine.perturbation-b-c.json
@@ -309,7 +314,7 @@ owner is stable across captures, declare the semantic parent and components in a
 the accepted canonical captures:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/critical_path.py" \
+python3 "$PPU_PROFILE_SKILL/scripts/critical_path.py" \
   --plan critical-path.plan.json \
   --capture attempt-1/fine.timeline.canonical.json attempt-1/fine.timeline.receipt.json \
   --capture attempt-2/fine.timeline.canonical.json attempt-2/fine.timeline.receipt.json \
@@ -333,7 +338,7 @@ and duration agreement before interpreting the output (warning above 3%, rejecti
 warning evidence cannot enter reusable memory).
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/merge.py" \
+python3 "$PPU_PROFILE_SKILL/scripts/merge.py" \
   --timeline fine.timeline.perfetto.json \
   --timeline-receipt fine.timeline.receipt.json \
   --pm-csv profile.samples.csv \

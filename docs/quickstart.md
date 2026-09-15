@@ -41,6 +41,9 @@ is optional and enabled by default. `gpu-measurement` documents GPU operations t
 HTTP client. `runtime-records` documents historical result/source lookup, Journal operations, and
 Episode reports, including request/response examples and their ID linkage. Prompts only state the
 required behavior and point to these Skills. They add no execution layer or host-level Skill installation.
+Each Skill is installed from an explicit file list, not its entire repository directory. Optional
+NCU retains metric interpretation and analysis helpers without requiring a standalone harness,
+repeated profiling, or a separate report. The third-party source remains unchanged.
 Reference projects and the entire `reference/` source
 directory are hidden; Agent `tools/` contains only the self-contained `sandbox.py` HTTP client. Existing
 managed symlinks are updated. A real, unmanaged resource directory causes an explicit migration

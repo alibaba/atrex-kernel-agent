@@ -2,6 +2,10 @@
 
 ## Collection
 
+Run GPU collection commands inside a Gateway Dev allocation, not on the coordinator; follow
+[remote capture](remote-capture.md) for explicit Skill/input uploads and output sync. Use a
+diagnostic directory under `scratch/`. File-only report extraction can run on already synced files.
+
 Precompile the workload and capture exactly one target launch. Choose the smallest PM metric set
 that can answer the current question. There is no default dtype: inspect the workload, source, or
 compiled instructions before selecting a Tensor metric, and do not collect a Tensor metric for a
@@ -51,12 +55,8 @@ acu --devices <PHYSICAL_DEVICE> \
   <TARGET_COMMAND>
 ```
 
-If ACU reports a GPM permission or monitoring conflict, disable GPM only on the
-target device and retry once:
-
-```bash
-/usr/local/PPU_SDK/ppu-smi/bin/ppu-smi gpm -i <PHYSICAL_DEVICE> -s 0
-```
+If ACU reports a GPM permission or monitoring conflict, preserve the error and request help from
+the Supervisor/operator. Do not change device-wide monitoring configuration from the Agent.
 
 ## Report extraction
 
@@ -133,7 +133,7 @@ serialized as JSON `NaN` or treated as numerical evidence.
 Run the exporter after exporting the ACU raw page:
 
 ```bash
-python "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
+python3 "$PPU_PROFILE_SKILL/scripts/acu_report.py" profile.acurep \
   --raw-csv profile.raw.csv \
   --collection profile.collection.json \
   --csv profile.samples.csv \

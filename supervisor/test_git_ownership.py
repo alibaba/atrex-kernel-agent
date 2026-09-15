@@ -16,7 +16,8 @@ from long_horizon.campaign import LongHorizonCampaign
 from long_horizon.git_episode import EpisodeWorktree, git_head, git_text
 from long_horizon.main_adapter import fresh_session_command, resume_session_command
 from long_horizon.store import CampaignStore
-from orchestrator.agent_assets import REQUIRED_AGENT_SKILLS, SKILL_PATHS
+from orchestrator.agent_assets import REQUIRED_AGENT_SKILLS
+from orchestrator.agent_skill_manifest import SKILL_MANIFEST
 from orchestrator.agent_sandbox import VISIBLE_WORKSPACE, wrap_agent_command
 
 
@@ -138,9 +139,11 @@ class GitOwnershipTest(unittest.TestCase):
         (assets / "tools").mkdir(exist_ok=True)
         (assets / "tools/sandbox.py").write_text("# HTTP client fixture\n")
         for name in REQUIRED_AGENT_SKILLS:
-            skill = assets / SKILL_PATHS[name]
-            skill.mkdir(parents=True, exist_ok=True)
-            (skill / "SKILL.md").write_text(f"# {name}\nTest fixture.\n")
+            manifest = SKILL_MANIFEST[name]
+            for filename in manifest.files:
+                target = assets / manifest.imports.get(filename, f"{manifest.root}/{filename}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"# {name}\nTest fixture.\n")
         submodule = assets / "reference-projects/example"
         submodule.mkdir(parents=True, exist_ok=True)
         (submodule / ".git").write_text("gitdir: /private/metadata")

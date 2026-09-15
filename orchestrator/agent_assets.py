@@ -6,17 +6,11 @@ import hashlib
 import json
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from .agent_skill_manifest import SKILL_MANIFEST, SKILL_PATHS
 
 HTTP_CLIENT_FILES = ("sandbox.py",)
-SKILL_PATHS = {
-    "gpu-measurement": "orchestrator/agent_skills/gpu-measurement",
-    "runtime-records": "orchestrator/agent_skills/runtime-records",
-    "KernelWiki": "skills/KernelWiki",
-    "ncu-report-skill": "3rdparty/ncu-report-skill",
-    "autonomous-gpu-kernel-timeline": "skills/autonomous-gpu-kernel-timeline",
-    "ppu-acu-joint-profile": "skills/ppu-acu-joint-profile",
-}
 REQUIRED_AGENT_SKILLS = ("gpu-measurement", "runtime-records", "KernelWiki")
 DEFAULT_AGENT_SKILLS = (*REQUIRED_AGENT_SKILLS, "autonomous-gpu-kernel-timeline")
 BACKEND_SKILL_ROOTS = (".claude", ".qoder", ".agents")
@@ -26,9 +20,7 @@ Use this Skill for domain knowledge and optional diagnostics, not as a replaceme
 Episode workflow. The injected hardware, DSL, and operator contract are authoritative; examples
 are not task inputs. All GPU execution must go through `python3 tools/sandbox.py`, using typed
 operations or Dev with explicit inputs. Never run a local GPU command from an example.
-Keep temporary files in `scratch/`; record plans and analysis with Journal tools. Repository-specific
-layouts, direct commands, and mandatory standalone reports below are reference examples only.
-This contract takes precedence over conflicting Skill instructions.
+Keep temporary files in `scratch/`; record plans and analysis with Journal tools.
 
 """
 
@@ -41,6 +33,24 @@ def resolve_agent_skills(names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*REQUIRED_AGENT_SKILLS, *names)))
 
 
+def _relative_asset_path(value: str) -> PurePosixPath:
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != value or not path.parts or "\\" in value:
+        raise RuntimeError(f"Skill asset must use a normalized relative file path: {value!r}")
+    return path
+
+
+def _skill_source(repository: Path, relative: str) -> Path:
+    path = repository
+    for part in _relative_asset_path(relative).parts:
+        path = path / part
+        if path.is_symlink():
+            raise RuntimeError(f"Skill asset cannot be a symlink: {path}")
+    if not path.is_file():
+        raise RuntimeError(f"Selected Skill asset is not installed: {path}")
+    return path
+
+
 def materialize_agent_assets(workspace: Path, repository: Path, names: tuple[str, ...]) -> Path:
     """Publish a content-keyed view. Existing sessions retain their immutable view."""
     from .supervisor_runtime import supervisor_campaign_root
@@ -51,17 +61,19 @@ def materialize_agent_assets(workspace: Path, repository: Path, names: tuple[str
     }
     executable = set()
     for name in names:
-        source = repository / SKILL_PATHS[name]
-        if not (source / "SKILL.md").is_file():
-            raise RuntimeError(f"Selected Skill is not installed: {name} ({source})")
-        for path in sorted(source.rglob("*")):
-            relative = path.relative_to(source)
-            if any(part in {".git", "__pycache__", ".pytest_cache"} for part in relative.parts):
-                continue
-            if path.is_symlink():
-                raise RuntimeError(f"Skill asset cannot be a symlink: {path}")
-            if not path.is_file():
-                continue
+        manifest = SKILL_MANIFEST.get(name)
+        if manifest is None:
+            raise RuntimeError(f"Selected Skill manifest is not installed: {name}")
+        if (
+            "SKILL.md" not in manifest.files
+            or len(set(manifest.files)) != len(manifest.files)
+            or set(manifest.imports) - set(manifest.files)
+        ):
+            raise RuntimeError(f"Invalid Skill asset manifest: {name}")
+        for filename in sorted(manifest.files):
+            relative = _relative_asset_path(filename)
+            source = manifest.imports.get(filename, f"{manifest.root}/{filename}")
+            path = _skill_source(repository, source)
             content = path.read_bytes()
             if relative.as_posix() == "SKILL.md":
                 value = content.decode("utf-8")
