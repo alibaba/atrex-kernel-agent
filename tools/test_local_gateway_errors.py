@@ -87,14 +87,21 @@ class LocalGatewayErrorTests(unittest.TestCase):
         terminate.assert_called_once_with(child)
         self.assert_infrastructure(self.store.get(job_id), "scheduler_stopped")
 
-    def test_whole_job_timeout_and_setup_exception_are_infrastructure(self):
+    def test_whole_job_timeout_is_unclassified_and_setup_exception_is_infrastructure(self):
         job_id = self.claim()
         with patch.object(
             self.scheduler, "_prepare_job",
             return_value=([sys.executable, "-c", "import time; time.sleep(30)"], 0.05),
         ):
             self.scheduler._execute(job_id, "dev", {})
-        self.assert_infrastructure(self.store.get(job_id), "command_timeout")
+        job = self.store.get(job_id)
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(job["error"]["reason"], "command_timeout")
+        self.assertEqual(job["error"]["error_class"], "unknown")
+        self.assertEqual(job["error"]["details"]["failure_origin"], "unknown")
+        self.assertFalse(gateway._infrastructure_failure(job))
+        self.assertTrue(gateway._command_timeout(job))
+        self.assertFalse(gateway._cacheable_gateway_outcome(job))
         job_id = self.claim()
         with patch.object(self.scheduler, "_prepare_job", side_effect=FileNotFoundError("tool missing")):
             self.scheduler._execute(job_id, "dev", {})

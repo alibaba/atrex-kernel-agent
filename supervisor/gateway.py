@@ -88,6 +88,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import statistics
 import subprocess
 import sys
@@ -140,7 +141,11 @@ from supervisor.identifiers import (  # noqa: E402
     kernel_id_for_digest,
     validate_kernel_identity,
 )
-from supervisor.gateway_errors import LOCAL_INFRASTRUCTURE_REASONS  # noqa: E402
+from supervisor.gateway_errors import (  # noqa: E402
+    COMMAND_TIMEOUT_REASON,
+    DEFAULT_COMMAND_TIMEOUT_RETRIES,
+    LOCAL_INFRASTRUCTURE_REASONS,
+)
 from supervisor.runner_assets import (  # noqa: E402
     PROFILE_DRIVER,
     RUNNERS_ROOT,
@@ -3104,6 +3109,7 @@ def _run_direct_job(
     deadline = time.monotonic() + timeout + queue_wait_grace
     notes: list[str] = []
     retries = 0
+    timeout_retries = 0
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 1:
@@ -3149,16 +3155,18 @@ def _run_direct_job(
                     if delay:
                         time.sleep(delay)
                     continue
-                if job.get("status") in ("succeeded", "failed", "cancelled"):
+                if job.get("status") in ("succeeded", "failed", "cancelled", "canceled"):
                     if (
-                        _infrastructure_failure(job)
-                        and retries < DEFAULT_INFRASTRUCTURE_RETRIES
+                        (_infrastructure_failure(job) or _command_timeout(job))
+                        and _job_retry_available(job, retries, timeout_retries)
                         and deadline - time.monotonic() > 1
                     ):
                         retries += 1
+                        if _command_timeout(job):
+                            timeout_retries += 1
                         delay = _retry_delay(retries, deadline - time.monotonic())
                         notes.append(
-                            "[sandbox] Gateway infrastructure failure "
+                            "[sandbox] Gateway job failure "
                             f"({_infrastructure_reason(job)}); resubmitting a fresh job "
                             f"({retries}/{DEFAULT_INFRASTRUCTURE_RETRIES})"
                         )
@@ -3322,6 +3330,9 @@ def _infrastructure_failure(job: dict | None) -> bool:
     """
     if not job or job.get("status") not in {"failed", "cancelled", "canceled"}:
         return False
+    if _command_timeout(job):
+        # Also correct older local records that classified a whole-job deadline as infra.
+        return False
     if _cancelled_without_outcome(job):
         return True
     error = job.get("error")
@@ -3345,6 +3356,23 @@ def _infrastructure_failure(job: dict | None) -> bool:
     )
 
 
+def _command_timeout(job: dict | None) -> bool:
+    if not job or job.get("status") not in {"failed", "error", "cancelled", "canceled"}:
+        return False
+    error = job.get("error")
+    return bool(
+        isinstance(error, dict)
+        and error.get("reason") == COMMAND_TIMEOUT_REASON
+        and error.get("error_class") != "candidate"
+    )
+
+
+def _job_retry_available(job: dict | None, retries: int, timeout_retries: int) -> bool:
+    return retries < DEFAULT_INFRASTRUCTURE_RETRIES and (
+        not _command_timeout(job) or timeout_retries < DEFAULT_COMMAND_TIMEOUT_RETRIES
+    )
+
+
 def _infrastructure_reason(job: dict | None) -> str:
     if _cancelled_without_outcome(job):
         return "cancelled_without_outcome"
@@ -3359,7 +3387,7 @@ def _cacheable_gateway_outcome(value: dict[str, Any]) -> bool:
     status = value.get("status")
     if status in {"cancelled", "canceled", "queued", "pending", "running", "submitted"}:
         return False
-    if _infrastructure_failure(value):
+    if _infrastructure_failure(value) or _command_timeout(value):
         return False
     if status in {"failed", "error"} and not value.get("error") and not value.get("result"):
         # A measured negative verdict is evidence; an empty failure envelope is not.
@@ -3368,7 +3396,7 @@ def _cacheable_gateway_outcome(value: dict[str, Any]) -> bool:
 
 
 def _agate_transport_failure(completed: subprocess.CompletedProcess[str], job: dict | None) -> bool:
-    if _infrastructure_failure(job):
+    if _infrastructure_failure(job) or _command_timeout(job):
         return True
     if job is not None or completed.returncode == 0:
         return False
@@ -3595,6 +3623,7 @@ def _run_agate_with_cancel_retry(
     deadline = time.monotonic() + wait_budget
     stderr_parts: list[str] = []
     retries = 0
+    timeout_retries = 0
     active_agate = list(agate)
     while True:
         remaining = int(deadline - time.monotonic())
@@ -3623,7 +3652,7 @@ def _run_agate_with_cancel_retry(
                 stdout=completed.stdout,
                 stderr="\n".join(stderr_parts),
             )
-        if retries >= DEFAULT_INFRASTRUCTURE_RETRIES:
+        if not _job_retry_available(job, retries, timeout_retries):
             return subprocess.CompletedProcess(
                 args=completed.args,
                 returncode=completed.returncode or 1,
@@ -3644,9 +3673,11 @@ def _run_agate_with_cancel_retry(
             if fallback is not None:
                 active_agate = fallback
         retries += 1
+        if _command_timeout(job):
+            timeout_retries += 1
         delay = _retry_delay(retries, deadline - time.monotonic())
         note = (
-            "[sandbox] Gateway infrastructure failure "
+            "[sandbox] Gateway job failure "
             f"({_agate_failure_reason(completed, job)}); resubmitting a fresh job "
             f"({retries}/{DEFAULT_INFRASTRUCTURE_RETRIES})"
         )
@@ -4494,12 +4525,14 @@ def _historical_evidence_roots() -> list[Path]:
     if not value:
         return []
     root = Path(value)
-    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+    if not root.is_absolute() or not stat.S_ISDIR(_record_path_mode(root)):
         return []
     return [
         path
-        for path in sorted(root.glob("e*/supervisor_runtime"))
-        if path.is_dir() and not path.is_symlink()
+        for episode in sorted(root.iterdir())
+        if episode.name.startswith("e") and stat.S_ISDIR(_record_path_mode(episode))
+        for path in [episode / "supervisor_runtime"]
+        if stat.S_ISDIR(_record_path_mode(path))
     ]
 
 
@@ -4525,21 +4558,29 @@ def _store_kernel_artifact(workspace: Path, kernel_bytes: bytes) -> dict[str, st
 
 
 def _read_json_file(path: Path, *, max_bytes: int) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"Gateway record file is missing: {path.name}")
     try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise ValueError(f"Gateway record file cannot be inspected: {path.name}") from exc
-    if size > max_bytes:
+        metadata = path.lstat()
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError(f"Gateway record file is missing: {path.name}") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"Gateway record file is missing: {path.name}")
+    if metadata.st_size > max_bytes:
         raise ValueError(f"Gateway record file exceeds {max_bytes} bytes: {path.name}")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"Gateway record file is invalid: {path.name}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"Gateway record file must contain an object: {path.name}")
     return value
+
+
+def _record_path_mode(path: Path) -> int:
+    """Distinguish absent evidence from I/O failures (Path.is_* may hide both)."""
+    try:
+        return path.lstat().st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return 0
 
 
 def _kernel_identity_for_digest(workspace: Path, digest: str) -> dict[str, str]:
@@ -4562,17 +4603,16 @@ def _load_kernel_identity(workspace: Path, kernel_id: str) -> dict[str, str]:
     if KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None:
         raise ValueError("Kernel ID has an invalid format")
     for root in _kernel_artifact_roots(workspace):
-        if root.is_symlink() or not root.is_dir():
+        if not stat.S_ISDIR(_record_path_mode(root)):
             continue
         for artifact_dir in root.iterdir():
             if (
-                artifact_dir.is_symlink()
-                or not artifact_dir.is_dir()
+                not stat.S_ISDIR(_record_path_mode(artifact_dir))
                 or re.fullmatch(r"[0-9a-f]{64}", artifact_dir.name) is None
             ):
                 continue
             identity_path = artifact_dir / "identity.json"
-            if not identity_path.is_file() or identity_path.is_symlink():
+            if not stat.S_ISREG(_record_path_mode(identity_path)):
                 continue
             try:
                 identity = _read_json_file(identity_path, max_bytes=4096)
@@ -4597,7 +4637,7 @@ def _load_gateway_record(workspace: Path, record_id: str) -> dict[str, Any]:
     record_dir: Path | None = None
     for root in _gateway_record_roots(workspace):
         candidate = root / record_id
-        if candidate.is_dir() and not candidate.is_symlink():
+        if stat.S_ISDIR(_record_path_mode(candidate)):
             record_dir = candidate
             break
     if record_dir is None:
@@ -4760,7 +4800,7 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
     owner = f"{os.getpid()}-{time.time_ns()}"
     with _locked_gateway_task_root(workspace) as root:
         marker = root / f"{task_digest}.json"
-        if marker.is_file():
+        if stat.S_ISREG(_record_path_mode(marker)):
             try:
                 state = json.loads(marker.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
@@ -4768,8 +4808,13 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
             if not isinstance(state, dict):
                 raise RuntimeError("Supervisor Gateway task marker is invalid")
             record_id = state.get("gateway_record_id")
-            if state.get("status") == "completed" and isinstance(record_id, str):
+            if state.get("status") in {"completed", "validation_pending"} and isinstance(record_id, str):
                 if _gateway_record_for_task_index(workspace, task_digest, record_id) is not None:
+                    if state["status"] == "validation_pending":
+                        durable_write_json(marker, {
+                            "status": "completed", "gateway_record_id": record_id,
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        }, indent=2, ensure_ascii=False)
                     return None, record_id
                 # Preserve old evidence; a stale index cannot prevent a fresh reservation.
                 marker.unlink(missing_ok=True)
@@ -4789,9 +4834,9 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
         # flag controls the response, not visibility of completed historical tasks.
         for evidence in reversed(_historical_evidence_roots()):
             previous = evidence / "gateway-tasks" / f"{task_digest}.json"
-            if previous.is_file() and not previous.is_symlink():
+            if stat.S_ISREG(_record_path_mode(previous)):
                 state = _read_json_file(previous, max_bytes=4096)
-                if state.get("status") == "completed" and isinstance(
+                if state.get("status") in {"completed", "validation_pending"} and isinstance(
                     state.get("gateway_record_id"), str
                 ):
                     record_id = state["gateway_record_id"]
@@ -4817,7 +4862,15 @@ def _complete_gateway_task(
     owner: str,
     gateway_record_id: str,
 ) -> None:
-    if _gateway_record_for_task_index(workspace, task_digest, gateway_record_id) is None:
+    validation_error: RuntimeStateError | None = None
+    try:
+        record = _gateway_record_for_task_index(workspace, task_digest, gateway_record_id)
+    except RuntimeStateError as exc:
+        # Preserve the recorded job even if its evidence cannot currently be read.
+        # This marker is not reusable until a later request validates the evidence.
+        validation_error = exc
+        record = None
+    if record is None and validation_error is None:
         _abandon_gateway_task(workspace, task_digest, owner)
         return
     with _locked_gateway_task_root(workspace) as root:
@@ -4828,16 +4881,19 @@ def _complete_gateway_task(
             raise RuntimeError("Supervisor Gateway task reservation was lost") from exc
         if not isinstance(state, dict) or state.get("owner") != owner:
             raise RuntimeError("Supervisor Gateway task is owned by another request")
+        timestamp_key = "validation_pending_at" if validation_error else "completed_at"
         durable_write_json(
             marker,
             {
-                "status": "completed",
+                "status": "validation_pending" if validation_error else "completed",
                 "gateway_record_id": gateway_record_id,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                timestamp_key: datetime.now(timezone.utc).isoformat(),
             },
             indent=2,
             ensure_ascii=False,
         )
+    if validation_error is not None:
+        raise validation_error
 
 
 def _abandon_gateway_task(workspace: Path, task_digest: str, owner: str) -> None:
@@ -4886,7 +4942,7 @@ def _gateway_task(
     try:
         yield _GatewayTask(workspace, digest, kernel_bytes, owner, previous)
     finally:
-        # Completed markers no longer contain owner, so this only releases unfinished work.
+        # Completed/pending-validation markers have no owner; keep their recorded jobs.
         if digest is not None and owner is not None:
             _abandon_gateway_task(workspace, digest, owner)
 
@@ -5386,31 +5442,52 @@ def _agent_gateway_failure(
     error = job.get("error")
     error = error if isinstance(error, dict) else {}
     error_class = str(error.get("error_class") or "unknown")
+    unclassified = error_class == "unknown"
+    command_timeout = _command_timeout(job)
     cancelled = job.get("status") in {"cancelled", "canceled"}
     infrastructure = _infrastructure_failure(job)
     # Decide diagnostic visibility before cancellation is classified as infrastructure.
-    message = (
-        "hidden evaluator case failed"
-        if generalized and not (infrastructure or error_class == "unknown")
-        else _bounded_text(error.get("message") or "Gateway job failed")
-    )
+    if command_timeout:
+        message = "Gateway job exceeded its whole-job deadline; no authoritative Candidate verdict is available."
+    elif generalized and unclassified:
+        message = "Gateway job failed for an unclassified reason; diagnostics are retained in the private Supervisor record."
+    elif generalized and not infrastructure:
+        message = "hidden evaluator case failed"
+    else:
+        message = _bounded_text(error.get("message") or "Gateway job failed")
     if cancelled:
         message = "Gateway job was cancelled; no completed Kernel measurement is available." + (
             f" {message}" if error.get("message") else ""
         )
         infrastructure = True
-    if infrastructure:
+    if command_timeout:
+        infrastructure = False
+        error_class = "unknown"
+    elif infrastructure:
         error_class = "infra"
     unknown = error_class == "unknown"
+    reason = _bounded_text(error.get("reason") or (
+        "cancelled_without_outcome" if _cancelled_without_outcome(job) else "unknown"
+    ), 128)
+    if command_timeout:
+        reason = COMMAND_TIMEOUT_REASON
+    elif generalized and unclassified:
+        reason = "unknown"
     projected = error_response(
         message,
-        code="gateway_infrastructure" if infrastructure else "gateway_job_failed",
+        code=(
+            "gateway_command_timeout" if command_timeout else
+            "gateway_infrastructure" if infrastructure else "gateway_job_failed"
+        ),
         repairable=not (infrastructure or unknown),
         error_class=error_class,
-        reason=_bounded_text(error.get("reason") or (
-            "cancelled_without_outcome" if _cancelled_without_outcome(job) else "unknown"
-        ), 128),
+        reason=reason,
         next_action=(
+            "The limited whole-job timeout retry allowance or overall wait budget has ended. "
+            "A timeout may come from slow/stalled code or infrastructure; it is not a correctness "
+            "verdict. Inspect the preserved record and ask the operator to check the deadline "
+            "and execution environment. Do not repeat this unchanged request in a retry loop."
+            if command_timeout else
             "The Supervisor's configured retry policy has ended for this request. Do not "
             "change the Kernel to fix this infrastructure failure or start a retry loop. "
             + ESCALATE_RUNTIME
@@ -5467,15 +5544,29 @@ def _validated_cached_gateway_record(
 def _gateway_record_for_task_index(
     workspace: Path, task_digest: str, record_id: str,
 ) -> dict[str, Any] | None:
-    """A stale index is a cache miss, never permission to trust invalid evidence.
+    """Invalid evidence is a cache miss; unavailable evidence keeps its index.
 
     Use only for reservation/cache publication. Direct reads and trusted reuse
     retain strict validation; original records and historical indexes stay untouched.
     """
-    try:
-        return _validated_cached_gateway_record(workspace, task_digest, record_id)
-    except (ValueError, OSError, RuntimeError):
-        return None
+    read_error: OSError | None = None
+    for delay in (0.0, 0.05, 0.1):
+        if delay:
+            time.sleep(delay)
+        try:
+            return _validated_cached_gateway_record(workspace, task_digest, record_id)
+        except (ValueError, RuntimeError, FileNotFoundError, NotADirectoryError, IsADirectoryError):
+            return None
+        except OSError as exc:
+            read_error = exc
+    error = RuntimeStateError(
+        "The Gateway job is recorded, but its evidence could not be read after three local "
+        "validation attempts. Its task index is retained; no new Agate job was submitted "
+        "by this validation. Retry after the storage issue is resolved; do not change the Kernel.",
+        code="gateway_evidence_unavailable",
+    )
+    error.response["error"]["gateway_record_id"] = record_id
+    raise error from read_error
 
 
 def _reusable_gateway_record(
@@ -5591,14 +5682,14 @@ def _comparison_input_identity(staged: Path) -> dict[str, str]:
     return {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()}
 
 
-def _agent_dev_probe_result(result: dict[str, Any]) -> dict[str, Any]:
+def _agent_dev_probe_result(result: dict[str, Any], *, generalized: bool = False) -> dict[str, Any]:
     """Project an arbitrary Dev command without pretending it is an evaluation."""
     projected: dict[str, Any] = {}
     status = result.get("status")
     if isinstance(status, str):
         projected["status"] = _bounded_text(status, 64)
     if isinstance(result.get("error"), dict):
-        failure = _agent_gateway_failure(result, None, generalized=False)
+        failure = _agent_gateway_failure(result, None, generalized=generalized)
         projected.update({key: failure[key] for key in ("ok", "repairable", "error")})
     command = result.get("command")
     if isinstance(command, str):
@@ -5667,7 +5758,7 @@ def _gateway_record_public_result(
         failure = {**stored, "status": record.get("execution_status") or stored.get("status")}
         projected = _agent_gateway_failure(failure, None, generalized=generalized)
         if gateway_kind == "dev":
-            projected.update(_agent_dev_probe_result(stored))
+            projected.update(_agent_dev_probe_result(stored, generalized=generalized))
     elif gateway_kind == "run":
         operation = "evaluate"
         projected = (
@@ -6930,8 +7021,9 @@ def _execute_typed_gateway(
     batched = len(shape_batches) > 1
     task_digest, task_owner = task.digest, task.owner
     try:
-        process_groups = [
-            _execute_typed_processes(
+        process_groups = []
+        for ordinal in range(1, repetitions + 1):
+            processes = _execute_typed_processes(
                 args,
                 workspace,
                 kind,
@@ -6945,14 +7037,18 @@ def _execute_typed_gateway(
                     else "primary"
                 ),
             )
-            for ordinal in range(1, repetitions + 1)
-        ]
+            process_groups.append(processes)
+            # Each physical job has already exhausted its timeout retry allowance.
+            # Extra median samples cannot repair a missing verdict from this round.
+            if any(_command_timeout(_job_response(proc.stdout or "")) for proc in processes):
+                break
     except GatewayHTTPError as exc:
         if task_digest is not None and task_owner is not None:
             _abandon_gateway_task(workspace, task_digest, task_owner)
         if not (kind in DIAGNOSTIC_KINDS or strict_evaluation) and _typed_fallback_allowed(exc):
             print(
-                f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
+                f"[sandbox] gateway {kind} interface unavailable; using dev"
+                if generalized else f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
                 file=sys.stderr,
             )
             return None
@@ -6990,6 +7086,8 @@ def _execute_typed_gateway(
                     _abandon_gateway_task(workspace, task_digest, task_owner)
                 if kind in DIAGNOSTIC_KINDS or strict_evaluation:
                     raise SystemExit(
+                        f"sandbox: typed {kind} is unavailable; private diagnostics withheld."
+                        if generalized else
                         f"sandbox: typed {kind} is unavailable: {_bounded_text(detail, 2000)}"
                     )
                 print(

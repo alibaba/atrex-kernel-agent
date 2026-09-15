@@ -14,7 +14,7 @@ from unittest.mock import patch
 from supervisor import gateway
 from supervisor import test_gateway_deduplication as fixtures
 from supervisor.errors import RuntimeStateError
-from supervisor.gateway_errors import LOCAL_INFRASTRUCTURE_REASONS
+from supervisor.gateway_errors import COMMAND_TIMEOUT_REASON, LOCAL_INFRASTRUCTURE_REASONS
 from tools.local_gateway import _error
 
 REAL_RETRY = gateway._run_agate_with_cancel_retry
@@ -105,7 +105,7 @@ class LocalGatewayOutcomeTests(unittest.TestCase):
     def test_old_current_and_historical_cache_entries_are_not_reused(self):
         source = (self.workspace / "kernel.py").read_bytes()
         for historical in (False, True):
-            for reason in LOCAL_INFRASTRUCTURE_REASONS:
+            for reason in (*LOCAL_INFRASTRUCTURE_REASONS, COMMAND_TIMEOUT_REASON):
                 case = self.root / f"poison-{historical}-{reason}"
                 current, history = case / "current", case / "episodes"
                 evidence = history / "e0001" / "supervisor_runtime" if historical else current
@@ -137,7 +137,9 @@ class LocalGatewayOutcomeTests(unittest.TestCase):
                     self.assertEqual(output.getvalue(), "")
                     loaded = gateway._load_gateway_record(self.workspace, record["record_id"])
                     public = gateway._gateway_record_public_result(record["record_id"], loaded)
-                    self.assertEqual(public["result"]["error"]["code"], "gateway_infrastructure")
+                    self.assertEqual(public["result"]["error"]["code"], (
+                        "gateway_command_timeout" if reason == COMMAND_TIMEOUT_REASON else "gateway_infrastructure"
+                    ))
                     with gateway._gateway_task(self.workspace, digest, source) as task:
                         self.assertIsNotNone(task.owner)
                         self.assertIsNone(task.previous_record_id)

@@ -358,8 +358,14 @@ reservation. Corrupt cached evidence is never reused as a measurement.
 Cancellation without a result or error (including empty objects) is an infrastructure failure,
 not a Candidate verdict. If retries are exhausted, the Gateway record and exact Kernel remain
 available for audit, but no completed task-dedup entry or Supervisor measurement receipt is issued.
-Cancelled responses retain the cancellation notice plus bounded underlying error message/reason;
-hidden-case Candidate diagnostics remain masked. For failed Dev/Probe jobs with an unknown
+Cancelled responses retain the cancellation notice and, when present and permitted by the
+privacy policy, the bounded underlying message. The reason is returned separately in
+`error.reason`, even when the underlying message is absent, subject to the same privacy policy.
+Hidden-case Candidate diagnostics remain masked. Unclassified errors (including a missing
+`error_class`) in generalized requests receive a generic message and `reason="unknown"`, even
+when their metadata claims an infrastructure origin. Their raw message/reason/details remain
+in private records, not Agent responses. Historical record reads apply the same projection,
+including the secondary Dev error projection. For failed Dev/Probe jobs with an unknown
 command exit status, `exit_code` is omitted rather than returning `null` or substituting the
 Agate CLI's exit code. These rules apply to immediate responses and historical record reads.
 Cancelled jobs with partial output are not completed measurements either. Cache publication and
@@ -368,14 +374,41 @@ cancelled or infrastructure-failed record are ignored on the next request, inclu
 Episode history; the current task can be reserved and submitted afresh without deleting old records.
 Real completed negative correctness/compiler results remain eligible for deduplication.
 
-The same cache-miss handling applies when a completed marker points to evidence that raises
-`ValueError`, `OSError`, or `RuntimeError` during validation: unsupported old IDs, missing files,
-and task/Kernel identity mismatches cannot permanently block re-reservation. Under the task lock,
+`command_timeout` means the whole job exceeded its deadline, not that the evaluator established
+a Candidate timeout. The cause can be infrastructure or slow/stalled submitted code. The local
+scheduler therefore emits an unclassified error; older `local_gateway`/`infra` records with this
+reason receive the same non-verdict treatment on read. They are never completed task-dedup
+facts or Supervisor measurement receipts. Agents receive `gateway_command_timeout`, an explicit
+non-verdict explanation, and the preserved Record ID. An explicit `error_class="candidate"`
+verdict is not reclassified merely because its reason has the same spelling.
+
+Both HTTP and Agate CLI transports allow at most **one extra submission per physical job** for
+whole-job timeouts (`DEFAULT_COMMAND_TIMEOUT_RETRIES=1`), within the existing overall deadline
+and total infrastructure retry cap. Intervening infrastructure failures do not reset the timeout
+counter. Confirmed infrastructure failures retain their five-retry allowance; retry backoff stays
+unchanged. If a typed measurement round ends with a whole-job timeout, remaining median-sample
+rounds are not launched. Already running Shape batches may finish, but no timeout outcome is
+mistaken for a measurement or silently reused as a permanent Candidate failure.
+
+The same cache-miss handling applies when a completed marker points to invalid or missing
+evidence: unsupported old IDs, missing files, and task/Kernel identity mismatches cannot
+permanently block re-reservation. Under the task lock,
 the stale current index is removed, then a fresh reservation or a valid historical record is selected;
 invalid historical indexes are skipped without modifying the archive. Cache publication failures
 of this kind release only the matching owner's reservation. Direct record reads and trusted reuse
 remain strict; malformed reservation metadata, index write failures, and owner conflicts are not
 silently converted into cache misses.
+
+Other evidence I/O failures are not cache misses. Validation retries the local read three times
+(with 50 ms and 100 ms delays), without resubmitting an Agate job. If reads remain unavailable
+during completion, the owner is checked under the task lock and a `validation_pending` index
+with the recorded Gateway ID is saved instead of abandoning the reservation. Cleanup preserves
+this index; the caller receives `gateway_evidence_unavailable` and the Record ID. Subsequent
+requests revalidate pending/current/historical indexes before either rejecting an Agent duplicate
+or allowing trusted reuse. A successfully validated current pending index becomes completed;
+historical indexes remain unchanged. Continuing I/O failures preserve the index and block new
+submissions for that task, while confirmed missing or invalid evidence still permits re-reservation.
+Completion read retries stay outside the task lock so unrelated tasks are not stalled.
 
 Each completed physical ABBA Shape batch is also checkpointed immediately under the private
 `abba-batches/` store. Its identity combines the exact comparison task, requested schedule, Shape

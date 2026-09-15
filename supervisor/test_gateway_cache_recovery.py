@@ -139,7 +139,7 @@ class GatewayCacheRecoveryTest(unittest.TestCase):
         self.damage(record, marker, "legacy_gateway_id")
         source = (self.workspace / "kernel.py").read_bytes()
         with gateway._gateway_task(self.workspace, digest, source) as task:
-            with patch.object(gateway, "_validated_cached_gateway_record", side_effect=OSError("unreadable record")):
+            with patch.object(gateway, "_validated_cached_gateway_record", side_effect=ValueError("invalid record")):
                 published = task.record({"passed": True}, gateway_kind="check")
             self.assertFalse(marker.exists())
         # The new immutable record still exists for audit; no invalid fact was cached.

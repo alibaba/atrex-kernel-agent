@@ -65,7 +65,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from supervisor.gateway_errors import LOCAL_INFRASTRUCTURE_REASONS  # noqa: E402
+from supervisor.gateway_errors import COMMAND_TIMEOUT_REASON, LOCAL_INFRASTRUCTURE_REASONS  # noqa: E402
 
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
@@ -97,8 +97,13 @@ def _error(reason: str, message: str, trace_id: str | None = None, **details: An
     infrastructure = reason in LOCAL_INFRASTRUCTURE_REASONS
     if infrastructure:
         details = {**details, "failure_origin": "infrastructure"}
+    elif reason == COMMAND_TIMEOUT_REASON:
+        details = {**details, "failure_origin": "unknown"}
     return {
-        "error_class": "infra" if infrastructure else "local_gateway",
+        "error_class": (
+            "infra" if infrastructure else
+            "unknown" if reason == COMMAND_TIMEOUT_REASON else "local_gateway"
+        ),
         "reason": reason,
         "message": message,
         "details": details,
