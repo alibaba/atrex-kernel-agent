@@ -1,7 +1,7 @@
 """Live Supervisor-owned conversation/usage copies, independent of CLI Home.
 
-Native files are data, not Runtime session envelopes. There is deliberately no
-small trace-file count limit: a session can contain arbitrarily many subagents.
+Native files are data, not Runtime session envelopes. High resource ceilings
+bound capture, not Agent execution: exceeding them makes evidence partial.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .agent_workspace import _regular_bytes
+from .session_tail import CaptureBudget, CaptureLimits, TranscriptTail
 from .session_transcript import (
     encode_records,
     initial_records,
@@ -24,7 +24,7 @@ from .session_transcript import (
     record_provider_line,
     render_conversation,
 )
-from .session_usage import summarize_usage
+from .session_usage import UsageAccumulator
 
 _LAST_CAPTURE: ContextVar[tuple[str, dict] | None] = ContextVar("aka_session_capture", default=None)
 
@@ -77,6 +77,7 @@ class SessionCapture:
         provider_home: Path | None,
         context: dict[str, str],
         native_environment: dict[str, str] | None = None,
+        limits: CaptureLimits | None = None,
     ) -> None:
         self.root = root.resolve() / ("run-" + uuid.uuid4().hex)
         self.root.mkdir(parents=True, mode=0o700)
@@ -97,20 +98,33 @@ class SessionCapture:
         self._readers: list[threading.Thread] = []
         self._monitor: threading.Thread | None = None
         self._chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        self._pipe_bytes = {"stdout": 0, "stderr": 0}
+        self._stdout_cursor = 0
         self.errors: list[str] = []
-        self.previous: dict[str, bytes] = {}
-        self._offsets: dict[str, int] = {}
+        self._budget = CaptureBudget(limits or CaptureLimits(), self._capture_error)
+        self._usage = UsageAccumulator(backend)
+        self._tails: dict[str, TranscriptTail] = {}
+        self._initial_sizes: dict[str, int] = {}
         self._host_transcripts = None
         if self.home is None and native_environment is not None:
             from .session_native import HostSessionTranscripts
 
             try:
-                self._host_transcripts = HostSessionTranscripts(backend, native_environment, command)
+                self._host_transcripts = HostSessionTranscripts(
+                    backend, native_environment, command,
+                    max_files=self._budget.limits.files,
+                    on_limit=lambda: self._budget.warning("native_files_exceeded"),
+                )
             except (OSError, ValueError) as error:
                 self._capture_error("native_capture_setup", error)
-        self.previous.update(self._native_snapshot())
-        self._offsets.update({path: len(text) for path, text in self.previous.items()})
-        self.native: dict[str, bytes] = {}
+        for name, (path, previous_size) in self._native_paths().items():
+            try:
+                size = previous_size if self._host_transcripts else path.stat().st_size
+                self._initial_sizes[name] = size
+                self._tail(name, path, size)
+            except (OSError, ValueError) as error:
+                self._capture_error("native_capture_setup", error)
+        self.native: dict[str, bytearray] = {}
         self._sequence = 0
         self.finished = False
         initial = initial_records(backend=backend, session_id=self.session_id, prompt=self.prompt)
@@ -119,15 +133,10 @@ class SessionCapture:
         self._sequence = len(initial)
         self._write_usage(False)
 
-    def _native_snapshot(self) -> dict[str, bytes]:
+    def _native_paths(self) -> dict[str, tuple[Path, int]]:
         if self._host_transcripts is not None:
             try:
-                snapshot, previous = self._host_transcripts.snapshot("".join(self._chunks["stdout"]))
-                for path, payload in previous.items():
-                    if path not in self.previous:
-                        self.previous[path] = payload
-                        self._offsets[path] = len(payload)
-                return snapshot
+                return self._host_transcripts.selected()
             except (OSError, ValueError) as error:
                 self._capture_error("native_capture", error)
                 return {}
@@ -144,18 +153,49 @@ class SessionCapture:
             ".pi/agent/sessions/**/*.jsonl",
         )
         result = {}
+        count = 0
         for pattern in patterns:
             for path in self.home.glob(pattern):
+                count += 1
+                if count > self._budget.limits.files:
+                    self._budget.warning("native_files_exceeded")
+                    return result
                 relative = "provider/native/" + path.relative_to(self.home).as_posix()
-                try:
-                    payload = _regular_bytes(path)
-                    if payload is not None:
-                        result[relative] = payload
-                except (OSError, ValueError) as error:
-                    warning = f"native_capture:{relative}:{type(error).__name__}"
-                    if warning not in self.errors:
-                        self.errors.append(warning)
+                result[relative] = (path, self._initial_sizes.get(relative, 0))
         return result
+
+    def _tail(self, name: str, path: Path, previous_size: int) -> TranscriptTail | None:
+        if name not in self._tails:
+            if len(self._tails) >= self._budget.limits.files:
+                self._budget.warning("native_files_exceeded")
+                return None
+            tail = self._tails[name] = TranscriptTail()
+            # Resume history is parsed once for IDs/counters, never kept in RAM.
+            for line in tail.read(path, self._budget, through=previous_size, final=True):
+                self._feed_usage(name, line.decode("utf-8", errors="replace"), previous=True)
+        return self._tails[name]
+
+    def _feed_usage(self, path: str, text: str, *, previous: bool = False) -> None:
+        try:
+            self._usage.feed(path, text, previous=previous)
+        except Exception as error:
+            # Provider/native JSON is untrusted data. A malformed counter cannot
+            # unwind a pipe reader or stop the other transcripts being captured.
+            self._capture_error("usage_capture", error)
+
+    def _sync_stdout_usage(self) -> None:
+        while self._stdout_cursor < len(self._chunks["stdout"]):
+            text = self._chunks["stdout"][self._stdout_cursor]
+            self._stdout_cursor += 1
+            self._feed_usage("provider/stdout.stream-json", text)
+            if self.backend == "codex":
+                from .agent_runtime.codex_ledger import codex_thread_id_from_stream
+
+                identity = codex_thread_id_from_stream(text)
+                if identity:
+                    self.session_id = identity
+                    if self._host_transcripts:
+                        self._host_transcripts.session_id = identity
 
     def _append(self, path: str, line: str) -> None:
         row = provider_line_record(self._sequence, path=path, line=line.rstrip("\n"))
@@ -165,45 +205,36 @@ class SessionCapture:
 
     def sync_native(self, *, final: bool = False) -> None:
         with self._lock:
-            for path, payload in self._native_snapshot().items():
-                offset = self._offsets.get(path, 0)
-                if len(payload) < offset:
-                    warning = f"native_transcript_truncated:{path}"
-                    if warning not in self.errors:
-                        self.errors.append(warning)
-                    continue
-                end = len(payload) if final else payload.rfind(b"\n") + 1
-                if end <= offset:
-                    continue
-                addition = payload[offset:end]
-                self._offsets[path] = end
-                self.native[path] = self.native.get(path, b"") + addition
-                destination = self.root / path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with destination.open("ab") as output:
-                    output.write(addition)
-                for line in addition.decode("utf-8", errors="replace").splitlines():
-                    if record_provider_line(line):
-                        self._append(path, line)
+            self._sync_stdout_usage()
+            for name, (path, previous_size) in self._native_paths().items():
+                try:
+                    tail = self._tail(name, path, previous_size)
+                    if tail is None:
+                        continue
+                    for addition in tail.read(path, self._budget, final=final):
+                        text = addition.decode("utf-8", errors="replace")
+                        self._feed_usage(name, text)
+                        self.native.setdefault(name, bytearray()).extend(addition)
+                        destination = self.root / name
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with destination.open("ab") as output:
+                            output.write(addition)
+                        if record_provider_line(text):
+                            self._append(name, text)
+                except (OSError, ValueError) as error:
+                    self._capture_error("native_capture", error)
             self._write_usage(False)
 
     def _write_usage(self, finished: bool) -> dict:
-        report = summarize_usage(
-            self.backend,
-            "".join(self._chunks["stdout"]),
-            {path: value.decode("utf-8", errors="replace") for path, value in self.native.items()},
-            previous={
-                path: value.decode("utf-8", errors="replace")
-                for path, value in self.previous.items()
-            },
-            finished=finished and not self.errors,
-        )
+        self._sync_stdout_usage()
+        report = self._usage.report(finished=finished and not self.errors)
         report.update(
             session_id=self.session_id,
             started_at=self.started_at,
             state="finished" if finished else "running",
             context=self.context,
             capture_errors=list(self.errors),
+            capture_complete=bool(finished and not self.errors),
         )
         _atomic(
             self.root / "token-usage.json", json.dumps(report, ensure_ascii=False, indent=2) + "\n"
@@ -213,7 +244,7 @@ class SessionCapture:
     def _capture_error(self, label: str, error: Exception) -> None:
         warning = f"{label}:{type(error).__name__}:{error}"
         with self._lock:
-            if warning not in self.errors:
+            if warning not in self.errors and len(self.errors) < 100:
                 self.errors.append(warning)
 
     def _read_pipe(self, name: str, pipe) -> None:
@@ -239,9 +270,26 @@ class SessionCapture:
                 self._capture_error(f"{name}_capture_open", error)
             # Drain to EOF even if *all* persistence sinks have failed. The CLI
             # owns its lifetime; a full disk must not inject EPIPE/SIGPIPE into it.
-            for line in iter(pipe.readline, ""):
+            dropping_line = False
+            for line in iter(lambda: pipe.readline(self._budget.limits.line_bytes + 1), ""):
                 with self._lock:
-                    # Keep the adapter's original, unfiltered stream in memory.
+                    if dropping_line:
+                        dropping_line = not line.endswith("\n")
+                        continue
+                    size = len(line.encode("utf-8", errors="replace"))
+                    if size > self._budget.limits.line_bytes:
+                        dropping_line = not line.endswith("\n")
+                        self._budget.warning(f"{name}_line_bytes_exceeded")
+                        continue
+                    if not self._budget.retain(size, file_used=self._pipe_bytes[name]) or not self._budget.record():
+                        # Preserve small terminal counters even when the text
+                        # archive is full; the final usage still remains partial.
+                        if name == "stdout":
+                            self._sync_stdout_usage()
+                            self._feed_usage(path, line)
+                        continue
+                    self._pipe_bytes[name] += size
+                    # Keep the adapter's stream only within the capture budget.
                     self._chunks[name].append(line)
                     try:
                         if name == "stdout" and not record_provider_line(line):
@@ -330,7 +378,7 @@ class SessionCapture:
                         if path.endswith(f"/{self.session_id}.jsonl")
                         else "provider/claude-subagents/" + path.split(".claude/projects/", 1)[1]
                     )
-                files.append((display, value))
+                files.append((display, bytes(value)))
             conversation = render_conversation(
                 backend=self.backend,
                 session_id=self.session_id,
@@ -345,6 +393,7 @@ class SessionCapture:
             # stderr can contain launch/auth/failure diagnostics absent from stdout.
             rows = [json.loads(line) for line in conversation.splitlines()]
             rows[0].update(started_at=self.started_at, context=self.context)
+            rows[-1].update(capture_complete=not self.errors, capture_errors=list(self.errors))
             for line in "".join(self._chunks["stderr"]).splitlines():
                 rows.insert(-1, provider_line_record(0, path="provider/stderr.log", line=line))
             for index, row in enumerate(rows):

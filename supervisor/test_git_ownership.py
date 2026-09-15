@@ -162,7 +162,9 @@ class GitOwnershipTest(unittest.TestCase):
 
     def test_bwrap_omits_worktree_and_reference_git_metadata(self) -> None:
         worktree = self.episode()
-        command, environment = self.sandbox(worktree)
+        launch = self.sandbox(worktree)
+        self.addCleanup(launch.close)
+        command, environment = launch.command, launch.environment
         mounts = {
             command[i + 2]: (arg, Path(command[i + 1]))
             for i, arg in enumerate(command)

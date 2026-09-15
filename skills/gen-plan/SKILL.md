@@ -9,6 +9,10 @@ This repository-native skill is adapted from the `gen-plan` flow in PolyArch Hum
 episode draft into a complete implementation plan without modifying source code or starting the
 implementation.
 
+This is a repository-side utility, not an installed Campaign Agent Skill. Simplified Campaign
+Agents use the Direction/Experiment Journal instead; these scripts and templates are not mounted
+into their workspaces. The helper scripts remain available to Supervisor-side reviewer code.
+
 ## Arguments
 
 - `--input <path>`: required draft document.
@@ -38,7 +42,7 @@ Execute these phases sequentially.
 
 ### 1. Validate input and output
 
-From the campaign workspace, run:
+From the repository checkout, run:
 
 ```bash
 bash skills/gen-plan/scripts/validate-gen-plan-io.sh \
@@ -81,11 +85,10 @@ answers materially change scope, correctness, or acceptance.
 
 ### 4. Obtain configured independent reviews
 
-The campaign independently configures Codex and Qoder for fast and full episodes. It probes a
-reviewer only when that reviewer is first enabled for the current episode mode, then caches the
-availability decision in private runtime state. A reviewer disabled by configuration or by its
-availability probe must not be retried; retain the helper's `disabled` status and recorded reason.
-Campaign restarts reuse cached availability decisions.
+The calling Supervisor supplies reviewer enablement and availability through the
+`ATREX_PLAN_REVIEW_CODEX_*` and `ATREX_PLAN_REVIEW_QODER_*` environment settings.
+A reviewer disabled by that configuration or its availability probe must not be retried;
+retain the helper's `disabled` status and recorded reason.
 
 After completing the initial analysis, freeze one evidence packet and use the bundled review helper
 before finalizing the plan direction. Give every enabled reviewer the candidate proposal, original

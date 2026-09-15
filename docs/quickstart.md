@@ -464,38 +464,34 @@ it advances campaign state, including failed, pivoted, blocked, and interrupted 
 Within a running Campaign Agent Session, use the scoped HTTP facade for validation and profiling:
 
 ```bash
-python3 tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync
-python3 tools/sandbox.py --kind profile --hardware REMOTE_GPU --profile-source
-python tools/sandbox.py --kind check --no-sync
-python tools/sandbox.py --kind check --sanitize memcheck --no-sync
-python tools/sandbox.py --kind profile --requirement 'package==1' \
+python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind profile --profile-source
+python3 tools/sandbox.py --kind check --no-sync
+python3 tools/sandbox.py --kind check --sanitize memcheck --no-sync
+python3 tools/sandbox.py --kind profile --requirement 'package==1' \
   --deps-mode freeze_installed --no-sync
-python tools/sandbox.py --kind check --requirement 'package==1' \
+python3 tools/sandbox.py --kind check --requirement 'package==1' \
   --deps-mode no_deps --no-sync
-python tools/sandbox.py --kind disassemble --format isa --no-sync
-python tools/sandbox.py --kind env --env-gpu REMOTE_GPU --env-capabilities
-python tools/sandbox.py --kind profile --profile-shape-id 0 \
+python3 tools/sandbox.py --kind disassemble --format isa --no-sync
+python3 tools/sandbox.py --kind env --env-gpu REMOTE_GPU --env-capabilities
+python3 tools/sandbox.py --kind profile --profile-shape-id 0 \
   --kernel-name candidate_kernel --profile-source \
   --launch-skip 1 --launch-count 5 --no-sync
-python tools/sandbox.py --kind run --mode correctness_only --no-sync
-python tools/sandbox.py --kind run \
+python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
+python3 tools/sandbox.py --kind run \
   --input-path scratch/custom-input.py \
   --shapes-path scratch/custom-shapes.json --no-sync
-python tools/sandbox.py --kind run --mode full \
+python3 tools/sandbox.py --kind run --mode full \
   --baseline-path scratch/baseline.py --comparison-repeats 2 --no-sync
-python tools/sandbox.py --kind record-read \
+python3 tools/sandbox.py --kind record-read \
   --record-id gateway-<uuid>
-python tools/sandbox.py --kind record-read \
+python3 tools/sandbox.py --kind record-read \
   --record-id kernel-<uuid> \
   --view gateway-records
-python tools/sandbox.py --kind record-read \
+python3 tools/sandbox.py --kind record-read \
   --record-id kernel-<uuid> \
   --view source \
   --output-path scratch/restored-kernel.py
-python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
-  --ssh-gpu 0 \
-  --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
-  --kind run --no-sync
 ```
 
 Only code and evaluator/profile inputs cross the remote GPU boundary. Agents edit source locally;

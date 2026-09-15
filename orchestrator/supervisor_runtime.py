@@ -39,6 +39,7 @@ from supervisor.errors import (
 from .agent_assets import DEFAULT_AGENT_SKILLS, resolve_agent_skills
 from .agent_workspace import AgentWorkspace
 from .constants import ATREX_BENCH_RUNTIME_ENV
+from .sandbox_launch import SandboxLaunch
 
 if TYPE_CHECKING:
     from .session_capture import SessionCapture
@@ -153,9 +154,23 @@ class RuntimeSessionLease:
 
     runtime: SupervisorRuntime
     token: str
-    command: tuple[str, ...]
-    environment: dict[str, str]
+    launch: SandboxLaunch
     capture: SessionCapture
+
+    @property
+    def command(self) -> tuple[str, ...]:
+        return tuple(self.launch.command)
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return self.launch.environment
+
+    @property
+    def pass_fds(self) -> tuple[int, ...]:
+        return self.launch.pass_fds
+
+    def close_launch_fds(self) -> None:
+        self.launch.close()
 
     def close(self) -> None:
         self.runtime.revoke(self.token)
@@ -494,7 +509,12 @@ class SupervisorRuntime:
             self._environment.pop(key, None)
         self._environment.pop(WIKI_PROFILE_ROOT_ENV, None)
         self._lock = threading.RLock()
+        # The global lock protects maps only. Slow Journal/Git/publication work
+        # is serialized per private workspace, including tokens sharing a scope.
+        self._journal_locks: dict[Path, threading.RLock] = {}
+        self._audit_locks: dict[Path, threading.RLock] = {}
         self._capabilities: dict[str, RuntimeCapability] = {}
+        self._launches: dict[str, SandboxLaunch] = {}
         self._workspace_views: dict[str, AgentWorkspace] = {}
         self._server: _RuntimeHttpServer | None = None
         self._thread: threading.Thread | None = None
@@ -536,6 +556,9 @@ class SupervisorRuntime:
             self._thread = None
         with self._lock:
             self._capabilities.clear()
+            for launch in self._launches.values():
+                launch.close()
+            self._launches.clear()
         self._temporary.cleanup()
 
     def __enter__(self) -> SupervisorRuntime:
@@ -552,10 +575,20 @@ class SupervisorRuntime:
 
     def revoke(self, token: str) -> None:
         with self._lock:
-            self._capabilities.pop(token, None)
+            capability = self._capabilities.pop(token, None)
+            launch = self._launches.pop(token, None)
             view = self._workspace_views.pop(token, None)
-            if view is not None:
+        if launch is not None:
+            launch.close()
+        if view is not None and capability is not None:
+            with self._scope_lock(capability):
                 view.publish()
+
+    def _scope_lock(self, capability: RuntimeCapability, *, audit: bool = False):
+        key = capability.evidence_root.resolve()
+        with self._lock:
+            locks = self._audit_locks if audit else self._journal_locks
+            return locks.setdefault(key, threading.RLock())
 
     def prepare_session(
         self,
@@ -647,7 +680,7 @@ class SupervisorRuntime:
         exact_environment[RUNTIME_TOKEN_ENV] = token
         exact_environment["ATREX_WORKSPACE"] = str(workspace)
         try:
-            wrapped, mapped_environment = wrap_agent_command(
+            launch = wrap_agent_command(
                 command,
                 workspace=workspace,
                 environment=exact_environment,
@@ -662,6 +695,8 @@ class SupervisorRuntime:
                 provider_home=provider_home,
                 read_only_paths=view.read_only_paths if view is not None else None,
             )
+            with self._lock:
+                self._launches[token] = launch
             capture = SessionCapture(
                 scope_root / "sessions", backend=backend, command=command,
                 provider_home=provider_home,
@@ -672,7 +707,7 @@ class SupervisorRuntime:
         except BaseException:
             self.revoke(token)
             raise
-        return RuntimeSessionLease(self, token, tuple(wrapped), mapped_environment, capture)
+        return RuntimeSessionLease(self, token, launch, capture)
 
     def execute_journal(
         self,
@@ -688,10 +723,15 @@ class SupervisorRuntime:
             evidence_root=capability.evidence_root,
             git_workspace=capability.worktree,
         )
-        with self._lock:
+        with self._scope_lock(capability):
             try:
+                # A request may have queued behind another mutation before its
+                # lease was revoked. Do not apply that stale queued mutation.
+                if self.authorize(capability.token) != capability:
+                    raise RuntimeStateError("Session capability has been revoked.", code="invalid_capability")
                 if request.get("operation") == "episode_report":
-                    view = self._workspace_views.get(capability.token)
+                    with self._lock:
+                        view = self._workspace_views.get(capability.token)
                     if view is not None:
                         view.publish()
                 result = service.execute(request)
@@ -1061,13 +1101,13 @@ class SupervisorRuntime:
             "stderr": process.stderr or "",
         }
         temporary = root / f".{record_id}.tmp"
-        with self._lock:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n",
-                encoding="utf-8",
-            )
-            temporary.chmod(0o600)
-            os.replace(temporary, path)
+        # UUID-named response files do not share mutable state.
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
         return record_id
 
     def _audit(
@@ -1091,7 +1131,7 @@ class SupervisorRuntime:
                 json.dumps(argv, separators=(",", ":"), ensure_ascii=False).encode()
             ).hexdigest(),
         }
-        with self._lock, path.open("a", encoding="utf-8") as stream:
+        with self._scope_lock(capability, audit=True), path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 _ACTIVE_LOCK = threading.RLock()

@@ -190,7 +190,8 @@ class CaptureFailureTests(unittest.TestCase):
     def test_process_guard_preserves_outputs_even_if_final_capture_cannot_be_written(self):
         capture = self.capture()
         command, expected_out, expected_err = self.command(7)
-        lease = SimpleNamespace(command=command, environment=dict(os.environ), capture=capture, close=Mock())
+        lease = SimpleNamespace(command=command, environment=dict(os.environ), capture=capture,
+                                pass_fds=(), close_launch_fds=Mock(), close=Mock())
         runtime = Mock()
         runtime.prepare_session.return_value = lease
 

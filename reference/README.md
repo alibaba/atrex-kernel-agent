@@ -1,8 +1,8 @@
 # Campaign Workspace Reference
 
-This file describes the runtime contract linked into workspaces by
-`orchestrator/optimize.py`. It is guidance for Agent sessions, not a standalone entry point or
-workspace template.
+This is a Supervisor-side reference for the Campaign workspace contract. The `reference/`
+directory is not mounted into Agent workspaces. `orchestrator/campaign.py` generates each
+Agent's read-only workspace `README.md`; this file is not linked or copied there.
 
 ## Target
 

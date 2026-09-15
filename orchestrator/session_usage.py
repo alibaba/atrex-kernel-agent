@@ -99,82 +99,83 @@ def _upper_bound(left: TokenUsage, right: TokenUsage) -> TokenUsage:
     return TokenUsage(**values, total_tokens=total, measurement="partial")
 
 
-def summarize_usage(
-    backend: str,
-    stdout: str,
-    native: dict[str, str],
-    *,
-    previous: dict[str, str] | None = None,
-    finished: bool = False,
-) -> dict:
-    """Attribute unique responses; previous native content is excluded on resume."""
-    previous = previous or {}
-    old_ids = set()
-    for text in previous.values():
-        for event in json_events(text):
-            message = event.get("message", {})
-            if isinstance(message, dict) and message.get("id"):
-                old_ids.add(message["id"])
-    responses: dict[str, dict] = {}
-    missing = set()
-    terminal = TokenUsage.unavailable()
-    native_seen = False
-    codex_totals: dict[str, TokenUsage] = {}
-    prior_codex: dict[str, TokenUsage] = {}
-    for path, text in previous.items():
-        for event in json_events(text):
-            body = event.get("payload", {})
-            if isinstance(body, dict) and body.get("type") == "token_count":
-                info = body.get("info") or {}
-                prior_codex[path] = _codex_usage(info.get("total_token_usage"))
+class UsageAccumulator:
+    """Fold newly captured records once; retain counters, never transcript text."""
 
-    # Stream is provisional; the last native counters supersede it by message ID.
-    for path, text in [("provider/stdout.stream-json", stdout), *sorted(native.items())]:
+    def __init__(self, backend: str, *, max_entries: int = 100_000):
+        self.backend = backend
+        self.max_entries = max_entries
+        self.old_ids: set[str] = set()
+        self.responses: dict[str, dict] = {}
+        self.missing: set[str] = set()
+        self.terminal = TokenUsage.unavailable()
+        self.native_seen = False
+        self.codex_totals: dict[str, TokenUsage] = {}
+        self.prior_codex: dict[str, TokenUsage] = {}
+        self.indices: dict[str, int] = {}
+        self.credit_event = ""
+
+    def feed(self, path: str, text: str, *, previous: bool = False) -> None:
         is_native = path != "provider/stdout.stream-json"
-        if is_native:
-            for line in text.splitlines():
-                try:
-                    json.loads(line)
-                except ValueError:
-                    missing.add(path + ":malformed-json")
-        for index, event in enumerate(json_events(text)):
+        for line in text.splitlines():
+            # A runaway stream cannot make the counter index grow indefinitely.
+            if len(self.responses) + len(self.old_ids) + len(self.missing) >= self.max_entries:
+                self.missing.add("usage_index_limit_exceeded")
+                return
+            index = self.indices.get(path, 0)
+            self.indices[path] = index + 1
+            try:
+                event = json.loads(line)
+            except ValueError:
+                if is_native:
+                    self.missing.add(path + ":malformed-json")
+                continue
+            if not isinstance(event, dict):
+                continue
+            message = event.get("message")
+            body = event.get("payload")
+            if previous:
+                if isinstance(message, dict) and message.get("id"):
+                    self.old_ids.add(message["id"])
+                    self.responses.pop(message["id"], None)
+                    self.missing.discard(message["id"])
+                if isinstance(body, dict) and body.get("type") == "token_count":
+                    info = body.get("info") or {}
+                    self.prior_codex[path] = _codex_usage(info.get("total_token_usage"))
+                continue
             if is_native:
-                native_seen = True
+                self.native_seen = True
             if not is_native and event.get("type") in {"result", "turn.completed"}:
-                terminal = (
+                self.credit_event = line
+                self.terminal = (
                     _codex_usage(event.get("usage"))
-                    if backend == "codex"
+                    if self.backend == "codex"
                     else token_usage_from_model_usage(event.get("modelUsage"))
                 )
-                if terminal.total_tokens is None:
-                    terminal = token_usage_from_mapping(event.get("usage"))
+                if self.terminal.total_tokens is None:
+                    self.terminal = token_usage_from_mapping(event.get("usage"))
                 continue
-            body = event.get("payload", {})
             if is_native and isinstance(body, dict) and body.get("type") == "token_count":
                 info = body.get("info") or {}
                 current = _codex_usage(info.get("total_token_usage"))
-                prior = codex_totals.get(path, prior_codex.get(path, TokenUsage.zero()))
+                prior = self.codex_totals.get(path, self.prior_codex.get(path, TokenUsage.zero()))
                 if current.total_tokens is not None:
                     try:
                         delta = subtract_token_usage(current, prior)
                     except ValueError:
-                        missing.add(path + ":counter-regression")
+                        self.missing.add(path + ":counter-regression")
                         continue
-                    codex_totals[path] = current
+                    self.codex_totals[path] = current
                     if delta.total_tokens:
                         last = _codex_usage(info.get("last_token_usage"))
                         if not _same(delta, last):
-                            missing.add(path + ":unreconciled-token-delta")
+                            self.missing.add(path + ":unreconciled-token-delta")
                         key = f"{path}:{current.total_tokens}"
-                        responses[key] = {
-                            "message_id": key,
-                            "path": path,
-                            "usage": delta,
-                            "agent": path,
-                            "native": True,
+                        self.responses[key] = {
+                            "message_id": key, "path": path, "usage": delta,
+                            "agent": path, "native": True,
                         }
                 continue
-            message = event.get("message")
             if not isinstance(message, dict) or (
                 event.get("type") not in {"assistant", "message", "message_end"}
                 or message.get("role", "assistant") != "assistant"
@@ -182,82 +183,94 @@ def summarize_usage(
                 continue
             message_id = message.get("id") or event.get("id")
             if not message_id:
-                # Without identity, repeated copies cannot be reliably reconciled.
                 message_id = f"{path}:line-{index}"
-                missing.add("response_identity_unavailable")
-            if message_id in old_ids:
+                self.missing.add("response_identity_unavailable")
+            if message_id in self.old_ids:
                 continue
             usage = token_usage_from_mapping(message.get("usage"))
             if usage.total_tokens is None:
-                if message_id not in responses:
-                    missing.add(message_id)
+                if message_id not in self.responses:
+                    self.missing.add(message_id)
                 continue
-            missing.discard(message_id)
+            self.missing.discard(message_id)
             agent = (
-                event.get("agentId")
-                or event.get("parent_tool_use_id")
+                event.get("agentId") or event.get("parent_tool_use_id")
                 or (path if "subagents/" in path else "main")
             )
-            earlier = responses.get(message_id)
-            # A child's copied main context is not a new request.
-            if earlier and earlier["native"] and earlier["agent"] == "main" and agent != "main":
+            earlier = self.responses.get(message_id)
+            # Native counters win regardless of pipe/monitor interleaving.
+            # A child's copied main context is not a second bill.
+            if earlier and earlier["native"] and (
+                not is_native or (earlier["agent"] == "main" and agent != "main")
+            ):
                 continue
-            responses[message_id] = {
-                "message_id": message_id,
-                "path": path,
-                "agent": agent,
-                "usage": usage,
-                "native": is_native,
+            self.responses[message_id] = {
+                "message_id": message_id, "path": path, "agent": agent,
+                "usage": usage, "native": is_native,
             }
 
-    observed = sum_token_usages([r["usage"] for r in responses.values()])
-    main = sum_token_usages([r["usage"] for r in responses.values() if r["agent"] == "main"])
-    warnings = []
-    exact = finished and not missing and native_seen and bool(responses)
-    if backend == "codex" and codex_totals:
-        # Native counters are cumulative per rollout; subtract the start snapshot.
-        # Root's stdout total may be session-cumulative or turn-only. Do not add it again.
-        total = observed
-        exact = exact and (
-            _same(observed, terminal)
-            or any(_same(total, terminal) for total in codex_totals.values())
-        )
-        basis = "native_rollout_deltas"
-        if not exact:
-            warnings.append("codex_native_usage_incomplete_or_unreconciled")
-    elif exact and (_same(observed, terminal) or _same(main, terminal)):
-        total = observed
-        basis = "reconciled_unique_responses"
-        if not _same(observed, terminal):
-            warnings.append("terminal_excludes_subagents; native child usage included")
-    else:
-        total = _upper_bound(observed, terminal)
-        exact = False
-        basis = "unreconciled_provider_counters"
-        warnings.append("native response usage and terminal total could not be fully reconciled")
-    if not exact and total.total_tokens is not None:
-        total = replace(total, measurement="partial")
-    groups = {}
-    for agent in sorted({str(r["agent"]) for r in responses.values()}):
-        rows = [r["usage"] for r in responses.values() if str(r["agent"]) == agent]
-        groups[agent] = asdict(sum_token_usages(rows))
-    return {
-        "backend": backend,
-        "total": asdict(total),
-        "accounting_basis": basis,
-        "provider_credits": _credits(stdout, finished) if backend == "qodercli" else None,
-        "terminal": asdict(terminal),
-        "observed_responses": asdict(observed),
-        "by_agent": groups,
-        "response_count": len(responses),
-        "responses": [
-            {
-                **{k: v for k, v in r.items() if k not in {"usage", "native"}},
-                "usage": asdict(r["usage"]),
-            }
-            for r in responses.values()
-        ],
-        "warnings": warnings,
-        "missing_usage": sorted(missing),
-        "subagent_coverage": "native_transcripts_and_stream; unexported calls cannot be counted",
-    }
+    def report(self, *, finished: bool = False) -> dict:
+        observed = sum_token_usages([r["usage"] for r in self.responses.values()])
+        main = sum_token_usages([r["usage"] for r in self.responses.values() if r["agent"] == "main"])
+        warnings = []
+        exact = finished and not self.missing and self.native_seen and bool(self.responses)
+        if self.backend == "codex" and self.codex_totals:
+            # Native counters are cumulative per rollout; subtract the start snapshot.
+            # Root's stdout total may be session-cumulative or turn-only. Do not add it again.
+            total = observed
+            exact = exact and (
+                _same(observed, self.terminal)
+                or any(_same(total, self.terminal) for total in self.codex_totals.values())
+            )
+            basis = "native_rollout_deltas"
+            if not exact:
+                warnings.append("codex_native_usage_incomplete_or_unreconciled")
+        elif exact and (_same(observed, self.terminal) or _same(main, self.terminal)):
+            total = observed
+            basis = "reconciled_unique_responses"
+            if not _same(observed, self.terminal):
+                warnings.append("terminal_excludes_subagents; native child usage included")
+        else:
+            total = _upper_bound(observed, self.terminal)
+            exact = False
+            basis = "unreconciled_provider_counters"
+            warnings.append("native response usage and terminal total could not be fully reconciled")
+        if not exact and total.total_tokens is not None:
+            total = replace(total, measurement="partial")
+        agent_rows = {}
+        for response in self.responses.values():
+            agent_rows.setdefault(str(response["agent"]), []).append(response["usage"])
+        groups = {agent: asdict(sum_token_usages(rows)) for agent, rows in sorted(agent_rows.items())}
+        return {
+            "backend": self.backend,
+            "total": asdict(total),
+            "accounting_basis": basis,
+            "provider_credits": _credits(self.credit_event, finished) if self.backend == "qodercli" else None,
+            "terminal": asdict(self.terminal),
+            "observed_responses": asdict(observed),
+            "by_agent": groups,
+            "response_count": len(self.responses),
+            "responses": [
+                {
+                    **{k: v for k, v in r.items() if k not in {"usage", "native"}},
+                    "usage": asdict(r["usage"]),
+                }
+                for r in self.responses.values()
+            ],
+            "warnings": warnings,
+            "missing_usage": sorted(self.missing),
+            "subagent_coverage": "native_transcripts_and_stream; unexported calls cannot be counted",
+        }
+
+def summarize_usage(
+    backend: str, stdout: str, native: dict[str, str], *,
+    previous: dict[str, str] | None = None, finished: bool = False,
+) -> dict:
+    """One-shot counterpart of the live incremental accounting."""
+    accumulator = UsageAccumulator(backend)
+    for path, text in (previous or {}).items():
+        accumulator.feed(path, text, previous=True)
+    accumulator.feed("provider/stdout.stream-json", stdout)
+    for path, text in sorted(native.items()):
+        accumulator.feed(path, text)
+    return accumulator.report(finished=finished)

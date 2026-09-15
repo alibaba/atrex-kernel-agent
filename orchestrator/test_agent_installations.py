@@ -215,16 +215,18 @@ class AgentInstallationTests(unittest.TestCase):
             patch("orchestrator.agent_sandbox.materialize_agent_assets", return_value=assets),
             patch("orchestrator.agent_installations.sys.executable", str(python)),
         ):
-            argv, _ = wrap_agent_command(
+            launch = wrap_agent_command(
                 ["/bin/sh", "-c", script], workspace=workspace, environment=environment,
                 repository_root=project, provider_homes=provider_homes,
                 hidden_host_paths=(self.private,), mode="bwrap", bwrap_executable=bwrap,
                 agent_workspace=view, agent_skills=(),
             )
-        return argv, secrets
+        self.addCleanup(launch.close)
+        return launch, secrets
 
     def test_full_mount_plan_never_restores_operator_home_roots(self):
-        argv, secrets = self.sandbox_fixture("/usr/bin/true")
+        launch, secrets = self.sandbox_fixture("/usr/bin/true")
+        argv = launch.command
         mounts = [(Path(argv[i+1]), Path(argv[i+2])) for i, arg in enumerate(argv) if arg in {"--bind", "--ro-bind"}]
         for path in secrets:
             # The initial '/' is masked before the selective installation mounts.
@@ -234,8 +236,9 @@ class AgentInstallationTests(unittest.TestCase):
 
     @unittest.skipUnless(platform.system() == "Linux" and shutil.which("bwrap"), "requires Linux Bubblewrap")
     def test_real_bwrap_executes_installations_without_exposing_original_histories(self):
-        argv, _ = self.sandbox_fixture(shutil.which("bwrap"))
-        result = subprocess.run(argv, text=True, capture_output=True, timeout=20)
+        launch, _ = self.sandbox_fixture(shutil.which("bwrap"))
+        result = subprocess.run(launch.command, env=launch.environment, pass_fds=launch.pass_fds,
+                                text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("VENV_OK", result.stdout)
         self.assertIn("ISOLATION_OK", result.stdout)
@@ -260,14 +263,18 @@ class AgentInstallationTests(unittest.TestCase):
                 view = self.private / cli / "view"
                 self.file(view / "kernel.py", "pass\n")
                 with patch("orchestrator.agent_sandbox.materialize_agent_assets", return_value=assets):
-                    argv, _ = wrap_agent_command(
+                    launch = wrap_agent_command(
                         [executable, "--version"], workspace=workspace,
                         environment={"HOME": str(Path.home()), "PATH": os.environ["PATH"]},
                         repository_root=project, provider_homes=self.private / cli / "providers",
                         hidden_host_paths=(self.private,), mode="bwrap",
                         bwrap_executable=shutil.which("bwrap"), agent_workspace=view, agent_skills=(),
                     )
-                result = subprocess.run(argv, text=True, capture_output=True, timeout=20)
+                try:
+                    result = subprocess.run(launch.command, env=launch.environment, pass_fds=launch.pass_fds,
+                                            text=True, capture_output=True, timeout=20)
+                finally:
+                    launch.close()
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertTrue(result.stdout.strip())
 

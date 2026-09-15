@@ -36,11 +36,7 @@ Each newly materialized Episode starts with empty `scratch/`; resuming an alread
 preserves its files. Completed Episode scratch evidence is archived but is not copied into the next
 Episode. Checkout-provided scratch symlinks are unlinked without modifying their targets.
 
-Every post-baseline Episode uses this workflow; there is no fixed five-Trial window or separate
-early-Episode comparison path. On resuming an older unfinished Fast Episode, the Supervisor keeps
-its worktree, Journal, and measurements but uses the ordinary Prompt and ABBA promotion gate.
-Completed historical records are not rewritten. Remove retired `--fast-episodes`, `--fast-trials`,
-and `--fast-episode-ask-*` options from old launch commands.
+Every post-baseline Episode uses the same Prompt, Journal, and ABBA promotion workflow.
 
 The Supervisor stores Git exclusions in the shared `info/exclude`, not a workspace `.gitignore`.
 V0 measurements live in `memory/v0.json`, without a duplicate baseline Markdown report. The accepted
@@ -131,6 +127,8 @@ Campaign policy before executing a request, and appends a compact request audit 
 evidence store. The same capability exposes `update/load/list` operations for Directions and
 Experiments plus a repairable terminal-report operation. Agent requests carry hypotheses and opaque
 Kernel IDs; the Runtime resolves exact Kernel and Gateway evidence before durably appending it.
+Journal mutations and report commits serialize within a workspace, not across the entire Runtime.
+Slow Git publication cannot block another Session's authorization or request audit.
 
 Git-backed coding sessions require Linux Bubblewrap: `auto` selects it when available, and
 `bwrap` requires it explicitly. There is no unsandboxed fallback for these workspaces; `none` is only
@@ -141,6 +139,13 @@ is a writable Episode-local seed copy; same-Episode recovery preserves its edits
 Shared tool seeds and the Supervisor implementation stay unchanged. Network is shared so
 the selected model provider remains reachable, while direct Agate
 credentials are absent and host-side Agate invocations remain process-policy violations.
+Agent environment values, including the Runtime capability and provider keys, are passed as
+NUL-separated `--clearenv`/`--setenv` options through an anonymous `bwrap --args FD` file,
+not command-line assignments. Bubblewrap directly launches the CLI without an `env KEY=value`
+intermediary. Recovery wrappers forward only the required descriptors to the primary process;
+the Supervisor closes its argument descriptor after spawning or on failure/revocation.
+This removes the command-line leak, not the host administrator's or other permitted debuggers'
+access to process environments. Multi-user deployments still need appropriate host UID and procfs policies.
 Authoritative Gateway records, evaluation ledgers, and Runtime request audits have no path in the
 Agent mount namespace. `.git`, `.orchestrator_mode.json`, and `gpu-wiki/` are absent from the
 Agent file view. Gateway reads the live view; report submission and session exit publish candidate
@@ -161,12 +166,18 @@ provider/
 └── native/                 # native transcript deltas, including subagents
 ```
 
-Stdout/stderr and the conversation are written while the process runs. Native files and usage are
-refreshed every second; on exit the reading view is compacted to remove duplicate Claude
+Stdout/stderr and the conversation are written while the process runs. Native files are tailed from
+their last byte offsets every second; only new records enter the usage accumulator. Resume history
+is parsed once for IDs and initial counters, not retained or reparsed on each poll. On exit the
+reading view is compacted to remove duplicate Claude
 stdout/native content while retaining the original provider files. Retries get a new `run-<uuid>`;
 existing native history is excluded from that invocation's usage. These Supervisor-owned copies
 survive Episode worktree removal and are not mounted into the Agent view. They do not need a custom
-header in native child files and have no fixed small file-count limit.
+header in native child files. Capture has resource ceilings, not an eight-file subagent restriction:
+64 MiB per file, 128 MiB per invocation (including resume-prefix reads), 2 MiB per line, 4,096 native
+files, and 200,000 records. Exceeding a ceiling stops the affected capture, not the Agent. The usage
+report and conversation footer record `capture_complete=false` and the reason; available usage is
+`partial`, never claimed as complete. Native file replacement or truncation is also reported.
 
 Native usage capture does not depend on bwrap. With `--agent-sandbox=none` (or `auto`
 without bwrap), capture uses the CLI's actual configuration directory, including
@@ -178,7 +189,7 @@ capture including child usage is never replaced by a root-only total. Sandbox mo
 alone neither downgrades complete usage nor upgrades incomplete usage to `exact`.
 
 Capture file failures do not terminate the CLI: each stdout/stderr reader keeps draining to EOF
-and retains the original stream in memory for the adapter. A failed raw-output or live-conversation
+and retains the stream within those ceilings for the adapter. A failed raw-output or live-conversation
 sink is disabled independently; healthy sinks keep recording. Capture errors are reported in
 `token-usage.json`, and usage completeness is not claimed after a capture error. On exit the
 conversation can still be reconstructed from retained data if storage is writable again. If final

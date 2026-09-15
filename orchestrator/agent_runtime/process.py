@@ -431,6 +431,7 @@ def run_bounded(
             command,
             role="coding-agent",
             environment=env,
+            inherited_fds=lease.pass_fds if lease is not None else (),
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -444,6 +445,10 @@ def run_bounded(
             finally:
                 lease.close()
         raise
+    if lease is not None:
+        # Popen has duplicated the selected descriptors into the child. Do not
+        # keep the Supervisor's copy of credential-bearing arguments for a session.
+        lease.close_launch_fds()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []

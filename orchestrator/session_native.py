@@ -11,7 +11,10 @@ from .agent_workspace import _regular_bytes
 
 
 class HostSessionTranscripts:
-    def __init__(self, backend: str, environment: dict[str, str], command: list[str]):
+    def __init__(self, backend: str, environment: dict[str, str], command: list[str], *,
+                 max_files: int = 4096, on_limit=lambda: None):
+        self.max_files = max_files
+        self.on_limit = on_limit
         self.backend = backend
         home = Path(environment.get("HOME") or str(Path.home())).expanduser()
         variable, default, label, patterns = {
@@ -36,8 +39,13 @@ class HostSessionTranscripts:
         self._initial_sizes = {path: path.stat().st_size for path in self._paths()}
 
     def _paths(self):
+        count = 0
         for pattern in self.patterns:
             for path in self.root.glob(pattern):
+                count += 1
+                if count > self.max_files:
+                    self.on_limit()
+                    return
                 # Never follow a session-directory symlink into credentials or
                 # another location. Selected payloads also use no-follow reads.
                 components = [path, *(parent for parent in path.parents if parent.is_relative_to(self.root))]
@@ -50,6 +58,9 @@ class HostSessionTranscripts:
         cached = self._metadata.get(path)
         if cached:
             return cached
+        if len(self._metadata) >= self.max_files:
+            self.on_limit()
+            return "", ""
         payload = _regular_bytes(path, limit=65536)
         for line in payload.splitlines()[:32]:
             try:
@@ -71,12 +82,12 @@ class HostSessionTranscripts:
                 return identity, parent
         return "", ""
 
-    def snapshot(self, stdout: str) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    def selected(self, stdout: str = "") -> dict[str, tuple[Path, int]]:
         if self.backend == "codex":
             self.session_id = codex_thread_id_from_stream(stdout) or self.session_id
         identity = self.session_id
         if not identity or not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
-            return {}, {}
+            return {}
         paths = list(self._paths())
         if self.backend == "codex":
             identities = {path: self._codex_identity(path) for path in paths}
@@ -92,13 +103,8 @@ class HostSessionTranscripts:
                 identity in path.relative_to(self.root).parts
                 or re.search(r"(?:^|[_-])" + re.escape(identity) + r"$", path.stem)
             )]
-        snapshot, previous = {}, {}
+        selected = {}
         for path in paths:
             name = self.label + "/" + path.relative_to(self.root).as_posix()
-            payload = _regular_bytes(path)
-            offset = self._initial_sizes.get(path, 0)
-            if len(payload) < offset:
-                raise ValueError(f"native transcript truncated: {name}")
-            snapshot[name] = payload
-            previous[name] = payload[:offset]
-        return snapshot, previous
+            selected[name] = (path, self._initial_sizes.get(path, 0))
+        return selected

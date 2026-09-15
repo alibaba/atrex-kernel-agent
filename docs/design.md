@@ -54,13 +54,12 @@ promotion; it is not a second CLI.
 │   └── prompts/                       # Inspection, baseline, and episode prompts
 ├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
 ├── supervisor/                        # Agent-invisible Gateway/Agate execution engine
-├── agents/                            # Baseline Agent definition injected into campaign workspaces
 ├── skills/                            # Backend-local workflows, including adaptive PPU profiling
 ├── tools/
 │   ├── sandbox.py                     # Unified HTTP CLI: Gateway, Journal, terminal reports
 │   ├── memory_manager.py              # Structured iteration memory manager
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
-├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
+├── reference/                         # Supervisor-only workspace/evaluator/schema resources
 ├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
 ├── reference-projects/                # Optional source-search repositories
 └── 3rdparty/                          # Profiler-analysis dependencies

@@ -33,7 +33,7 @@ WORKSPACE_LAYOUTS = {
 }
 
 
-def _regular_bytes(path: Path, *, limit: int = -1) -> bytes:
+def _open_regular(path: Path):
     # Anchor every path component, not just the final file: an Agent may rename
     # scratch directories while the Supervisor is archiving them.
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
@@ -45,9 +45,18 @@ def _regular_bytes(path: Path, *, limit: int = -1) -> bytes:
         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     finally:
         os.close(directory)
-    with os.fdopen(fd, "rb") as stream:
+    stream = os.fdopen(fd, "rb")
+    try:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError(f"Agent output must be a regular file: {path.name}")
+    except BaseException:
+        stream.close()
+        raise
+    return stream
+
+
+def _regular_bytes(path: Path, *, limit: int = -1) -> bytes:
+    with _open_regular(path) as stream:
         return stream.read(limit)
 
 

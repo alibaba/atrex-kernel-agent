@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.agent_sandbox import VISIBLE_WORKSPACE, wrap_agent_command
+from orchestrator.sandbox_launch import SandboxLaunch
 from orchestrator.constants import ATREX_BENCH_RUNTIME_ENV
 from orchestrator.session_io import _sandbox_command
 from orchestrator.supervisor_runtime import (
@@ -763,7 +764,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                     # Exercise HTTP scoping only; no Agent process is launched.
                     with patch(
                         "orchestrator.agent_sandbox.wrap_agent_command",
-                        side_effect=lambda command, **kwargs: (command, kwargs["environment"]),
+                        side_effect=lambda command, **kwargs: SandboxLaunch(command, kwargs["environment"]),
                     ):
                         lease = runtime.prepare_session(["claude"], episode, environment)
                     capability = runtime.authorize(lease.token)
@@ -938,7 +939,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
             (workspace / "kernel.py").write_text("def run(x): return x\n")
             provider_homes = root / "provider-homes"
             provider_homes.mkdir()
-            command, mapped = wrap_agent_command(
+            launch = wrap_agent_command(
                 ["bash", "-lc", f"pwd; touch {workspace.resolve()}/candidate"],
                 workspace=workspace,
                 environment={
@@ -953,6 +954,8 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 mode="bwrap",
                 bwrap_executable="/usr/bin/true",
             )
+            self.addCleanup(launch.close)
+            command, mapped = launch.command, launch.environment
             self.assertEqual(command[0], "/usr/bin/true")
             self.assertIn("--ro-bind", command)
             self.assertIn("--bind", command)
@@ -1032,6 +1035,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                     try:
                         result = subprocess.run(
                             lease.command, env=lease.environment, cwd=workspace,
+                            pass_fds=lease.pass_fds,
                             capture_output=True, text=True, timeout=20,
                         )
                     finally:
@@ -1220,6 +1224,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                         lease.command,
                         cwd=workspace,
                         env=lease.environment,
+                        pass_fds=lease.pass_fds,
                         text=True,
                         capture_output=True,
                         check=False,

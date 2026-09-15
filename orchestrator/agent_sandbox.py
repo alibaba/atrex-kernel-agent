@@ -20,6 +20,7 @@ from pathlib import Path
 from .agent_assets import DEFAULT_AGENT_SKILLS, initialize_writable_tools, materialize_agent_assets
 from .agent_installations import installation_mounts
 from .agent_workspace import AgentWorkspace, project_reference_tree
+from .sandbox_launch import SandboxLaunch
 
 VISIBLE_WORKSPACE = Path("/home/agent/workspace")
 VISIBLE_HOME = VISIBLE_WORKSPACE
@@ -281,8 +282,8 @@ def wrap_agent_command(
     agent_workspace: Path | None = None,
     provider_home: Path | None = None,
     read_only_paths: tuple[str, ...] | None = None,
-) -> tuple[list[str], dict[str, str]]:
-    """Return the bwrap command and the exact environment visible to the Agent."""
+) -> SandboxLaunch:
+    """Build a launch; caller must pass its FDs on spawn and close its owned file."""
     bwrap = _enabled(mode, bwrap_executable)
     if bwrap is None:
         if _git_common_directory(workspace) is not None:
@@ -290,7 +291,7 @@ def wrap_agent_command(
                 "Git-backed Agent workspaces require --agent-sandbox=bwrap on Linux; "
                 "an unsandboxed process can access Supervisor Git metadata"
             )
-        return list(command), dict(environment)
+        return SandboxLaunch(list(command), dict(environment))
 
     workspace = workspace.resolve()
     repository_root = repository_root.resolve()
@@ -340,7 +341,6 @@ def wrap_agent_command(
                 break
 
     translated_command = [_translate(value, workspace) for value in command]
-    assignments = [f"{key}={value}" for key, value in sorted(mapped.items())]
     argv = [
         bwrap,
         "--die-with-parent",
@@ -515,16 +515,8 @@ def wrap_agent_command(
                 _mount(argv, source, destination / source.name, writable=False, created=created)
         argv += ["--remount-ro", str(destination)]
 
-    argv += [
-        "--chdir",
-        str(VISIBLE_WORKSPACE),
-        "--",
-        "/usr/bin/env",
-        "-i",
-        *assignments,
-        *translated_command,
-    ]
-    return argv, mapped
+    argv += ["--chdir", str(VISIBLE_WORKSPACE)]
+    return SandboxLaunch.with_bwrap_environment(argv, translated_command, mapped)
 
 
 __all__ = ["VISIBLE_HOME", "VISIBLE_WORKSPACE", "wrap_agent_command"]
