@@ -179,11 +179,20 @@ class SessionCapture:
         self._stop = threading.Event()
         self._readers: list[threading.Thread] = []
         self._monitor: threading.Thread | None = None
+        # Functional output has the same full-stream contract as Popen.communicate.
+        # Neither diagnostic limits nor native/history reads may truncate it.
         self._chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        self._retained_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         self._pipe_bytes = {"stdout": 0, "stderr": 0}
         self._stdout_cursor = 0
         self.errors: list[str] = []
         self._budget = CaptureBudget(limits or CaptureLimits(), self._capture_error)
+        # History scanning is bounded independently. Old bytes/records never
+        # consume the invocation's diagnostic retention allowance.
+        self._history_budget = CaptureBudget(
+            self._budget.limits,
+            lambda label, error: self._capture_error("resume_history_" + label, error),
+        )
         self._usage = UsageAccumulator(backend)
         self._tails: dict[str, TranscriptTail] = {}
         self._initial_sizes: dict[str, int] = {}
@@ -254,9 +263,12 @@ class SessionCapture:
                 self._budget.warning("native_files_exceeded")
                 return None
             tail = self._tails[name] = TranscriptTail()
-            # Resume history is parsed once for IDs/counters, never kept in RAM.
-            for line in tail.read(path, self._budget, through=previous_size, final=True):
-                self._feed_usage(name, line.decode("utf-8", errors="replace"), previous=True)
+            try:
+                for line in tail.resume_history(path, self._history_budget, previous_size):
+                    self._feed_usage(name, line.decode("utf-8", errors="replace"), previous=True)
+            finally:
+                if tail.history_incomplete:
+                    self._usage.mark_history_incomplete(name)
         return self._tails[name]
 
     def _feed_usage(self, path: str, text: str, *, previous: bool = False) -> None:
@@ -361,6 +373,10 @@ class SessionCapture:
             dropping_line = False
             drain_only = False
             for line in iter(lambda: pipe.readline(self._budget.limits.line_bytes + 1), ""):
+                # Preserve even oversized-line fragments and output received
+                # after a capture failure; joining reconstructs the original stream.
+                with self._lock:
+                    self._chunks[name].append(line)
                 if drain_only:
                     continue
                 try:
@@ -377,15 +393,11 @@ class SessionCapture:
                             not self._budget.retain(size, file_used=self._pipe_bytes[name])
                             or not self._budget.record()
                         ):
-                            # Preserve small terminal counters even when the text
-                            # archive is full; the final usage still remains partial.
-                            if name == "stdout":
-                                self._sync_stdout_usage()
-                                self._feed_usage(path, line)
                             continue
                         self._pipe_bytes[name] += size
-                        # Keep the adapter's stream only within the capture budget.
-                        self._chunks[name].append(line)
+                        # Only this bounded copy may enter persisted diagnostics.
+                        # Keep it even if a disk sink fails, for final projection.
+                        self._retained_chunks[name].append(line)
                         try:
                             if name == "stdout" and not record_provider_line(line):
                                 continue
@@ -408,7 +420,7 @@ class SessionCapture:
                 except Exception as error:
                     # Last-resort capture boundary: even an unexpected parser or
                     # accounting failure must not close a live child pipe. Stop
-                    # all work on this stream except bounded reads through EOF.
+                    # diagnostic processing, but preserve functional output to EOF.
                     self._capture_error(f"{name}_capture_processing", error)
                     drain_only = True
                     close_output()
@@ -456,7 +468,7 @@ class SessionCapture:
         with self._lock:
             self.sync_native(final=True)
             stdout = "".join(self._chunks["stdout"])
-            # sync_native already folded the retained stream and its identity.
+            # sync_native already folded the functional stream and its identity.
             # Re-parsing it here would replay failed records without that guard.
             state = (
                 "timed_out"
@@ -483,7 +495,7 @@ class SessionCapture:
                 backend=self.backend,
                 session_id=self.session_id,
                 prompt=self.prompt,
-                stdout=stdout,
+                stdout="".join(self._retained_chunks["stdout"]),
                 raw_provider_files=files,
                 state=state,
                 exit_status=exit_status,
@@ -494,7 +506,7 @@ class SessionCapture:
             rows = [json.loads(line) for line in conversation.splitlines()]
             rows[0].update(started_at=self.started_at, context=self.context)
             rows[-1].update(capture_complete=not self.errors, capture_errors=list(self.errors))
-            for line in "".join(self._chunks["stderr"]).splitlines():
+            for line in "".join(self._retained_chunks["stderr"]).splitlines():
                 rows.insert(-1, provider_line_record(0, path="provider/stderr.log", line=line))
             for index, row in enumerate(rows):
                 row["sequence"] = index

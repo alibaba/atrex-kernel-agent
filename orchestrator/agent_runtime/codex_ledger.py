@@ -118,10 +118,17 @@ def observe_codex_usage(
         # Advance even when capture wins, so a later resume's ledger fallback
         # cannot count this invocation again.
         observed = _observe_codex_usage(observer, thread_id, stream_terminal)
-    except Exception:
+    except Exception as exc:
         if captured is not None and captured.terminal_usage.measurement == "exact":
             observer.invalidate()
-            return captured[:4]
+            # Exact capture can still account for this invocation, but the failed
+            # ledger must remain visible to diagnostics and resume qualification.
+            return (
+                captured.events,
+                captured.terminal_usage,
+                captured.capabilities,
+                captured.errors + (f"codex_ledger_unavailable:{type(exc).__name__}",),
+            )
         raise
     if captured is not None and (
         captured.terminal_usage.measurement == "exact"
@@ -145,7 +152,12 @@ def observe_codex_usage(
                 replace(captured.capabilities, usage_delta_observed=True),
                 captured.errors + observed[3],
             )
-        return captured[:4]
+        return (
+            captured.events,
+            captured.terminal_usage,
+            captured.capabilities,
+            captured.errors + observed[3],
+        )
     return observed
 
 

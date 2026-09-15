@@ -51,11 +51,17 @@ Repeated stream/native copies of the same response are counted once. Claude cumu
 
 Existing Phase Marker ordering is retained. Native-only child usage without a reliable position in the root phase sequence contributes to the total, not to an invented phase attribution. Detailed per-response counters remain available in the usage report even when phase attribution is incomplete.
 
+If Codex ledger reconciliation fails while Capture provides exact usage, that usage is preserved. The invocation observation still reports `codex_ledger_unavailable:<ExceptionType>`, the failed ledger cursor is invalidated, and the invocation does not qualify for usage-verified resume. A successful Capture does not hide ledger failures.
+
 The supported native sources are Claude, Codex, Qoder, and Pi. Existing provider-home configuration is respected; this change does not remount credentials or replace HOME. Qoder no longer receives `--no-session-persistence`, so its native session files can be captured. Optional external reviewer helpers or arbitrary model processes bypassing the shared Agent runtime are not automatically covered unless their calls appear in the selected provider transcripts.
 
 ## Failure and privacy boundaries
 
 Capture uses incremental reads, bounded transcript discovery, and no-follow regular-file reads. Default limits are 64 MiB per file, 128 MiB retained per invocation, 2 MiB per line, 4,096 discovered files, and 200,000 retained records. Exceeding a limit records partial coverage; it does not terminate the Agent or reject its result.
+
+Native per-file limits count bytes captured during this invocation, not the absolute offset of a resumed transcript. Pre-invocation history is scanned once under a separate budget with the same limits, shared across history files. History bytes and records never consume the live capture allowance. If that scan is capped, capture still starts at the original snapshot boundary; history is not replayed as new content. Usage reconciliation is marked incomplete, and missing Codex baseline counters are not treated as zero.
+
+These limits apply to diagnostic capture, not to the stdout/stderr returned to the existing Runtime parsers. The returned streams remain complete, including oversized lines, late phase receipts, terminal results, and Codex thread IDs—even when diagnostic limits are exhausted. As with the previous `Popen.communicate()` path, functional output remains buffered in memory without a capture-imposed cap. The final conversation is rebuilt only from the bounded diagnostic copy; finalization does not restore omitted output into the archive.
 
 If a persistence sink fails, the pipe reader keeps draining the child's output to EOF. Setup/finalization failures are logged without replacing the CLI outcome. Existing process timeout, dependency guards, termination, and resume policy remain in place. A forcibly killed observer cannot write a final status; surviving files may still say `running`.
 
@@ -63,18 +69,10 @@ Each capture directory is created with mode `0700`. Only the current session and
 
 ## Verification
 
-No GPU or model credentials are needed:
+The CLI import/argument smoke check requires no GPU or model credentials:
 
 ```bash
-python3 -m unittest \
-  orchestrator.test_session_capture \
-  orchestrator.test_session_capture_failures \
-  orchestrator.test_session_discovery \
-  orchestrator.test_unsandboxed_usage \
-  orchestrator.test_session_integration \
-  long_horizon.test_journal_wiki_attribution
-
 python3 orchestrator/optimize.py --help
 ```
 
-Tests use recorded-format fixtures and real local Python subprocesses in place of paid Agent CLIs. They cover native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, pipe draining after write/parser failures, normal exit, timeout, and Long Horizon invocation archives.
+Regression tests are maintained outside this repository. Local validation uses recorded-format fixtures and real Python subprocesses instead of paid Agent CLIs. It covers native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, complete functional stdout/stderr, pipe draining after write/parser failures, ledger-failure diagnostics and resume qualification, normal exit, timeout, and Long Horizon invocation archives. The CLI smoke check alone does not verify these behaviors.

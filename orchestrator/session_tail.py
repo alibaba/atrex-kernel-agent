@@ -86,10 +86,32 @@ class CaptureBudget:
 
 class TranscriptTail:
     def __init__(self):
+        # Absolute file position and invocation-local capture usage are distinct.
         self.offset = 0
+        self.captured_bytes = 0
         self.identity = None
         self.pending = bytearray()
         self.stopped = False
+        self.invalidated = False
+        self.history_incomplete = False
+
+    def resume_history(self, path: Path, budget: CaptureBudget, previous_size: int):
+        """Parse a bounded prefix without charging or stopping the live tail."""
+        if self.offset or self.captured_bytes or self.identity is not None:
+            raise ValueError("Resume history must be initialized before live capture")
+        # Even if the scan is capped or fails, never replay old bytes as new output.
+        self.offset = previous_size
+        history = TranscriptTail()
+        try:
+            yield from history.read(path, budget, through=previous_size, final=True)
+        except (OSError, ValueError):
+            self.stopped = True
+            raise
+        finally:
+            self.identity = history.identity
+            self.invalidated = history.invalidated
+            self.history_incomplete = history.stopped or self.stopped
+            self.stopped = self.stopped or history.invalidated
 
     def read(
         self, path: Path, budget: CaptureBudget, *, through: int | None = None, final: bool = False
@@ -102,6 +124,7 @@ class TranscriptTail:
             identity = (stat.st_dev, stat.st_ino)
             if self.identity not in (None, identity) or stat.st_size < self.offset:
                 self.stopped = True
+                self.invalidated = True
                 budget.warn(
                     "native_capture", ValueError(f"transcript replaced or truncated: {path.name}")
                 )
@@ -110,6 +133,7 @@ class TranscriptTail:
             end = stat.st_size if through is None else min(through, stat.st_size)
             if through is not None and through > stat.st_size:
                 self.stopped = True
+                self.invalidated = True
                 budget.warn(
                     "native_capture", ValueError(f"resume transcript truncated: {path.name}")
                 )
@@ -117,12 +141,13 @@ class TranscriptTail:
             stream.seek(self.offset)
             while self.offset < end:
                 available = min(
-                    budget.limits.file_bytes - self.offset, budget.limits.total_bytes - budget.used
+                    budget.limits.file_bytes - self.captured_bytes,
+                    budget.limits.total_bytes - budget.used,
                 )
                 if available <= 0:
                     budget.warning(
                         "per_file_bytes_exceeded"
-                        if self.offset >= budget.limits.file_bytes
+                        if self.captured_bytes >= budget.limits.file_bytes
                         else "session_bytes_exceeded"
                     )
                     self.stopped = True
@@ -131,11 +156,13 @@ class TranscriptTail:
                 chunk = stream.read(min(256 * 1024, available, end - self.offset))
                 if not chunk:
                     self.stopped = True
+                    self.invalidated = True
                     budget.warn(
                         "native_capture", ValueError(f"transcript shrank during read: {path.name}")
                     )
                     break
                 self.offset += len(chunk)
+                self.captured_bytes += len(chunk)
                 budget.used += len(chunk)
                 self.pending.extend(chunk)
                 consumed = 0
@@ -161,4 +188,6 @@ class TranscriptTail:
             if final and self.pending:
                 if budget.record():
                     yield bytes(self.pending)
+                else:
+                    self.stopped = True
                 self.pending.clear()

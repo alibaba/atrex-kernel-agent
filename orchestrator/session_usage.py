@@ -115,6 +115,10 @@ class UsageAccumulator:
         self.indices: dict[str, int] = {}
         self.credit_event = ""
 
+    def mark_history_incomplete(self, path: str) -> None:
+        self.missing.add(path + ":resume_history_incomplete")
+        self.prior_codex.pop(path, None)
+
     def feed(self, path: str, text: str, *, previous: bool = False) -> None:
         is_native = path != "provider/stdout.stream-json"
         for line in text.splitlines():
@@ -158,6 +162,16 @@ class UsageAccumulator:
             if is_native and isinstance(body, dict) and body.get("type") == "token_count":
                 info = body.get("info") or {}
                 current = _codex_usage(info.get("total_token_usage"))
+                if (
+                    path + ":resume_history_incomplete" in self.missing
+                    and path not in self.codex_totals
+                ):
+                    # A capped prefix cannot establish the invocation baseline.
+                    # Do not count the whole historic cumulative total as new usage.
+                    # The first live counter establishes a lower-bound cursor only.
+                    if current.total_tokens is not None:
+                        self.codex_totals[path] = current
+                    continue
                 prior = self.codex_totals.get(path, self.prior_codex.get(path, TokenUsage.zero()))
                 if current.total_tokens is not None:
                     try:
