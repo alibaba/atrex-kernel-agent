@@ -36,7 +36,8 @@ from .models import (
     VerificationResult,
 )
 from .protocol import read_handoff
-from .promotion_audit import committed_promotion_audit
+from .audit_recovery import pause_for_audit_repair, recover_promotion_audit
+from .promotion_audit import PromotionAuditUnverifiable
 from .session import LongSessionRunner
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
@@ -1431,16 +1432,21 @@ class LongHorizonCampaign:
         if git_head(self.workspace) != base_commit:
             message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
             parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
-            promoted = (
+            promotion_audit = None
+            if (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
                 and message
                 == f"episode {episode}: promote verified long-horizon candidate"
-                and committed_promotion_audit(
-                    self.workspace, episode=episode, base_commit=base_commit,
-                    branch=branch, version=memory_version,
-                ) is not None
-            )
+            ):
+                try:
+                    promotion_audit = recover_promotion_audit(
+                        self.workspace, episode=episode, base_commit=base_commit,
+                        branch=branch, version=memory_version,
+                    )
+                except PromotionAuditUnverifiable as error:
+                    raise pause_for_audit_repair(self.workspace, store, active, error) from error
+            promoted = promotion_audit is not None
             outcome_recorded = (
                 phase in {"recording", "recorded"}
                 and memory_version > 0
@@ -1479,6 +1485,7 @@ class LongHorizonCampaign:
                     state.accepted += 1
                     state.consecutive_without_promotion = 0
                     recovered_attempt["promotion_commit"] = git_head(self.workspace)
+                    recovered_attempt["promotion_audit"] = promotion_audit
                 else:
                     state.consecutive_without_promotion += 1
                     recovered_attempt["outcome_commit"] = git_head(self.workspace)
@@ -1496,6 +1503,14 @@ class LongHorizonCampaign:
                         state.rejected += 1
                 state.attempts.append(recovered_attempt)
                 store.archive_attempt(episode, recovered_attempt)
+            elif promoted:
+                # State may have been saved before the interruption but active not cleared.
+                # Preserve the repair provenance without counting this promotion twice.
+                for attempt in state.attempts:
+                    if attempt.get("episode") == episode and attempt.get("episode_branch") == branch:
+                        attempt["promotion_audit"] = promotion_audit
+                        store.archive_attempt(episode, attempt)
+                        break
         else:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these

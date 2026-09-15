@@ -142,7 +142,11 @@ class LongSessionRunner:
         from orchestrator.supervisor_runtime import active_supervisor_runtime
 
         supervisor = active_supervisor_runtime()
-        managed_home = supervisor is not None and supervisor.config.agent_sandbox != "none"
+        from orchestrator.agent_sandbox import _enabled
+
+        managed_home = supervisor is not None and bool(_enabled(
+            supervisor.config.agent_sandbox, supervisor.config.bwrap_executable,
+        ))
         if is_codex and not managed_home:
             try:
                 codex_observer = CodexSessionLedgerObserver(

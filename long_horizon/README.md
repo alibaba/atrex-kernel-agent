@@ -1,7 +1,8 @@
 # Episode supervisor internals
 
 This package implements the native optimization engine used by
-`orchestrator/optimize.py`. It is not a separate command-line entry point.
+`orchestrator/optimize.py`. Campaign execution uses that entry point; the audit repair command
+below is an offline, operator-only maintenance tool.
 
 Each canonical optimization version is explored in an isolated Git branch and worktree. A coding
 agent may advance up to three Directions one at a time, run multiple related
@@ -40,6 +41,48 @@ Episode identity, including after a crash between commit and state update. Prepa
 audits never count as promoted. Legacy snapshots are read from committed Git objects and copied
 privately without rewriting history. Agents receive a read-only view of canonical `memory/vN.json`
 only; Supervisor audit files and live progress mirrors are omitted.
+
+### Repair an interrupted promotion
+
+If Git already contains the promotion but its private audit is missing or invalid, resume records
+`promotion_audit.status = "audit_unverifiable"` in `active_episode.json` and stops with exit code 2
+and repair instructions. It keeps the committed Kernel, Episode worktree, phase, and counters;
+it neither rejects the Episode nor silently trusts an unverifiable Gate.
+
+Stop the affected Campaign first. From the repository root, use the exact promotion Commit printed
+in the error (the current HEAD, not the candidate branch Commit):
+
+```bash
+python3 -m long_horizon.audit_recovery \
+  --workspace /path/to/campaign --promotion-commit FULL_HEAD_COMMIT \
+  restore --file /path/to/original-audit.json
+```
+
+Restore requires the original bytes: equivalent JSON with different formatting does not match the
+Commit's SHA-256. Both the digest and Episode identity must match before replacing the private file.
+Git history and the canonical report are unchanged.
+
+If the audit is genuinely missing and there is no backup, an operator may explicitly retain the
+already committed promotion without claiming its original Gate evidence is verified:
+
+```bash
+python3 -m long_horizon.audit_recovery \
+  --workspace /path/to/campaign --promotion-commit FULL_HEAD_COMMIT \
+  acknowledge-missing --reason 'Backup unavailable; reviewed the committed Kernel and report'
+```
+
+This writes a private `promotions/long_horizon_eNNNN.recovery.json` receipt bound to the exact
+promotion Commit and Episode, including reason and timestamp. It does not recreate the missing
+audit. Corrupt audits, digest/identity mismatches, and symlink paths cannot use this acknowledgement.
+The committed Kernel and canonical report must still be intact. Run repair with the same Supervisor
+environment/private-root configuration as the Campaign; no Agent, Gateway or model is started.
+
+After either repair, rerun the original Campaign command. Recovery records the existing promotion
+exactly once without another GPU evaluation or Git commit. When loss was acknowledged, the Attempt
+archive and state retain `promotion_audit.status = "audit_unverifiable"` and
+`resolution = "operator_acknowledged_missing"`; `accepted` counts the retained Git promotion, not a
+newly verified Gate. A restored valid audit records `status = "verified"`. A receipt cannot authorize
+a different promotion Commit.
 
 Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
@@ -111,6 +154,15 @@ stdout/native content while retaining the original provider files. Retries get a
 existing native history is excluded from that invocation's usage. These Supervisor-owned copies
 survive Episode worktree removal and are not mounted into the Agent view. They do not need a custom
 header in native child files and have no fixed small file-count limit.
+
+Native usage capture does not depend on bwrap. With `--agent-sandbox=none` (or `auto`
+without bwrap), capture uses the CLI's actual configuration directory, including
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It captures only the requested session and its
+children, not unrelated sessions or credentials in the same Home. Pre-invocation
+native history is excluded on resume. Codex's stream-only partial capture does not
+block an available ledger reconciliation in either session entry point; an exact
+capture including child usage is never replaced by a root-only total. Sandbox mode
+alone neither downgrades complete usage nor upgrades incomplete usage to `exact`.
 
 Capture file failures do not terminate the CLI: each stdout/stderr reader keeps draining to EOF
 and retains the original stream in memory for the adapter. A failed raw-output or live-conversation

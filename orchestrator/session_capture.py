@@ -53,7 +53,9 @@ def captured_observation(stdout: str, events, capabilities):
     usage = TokenUsage(**total)
     normalized.append(NormalizedAgentEvent(0, "terminal_usage", usage))
     capabilities = replace(capabilities, usage_delta_observed=bool(report["responses"]))
-    return resequence_agent_events(normalized), usage, capabilities, tuple(report["warnings"])
+    return resequence_agent_events(normalized), usage, capabilities, tuple(
+        [*report["warnings"], *report.get("capture_errors", [])]
+    )
 
 
 def _atomic(path: Path, text: str) -> None:
@@ -74,6 +76,7 @@ class SessionCapture:
         command: list[str],
         provider_home: Path | None,
         context: dict[str, str],
+        native_environment: dict[str, str] | None = None,
     ) -> None:
         self.root = root.resolve() / ("run-" + uuid.uuid4().hex)
         self.root.mkdir(parents=True, mode=0o700)
@@ -95,8 +98,18 @@ class SessionCapture:
         self._monitor: threading.Thread | None = None
         self._chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         self.errors: list[str] = []
-        self.previous = self._native_snapshot()
-        self._offsets = {path: len(text) for path, text in self.previous.items()}
+        self.previous: dict[str, bytes] = {}
+        self._offsets: dict[str, int] = {}
+        self._host_transcripts = None
+        if self.home is None and native_environment is not None:
+            from .session_native import HostSessionTranscripts
+
+            try:
+                self._host_transcripts = HostSessionTranscripts(backend, native_environment, command)
+            except (OSError, ValueError) as error:
+                self._capture_error("native_capture_setup", error)
+        self.previous.update(self._native_snapshot())
+        self._offsets.update({path: len(text) for path, text in self.previous.items()})
         self.native: dict[str, bytes] = {}
         self._sequence = 0
         self.finished = False
@@ -107,6 +120,17 @@ class SessionCapture:
         self._write_usage(False)
 
     def _native_snapshot(self) -> dict[str, bytes]:
+        if self._host_transcripts is not None:
+            try:
+                snapshot, previous = self._host_transcripts.snapshot("".join(self._chunks["stdout"]))
+                for path, payload in previous.items():
+                    if path not in self.previous:
+                        self.previous[path] = payload
+                        self._offsets[path] = len(payload)
+                return snapshot
+            except (OSError, ValueError) as error:
+                self._capture_error("native_capture", error)
+                return {}
         if self.home is None:
             return {}
         # No broad Home scan: credentials/settings are never session artifacts.
@@ -282,6 +306,10 @@ class SessionCapture:
         with self._lock:
             self.sync_native(final=True)
             stdout = "".join(self._chunks["stdout"])
+            if self.backend == "codex":
+                from .agent_runtime.codex_ledger import codex_thread_id_from_stream
+
+                self.session_id = codex_thread_id_from_stream(stdout) or self.session_id
             state = (
                 "timed_out"
                 if timed_out

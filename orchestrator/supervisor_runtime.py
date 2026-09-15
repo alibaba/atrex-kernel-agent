@@ -666,6 +666,7 @@ class SupervisorRuntime:
                 scope_root / "sessions", backend=backend, command=command,
                 provider_home=provider_home,
                 context=dict(request_environment),
+                native_environment=dict(environment),
             )
             print(f"[orchestrator] Session capture: {capture.root}", flush=True)
         except BaseException:

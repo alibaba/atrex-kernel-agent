@@ -79,13 +79,15 @@ def _usage(value: object) -> TokenUsage:
     components = (
         _counter(value, "input_tokens"),
         _counter(value, "output_tokens"),
-        _counter(value, "cached_input_tokens"),
-        _counter(value, "cache_write_input_tokens"),
+        _counter(value, "cached_input_tokens") if "cached_input_tokens" in value else 0,
+        _counter(value, "cache_write_input_tokens") if "cache_write_input_tokens" in value else 0,
         _counter(value, "total_tokens"),
     )
     if any(item is None for item in components):
         return TokenUsage.unavailable()
-    return TokenUsage(*components, measurement="exact")
+    if components[0] < components[2]:
+        return TokenUsage.unavailable()
+    return TokenUsage(components[0] - components[2], *components[1:], measurement="exact")
 
 
 CODEX_LEDGER_CAPABILITIES = AgentRuntimeCapabilities(
@@ -100,13 +102,41 @@ def observe_codex_usage(
     observer: "CodexSessionLedgerObserver",
     thread_id: str,
     stream_terminal: TokenUsage,
+    *,
+    captured=None,
 ) -> tuple[
     tuple[NormalizedAgentEvent, ...],
     TokenUsage,
     AgentRuntimeCapabilities,
     tuple[str, ...],
 ]:
+    try:
+        # Advance even when capture wins, so a later resume's ledger fallback
+        # cannot count this invocation again.
+        observed = _observe_codex_usage(observer, thread_id, stream_terminal)
+    except Exception:
+        if captured is not None and captured[1].measurement == "exact":
+            observer.invalidate()
+            return captured
+        raise
+    if captured is not None and (captured[1].measurement == "exact" or captured[2].usage_delta_observed or any(
+        "capture" in warning or "pipe" in warning for warning in captured[3]
+    )):
+        # This may include native child usage that a root-only ledger cannot
+        # replace. Reconciliation must not silently lose children or capture errors.
+        return captured
+    return observed
+
+
+def _observe_codex_usage(observer, thread_id, stream_terminal):
     if stream_terminal.total_tokens is not None:
+        # Adapter terminal input includes cache reads; native/accounting buckets
+        # are disjoint. Normalize before comparing, never add cache reads twice.
+        if stream_terminal.input_tokens is not None:
+            stream_terminal = replace(
+                stream_terminal,
+                input_tokens=stream_terminal.input_tokens - (stream_terminal.cache_read_tokens or 0),
+            )
         observation = observer.observe_reconciled(thread_id, stream_terminal)
         return (
             observation.events,
@@ -186,6 +216,12 @@ class CodexSessionLedgerObserver:
         self._path: Path | None = None
         self._offset = 0
         self._session_usage: TokenUsage | None = None
+        self._invalidated = False
+
+    def invalidate(self) -> None:
+        # A different accounting source consumed an invocation whose ledger
+        # cursor could not advance. Never replay those old tokens on fallback.
+        self._invalidated = True
 
     def _rollout_paths(self) -> Iterator[Path]:
         root = self.home / "sessions"
@@ -251,6 +287,8 @@ class CodexSessionLedgerObserver:
         return thread_id
 
     def observe(self, thread_id: str) -> CodexLedgerObservation:
+        if self._invalidated:
+            raise CodexLedgerError("Codex ledger cursor missed an accounted invocation")
         path = self._find_rollout_path(thread_id)
         if self._thread_id and thread_id != self._thread_id:
             raise CodexLedgerError("Codex observer cannot switch thread ids")

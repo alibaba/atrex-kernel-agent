@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -992,9 +993,31 @@ class Model:
                 stdout=sandbox.ABBA_RESULT_PREFIX + json.dumps(payload) + "\n",
                 stderr="",
             )
+            real_run = subprocess.run
+            real_is_dir = Path.is_dir
+            gateway_script = str(Path(sandbox.__file__).resolve())
+
+            def is_gpu_submission(command: list[str]) -> bool:
+                return len(command) > 1 and str(command[1]) == gateway_script
+
+            def run_measurement(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                if is_gpu_submission(command):
+                    return completed
+                # subprocess is shared across modules: Git discovery must not
+                # receive the measurement JSON as its --git-common-dir result.
+                return real_run(command, **kwargs)
+
+            def reject_measurement_path(path: Path, **kwargs: object) -> bool:
+                # Python 3.14 suppresses this filesystem error in is_dir(); keep
+                # the regression visible on every supported Python version.
+                if sandbox.ABBA_RESULT_PREFIX in str(path):
+                    raise OSError(errno.ENAMETOOLONG, "measurement JSON used as a path", str(path))
+                return real_is_dir(path, **kwargs)
+
             output = io.StringIO()
             with (
-                patch.object(sandbox.subprocess, "run", return_value=completed) as run,
+                patch.object(sandbox.subprocess, "run", side_effect=run_measurement) as run,
+                patch.object(Path, "is_dir", reject_measurement_path),
                 patch("sys.stdout", output),
             ):
                 status = sandbox._run_agent_abba(args, workspace, [], 0)
@@ -1005,8 +1028,7 @@ class Model:
                 return [
                     call
                     for call in mock.call_args_list
-                    if len(call.args[0]) > 1
-                    and str(call.args[0][1]).endswith("supervisor/gateway.py")
+                    if is_gpu_submission(call.args[0])
                 ]
 
             # Workspace discovery may run Git; count only actual measurement subprocesses.
@@ -1028,7 +1050,8 @@ class Model:
                 {"incumbent", "candidate"},
             )
             with (
-                patch.object(sandbox.subprocess, "run", return_value=completed) as duplicate_run,
+                patch.object(sandbox.subprocess, "run", side_effect=run_measurement) as duplicate_run,
+                patch.object(Path, "is_dir", reject_measurement_path),
                 self.assertRaisesRegex(SystemExit, "duplicate Gateway task") as duplicate,
             ):
                 sandbox._run_agent_abba(args, workspace, [], 0)

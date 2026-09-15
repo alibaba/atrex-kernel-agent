@@ -199,7 +199,11 @@ class CliAgentRuntime:
         from ..supervisor_runtime import active_supervisor_runtime
 
         supervisor = active_supervisor_runtime()
-        managed_home = supervisor is not None and supervisor.config.agent_sandbox != "none"
+        from ..agent_sandbox import _enabled
+
+        managed_home = supervisor is not None and bool(_enabled(
+            supervisor.config.agent_sandbox, supervisor.config.bwrap_executable,
+        ))
         if self.id == "codex" and not managed_home:
             try:
                 codex_temporary_home = CodexTemporaryHome(codex_home(environment))
@@ -252,10 +256,7 @@ class CliAgentRuntime:
         from ..session_capture import captured_observation
 
         captured = captured_observation(stdout, events, capabilities)
-        if captured is not None:
-            events, terminal_usage, capabilities, capture_errors = captured
-            observation_errors += capture_errors
-        elif codex_observer is not None:
+        if codex_observer is not None:
             observed_session_id = codex_thread_id_from_stream(stdout)
             try:
                 if not observed_session_id:
@@ -269,13 +270,19 @@ class CliAgentRuntime:
                     capabilities,
                     ledger_errors,
                 ) = observe_codex_usage(
-                    codex_observer, observed_session_id, terminal_usage
+                    codex_observer, observed_session_id, terminal_usage, captured=captured,
                 )
                 observation_errors += ledger_errors
             except Exception as exc:
+                if captured is not None:
+                    events, terminal_usage, capabilities, capture_errors = captured
+                    observation_errors += capture_errors
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",
                 )
+        elif captured is not None:
+            events, terminal_usage, capabilities, capture_errors = captured
+            observation_errors += capture_errors
         if codex_temporary_home is not None:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:

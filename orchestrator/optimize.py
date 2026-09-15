@@ -1034,8 +1034,13 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from long_horizon.audit_recovery import PromotionAuditRecoveryRequired
+
     try:
         result = _run_main(argv)
+    except PromotionAuditRecoveryRequired as error:
+        print(f"[orchestrator] STOP {error}", file=sys.stderr, flush=True)
+        return 2
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():

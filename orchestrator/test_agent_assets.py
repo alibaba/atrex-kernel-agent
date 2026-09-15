@@ -88,6 +88,30 @@ class AgentAssetsTest(unittest.TestCase):
                         proxy.assert_called_once_with(options)
         self.assertEqual(operations, {"run", "profile", "check", "disassemble", "dev", "env", "record-read"})
 
+    def test_installed_workflow_guidance_has_no_retired_episode_skill_or_telemetry(self) -> None:
+        retired = "gpu-kernel-episode-loop"
+        self.assertFalse((REPO_ROOT / "skills" / retired / "SKILL.md").exists())
+        self.assertNotIn(retired, SKILL_PATHS)
+        with self.assertRaisesRegex(ValueError, "Unknown Agent skills"):
+            resolve_agent_skills((retired,))
+
+        link_runtime(self.workspace)
+        self.assertFalse((self.workspace / "skills" / retired).exists())
+        self.assertFalse((self.workspace / "tools/iteration_trace.py").exists())
+        # Check the actual Agent-facing replacements, including their detailed
+        # examples, rather than keeping a test dependency on an unused Skill.
+        for name in ("gpu-measurement", "runtime-records"):
+            paths = list((self.workspace / "skills" / name).rglob("*.md"))
+            self.assertTrue(paths)
+            for path in paths:
+                with self.subTest(skill=name, path=path.name):
+                    text = path.read_text()
+                    for obsolete in (
+                        retired, "iteration_trace.py", "phase-start", "phase-end", "source-read",
+                        "plans/", "profiles/", "<PLAN_", "<PROFILE_DIR>",
+                    ):
+                        self.assertNotIn(obsolete, text)
+
     def test_required_record_skill_has_complete_materialized_references(self) -> None:
         import re
 

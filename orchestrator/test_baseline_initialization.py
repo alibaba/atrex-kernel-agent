@@ -154,6 +154,8 @@ class BaselineInitializationTest(unittest.TestCase):
                 for obsolete in (
                     "plans/", "profiles/", "PLAN_GENERATOR", "{{", "candidate_commit",
                     "git add", "git commit", "best_commit", "policy_review_request",
+                    "gpu-kernel-episode-loop", "iteration_trace.py",
+                    "phase-start", "phase-end", "source-read",
                 ):
                     self.assertNotIn(obsolete, prompt)
                 self.assertIn("Git is Supervisor-only", prompt)
@@ -163,9 +165,6 @@ class BaselineInitializationTest(unittest.TestCase):
                 self.assertIn("--kind episode-report", prompt)
                 compact = " ".join(prompt.lower().split())
                 self.assertTrue("not required" in compact or "no plan-generator" in compact)
-        skill = (REPO_ROOT / "skills/gpu-kernel-episode-loop/SKILL.md").read_text()
-        for obsolete in ("plans/", "profiles/", "<PLAN_", "<PROFILE_DIR>"):
-            self.assertNotIn(obsolete, skill)
 
     def episode_prompt(self, *, platform="L20N", arch="sm_120", skills=(), **options) -> str:
         campaign = self.campaign(atrex_bench_root=str(self.bench), agent_skills=skills)
