@@ -20,7 +20,7 @@
     "common": "instructions.md",
     "setup": "setup.md",
     "episode": "episode.md",
-    "fast_episode": "fast_episode.md",
+    "fast_episode": "episode.md",
     "framework_baseline": "framework_baseline.md"
   },
   "environment": {

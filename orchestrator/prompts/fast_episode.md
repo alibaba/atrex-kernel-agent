@@ -21,7 +21,7 @@ own only this episode branch, its final `kernel.py`, journal, and terminal hando
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are linked into the worktree.
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are linked into the worktree.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}
@@ -149,7 +149,7 @@ are omitted and reported in `wiki_usage_errors`, while the experiment still reco
 
 ```bash
 {{JOURNAL_COMMAND}} append --path {{JOURNAL_PATH_SHELL}} \
-  --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":"<evaluator-kernel-hash-or-empty>"},"decision":"keep_as_best | reject_and_continue | blocked","wiki_usage_status":"not_queried"}'
+  --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":"<evaluator-kernel-hash-or-empty>"},"decision":"keep_as_best | reject_and_continue | blocked","wiki_usage_status":"<declared|no_material_use|not_queried>"}'
 ```
 
 If the result passes and its `performance_score` exceeds `best_score`, update `best_commit`,

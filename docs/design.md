@@ -63,7 +63,7 @@ promotion; it is not a second CLI.
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
 ├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
-├── plugins/                           # Local tool manifests, adapters and default plugin configuration
+├── plugins/                           # Automatically discovered local plugin manifests and adapters
 ├── reference-projects/                # Optional source-search repositories
 └── 3rdparty/                          # Profiler-analysis dependencies
 ```
@@ -79,7 +79,7 @@ points.
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
 | GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
-| Optimization knowledge | Enabled plugins (GPU Wiki by default), then optional `reference-projects/` | Evidence references recorded by the episode |
+| Optimization knowledge | Discovered plugins, then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
 incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
@@ -161,9 +161,9 @@ direct host GPU execution, and profiler use outside the sandbox.
 
 ### Workspace runtime assets
 
-`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and enabled plugin
-resources inside each campaign workspace. The default GPU Wiki plugin provides `gpu-wiki.query`
-through `tools/plugin.py`. Plugin manifests own resources and phase instructions; campaign locks
+`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and discovered
+plugin resources inside each campaign workspace. AKA discovers each `plugins/*/plugin.json`; the
+bundled GPU Wiki plugin provides `gpu-wiki.query` through `tools/plugin.py`. Plugin manifests own resources and phase instructions; campaign locks
 check versions and content fingerprints on resume. See [Local plugins](plugins.md).
 It also prepares backend-specific project-local discovery trees:
 

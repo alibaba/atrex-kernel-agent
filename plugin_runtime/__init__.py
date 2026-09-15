@@ -1,6 +1,6 @@
-"""Local plugin APIs independent of AKA, GPU Wiki and coding-agent backends."""
+"""AKA local plugin runtime."""
 
-from .registry import HostLayout, Plugin, PluginRegistry
+from .registry import Plugin, PluginRegistry
 from .schema import PluginError
 
-__all__ = ["HostLayout", "Plugin", "PluginError", "PluginRegistry"]
+__all__ = ["Plugin", "PluginError", "PluginRegistry"]

@@ -11,8 +11,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from orchestrator.plugins import (
-    DEFAULT_CONFIG,
-    STATE_DIR,
     PluginError,
     PluginRegistry,
     decode_json,
@@ -22,10 +20,6 @@ from orchestrator.plugins import (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config",
-        help="Plugin configuration JSON (defaults to campaign lock or bundled defaults)",
-    )
     parser.add_argument(
         "--workspace", default=os.environ.get("ATREX_PLUGIN_WORKSPACE", ".")
     )
@@ -39,11 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         workspace = Path(args.workspace).resolve()
-        lock = workspace / STATE_DIR / "lock.json"
-        config = args.config or os.environ.get("ATREX_PLUGIN_CONFIG")
-        if config is None and lock.exists():
-            config = read_json(lock)["config"]
-        registry = PluginRegistry(config or DEFAULT_CONFIG)
+        registry = PluginRegistry()
         registry.check_lock(workspace)
         if args.command == "list":
             result = {"tools": registry.catalog(), "skills": registry.skill_catalog()}

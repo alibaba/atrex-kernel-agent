@@ -1,4 +1,4 @@
-"""Reusable local plugin registry for tools and Skills; host policy is injected."""
+"""AKA local plugin discovery, workspace wiring, and tool invocation."""
 
 from __future__ import annotations
 
@@ -16,28 +16,20 @@ from .execution import execute_json, resolve_command
 from .schema import PluginError, check_schema, read_json, validate_schema
 
 NAME = re.compile(r"[a-z][a-z0-9-]*")
-
-
-@dataclass(frozen=True)
-class HostLayout:
-    """Host-owned installation paths; the runtime knows no Agent or workflow names."""
-
-    state_dir: str = ".plugins"
-    skill_roots: tuple[str, ...] = ()
-    reserved_mounts: frozenset[str] = frozenset()
-
-    def __post_init__(self) -> None:
-        for name in (self.state_dir, *self.skill_roots):
-            path = Path(name)
-            if (
-                not name
-                or path.is_absolute()
-                or ".." in path.parts
-                or path == Path(".")
-            ):
-                raise PluginError(
-                    "invalid_config", f"host path must be workspace-relative: {name}"
-                )
+STATE_DIR = ".atrex_plugins"
+SKILL_ROOTS = (".claude/skills", ".qoder/skills", ".agents/skills")
+RESERVED_MOUNTS = frozenset(
+    {
+        "tools",
+        "reference",
+        "skills",
+        "reference-projects",
+        "atrex-bench",
+        "memory",
+        "plans",
+        "profiles",
+    }
+)
 
 
 def local_file(root: Path, relative: str) -> Path:
@@ -77,7 +69,6 @@ class Plugin:
     manifest: dict
     tools: dict
     resources: dict[str, tuple[Path, bool]]
-    settings: dict
     fingerprint: str
 
     @property
@@ -86,45 +77,22 @@ class Plugin:
 
 
 class PluginRegistry:
-    def __init__(self, config: Path | str, *, layout: HostLayout | None = None):
-        self.layout = layout or HostLayout()
-        self.config = Path(config).resolve()
-        value = read_json(self.config)
-        if (
-            not isinstance(value, dict)
-            or type(value.get("schema_version")) is not int
-            or value["schema_version"] != 1
-            or set(value) != {"schema_version", "plugins"}
-            or not isinstance(value["plugins"], list)
-        ):
+    def __init__(self, plugin_dir: Path | str):
+        self.plugin_dir = Path(plugin_dir).resolve()
+        if not self.plugin_dir.is_dir():
             raise PluginError(
-                "invalid_config", "expected schema_version=1 and plugins array"
+                "invalid_config", f"missing plugin directory: {self.plugin_dir}"
             )
         self.plugins: list[Plugin] = []
         seen = set()
-        for entry in value["plugins"]:
-            if (
-                not isinstance(entry, dict)
-                or set(entry) - {"path", "enabled", "settings"}
-                or not isinstance(entry.get("path"), str)
-                or not isinstance(entry.get("enabled", True), bool)
-                or not isinstance(entry.get("settings", {}), dict)
-            ):
-                raise PluginError(
-                    "invalid_config",
-                    "plugin entry requires path and optional enabled boolean",
-                )
-            if not entry.get("enabled", True):
-                continue
+        manifests = sorted(self.plugin_dir.glob("*/plugin.json"))
+        for manifest in manifests:
             try:
-                plugin = self._load(
-                    (self.config.parent / entry["path"]).resolve(),
-                    entry.get("settings", {}),
-                )
+                plugin = self._load(manifest.parent)
             except OSError as exc:
                 raise PluginError(
                     "invalid_manifest",
-                    f"cannot read local plugin {entry['path']}: {exc}",
+                    f"cannot read local plugin {manifest.parent}: {exc}",
                 ) from exc
             if plugin.id in seen:
                 raise PluginError("invalid_config", f"duplicate plugin id: {plugin.id}")
@@ -133,7 +101,7 @@ class PluginRegistry:
         self.mounts()  # Fail before installing anything on conflicting resources.
         self.environment(Path("/workspace"))
 
-    def _load(self, root: Path, settings: dict) -> Plugin:
+    def _load(self, root: Path) -> Plugin:
         manifest_path = root / "plugin.json"
         manifest = read_json(manifest_path)
         required = {"id", "version", "api_version"}
@@ -143,7 +111,6 @@ class PluginRegistry:
             "skills",
             "environment",
             "tools",
-            "settings_schema",
         }
         if (
             not isinstance(manifest, dict)
@@ -162,19 +129,10 @@ class PluginRegistry:
             raise PluginError(
                 "invalid_manifest", f"invalid plugin identity/API: {manifest_path}"
             )
-        for key in optional - {"settings_schema"}:
+        for key in optional:
             if key in manifest and not isinstance(manifest[key], dict):
                 raise PluginError("invalid_manifest", f"{key} must be an object")
         files = {manifest_path}
-        if "settings_schema" in manifest:
-            path = local_file(root, manifest["settings_schema"])
-            files.add(path)
-            schema = read_json(path)
-            check_schema(schema)
-            try:
-                validate_schema(schema, settings, "settings")
-            except PluginError as exc:
-                raise PluginError("invalid_config", str(exc)) from exc
         for phase, relative in manifest.get("instructions", {}).items():
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", phase):
                 raise PluginError(
@@ -203,10 +161,9 @@ class PluginRegistry:
                     "input_schema",
                     "output_schema",
                     "timeout_seconds",
-                    "entrypoint",
                     "command",
                 }
-                or len({"entrypoint", "command"} & tool.keys()) != 1
+                or "command" not in tool
             ):
                 raise PluginError("invalid_manifest", f"invalid tool: {name}")
             if (
@@ -271,26 +228,18 @@ class PluginRegistry:
         for name, skill in sorted(manifest.get("skills", {}).items()):
             digest.update(name.encode())
             digest.update(tree_digest((root / skill["path"]).resolve()).encode())
-        return Plugin(root, manifest, tools, resources, settings, digest.hexdigest())
+        return Plugin(root, manifest, tools, resources, digest.hexdigest())
 
     def snapshot(self) -> dict:
         return {
             "api_version": 1,
-            "config": str(self.config),
-            "layout": {
-                "state_dir": self.layout.state_dir,
-                "skill_roots": list(self.layout.skill_roots),
-                "reserved_mounts": sorted(self.layout.reserved_mounts),
-            },
+            "plugin_dir": str(self.plugin_dir),
             "plugins": [
                 {
                     "id": p.id,
                     "version": p.manifest["version"],
                     "root": str(p.root),
                     "fingerprint": p.fingerprint,
-                    "settings_digest": hashlib.sha256(
-                        json.dumps(p.settings, sort_keys=True).encode()
-                    ).hexdigest(),
                     "commands": {
                         name: list(tool["resolved_command"])
                         for name, tool in p.tools.items()
@@ -311,12 +260,12 @@ class PluginRegistry:
             for name, skill in plugin.manifest.get("skills", {}).items():
                 source = (plugin.root / skill["path"]).resolve()
                 if (source / "SKILL.md").is_file():
-                    for skill_root in self.layout.skill_roots:
+                    for skill_root in SKILL_ROOTS:
                         entries[f"{skill_root}/{name}"] = source
             for name, source in entries.items():
                 candidate = Path(name)
-                occupied = [Path(self.layout.state_dir), *(Path(key) for key in mounts)]
-                if name in self.layout.reserved_mounts or any(
+                occupied = [Path(STATE_DIR), *(Path(key) for key in mounts)]
+                if name in RESERVED_MOUNTS or any(
                     candidate.is_relative_to(path) or path.is_relative_to(candidate)
                     for path in occupied
                 ):
@@ -325,14 +274,12 @@ class PluginRegistry:
         return mounts
 
     def check_lock(self, workspace: Path) -> None:
-        lock = workspace / self.layout.state_dir / "lock.json"
-        if lock.exists():
-            current = PluginRegistry(self.config, layout=self.layout).snapshot()
-            if read_json(lock) != current or current != self.snapshot():
-                raise PluginError(
-                    "plugin_changed",
-                    "plugin configuration, code, or host layout changed; restore the locked inputs or use a new workspace",
-                )
+        lock = workspace / STATE_DIR / "lock.json"
+        if lock.exists() and read_json(lock) != self.snapshot():
+            raise PluginError(
+                "plugin_changed",
+                "discovered plugins changed; restore the locked inputs or use a new workspace",
+            )
 
     def install(self, workspace: Path) -> None:
         self.check_lock(workspace)
@@ -345,7 +292,7 @@ class PluginRegistry:
                 raise PluginError(
                     "mount_conflict", f"plugin mount would replace {destination}"
                 )
-        state = workspace / self.layout.state_dir
+        state = workspace / STATE_DIR
         state.mkdir(parents=True, exist_ok=True)
         for name, source in mounts.items():
             destination = workspace / name
@@ -358,7 +305,7 @@ class PluginRegistry:
         (state / "instructions.md").write_text(self.instructions("common"))
         ignore = workspace / ".gitignore"
         existing = ignore.read_text() if ignore.exists() else ""
-        additions = [f"/{self.layout.state_dir}/", *(f"/{name}" for name in mounts)]
+        additions = [f"/{STATE_DIR}/", *(f"/{name}" for name in mounts)]
         missing = [line for line in additions if line not in existing.splitlines()]
         if missing:
             with ignore.open("a") as stream:
@@ -425,7 +372,7 @@ class PluginRegistry:
         environment = {}
         for plugin in self.plugins:
             for key, value in plugin.manifest.get("environment", {}).items():
-                if key in environment or key in {"PLUGIN_ROOT", "PLUGIN_SETTINGS_JSON"}:
+                if key in environment or key == "PLUGIN_ROOT":
                     raise PluginError(
                         "invalid_manifest", f"conflicting environment variable: {key}"
                     )
@@ -435,11 +382,7 @@ class PluginRegistry:
         return environment
 
     def _tool_environment(self, plugin: Plugin) -> dict[str, str]:
-        return dict(
-            os.environ,
-            PLUGIN_ROOT=str(plugin.root),
-            PLUGIN_SETTINGS_JSON=json.dumps(plugin.settings),
-        )
+        return dict(os.environ, PLUGIN_ROOT=str(plugin.root))
 
     def call(
         self, name: str, request: object, workspace: Path, *, cwd: Path | None = None
@@ -485,8 +428,8 @@ class PluginRegistry:
             status = "interrupted"
             raise
         finally:
-            event_dir = workspace / self.layout.state_dir / "calls"
-            if (workspace / self.layout.state_dir / "lock.json").exists():
+            event_dir = workspace / STATE_DIR / "calls"
+            if (workspace / STATE_DIR / "lock.json").exists():
                 event = {
                     "call_id": call_id,
                     "tool": name,

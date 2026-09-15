@@ -23,13 +23,13 @@ def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
             "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
             f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-            f"`gen-plan` and enabled plugin skills. Invoke a named skill with {syntax}."
+            f"`gen-plan` and discovered plugin skills. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
         f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-        "and enabled plugin skills."
+        "and discovered plugin skills."
     )
 
 
@@ -119,7 +119,7 @@ def link_runtime(
     """Link repository runtime assets into a campaign workspace.
 
     The gpu-kernel-* skills reference ``tools/``, ``reference/``, ``skills/``,
-    ``reference-projects/``, and enabled plugin resources by relative path. Sessions run with
+    ``reference-projects/``, and discovered plugin resources by relative path. Sessions run with
     ``cwd=workspace``, so symlink them in using absolute targets. Atrex-Bench evaluator code is
     copied from its checkout without linking the checkout's private ``data/`` tree.
 

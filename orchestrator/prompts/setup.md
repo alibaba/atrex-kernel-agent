@@ -19,7 +19,7 @@ profiles). Sandbox input filtering is owned by `tools/sandbox.py`; deleting camp
 payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are symlinked into the workspace — read/use them by relative path
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are symlinked into the workspace — read/use them by relative path
   (e.g. `python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 
@@ -39,7 +39,7 @@ through `tools/sandbox.py`.
 
 Do the following, in order, but only through baseline:
 
-1. **Step 0 — Hardware specs + Roofline.** Follow enabled plugin instructions for hardware lookup.
+1. **Step 0 — Hardware specs + Roofline.** Follow discovered plugin instructions for hardware lookup.
    Name the true product `{{PLATFORM}}` and the authoritative runtime architecture exactly.
    Source every hardware limit from auditable records or primary reference specifications. Unknown
    values remain unknown; never borrow a sibling product's numbers. Compute the Roofline from the

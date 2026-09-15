@@ -13,16 +13,6 @@ from .schema import PluginError, decode_json
 
 
 def resolve_command(root: Path, declaration: dict) -> tuple[str, ...]:
-    if "entrypoint" in declaration:
-        entry = declaration["entrypoint"]
-        if not isinstance(entry, str):
-            raise PluginError(
-                "invalid_manifest", "entrypoint must be a relative Python file"
-            )
-        path = (root / entry).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
-            raise PluginError("invalid_manifest", f"missing entrypoint: {entry}")
-        return (sys.executable, str(path))
     command = declaration["command"]
     if (
         not isinstance(command, list)

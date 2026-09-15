@@ -19,7 +19,7 @@ final squash promotion. You own only this episode branch and its structured evid
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are linked into the worktree.
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are linked into the worktree.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}

@@ -14,6 +14,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
@@ -187,7 +188,6 @@ class Campaign:
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
-    plugin_config: str = ""  # local JSON configuration; empty uses bundled defaults
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
     optimization_mode: str = (
         "leaderboard"  # permissive contest flow or strict production gate
@@ -364,13 +364,9 @@ class Campaign:
                 )
                 return
 
-    @property
+    @cached_property
     def plugin_registry(self) -> PluginRegistry:
-        return (
-            PluginRegistry(self.plugin_config)
-            if self.plugin_config
-            else PluginRegistry()
-        )
+        return PluginRegistry()
 
     def plugin_directive(self, phase: str) -> str:
         registry = self.plugin_registry

@@ -17,7 +17,7 @@ Use this skill when the user provides PyTorch logic or a kernel demo and asks to
 
 This stage first understands the PyTorch semantics, then learns the framework APIs (CuteDSL or FlyDSL) through enabled knowledge tools, implements `kernel.py` and `test_kernel.py`, validates correctness, records performance, writes `baseline_report.md`, and writes `memory/v0.json`.
 
-The orchestrator installs enabled plugin instructions at `.atrex_plugins/instructions.md`.
+The orchestrator installs discovered plugin instructions at `.atrex_plugins/instructions.md`.
 
 ## Phase 1: Understand PyTorch Semantics
 

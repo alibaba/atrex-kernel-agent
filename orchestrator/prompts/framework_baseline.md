@@ -48,7 +48,7 @@ Hard rules for this session:
 
 - Workspace: `{{WORKSPACE}}` — this is your cwd, and a git repo. **git HEAD is the PyTorch V0 baseline.**
 - You are producing version **v{{N}}**. Previous version: **v{{PREV}}** (the PyTorch reference measurement).
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus enabled plugin resources are symlinked into the workspace — read/use them by relative path
+- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are symlinked into the workspace — read/use them by relative path
   (`python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 
