@@ -5387,16 +5387,23 @@ def _agent_gateway_failure(
     error = error if isinstance(error, dict) else {}
     error_class = str(error.get("error_class") or "unknown")
     cancelled = job.get("status") in {"cancelled", "canceled"}
-    infrastructure = _infrastructure_failure(job) or cancelled
+    infrastructure = _infrastructure_failure(job)
+    # Decide diagnostic visibility before cancellation is classified as infrastructure.
+    message = (
+        "hidden evaluator case failed"
+        if generalized and not (infrastructure or error_class == "unknown")
+        else _bounded_text(error.get("message") or "Gateway job failed")
+    )
+    if cancelled:
+        message = "Gateway job was cancelled; no completed Kernel measurement is available." + (
+            f" {message}" if error.get("message") else ""
+        )
+        infrastructure = True
     if infrastructure:
         error_class = "infra"
     unknown = error_class == "unknown"
     projected = error_response(
-        "Gateway job was cancelled; no completed Kernel measurement is available."
-        if cancelled else
-        "hidden evaluator case failed"
-        if generalized and not (infrastructure or unknown)
-        else _bounded_text(error.get("message") or "Gateway job failed"),
+        message,
         code="gateway_infrastructure" if infrastructure else "gateway_job_failed",
         repairable=not (infrastructure or unknown),
         error_class=error_class,

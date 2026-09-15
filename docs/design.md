@@ -222,6 +222,8 @@ project checkout. A venv inside a project does not expose that project's source 
 aliases remain available at their original paths, but sibling Provider histories and credentials do
 not; login material still uses the explicit Provider credential mounts into the session Home.
 Installation sources/destinations that overlap private Runtime paths or Provider state are rejected.
+Dependencies use iterative depth-first traversal, preserving nearest-installed resolution and cycle
+deduplication; graphs exceeding 512 distinct packages fail with an explicit installation error.
 Unknown launchers receive only their exact executable and shebang interpreter; missing dependencies
 must be installed in a supported package/runtime layout, never fixed by mounting a broader parent.
 
@@ -356,6 +358,10 @@ reservation. Corrupt cached evidence is never reused as a measurement.
 Cancellation without a result or error (including empty objects) is an infrastructure failure,
 not a Candidate verdict. If retries are exhausted, the Gateway record and exact Kernel remain
 available for audit, but no completed task-dedup entry or Supervisor measurement receipt is issued.
+Cancelled responses retain the cancellation notice plus bounded underlying error message/reason;
+hidden-case Candidate diagnostics remain masked. For failed Dev/Probe jobs with an unknown
+command exit status, `exit_code` is omitted rather than returning `null` or substituting the
+Agate CLI's exit code. These rules apply to immediate responses and historical record reads.
 Cancelled jobs with partial output are not completed measurements either. Cache publication and
 trusted reuse both check this boundary. Completed markers from older releases that refer to a
 cancelled or infrastructure-failed record are ignored on the next request, including in authorized

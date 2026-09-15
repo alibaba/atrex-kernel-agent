@@ -85,6 +85,34 @@ class AgentInstallationTests(unittest.TestCase):
         self.assertIn((root, root), mounts)
         self.assertNotIn(alias, [destination for _, destination in mounts])
 
+    def test_deep_package_graph_uses_the_package_cap_not_python_recursion(self):
+        modules = self.home / ".local/lib/node_modules"
+        target = self.npm(modules / "@openai/codex", "@openai/codex", dependencies={"p1": "1"})
+        for index in range(1, 512):
+            self.npm(modules / f"p{index}", f"p{index}", dependencies={f"p{index + 1}": "1"} if index < 511 else {})
+        previous = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(128)
+            self.assertIn((modules / "p511", modules / "p511"), self.mounts(target))
+            self.npm(modules / "p511", "p511", dependencies={"p512": "1"})
+            self.npm(modules / "p512", "p512")
+            with self.assertRaisesRegex(RuntimeError, "exceeds 512 packages") as rejected:
+                self.mounts(target)
+            self.assertIs(type(rejected.exception), RuntimeError)
+        finally:
+            sys.setrecursionlimit(previous)
+
+    def test_nested_dependency_takes_precedence_over_hoisted_copy_with_cycles(self):
+        modules = self.home / ".local/lib/node_modules"
+        root = modules / "@openai/codex"
+        target = self.npm(root, "@openai/codex", dependencies={"helper": "1"})
+        self.npm(root / "node_modules/helper", "helper", peerDependencies={"@openai/codex": "1"})
+        hoisted = modules / "helper"
+        self.npm(hoisted, "helper")
+        mounts = self.mounts(target)
+        self.assertIn((root, root), mounts)
+        self.assert_not_exposed(mounts, hoisted)
+
     def test_legacy_claude_local_package_does_not_expose_sibling_histories(self):
         root = self.home / ".claude/local"
         target = self.npm(root, "@anthropic-ai/claude-code")

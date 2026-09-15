@@ -188,7 +188,15 @@ Native usage capture does not depend on bwrap. With `--agent-sandbox=none` (or `
 without bwrap), capture uses the CLI's actual configuration directory, including
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It captures only the requested session and its
 children, not unrelated sessions or credentials in the same Home. Pre-invocation
-native history is excluded on resume. Codex's healthy stream-only partial capture does not
+native history is excluded on resume. Shared-Home file discovery runs at most once every five
+seconds, with a forced scan when Codex announces a different thread and at invocation completion.
+Already-discovered files are still tailed every second. Codex identity caching includes missing or
+unfinished headers: unchanged files are not re-read, while size/mtime or file-identity changes
+invalidate negative results. Parsed identities stay cached, so the existing tail reader can flag
+replacement or truncation of a selected transcript rather than silently dropping its capture.
+Discovery and metadata caches retain at most the native file limit, and removed paths are pruned
+on the next scan.
+Codex's healthy stream-only partial capture does not
 block an available ledger reconciliation in either session entry point. A capture that includes
 child counters or has `capture_complete=false` is not replaced by a root-only total; capture health
 is passed as a structured flag, never inferred from warning text. Sandbox mode

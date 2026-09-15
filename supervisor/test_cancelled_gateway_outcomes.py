@@ -55,6 +55,96 @@ class CancelledOutcomeTests(unittest.TestCase):
                         )
                         self.assertFalse(gateway._cacheable_gateway_outcome(job))
 
+    def test_cancellation_diagnostics_survive_response_and_historical_read(self):
+        error = {
+            "error_class": "infra", "reason": "scheduler_stopped",
+            "message": "Scheduler restarted before command launch.",
+            "details": {"private": "do-not-project"},
+        }
+        for status in ("cancelled", "canceled"):
+            for kind in ("run", "profile", "check", "disassemble", "dev", "inline-profile"):
+                with self.subTest(status=status, kind=kind):
+                    history = self.root / f"{status}-{kind}"
+                    evidence = history / "e0001/supervisor_runtime"
+                    job = cancelled(error, status=status)
+                    self.typed.side_effect = lambda *a, **kw: [process(job)]
+                    self.dev_run.return_value = process(job)
+                    with patch.dict(os.environ, {
+                        gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(evidence),
+                    }):
+                        if kind == "dev":
+                            code, output = self.dev()
+                        elif kind == "inline-profile":
+                            code, output = self.run_task("--kind", "profile", "--include-raw-profile")
+                        else:
+                            code, output = self.run_task("--kind", kind)
+                        self.assertNotEqual(code, 0)
+                        immediate = json.loads(output)
+                        record = gateway._load_gateway_record(self.workspace, immediate["gateway_record_id"])
+                        raw = (record["record_dir"] / "raw-result.json").read_text()
+                        self.assertEqual(json.loads(raw), job)
+                        self.assertEqual(list((evidence / "gateway-tasks").glob("*.json")), [])
+                    with patch.dict(os.environ, {
+                        gateway.SUPERVISOR_EVIDENCE_ROOT_ENV: str(history / "e0002/supervisor_runtime"),
+                        gateway.SUPERVISOR_HISTORY_ROOT_ENV: str(history),
+                    }):
+                        code, output = self.run_task("--kind", "record-read", "--record-id", record["record_id"])
+                        self.assertEqual(code, 0)
+                        historical = json.loads(output.removeprefix(gateway.RECORD_RESULT_PREFIX))["result"]
+                    self.assertEqual(historical["error"], immediate["error"])
+                    for public in (immediate, historical):
+                        self.assertFalse(public["ok"])
+                        self.assertFalse(public["repairable"])
+                        self.assertEqual(public["error"]["reason"], error["reason"])
+                        self.assertTrue(public["error"]["message"].startswith("Gateway job was cancelled;"))
+                        self.assertIn(error["message"], public["error"]["message"])
+                        self.assertNotIn("do-not-project", json.dumps(public))
+                        self.assertNotIn("exit_code", public)
+
+    def test_cancellation_diagnostics_are_bounded_and_keep_hidden_cases_private(self):
+        for status in ("cancelled", "canceled"):
+            for generalized in (False, True):
+                with self.subTest(status=status, generalized=generalized):
+                    error = {"error_class": "infra", "message": "diagnostic " * 1000, "reason": "r" * 500}
+                    public = gateway._agent_gateway_failure(cancelled(error, status=status), None, generalized=generalized)
+                    self.assertLessEqual(len(public["error"]["message"]), 1100)
+                    self.assertTrue(public["error"]["message"].endswith("…"))
+                    self.assertEqual(len(public["error"]["reason"]), 128)
+                    for message in (None, ""):
+                        public = gateway._agent_gateway_failure(
+                            cancelled({"error_class": "infra", "reason": "stopped", "message": message}, status=status),
+                            None, generalized=generalized,
+                        )
+                        self.assertEqual(public["error"]["message"], "Gateway job was cancelled; no completed Kernel measurement is available.")
+                        self.assertEqual(public["error"]["reason"], "stopped")
+                    error = {"error_class": "candidate", "message": "PRIVATE_SHAPE_INPUT", "reason": "check_failed"}
+                    public = gateway._agent_gateway_failure(cancelled(error, status=status), None, generalized=generalized)
+                    self.assertEqual("PRIVATE_SHAPE_INPUT" in public["error"]["message"], not generalized)
+                    self.assertEqual("hidden evaluator case failed" in public["error"]["message"], generalized)
+                    self.assertFalse(public["repairable"])
+
+    def test_failed_dev_exit_code_is_omitted_unless_an_integer_is_known(self):
+        for remote in (None, {}, *({"exit_code": value} for value in (None, False, "1", 1, 0))):
+            with self.subTest(remote=remote):
+                error = {"error_class": "infra", "reason": "exec_failed", "message": "Probe failed."}
+                self.dev_run.return_value = process({
+                    "job_id": "probe-failed", "status": "failed", "result": remote, "error": error,
+                })
+                code, output = self.dev()
+                self.assertNotEqual(code, 0)
+                immediate = json.loads(output)
+                code, output = self.run_task("--kind", "record-read", "--record-id", immediate["gateway_record_id"])
+                self.assertEqual(code, 0)
+                historical = json.loads(output.removeprefix(gateway.RECORD_RESULT_PREFIX))["result"]
+                expected = (remote or {}).get("exit_code")
+                for public in (immediate, historical):
+                    if isinstance(expected, int) and not isinstance(expected, bool):
+                        self.assertEqual(public["exit_code"], expected)
+                    else:
+                        self.assertNotIn("exit_code", public)
+                    self.assertFalse(public["ok"])
+                    self.assertEqual(public["error"]["reason"], error["reason"])
+
     def test_typed_cancellations_are_recorded_but_do_not_poison_dedup(self):
         for kind in ("run", "profile", "check", "disassemble"):
             for error in (None, {}):

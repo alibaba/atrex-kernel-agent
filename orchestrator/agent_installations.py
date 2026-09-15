@@ -8,7 +8,7 @@ import re
 import shlex
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 _CLI_PACKAGES = frozenset({
@@ -108,15 +108,7 @@ def installation_mounts(
                 raise RuntimeError(f"Conflicting Agent installation mounts: {destination}")
             mounts[destination] = source
 
-    def package(root: Path) -> None:
-        canonical = root.resolve(strict=True)
-        add(root)
-        add(canonical)
-        if canonical in packages:
-            return
-        packages.add(canonical)
-        if len(packages) > 512:
-            raise RuntimeError("Agent installation dependency graph exceeds 512 packages")
+    def package_dependencies(canonical: Path) -> Iterator[Path]:
         manifest = _package_manifest(canonical)
         dependencies: dict[str, object] = {}
         for field in ("dependencies", "optionalDependencies", "peerDependencies"):
@@ -129,8 +121,27 @@ def installation_mounts(
             for parent in (canonical, *canonical.parents):
                 dependency = parent / "node_modules" / name
                 if (dependency / "package.json").is_file():
-                    package(dependency)
+                    yield dependency
                     break  # Node's nearest installed dependency wins.
+
+    def package(root: Path) -> None:
+        # Explicit DFS preserves dependency/alias validation order without using
+        # Python's call stack for a potentially deep installed-package graph.
+        pending = [iter((root,))]
+        while pending:
+            selected = next(pending[-1], None)
+            if selected is None:
+                pending.pop()
+                continue
+            canonical = selected.resolve(strict=True)
+            add(selected)
+            add(canonical)
+            if canonical in packages:
+                continue
+            packages.add(canonical)
+            if len(packages) > 512:
+                raise RuntimeError("Agent installation dependency graph exceeds 512 packages")
+            pending.append(package_dependencies(canonical))
 
     def executable(value: str) -> None:
         if not value:

@@ -150,10 +150,10 @@ class SessionCapture:
         self._sequence = len(initial)
         self._write_usage(False)
 
-    def _native_paths(self) -> dict[str, tuple[Path, int]]:
+    def _native_paths(self, *, force: bool = False) -> dict[str, tuple[Path, int]]:
         if self._host_transcripts is not None:
             try:
-                return self._host_transcripts.selected()
+                return self._host_transcripts.selected(force=force)
             except (OSError, ValueError) as error:
                 self._capture_error("native_capture", error)
                 return {}
@@ -227,7 +227,7 @@ class SessionCapture:
     def sync_native(self, *, final: bool = False) -> None:
         with self._lock:
             self._sync_stdout_usage()
-            for name, (path, previous_size) in self._native_paths().items():
+            for name, (path, previous_size) in self._native_paths(force=final).items():
                 try:
                     tail = self._tail(name, path, previous_size)
                     if tail is None:
