@@ -15,7 +15,7 @@ from orchestrator.constants import ATREX_BENCH_RUNTIME_ENV
 from supervisor import gateway as sandbox
 from tools import local_gateway
 
-from long_horizon import journal, report, session
+from long_horizon import session
 
 
 class GatewayRecordTest(unittest.TestCase):
@@ -1266,99 +1266,6 @@ class ClaudeRetryTest(unittest.TestCase):
             }
         )
         self.assertIn("ENOTFOUND", session._claude_transient_api_error(stdout))
-
-
-class RepairableReportTest(unittest.TestCase):
-    def test_bad_report_can_be_fixed_and_resubmitted(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            journal_path = root / "journal.json"
-            handoff_path = root / "handoff.json"
-            journal.initialize(
-                journal_path,
-                episode=3,
-                base_commit="base",
-                branch="episode-3",
-            )
-            journal.append_experiment(journal_path, {"name": "trial"})
-
-            with self.assertRaisesRegex(ValueError, "outcome.summary"):
-                report.submit_report(
-                    journal_path=journal_path,
-                    handoff_path=handoff_path,
-                    expected_episode=3,
-                    base_commit="base",
-                    branch="episode-3",
-                    state="pivot",
-                    outcome={"summary": "", "next_directions": []},
-                )
-            self.assertFalse(handoff_path.exists())
-
-            result = report.submit_report(
-                journal_path=journal_path,
-                handoff_path=handoff_path,
-                expected_episode=3,
-                base_commit="base",
-                branch="episode-3",
-                state="pivot",
-                outcome={"summary": "direction exhausted", "next_directions": []},
-            )
-            self.assertTrue(result["ok"])
-            self.assertEqual(
-                json.loads(handoff_path.read_text(encoding="utf-8")),
-                {"status": "pivot"},
-            )
-
-    def test_candidate_report_identifies_a_passing_selected_experiment(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            journal_path = root / "journal.json"
-            handoff_path = root / "handoff.json"
-            journal.initialize(
-                journal_path,
-                episode=1,
-                base_commit="base",
-                branch="episode-1",
-            )
-            journal.append_experiment(
-                journal_path,
-                {
-                    "name": "candidate",
-                    "decision": "keep_as_best",
-                    "evaluation": {
-                        "correctness": "pass",
-                        "performance": "improved",
-                        "latency_us": 10.0,
-                        "kernel_hash": "abc",
-                    },
-                },
-            )
-            with self.assertRaisesRegex(ValueError, "selected_experiment_index"):
-                report.submit_report(
-                    journal_path=journal_path,
-                    handoff_path=handoff_path,
-                    expected_episode=1,
-                    base_commit="base",
-                    branch="episode-1",
-                    state="candidate_ready",
-                    candidate_commit="candidate",
-                    outcome={"summary": "faster", "next_directions": []},
-                )
-            result = report.submit_report(
-                journal_path=journal_path,
-                handoff_path=handoff_path,
-                expected_episode=1,
-                base_commit="base",
-                branch="episode-1",
-                state="candidate_ready",
-                candidate_commit="candidate",
-                outcome={
-                    "summary": "faster",
-                    "next_directions": [],
-                    "selected_experiment_index": 1,
-                },
-            )
-            self.assertTrue(result["ok"])
 
 
 if __name__ == "__main__":

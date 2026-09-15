@@ -910,6 +910,8 @@ def validate_terminal(
     branch: str,
     state: str,
     candidate_commit: str = "",
+    campaign_root: Path | None = None,
+    workspace: Path | None = None,
 ) -> str:
     try:
         value = load(path)
@@ -934,50 +936,23 @@ def validate_terminal(
     if not isinstance(directions, list) or any(not isinstance(item, str) for item in directions):
         return "episode journal next_directions is invalid"
     if runtime_managed:
-        events = value.get("direction_events")
-        if not isinstance(events, list):
-            return "Runtime Journal direction_events is invalid"
-        direction_status: dict[str, str] = {}
-        for event in events:
-            if not isinstance(event, dict):
-                return "Runtime Journal contains an invalid Direction event"
-            direction_id = event.get("direction_id")
-            action = event.get("action")
-            if not isinstance(direction_id, str) or action not in {
-                "propose", "start", "complete", "abandon", "block", "defer"
-            }:
-                return "Runtime Journal contains an invalid Direction event"
-            direction_status[direction_id] = {
-                "propose": "proposed",
-                "start": "in_progress",
-                "complete": "completed",
-                "abandon": "abandoned",
-                "block": "blocked",
-                "defer": "deferred",
-            }[action]
-        active = sorted(
-            direction_id
-            for direction_id, direction_state in direction_status.items()
-            if direction_state == "in_progress"
-        )
-        if active:
-            return f"Runtime Journal has in-progress Directions: {active}"
-        if state == "candidate_ready":
-            selected_id = outcome.get("selected_experiment_id")
-            selected = next(
-                (
-                    experiment
-                    for experiment in experiments
-                    if isinstance(experiment, dict)
-                    and experiment.get("experiment_id") == selected_id
-                ),
-                None,
+        from supervisor.errors import RuntimeStateError
+        from supervisor.journal import validate_report_evidence
+
+        if campaign_root is None or workspace is None:
+            return "Runtime Journal recheck requires Campaign history and Kernel workspace"
+        try:
+            validate_report_evidence(
+                path, campaign_root, workspace, status=state,
+                selected_id=outcome.get("selected_experiment_id"),
             )
-            if selected is None:
-                return "Runtime Journal selected Experiment is missing"
+        except (OSError, ValueError, RuntimeStateError) as error:
+            return f"Runtime Journal terminal evidence is invalid: {error}"
         if not value.get("finalized_at"):
             return "episode journal is not finalized"
-        if state == "candidate_ready" and value.get("candidate_commit") != candidate_commit:
+        if state == "candidate_ready" and (
+            not candidate_commit or value.get("candidate_commit") != candidate_commit
+        ):
             return "episode journal candidate_commit does not match handoff"
         return ""
     if state == "candidate_ready":

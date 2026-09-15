@@ -37,6 +37,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 class SupervisorRuntimeTest(unittest.TestCase):
     @patch("orchestrator.agent_sandbox.platform.system", return_value="Linux")
     def test_projected_candidate_is_measured_then_reported_to_supervisor_git(self, _system: object) -> None:
+        from long_horizon.store import CampaignStore
         from supervisor.journal import initialize_journal
         from supervisor.test_journal import _record_kernel
 
@@ -44,6 +45,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
             workspace = Path(directory).resolve() / "worktree"
             workspace.mkdir()
             subprocess.run(["git", "init", "-qb", "episode-1"], cwd=workspace, check=True)
+            CampaignStore.ensure_excluded(workspace)
             (workspace / "kernel.py").write_text("# seed\n")
             subprocess.run(["git", "add", "kernel.py"], cwd=workspace, check=True)
             subprocess.run([
@@ -71,13 +73,32 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 ))
                 _, record_id = _record_kernel(capability.evidence_root, source)
                 path = capability.evidence_root / "journal.json"
-                journal = initialize_journal(path, episode=1, base_commit=base, branch="episode-1")
-                experiment_id = "experiment_" + "1" * 32
-                journal["experiments"] = [{
-                    "experiment_id": experiment_id, "action": "keep_after",
+                initialize_journal(path, episode=1, base_commit=base, branch="episode-1")
+
+                def journal_request(operation: str, body: dict) -> dict:
+                    response = runtime.execute_journal(capability, {"operation": operation, "request": body})
+                    self.assertEqual(response["exit_code"], 0, response)
+                    return json.loads(response["stdout"])
+
+                direction_id = journal_request("direction_update", {
+                    "action": "propose", "name": "identity", "hypothesis": "avoid a copy",
+                    "rationale": "memory traffic", "plan": ["measure candidate"],
+                    "success_criteria": ["correct and faster"], "stop_conditions": ["no gain"],
+                })["direction_id"]
+                journal_request("direction_update", {
+                    "action": "start", "direction_id": direction_id, "analysis": "explore",
+                })
+                experiment_id = journal_request("experiment_record", {
+                    "direction_id": direction_id, "name": "identity measurement",
+                    "hypothesis": "avoid a copy", "change": "return input", "action": "keep_after",
                     "gateway_record_ids": [record_id],
-                }]
-                path.write_text(json.dumps(journal))
+                    "evidence": "Evaluate passed", "analysis": "candidate is correct",
+                })["experiment_id"]
+                journal_request("direction_update", {
+                    "action": "complete", "direction_id": direction_id,
+                    "analysis": "measured candidate", "hypothesis_status": "supported",
+                    "supporting_experiment_ids": [experiment_id],
+                })
                 request = {"operation": "episode_report", "request": {
                     "status": "candidate_ready", "summary": "measured candidate",
                     "selected_experiment_id": experiment_id,
@@ -85,6 +106,7 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 (capability.workspace / "kernel.py").write_text("# not measured\n")
                 result = runtime.execute_journal(capability, request)
                 self.assertEqual(result["exit_code"], 2)
+                self.assertIn("Kernel exactly matches current kernel.py", result["stdout"])
                 (capability.workspace / "kernel.py").write_bytes(source)
                 result = runtime.execute_journal(capability, request)
                 self.assertEqual(result["exit_code"], 0, result)
@@ -344,6 +366,20 @@ class SupervisorRuntimeTest(unittest.TestCase):
                     expected_code=2,
                 )
                 self.assertTrue(rejected["repairable"])
+                journal_path = capability.evidence_root / "journal.json"
+                before_report = journal_path.read_bytes()
+                rejected = call(
+                    "episode-report",
+                    request={
+                        "status": "candidate_ready", "summary": "old report format",
+                        "selected_experiment_index": 1,
+                    },
+                    expected_code=2,
+                )
+                self.assertTrue(rejected["repairable"])
+                self.assertEqual(rejected["error"]["unexpected_fields"], ["selected_experiment_index"])
+                self.assertEqual(journal_path.read_bytes(), before_report)
+                self.assertFalse((workspace / ".atrex_long_horizon" / "handoff.json").exists())
                 self.assertEqual(
                     call(
                         "episode-report",
@@ -357,6 +393,18 @@ class SupervisorRuntimeTest(unittest.TestCase):
                 self.assertEqual(
                     load_journal(capability.evidence_root / "journal.json")["state"], "pivot"
                 )
+                damaged = load_journal(journal_path)
+                damaged["direction_events"] = [{
+                    "direction_id": direction, "action": "complete",
+                }]
+                journal_path.write_text(json.dumps(damaged))
+                unavailable = call(
+                    "episode-report", request={"status": "pivot", "summary": "cannot repair private history"},
+                    expected_code=75,
+                )
+                self.assertFalse(unavailable["repairable"])
+                self.assertIn("Invalid Direction history", unavailable["error"]["message"])
+                self.assertIn("operator", unavailable["error"]["next_action"])
                 (capability.evidence_root / "journal.json").write_text("corrupt fixture")
                 unavailable = call(
                     "list-directions", "--output-path", "scratch/directions.json",

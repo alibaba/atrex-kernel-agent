@@ -609,6 +609,8 @@ class LongHorizonCampaign:
             branch=worktree.branch,
             state=handoff.status,
             candidate_commit=candidate,
+            campaign_root=self.workspace,
+            workspace=worktree.path,
         )
         if diagnosis:
             return diagnosis

@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from long_horizon.journal import validate_terminal
 from supervisor.errors import AgentRequestError
 from supervisor.identifiers import kernel_id_for_digest
 from supervisor.journal import (
@@ -48,6 +49,34 @@ def _record_kernel(evidence: Path, source: bytes) -> tuple[str, str]:
 
 
 class SupervisorJournalServiceTest(unittest.TestCase):
+    def test_bad_report_can_be_repaired_without_publishing_a_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            evidence = workspace / ".private" / "evidence"
+            path = evidence / "journal.json"
+            handoff = workspace / ".atrex_long_horizon" / "handoff.json"
+            initialize_journal(path, episode=3, base_commit="base", branch="episode-3")
+            service = SupervisorJournalService(
+                workspace=workspace, campaign_root=workspace, evidence_root=evidence,
+            )
+            original = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "summary must be non-empty"):
+                service.execute({
+                    "operation": "episode_report",
+                    "request": {"status": "pivot", "summary": " "},
+                })
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(handoff.exists())
+            self.assertEqual(service.execute({
+                "operation": "episode_report",
+                "request": {"status": "pivot", "summary": "Need a different direction"},
+            }), {"status": "accepted", "message": "Report accepted and recorded"})
+            self.assertEqual(json.loads(handoff.read_text()), {"status": "pivot"})
+            self.assertEqual(validate_terminal(
+                path, expected_episode=3, base_commit="base", branch="episode-3", state="pivot",
+                campaign_root=workspace, workspace=workspace,
+            ), "")
+
     def test_genealogy_validates_visible_history_and_remains_queryable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -287,13 +316,19 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 "status": "candidate_ready", "summary": "measured candidate",
                 "selected_experiment_id": experiment_id,
             }
-            for field in ("git_commit_hash", "candidate_commit", "last_trial_commit"):
+            journal_before_report = service.path.read_bytes()
+            for field, value in {
+                "git_commit_hash": commit, "candidate_commit": commit,
+                "last_trial_commit": commit, "selected_experiment_index": 1,
+            }.items():
                 with self.assertRaises(AgentRequestError) as rejected:
                     service.execute({"operation": "episode_report", "request": {
-                        **valid_report, field: commit,
+                        **valid_report, field: value,
                     }})
                 self.assertEqual(rejected.exception.response["error"]["unexpected_fields"], [field])
                 self.assertEqual(rejected.exception.response["error"]["missing_fields"], [])
+                self.assertEqual(service.path.read_bytes(), journal_before_report)
+                self.assertFalse((workspace / ".atrex_long_horizon" / "handoff.json").exists())
             (workspace / "kernel.py").write_bytes(source + b"# not measured\n")
             with self.assertRaisesRegex(ValueError, "exactly matches current kernel.py"):
                 service.execute({"operation": "episode_report", "request": valid_report})
@@ -322,6 +357,15 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 capture_output=True, check=True,
             ).stdout.strip(), candidate)
             private = load_journal(evidence / "journal.json")
+            self.assertTrue(private["runtime_managed"])
+            self.assertEqual(private["outcome"]["selected_experiment_id"], experiment_id)
+            self.assertNotIn("selected_experiment_index", private["outcome"])
+            self.assertNotIn("evaluation", private["experiments"][0])
+            self.assertEqual(validate_terminal(
+                service.path, expected_episode=1, base_commit=commit, branch="episode-1",
+                state="candidate_ready", candidate_commit=candidate,
+                campaign_root=workspace, workspace=workspace,
+            ), "")
             self.assertEqual(
                 private["experiments"][0]["gateway_record_ids"],
                 [gateway_id],

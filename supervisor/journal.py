@@ -23,6 +23,12 @@ from supervisor.direction_genealogy import (
     relationship_fields,
     validate_relationship,
 )
+from supervisor.direction_lifecycle import (
+    CLOSED_STATUSES as _CLOSED_STATUSES,
+    CLOSURES as _CLOSURES,
+    DIRECTION_STATUS as _DIRECTION_STATUS,
+    advance_direction,
+)
 from supervisor.errors import AgentRequestError, RuntimeStateError, require_fields
 from supervisor.identifiers import (
     DIRECTION_ID_RE,
@@ -42,8 +48,6 @@ _PROPOSAL_FIELDS = {
 }
 _UPDATE_FIELDS = {"action", "direction_id", "analysis"}
 _CLOSURE_FIELDS = _UPDATE_FIELDS | {"hypothesis_status", "supporting_experiment_ids"}
-_CLOSURES = {"complete", "abandon", "block", "defer"}
-_CLOSED_STATUSES = {"completed", "abandoned", "blocked", "deferred"}
 _HYPOTHESIS_STATUSES = {"unresolved", "supported", "refuted"}
 _EVIDENCE_KINDS = {"run", "same_allocation_abba", "profile", "dev", "check", "disassemble"}
 _EXPERIMENT_FIELDS = {
@@ -55,14 +59,6 @@ _EXPERIMENT_FIELDS = {
     "evidence",
     "analysis",
     "action",
-}
-_DIRECTION_STATUS = {
-    "propose": "proposed",
-    "start": "in_progress",
-    "complete": "completed",
-    "abandon": "abandoned",
-    "block": "blocked",
-    "defer": "deferred",
 }
 _EXPERIMENT_ACTIONS = {
     "baseline",
@@ -170,17 +166,26 @@ def _visible_journals(current: Path, campaign_root: Path) -> list[dict[str, Any]
 
 def _direction_views(current: Path, campaign_root: Path) -> dict[str, dict[str, Any]]:
     views: dict[str, dict[str, Any]] = {}
+    statuses: dict[str, str] = {}
     for journal in _visible_journals(current, campaign_root):
-        events = journal.get("direction_events", [])
-        if not isinstance(events, list):
-            continue
-        for event in events:
+        started: set[str] = set()
+        for event in journal["direction_events"]:
             if not isinstance(event, dict):
-                continue
+                raise RuntimeStateError("Runtime Journal contains an invalid Direction event")
             direction_id = event.get("direction_id")
             action = event.get("action")
-            if not isinstance(direction_id, str) or action not in _DIRECTION_STATUS:
-                continue
+            try:
+                advance_direction(statuses, started, direction_id, action)
+                if action == "propose":
+                    for field in ("name", "hypothesis", "rationale", "recorded_at"):
+                        _text(event.get(field), f"Direction {field}")
+                    for field in ("plan", "success_criteria", "stop_conditions"):
+                        _text_list(event.get(field), f"Direction {field}")
+                _text_list(event.get("supporting_experiment_ids", []), "supporting_experiment_ids")
+            except ValueError as error:
+                raise RuntimeStateError(
+                    f"Invalid Direction history in Episode {journal['episode']}: {error}"
+                ) from error
             if action == "propose":
                 views[direction_id] = {
                     "direction_id": direction_id,
@@ -278,17 +283,24 @@ def update_direction(
     _mutable_journal(path)
     value = dict(request)
     action = value.get("action")
+    views = _direction_views(path, campaign_root)
+    statuses = {key: direction["status"] for key, direction in views.items()}
+    started = {
+        event["direction_id"] for event in load_journal(path)["direction_events"]
+        if event["action"] == "start"
+    }
     if action == "propose":
         require_fields(
             value, _PROPOSAL_FIELDS, optional=RELATIONSHIP_FIELDS, label="Direction proposal"
         )
         direction_id = f"direction_{uuid.uuid4().hex}"
+        advance_direction(statuses, started, direction_id, action)
         ancestry: dict[str, Any] = {}
         if set(value) & RELATIONSHIP_FIELDS:
             ancestry = validate_relationship(
                 direction_id,
                 value,
-                _direction_views(path, campaign_root),
+                views,
                 {
                     str(item["experiment_id"]): item
                     for item in _visible_experiments(path, campaign_root)
@@ -322,54 +334,7 @@ def update_direction(
             label=f"Direction {action}",
         )
         direction_id = _text(value["direction_id"], "Direction ID")
-        if DIRECTION_ID_RE.fullmatch(direction_id) is None:
-            raise ValueError("Direction ID has an invalid format")
-        views = _direction_views(path, campaign_root)
-        direction = views.get(direction_id)
-        if direction is None:
-            raise ValueError("Direction ID is outside visible history")
-        status = direction["status"]
-        if action == "start":
-            active = [
-                item["direction_id"]
-                for item in views.values()
-                if item["status"] == "in_progress" and item["direction_id"] != direction_id
-            ]
-            if active:
-                raise AgentRequestError(
-                    "only one Direction may be in progress; close or defer "
-                    f"{active[0]} before starting another",
-                    code="direction_in_progress",
-                    direction_id=active[0],
-                    next_action=(
-                        "Use update-direction to complete, abandon, block, or defer that Direction "
-                        "before starting another. Every closure requires supporting_experiment_ids "
-                        "and hypothesis_status; record real Gateway evidence first."
-                    ),
-                )
-            journal = load_journal(path)
-            started = {
-                event.get("direction_id")
-                for event in journal["direction_events"]
-                if isinstance(event, dict) and event.get("action") == "start"
-            }
-            if direction_id not in started and len(started) >= 3:
-                raise AgentRequestError(
-                    "Direction advancement limit exceeded: at most three Directions "
-                    "may be started in one Episode",
-                    code="direction_limit_exceeded",
-                    started_direction_ids=sorted(started),
-                    next_action=(
-                        "Do not start a fourth Direction. Continue an already-started Direction "
-                        "if it is in_progress, or explicitly restart it if closed; otherwise close remaining "
-                        "in_progress Directions and submit episode-report. You may still propose "
-                        "new Directions for later Episodes."
-                    ),
-                )
-            if status not in {"proposed", *_CLOSED_STATUSES}:
-                raise ValueError(f"Direction cannot start from status {status}")
-        elif status not in {"in_progress", *_CLOSED_STATUSES}:
-            raise ValueError(f"Direction cannot {action} from status {status}")
+        advance_direction(statuses, started, direction_id, action)
         supporting = (
             _closure_support(path, campaign_root, direction_id, value)
             if action in _CLOSURES else []
@@ -449,6 +414,9 @@ def _has_passing_evaluate(
             record.get("gateway_kind") == "run"
             and record.get("kernel_artifact_digest") == kernel_digest
             and record["result"].get("all_pass") is True
+            and not record.get("error")
+            and not record["result"].get("error")
+            and _completed_record(record)
         ):
             return True
     return False
@@ -475,7 +443,8 @@ def _validate_record_ids(evidence_root: Path, campaign_root: Path, raw: object) 
         digest = record.get("kernel_artifact_digest")
         kernel_id = record.get("kernel_id")
         if (
-            record.get("gateway_kind") not in _EVIDENCE_KINDS
+            not isinstance(record.get("gateway_kind"), str)
+            or record["gateway_kind"] not in _EVIDENCE_KINDS
             or not isinstance(digest, str)
             or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
             or not isinstance(kernel_id, str)
@@ -493,12 +462,12 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
     result = record["result"]
     execution_status = record.get("execution_status")
     if execution_status is not None:
-        return execution_status in {"completed", "succeeded"}
+        return isinstance(execution_status, str) and execution_status in {"completed", "succeeded"}
     if record.get("error") or result.get("error"):
         return False
     status = result.get("status")
     if status is not None:
-        return status in {"completed", "succeeded", "success", "ok"}
+        return isinstance(status, str) and status in {"completed", "succeeded", "success", "ok"}
     # Legacy successful evaluator/profiler payloads have no status. Require an
     # actual completion signal, never infer completion from an empty dictionary.
     return (
@@ -628,6 +597,60 @@ def _write_index(workspace: Path, file: object, payload: dict[str, Any]) -> dict
     return {"status": "written", "file": public, "count": count}
 
 
+def validate_report_evidence(
+    path: Path, campaign_root: Path, workspace: Path, *, status: str, selected_id: object,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], bytes | None]:
+    """Read-only preflight shared by HTTP submission and Supervisor terminal rechecks."""
+    current = load_journal(path)
+    directions = _direction_views(path, campaign_root)
+    in_progress = [
+        item["direction_id"] for item in directions.values() if item["status"] == "in_progress"
+    ]
+    if in_progress:
+        raise ValueError(
+            "Episode Report cannot leave a Direction in progress; record its real Gateway "
+            "evidence as an Experiment, then close with hypothesis_status and "
+            "supporting_experiment_ids: " + ", ".join(in_progress)
+        )
+    for event in current["direction_events"]:
+        if event.get("hypothesis_status") is not None:
+            _closure_support(path, campaign_root, event["direction_id"], event)
+    if status != "candidate_ready":
+        if selected_id is not None and selected_id != "":
+            raise ValueError(f"{status} cannot include selected_experiment_id")
+        return current, directions, None
+    if not isinstance(selected_id, str) or EXPERIMENT_ID_RE.fullmatch(selected_id) is None:
+        raise ValueError("candidate_ready requires a valid selected_experiment_id")
+    matches = [
+        item for item in current["experiments"]
+        if isinstance(item, dict) and item.get("experiment_id") == selected_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("selected_experiment_id must identify exactly one Experiment in the current Episode")
+    selected = matches[0]
+    action = selected.get("action")
+    if not isinstance(action, str) or action not in {"keep_after", "adopt", "baseline"}:
+        raise ValueError("selected Experiment must use baseline, keep_after, or adopt")
+    direction_id = selected.get("direction_id")
+    if not isinstance(direction_id, str) or direction_id not in directions:
+        raise ValueError("selected Experiment Direction is outside visible history")
+    if directions[direction_id]["status"] not in _CLOSED_STATUSES:
+        raise ValueError("selected Experiment Direction must have been started and closed")
+    records = _validate_record_ids(path.parent, campaign_root, selected.get("gateway_record_ids"))
+    kernel = workspace / "kernel.py"
+    if kernel.is_symlink() or not kernel.is_file():
+        raise ValueError("candidate kernel.py must be a regular file")
+    kernel_source = kernel.read_bytes()
+    kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
+    if not _has_passing_evaluate(path.parent, campaign_root, records, kernel_digest):
+        raise ValueError(
+            "selected Experiment must cite a passing Evaluate Gateway record whose "
+            "Kernel exactly matches current kernel.py; inspect the cited records "
+            "with tools/sandbox.py --kind record-read --record-id gateway-..."
+        )
+    return current, directions, kernel_source
+
+
 class SupervisorJournalService:
     """Execute scoped Journal operations over one private Episode document."""
 
@@ -737,58 +760,11 @@ class SupervisorJournalService:
             _text(blocker, "Episode Report blocker")
         elif blocker is not None and blocker != "":
             raise ValueError(f"Episode Report status {status} cannot include blocker")
-        directions = _direction_views(self.path, self.campaign_root)
-        in_progress = [
-            item["direction_id"] for item in directions.values() if item["status"] == "in_progress"
-        ]
-        if in_progress:
-            raise ValueError(
-                "Episode Report cannot leave a Direction in progress; record its real Gateway "
-                "evidence as an Experiment, then close with hypothesis_status and "
-                "supporting_experiment_ids: "
-                + ", ".join(in_progress)
-            )
-        current = load_journal(self.path)
-        for event in current["direction_events"]:
-            if event.get("hypothesis_status") is not None:
-                _closure_support(self.path, self.campaign_root, event["direction_id"], event)
         selected_id = raw.get("selected_experiment_id")
+        current, directions, kernel_source = validate_report_evidence(
+            self.path, self.campaign_root, self.workspace, status=status, selected_id=selected_id,
+        )
         candidate_commit = ""
-        kernel_source: bytes | None = None
-        if status == "candidate_ready":
-            if not isinstance(selected_id, str) or EXPERIMENT_ID_RE.fullmatch(selected_id) is None:
-                raise ValueError("candidate_ready requires a valid selected_experiment_id")
-            selected = next(
-                (
-                    item
-                    for item in current["experiments"]
-                    if item.get("experiment_id") == selected_id
-                ),
-                None,
-            )
-            if selected is None:
-                raise ValueError("selected_experiment_id must belong to the current Episode")
-            if selected.get("action") not in {"keep_after", "adopt", "baseline"}:
-                raise ValueError("selected Experiment must use baseline, keep_after, or adopt")
-            kernel = self.workspace / "kernel.py"
-            if kernel.is_symlink() or not kernel.is_file():
-                raise ValueError("candidate kernel.py must be a regular file")
-            kernel_source = kernel.read_bytes()
-            kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-            if not _has_passing_evaluate(
-                self.evidence_root,
-                self.campaign_root,
-                selected.get("gateway_record_ids"),
-                kernel_digest,
-            ):
-                raise ValueError(
-                    "selected Experiment must cite a passing Evaluate Gateway record whose "
-                    "Kernel exactly matches current kernel.py; inspect the cited records "
-                    "with tools/sandbox.py --kind record-read --record-id gateway-..."
-                )
-        else:
-            if selected_id is not None and selected_id != "":
-                raise ValueError(f"{status} cannot include selected_experiment_id")
         next_directions = [
             item["name"]
             for item in directions.values()

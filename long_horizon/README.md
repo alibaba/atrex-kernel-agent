@@ -8,6 +8,19 @@ Each canonical optimization version is explored in an isolated Git branch and wo
 agent may advance up to three Directions one at a time, run multiple related
 profile/research/edit/validate cycles, preserve scratch source copies, and finally submit one report: `candidate_ready`, `pivot`, or `blocked`.
 
+Agent reports use `python3 tools/sandbox.py --kind episode-report --request-file scratch/report.json`,
+which calls the Supervisor's HTTP Journal service. A candidate selects `selected_experiment_id`, not
+a positional index. The service verifies the cited Gateway measurement against current `kernel.py`;
+field-validation failures leave the Journal and handoff unchanged so the Agent can correct and resubmit.
+
+Terminal rechecks, including interrupted-Episode recovery, use the same evidence validation as
+submission: the selected Experiment must reference visible Kernel-bound Gateway records, including a
+completed, passing Evaluate for the exact candidate source. Direction events are replayed across visible
+Episodes with the same transition rules as updates, including one in-progress Direction and at most
+three distinct starts per Episode. Historical closed Directions may be reassessed or restarted. Invalid
+persisted histories are operator-facing Runtime state errors, not instructions for the Agent to rewrite
+private files. These checks do not submit GPU jobs or replace the policy and ABBA gates below.
+
 The Supervisor validates the Journal and selected measurement, commits the matching current Kernel,
 and checks production policy. Verification requests the Runtime's shared same-allocation ABBA
 service: reuse a completed matching record, otherwise measure and persist it. A strict correctness-passing
