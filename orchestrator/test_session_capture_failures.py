@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 
 from orchestrator.agent_runtime import process as agent_process
 from orchestrator.session_capture import SessionCapture
+from orchestrator.session_tail import CaptureLimits
 from orchestrator.test_session_capture import assistant, lines, usage
 
 
@@ -53,11 +54,11 @@ class CaptureFailureTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
-    def capture(self):
+    def capture(self, *, backend="claude", limits=None):
         return SessionCapture(
-            self.root / "captures", backend="claude",
-            command=["claude", "--session-id", "main", "initial prompt"],
-            provider_home=None, context={"attempt": "test"},
+            self.root / "captures", backend=backend,
+            command=[backend, "--session-id", "main", "initial prompt"],
+            provider_home=None, context={"attempt": "test"}, limits=limits,
         )
 
     @contextmanager
@@ -186,6 +187,92 @@ class CaptureFailureTests(unittest.TestCase):
                 process.kill()
                 capture.communicate(process)
             capture.finish(exit_status=process.returncode, timed_out=True)
+
+    def test_codex_identity_recursion_after_capture_limit_preserves_exit_and_usage(self):
+        terminal = lines({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}})
+        for limits in ({"file_bytes": 4096}, {"total_bytes": 4096}, {"records": 1}):
+            for status in (0, 7):
+                with self.subTest(limits=limits, status=status):
+                    capture = self.capture(backend="codex", limits=CaptureLimits(**limits))
+                    code = (
+                        "import sys\nprint('preamble', flush=True)\n"
+                        "for i in range(128):\n print('x'*4096, flush=True)\n"
+                        f"print({terminal!r}, end='', flush=True)\nraise SystemExit({status})\n"
+                    )
+                    with (
+                        patch("orchestrator.agent_runtime.codex_ledger.codex_thread_id_from_stream",
+                              side_effect=RecursionError("deep provider JSON")) as parse,
+                        # Make the first identity parse happen in the pipe's
+                        # overflow path, not opportunistically in the monitor.
+                        patch.object(capture, "_poll"),
+                    ):
+                        _, _, actual = self.run_capture(capture, [sys.executable, "-c", code])
+                        self.assertEqual(actual, status)
+                        capture.finish(exit_status=actual)
+                        self.assertEqual(sum(call.args == ("preamble\n",) for call in parse.call_args_list), 1)
+                    report = json.loads((capture.root / "token-usage.json").read_text())
+                    self.assertEqual(report["exit_status"], status)
+                    self.assertEqual(report["total"]["measurement"], "partial")
+                    self.assertEqual(report["terminal"]["total_tokens"], 12)
+                    self.assertFalse(report["capture_complete"])
+                    self.assertIn("codex_session_identity:RecursionError", str(report["capture_errors"]))
+                    self.assertNotIn("stdout_pipe_read", str(report["capture_errors"]))
+
+    def test_unexpected_capture_error_switches_to_drain_only_for_both_pipes(self):
+        for status in (0, 7):
+            with self.subTest(status=status):
+                capture = self.capture()
+                command, _, _ = self.command(status)
+                with patch.object(capture._budget, "retain", side_effect=RuntimeError("accounting failure")) as retain:
+                    _, _, actual = self.run_capture(capture, command)
+                    self.assertEqual(actual, status)
+                    # Stop processing the affected stream after the first error;
+                    # subsequent reads only discard bytes until EOF.
+                    self.assertEqual(retain.call_count, 2)
+                capture.finish(exit_status=actual)
+                report = json.loads((capture.root / "token-usage.json").read_text())
+                self.assertFalse(report["capture_complete"])
+                for name in ("stdout", "stderr"):
+                    self.assertIn(f"{name}_capture_processing:RuntimeError", str(report["capture_errors"]))
+                    self.assertNotIn(f"{name}_pipe_read", str(report["capture_errors"]))
+
+    def test_filter_and_projection_recursion_keep_draining_to_eof(self):
+        for target in ("record_provider_line", "SessionCapture._append"):
+            with self.subTest(target=target):
+                capture = self.capture()
+                command, stdout, stderr = self.command(7)
+                with patch(f"orchestrator.session_capture.{target}", side_effect=RecursionError("deep provider JSON")):
+                    self.assertEqual(self.run_capture(capture, command), (stdout, stderr, 7))
+                self.assert_final_capture_is_marked(capture, 7)
+
+    def test_codex_identity_recovers_from_bad_record_without_replaying_it_at_finish(self):
+        from orchestrator.agent_runtime.codex_ledger import codex_thread_id_from_stream
+        from orchestrator.test_unsandboxed_usage import ROOT_ID, codex_stream, count, metadata
+
+        capture = SessionCapture(self.root / "captures", backend="codex",
+                                 command=["codex", "exec", "prompt"], provider_home=None,
+                                 native_environment={"HOME": str(self.root / "home")}, context={})
+        native = self.root / "home/.codex/sessions/root.jsonl"
+        native.parent.mkdir(parents=True)
+        native.write_text(lines(metadata(ROOT_ID), count()))
+
+        def parse(text):
+            if text == "bad record\n":
+                raise RecursionError("deep provider JSON")
+            return codex_thread_id_from_stream(text)
+
+        with patch("orchestrator.agent_runtime.codex_ledger.codex_thread_id_from_stream", side_effect=parse) as parser:
+            capture._read_pipe("stdout", io.StringIO("bad record\n" + codex_stream()))
+            capture.sync_native()
+            self.assertEqual(capture.session_id, ROOT_ID)
+            self.assertEqual(capture._host_transcripts.session_id, ROOT_ID)
+            self.assertTrue(capture.native)
+            capture.finish(exit_status=0)
+            self.assertEqual(sum(call.args == ("bad record\n",) for call in parser.call_args_list), 1)
+        report = json.loads((capture.root / "token-usage.json").read_text())
+        self.assertEqual(report["total"]["total_tokens"], 110)
+        self.assertEqual(report["total"]["measurement"], "partial")
+        self.assertEqual(report["session_id"], ROOT_ID)
 
     def test_process_guard_preserves_outputs_even_if_final_capture_cannot_be_written(self):
         capture = self.capture()

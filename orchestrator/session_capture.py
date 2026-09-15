@@ -191,7 +191,11 @@ class SessionCapture:
             if self.backend == "codex":
                 from .agent_runtime.codex_ledger import codex_thread_id_from_stream
 
-                identity = codex_thread_id_from_stream(text)
+                try:
+                    identity = codex_thread_id_from_stream(text)
+                except Exception as error:
+                    self._capture_error("codex_session_identity", error)
+                    continue
                 if identity:
                     self.session_id = identity
                     if self._host_transcripts:
@@ -271,45 +275,56 @@ class SessionCapture:
             # Drain to EOF even if *all* persistence sinks have failed. The CLI
             # owns its lifetime; a full disk must not inject EPIPE/SIGPIPE into it.
             dropping_line = False
+            drain_only = False
             for line in iter(lambda: pipe.readline(self._budget.limits.line_bytes + 1), ""):
-                with self._lock:
-                    if dropping_line:
-                        dropping_line = not line.endswith("\n")
-                        continue
-                    size = len(line.encode("utf-8", errors="replace"))
-                    if size > self._budget.limits.line_bytes:
-                        dropping_line = not line.endswith("\n")
-                        self._budget.warning(f"{name}_line_bytes_exceeded")
-                        continue
-                    if not self._budget.retain(size, file_used=self._pipe_bytes[name]) or not self._budget.record():
-                        # Preserve small terminal counters even when the text
-                        # archive is full; the final usage still remains partial.
-                        if name == "stdout":
-                            self._sync_stdout_usage()
-                            self._feed_usage(path, line)
-                        continue
-                    self._pipe_bytes[name] += size
-                    # Keep the adapter's stream only within the capture budget.
-                    self._chunks[name].append(line)
-                    try:
-                        if name == "stdout" and not record_provider_line(line):
+                if drain_only:
+                    continue
+                try:
+                    with self._lock:
+                        if dropping_line:
+                            dropping_line = not line.endswith("\n")
                             continue
-                    except Exception as error:
-                        self._capture_error(f"{name}_capture_filter", error)
-                        continue
-                    if output is not None:
+                        size = len(line.encode("utf-8", errors="replace"))
+                        if size > self._budget.limits.line_bytes:
+                            dropping_line = not line.endswith("\n")
+                            self._budget.warning(f"{name}_line_bytes_exceeded")
+                            continue
+                        if not self._budget.retain(size, file_used=self._pipe_bytes[name]) or not self._budget.record():
+                            # Preserve small terminal counters even when the text
+                            # archive is full; the final usage still remains partial.
+                            if name == "stdout":
+                                self._sync_stdout_usage()
+                                self._feed_usage(path, line)
+                            continue
+                        self._pipe_bytes[name] += size
+                        # Keep the adapter's stream only within the capture budget.
+                        self._chunks[name].append(line)
                         try:
-                            output.write(line)
-                            output.flush()
+                            if name == "stdout" and not record_provider_line(line):
+                                continue
                         except Exception as error:
-                            self._capture_error(f"{name}_capture_write", error)
-                            close_output()
-                    if conversation_enabled:
-                        try:
-                            self._append(path, line)
-                        except Exception as error:
-                            self._capture_error(f"{name}_conversation_capture", error)
-                            conversation_enabled = False
+                            self._capture_error(f"{name}_capture_filter", error)
+                            continue
+                        if output is not None:
+                            try:
+                                output.write(line)
+                                output.flush()
+                            except Exception as error:
+                                self._capture_error(f"{name}_capture_write", error)
+                                close_output()
+                        if conversation_enabled:
+                            try:
+                                self._append(path, line)
+                            except Exception as error:
+                                self._capture_error(f"{name}_conversation_capture", error)
+                                conversation_enabled = False
+                except Exception as error:
+                    # Last-resort capture boundary: even an unexpected parser or
+                    # accounting failure must not close a live child pipe. Stop
+                    # all work on this stream except bounded reads through EOF.
+                    self._capture_error(f"{name}_capture_processing", error)
+                    drain_only = True
+                    close_output()
         except Exception as error:
             self._capture_error(f"{name}_pipe_read", error)
         finally:
@@ -354,10 +369,8 @@ class SessionCapture:
         with self._lock:
             self.sync_native(final=True)
             stdout = "".join(self._chunks["stdout"])
-            if self.backend == "codex":
-                from .agent_runtime.codex_ledger import codex_thread_id_from_stream
-
-                self.session_id = codex_thread_id_from_stream(stdout) or self.session_id
+            # sync_native already folded the retained stream and its identity.
+            # Re-parsing it here would replay failed records without that guard.
             state = (
                 "timed_out"
                 if timed_out

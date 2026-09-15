@@ -195,6 +195,9 @@ sink is disabled independently; healthy sinks keep recording. Capture errors are
 conversation can still be reconstructed from retained data if storage is writable again. If final
 persistence also fails, the process guard reports the capture failure without replacing the CLI's
 actual output, exit code, or timeout status. Missing raw evidence is never presented as complete.
+Codex Session ID parsing has the same failure isolation, including on the capture-overflow path.
+Unexpected capture-processing exceptions switch the affected pipe to bounded drain-only reads
+through EOF; they do not close it while the CLI is still writing.
 
 Usage comes from Provider counters, never a local token estimate. Claude uses the last counters per
 message ID, includes child responses, and reconciles them against the terminal result without adding
