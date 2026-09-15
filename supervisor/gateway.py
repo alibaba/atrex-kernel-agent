@@ -4769,9 +4769,11 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
                 raise RuntimeError("Supervisor Gateway task marker is invalid")
             record_id = state.get("gateway_record_id")
             if state.get("status") == "completed" and isinstance(record_id, str):
-                if _validated_cached_gateway_record(workspace, task_digest, record_id) is not None:
+                if _gateway_record_for_task_index(workspace, task_digest, record_id) is not None:
                     return None, record_id
-                # Preserve the immutable cancelled record, but replace its poisoned index.
+                # Preserve old evidence; a stale index cannot prevent a fresh reservation.
+                marker.unlink(missing_ok=True)
+                fsync_directory(root)
                 state = {}
             pid = state.get("pid")
             if isinstance(pid, int) and pid > 0:
@@ -4793,7 +4795,7 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
                     state.get("gateway_record_id"), str
                 ):
                     record_id = state["gateway_record_id"]
-                    if _validated_cached_gateway_record(workspace, task_digest, record_id) is not None:
+                    if _gateway_record_for_task_index(workspace, task_digest, record_id) is not None:
                         return None, record_id
         durable_write_json(
             marker,
@@ -4815,7 +4817,7 @@ def _complete_gateway_task(
     owner: str,
     gateway_record_id: str,
 ) -> None:
-    if _validated_cached_gateway_record(workspace, task_digest, gateway_record_id) is None:
+    if _gateway_record_for_task_index(workspace, task_digest, gateway_record_id) is None:
         _abandon_gateway_task(workspace, task_digest, owner)
         return
     with _locked_gateway_task_root(workspace) as root:
@@ -5453,6 +5455,20 @@ def _validated_cached_gateway_record(
     if hashlib.sha256(source).hexdigest() != record["kernel_sha256"]:
         raise RuntimeError("Gateway cache Kernel source does not match its recorded digest")
     return record if _record_has_cacheable_outcome(record) else None
+
+
+def _gateway_record_for_task_index(
+    workspace: Path, task_digest: str, record_id: str,
+) -> dict[str, Any] | None:
+    """A stale index is a cache miss, never permission to trust invalid evidence.
+
+    Use only for reservation/cache publication. Direct reads and trusted reuse
+    retain strict validation; original records and historical indexes stay untouched.
+    """
+    try:
+        return _validated_cached_gateway_record(workspace, task_digest, record_id)
+    except (ValueError, OSError, RuntimeError):
+        return None
 
 
 def _reusable_gateway_record(

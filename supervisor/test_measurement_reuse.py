@@ -175,7 +175,11 @@ class MeasurementReuseTest(unittest.TestCase):
         self.assertEqual(kwargs["comparison_run_timeout"], 120)
         options = list(kwargs["gateway_options"])
         self.args.baseline_path = options[options.index("--baseline-path") + 1]
-        status, output = self.measure(reuse=True, command=command)
+        try:
+            status, output = self.measure(reuse=True, command=command)
+        except SystemExit as exc:
+            # Match the real Gateway subprocess boundary for execution failures.
+            return subprocess.CompletedProcess([], 1, "", str(exc))
         return subprocess.CompletedProcess([], status, output, "")
 
     def verify(self) -> verifier.VerificationResult:
@@ -354,7 +358,7 @@ class MeasurementReuseTest(unittest.TestCase):
         gateway._abandon_gateway_task(self.workspace, digest, owner)
         self.assertIsNotNone(gateway._reserve_gateway_task(self.workspace, digest)[0])
 
-    def test_corrupt_record_does_not_authorize_promotion(self) -> None:
+    def test_corrupt_record_is_rebuilt_before_authorizing_promotion(self) -> None:
         _, output = self.measure(reuse=True)
         receipt = json.loads(
             next(
@@ -363,11 +367,47 @@ class MeasurementReuseTest(unittest.TestCase):
                 if line.startswith(gateway.SUPERVISOR_MEASUREMENT_PREFIX)
             )
         )
-        Path(receipt["artifact"]).with_name("kernel.py").write_text("tampered")
+        artifact = Path(receipt["artifact"])
+        original = artifact.read_bytes()
+        artifact.with_name("kernel.py").write_text("tampered")
+        task_digest = json.loads(original)["gateway_task_digest"]
+        with self.assertRaisesRegex(RuntimeError, "recorded digest"):
+            gateway._reusable_gateway_record(
+                self.workspace, task_digest, receipt["gateway_record_id"],
+            )
         result = self.verify()
-        self.assertEqual(result.gate, "ERROR")
-        self.assertIn("recorded digest", result.error)
+        self.assertTrue(result.passed, result.error)
+        self.assertFalse(result.reused)
+        self.assertNotEqual(result.gateway_record_id, receipt["gateway_record_id"])
+        self.assertIsNotNone(gateway._validated_cached_gateway_record(
+            self.workspace, task_digest, result.gateway_record_id,
+        ))
+        self.assertEqual(Path(result.artifact).with_name("kernel.py").read_bytes(), self.candidate)
+        self.assertEqual(artifact.read_bytes(), original)
+        self.assertEqual(artifact.with_name("kernel.py").read_text(), "tampered")
+        # Independent, validated physical-batch checkpoints can rebuild the record.
         self.assertEqual(self.calls, 3)
+        self.assertEqual(self.verify().gateway_record_id, result.gateway_record_id)
+        self.assertEqual(self.calls, 3)
+
+    def test_corrupt_record_cannot_authorize_promotion_if_rebuild_fails(self) -> None:
+        self.measure()
+        record = gateway._visible_gateway_records(self.workspace)[-1]
+        (record["record_dir"] / "kernel.py").write_text("tampered")
+        with patch(
+            "supervisor.abba_checkpoints.AbbaBatchStore.load",
+            side_effect=RuntimeError("checkpoint unavailable"),
+        ):
+            result = self.verify()
+        self.assertEqual(result.gate, "ERROR")
+        self.assertIn("checkpoint unavailable", result.error)
+        self.assertFalse(result.gateway_record_id)
+        self.assertFalse(result.artifact)
+        self.assertEqual(self.calls, 3)
+        marker = self.root / "private/gateway-tasks" / f"{record['gateway_task_digest']}.json"
+        self.assertFalse(marker.exists())
+        # Recovery failure released the reservation, so a later request can retry.
+        self.assertTrue(self.verify().passed)
 
     def test_evaluate_record_is_reused_without_gpu_calls(self) -> None:
         args = copy.copy(self.args)

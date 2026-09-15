@@ -351,7 +351,7 @@ and version labels do not identify a measurement. Ordinary Evaluate, custom-inpu
 partial-Shape ABBA are not substitutes for the required full-contract comparison. Unmatched
 measurement requests execute through the same batching, infrastructure retry, and three-call per-Shape median
 logic. In-flight requests are not submitted twice; an infrastructure failure or unfinished execution releases the task
-reservation. Corrupt cached evidence fails closed.
+reservation. Corrupt cached evidence is never reused as a measurement.
 
 Cancellation without a result or error (including empty objects) is an infrastructure failure,
 not a Candidate verdict. If retries are exhausted, the Gateway record and exact Kernel remain
@@ -361,6 +361,15 @@ trusted reuse both check this boundary. Completed markers from older releases th
 cancelled or infrastructure-failed record are ignored on the next request, including in authorized
 Episode history; the current task can be reserved and submitted afresh without deleting old records.
 Real completed negative correctness/compiler results remain eligible for deduplication.
+
+The same cache-miss handling applies when a completed marker points to evidence that raises
+`ValueError`, `OSError`, or `RuntimeError` during validation: unsupported old IDs, missing files,
+and task/Kernel identity mismatches cannot permanently block re-reservation. Under the task lock,
+the stale current index is removed, then a fresh reservation or a valid historical record is selected;
+invalid historical indexes are skipped without modifying the archive. Cache publication failures
+of this kind release only the matching owner's reservation. Direct record reads and trusted reuse
+remain strict; malformed reservation metadata, index write failures, and owner conflicts are not
+silently converted into cache misses.
 
 Each completed physical ABBA Shape batch is also checkpointed immediately under the private
 `abba-batches/` store. Its identity combines the exact comparison task, requested schedule, Shape
