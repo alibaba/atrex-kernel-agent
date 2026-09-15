@@ -252,6 +252,13 @@ and `wiki-hardware` for hardware facts. These dispatch to the existing scoped Wi
 the underlying retrieval scripts and stores remain Supervisor-private. The selected KernelWiki
 Skill contains the unified CLI guide; no duplicate Wiki directory is installed.
 
+The Gateway and Wiki parsers require exact long-option names (`allow_abbrev=False`).
+The HTTP boundary rejects abbreviations of policy-checked options before starting a subprocess.
+Gateway workspace, hardware, endpoint and timeout overrides are stripped before Campaign values
+are injected; Wiki store overrides and unsafe query-file paths are rejected. Thus an Agent cannot
+use `--ur`, `--workspac`, or `--fi` to bypass those checks. Dev argv after `--` remains command data,
+not Supervisor configuration.
+
 Evaluate returns only correctness, aggregate and
 opaque-per-shape latency, bounded diagnostics, and the immutable record/source identities. Profile
 uses an explicit allowlist of summary, clock-lock, Kernel-duration, SOL, resource, and requested

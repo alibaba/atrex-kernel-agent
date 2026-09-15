@@ -204,7 +204,7 @@ def field_answer(record: dict, dotted: str) -> dict:
 # ------------------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--store", default=None, help="Store root (default: this repo).")
     ap.add_argument("--product", default=None, help="Look up one part's spec sheet.")

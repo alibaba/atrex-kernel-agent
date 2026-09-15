@@ -536,7 +536,7 @@ def fallback(pool, ratio, limit, seed) -> list[tuple[dict, str]]:
 # ------------------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("query", nargs="*", help="Free-text terms (AND unless --any).")
     ap.add_argument("--json-store", default=None, help="Store root (default: this repo).")

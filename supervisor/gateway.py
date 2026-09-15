@@ -2029,6 +2029,7 @@ class _AgentArgumentParser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     parser = _AgentArgumentParser(
         description="Run correctness, performance, or profile commands on a remote GPU sandbox.",
+        allow_abbrev=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

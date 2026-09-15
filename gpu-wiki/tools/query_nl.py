@@ -1073,7 +1073,7 @@ def main(argv=None) -> int:
     wiki_stores: list[dict[str, object]] = []
     retrieval_failures: list[dict[str, str]] = []
     selected_cli = os.environ.get(BRIDGE_CLI_ENV, agent_launch.DEFAULT_CLI)
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     ap.add_argument("request", nargs="*")
     ap.add_argument("--file")
     ap.add_argument("--store-root", default=None)

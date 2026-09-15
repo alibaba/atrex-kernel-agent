@@ -424,8 +424,33 @@ _CANONICAL_GATEWAY_VALUE_OPTIONS = frozenset(
 )
 
 
+def _reject_abbreviated_options(argv: list[str], checked_options: frozenset[str] | set[str]) -> None:
+    """Fail before dispatch if a prefix could bypass a textual policy check.
+
+    Downstream parsers also disable abbreviations. The command after ``--`` is
+    opaque Dev input, not Supervisor options.
+    """
+    for value in argv:
+        if value == "--":
+            break
+        option = value.split("=", 1)[0]
+        if not option.startswith("--") or option in checked_options:
+            continue
+        if any(known.startswith(option) for known in checked_options):
+            raise AgentRequestError(
+                f"Abbreviated option {option!r} is not allowed.",
+                code="invalid_arguments",
+                next_action=(
+                    "Use complete option names for allowed inputs; remove Supervisor-owned "
+                    "endpoint, workspace, hardware, timeout, and Wiki store overrides. "
+                    "For a Wiki query file, use --file with a workspace-relative path."
+                ),
+            )
+
+
 def _without_endpoint_overrides(argv: list[str]) -> list[str]:
     """Remove Agent-supplied authority fields before applying Campaign policy."""
+    _reject_abbreviated_options(argv, _CANONICAL_GATEWAY_VALUE_OPTIONS)
     output: list[str] = []
     index = 0
     while index < len(argv):
@@ -437,7 +462,7 @@ def _without_endpoint_overrides(argv: list[str]) -> list[str]:
         if option in _CANONICAL_GATEWAY_VALUE_OPTIONS:
             if "=" not in value:
                 index += 1
-                if index >= len(argv):
+                if index >= len(argv) or argv[index].startswith("--"):
                     raise ValueError(f"{option} requires a value")
             index += 1
             continue
@@ -910,6 +935,9 @@ class SupervisorRuntime:
             "query_wiki": {"--json-store"},
             "query_hardware": {"--store"},
         }[str(tool)]
+        _reject_abbreviated_options(
+            argv, forbidden | {"--file", "--keep-workspace", "--max-bytes", "--brief"},
+        )
         if any(item.split("=", 1)[0] in forbidden for item in argv):
             raise ValueError("Agent cannot override the Supervisor-owned Wiki store")
         if _has_option(argv, "--keep-workspace"):
