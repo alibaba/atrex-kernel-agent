@@ -61,6 +61,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from supervisor.gateway_errors import LOCAL_INFRASTRUCTURE_REASONS  # noqa: E402
+
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 VALID_STATUSES = frozenset({"queued", "running", *TERMINAL_STATUSES})
@@ -88,8 +94,11 @@ def _json_loads(value: str | None) -> Any:
 
 
 def _error(reason: str, message: str, trace_id: str | None = None, **details: Any) -> dict[str, Any]:
+    infrastructure = reason in LOCAL_INFRASTRUCTURE_REASONS
+    if infrastructure:
+        details = {**details, "failure_origin": "infrastructure"}
     return {
-        "error_class": "local_gateway",
+        "error_class": "infra" if infrastructure else "local_gateway",
         "reason": reason,
         "message": message,
         "details": details,
@@ -1279,6 +1288,9 @@ class LocalScheduler:
 
     def stop(self) -> None:
         self._stop.set()
+        # Publish interruption before killing children. Otherwise a worker can
+        # record SIGTERM as a repairable command_failed and permanently cache it.
+        self.store.fail_running("scheduler_stopped", "local scheduler stopped during execution")
         self.notify()
         deadline = time.monotonic() + 5
         while any(thread.is_alive() for thread in self._threads) and time.monotonic() < deadline:
@@ -1290,7 +1302,6 @@ class LocalScheduler:
                 self._terminate(process)
             for thread in self._threads:
                 thread.join(timeout=0.1)
-        self.store.fail_running("scheduler_stopped", "local scheduler stopped during execution")
 
     def notify(self) -> None:
         with self._condition:

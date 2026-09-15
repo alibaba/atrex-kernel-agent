@@ -30,6 +30,25 @@ The state directory contains `jobs.db`, per-job uploaded files, stdout, and stde
 restart. A job that was running when the server stopped is marked failed on the next start rather than being
 silently executed twice.
 
+### Infrastructure errors and retry
+
+Scheduler stop/restart, whole-job `command_timeout`, execution setup exceptions, and missing or
+unreadable evaluator/diagnostic results return `error_class: "infra"` with
+`details.failure_origin: "infrastructure"`. The Supervisor applies its infrastructure retry
+policy by submitting a fresh job, not polling the failed job again. If retries are exhausted,
+the Agent receives a non-repairable infrastructure blocker. The failed request remains auditable
+but does not reserve the task permanently or become a reusable measurement.
+
+The whole-job deadline includes setup, compilation, and probes; it is not the evaluator's explicit
+Candidate timeout. Structured compilation/correctness/sanitizer failures remain Candidate outcomes.
+Dev/profiler command failures, output-size limits, and invalid requests retain their existing
+non-infrastructure behavior. Service shutdown records interruption before terminating child
+processes, so termination cannot masquerade as a Candidate command failure.
+
+Previously saved `local_gateway` errors with these infrastructure reasons are also excluded from
+current and cross-Episode deduplication and Supervisor measurement reuse. Existing audit records
+are preserved; no workspace cleanup is required.
+
 ## Use with the Optimizer
 
 The optimizer continues to use `tools/sandbox.py`, so correctness, performance, and profiler commands have

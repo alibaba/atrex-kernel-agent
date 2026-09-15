@@ -140,6 +140,7 @@ from supervisor.identifiers import (  # noqa: E402
     kernel_id_for_digest,
     validate_kernel_identity,
 )
+from supervisor.gateway_errors import LOCAL_INFRASTRUCTURE_REASONS  # noqa: E402
 from supervisor.runner_assets import (  # noqa: E402
     PROFILE_DRIVER,
     RUNNERS_ROOT,
@@ -3331,6 +3332,14 @@ def _infrastructure_failure(job: dict | None) -> bool:
     return bool(
         error.get("error_class") == "infra"
         or details.get("failure_origin") == "infrastructure"
+        # Existing JobStore rows and cross-Episode dedup records predate the
+        # local scheduler's infra contract. Reclassify on read, without rewriting
+        # audit evidence or trusting their old completed-cache markers.
+        or (
+            error.get("error_class") == "local_gateway"
+            and isinstance(error.get("reason"), str)
+            and error.get("reason") in LOCAL_INFRASTRUCTURE_REASONS
+        )
         or _ray_submit_version_mismatch(job)
         or _queue_timeout_before_start(job)
     )
