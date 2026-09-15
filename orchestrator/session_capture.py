@@ -186,30 +186,73 @@ class SessionCapture:
         )
         return report
 
+    def _capture_error(self, label: str, error: Exception) -> None:
+        warning = f"{label}:{type(error).__name__}:{error}"
+        with self._lock:
+            if warning not in self.errors:
+                self.errors.append(warning)
+
     def _read_pipe(self, name: str, pipe) -> None:
         path = "provider/" + ("stdout.stream-json" if name == "stdout" else "stderr.log")
+        output = None
+        conversation_enabled = True
+
+        def close_output() -> None:
+            nonlocal output
+            sink, output = output, None
+            if sink is not None:
+                try:
+                    sink.close()
+                except Exception as error:
+                    # Closing a buffered sink can itself flush and fail. It must
+                    # not unwind the reader or prevent the other sink from working.
+                    self._capture_error(f"{name}_capture_close", error)
+
         try:
-            with (self.root / path).open("a", encoding="utf-8") as output:
-                for line in iter(pipe.readline, ""):
-                    with self._lock:
-                        # Do not change the string returned to existing adapters.
-                        self._chunks[name].append(line)
+            try:
+                output = (self.root / path).open("a", encoding="utf-8")
+            except Exception as error:
+                self._capture_error(f"{name}_capture_open", error)
+            # Drain to EOF even if *all* persistence sinks have failed. The CLI
+            # owns its lifetime; a full disk must not inject EPIPE/SIGPIPE into it.
+            for line in iter(pipe.readline, ""):
+                with self._lock:
+                    # Keep the adapter's original, unfiltered stream in memory.
+                    self._chunks[name].append(line)
+                    try:
                         if name == "stdout" and not record_provider_line(line):
                             continue
-                        output.write(line)
-                        output.flush()
-                        self._append(path, line)
+                    except Exception as error:
+                        self._capture_error(f"{name}_capture_filter", error)
+                        continue
+                    if output is not None:
+                        try:
+                            output.write(line)
+                            output.flush()
+                        except Exception as error:
+                            self._capture_error(f"{name}_capture_write", error)
+                            close_output()
+                    if conversation_enabled:
+                        try:
+                            self._append(path, line)
+                        except Exception as error:
+                            self._capture_error(f"{name}_conversation_capture", error)
+                            conversation_enabled = False
         except Exception as error:
-            self.errors.append(f"{name}_capture:{type(error).__name__}:{error}")
+            self._capture_error(f"{name}_pipe_read", error)
         finally:
-            pipe.close()
+            close_output()
+            try:
+                pipe.close()
+            except Exception as error:
+                self._capture_error(f"{name}_pipe_close", error)
 
     def _poll(self) -> None:
         while not self._stop.wait(1):
             try:
                 self.sync_native()
             except Exception as error:
-                self.errors.append(f"native_capture:{type(error).__name__}:{error}")
+                self._capture_error("native_capture", error)
 
     def communicate(self, process, timeout: float | None = None) -> tuple[str, str]:
         if not self._readers:

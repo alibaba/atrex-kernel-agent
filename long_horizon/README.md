@@ -112,6 +112,14 @@ existing native history is excluded from that invocation's usage. These Supervis
 survive Episode worktree removal and are not mounted into the Agent view. They do not need a custom
 header in native child files and have no fixed small file-count limit.
 
+Capture file failures do not terminate the CLI: each stdout/stderr reader keeps draining to EOF
+and retains the original stream in memory for the adapter. A failed raw-output or live-conversation
+sink is disabled independently; healthy sinks keep recording. Capture errors are reported in
+`token-usage.json`, and usage completeness is not claimed after a capture error. On exit the
+conversation can still be reconstructed from retained data if storage is writable again. If final
+persistence also fails, the process guard reports the capture failure without replacing the CLI's
+actual output, exit code, or timeout status. Missing raw evidence is never presented as complete.
+
 Usage comes from Provider counters, never a local token estimate. Claude uses the last counters per
 message ID, includes child responses, and reconciles them against the terminal result without adding
 the two bills. Codex uses per-rollout cumulative deltas, with cached input separated from uncached
