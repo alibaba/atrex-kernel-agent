@@ -2,10 +2,11 @@
 
 ## IDs and output formats
 
-- `gateway_record_id` identifies one persisted operation result. Use it for `record-read` and
+- `gateway_record_id` is globally unique to one persisted operation result. Use it for `record-read` and
   Experiment `gateway_record_ids`.
-- `kernel_id` identifies stored exact Kernel source. Use it for source recovery or to discover
-  the Gateway operations associated with that source. A Kernel can have several Gateway records.
+- `kernel_id` identifies exact Kernel source globally: identical source bytes have the same ID
+  across Episodes. Use it to recover source or list its Gateway operations in your visible history.
+  A Kernel can have several Gateway records.
 - `direction_id` and `experiment_id` are returned by Journal writes, then used by list/load and reports.
 - These IDs are not interchangeable with remote Agate Job IDs. Examples below use illustrative IDs.
 
@@ -29,7 +30,7 @@ check both and the exit status. `[test_kernel]` is a result label, not a file to
 For example, a successful ordinary Run can return:
 
 ```text
-[test_kernel] RESULT_JSON={"all_pass":true,"latency_us_geomean":10.0,"latency_us_arith_mean":10.0,"latency_us_by_shape":{"0":10.0},"failures":[],"actionable_diagnostics":[],"gateway_record_id":"gateway-100-111111111111","kernel_id":"kernel-100-aaaaaaaaaaaa"}
+[test_kernel] RESULT_JSON={"all_pass":true,"latency_us_geomean":10.0,"latency_us_arith_mean":10.0,"latency_us_by_shape":{"0":10.0},"failures":[],"actionable_diagnostics":[],"gateway_record_id":"gateway-11111111111111111111111111111111","kernel_id":"kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 ```
 
 Fields such as `performance_score`, `mode`, and `input_scope` depend on the operation and evaluator.
@@ -39,7 +40,7 @@ kernel duration. Check or Dev success only establishes what that diagnostic actu
 ## Read a Gateway result
 
 ```bash
-python3 tools/sandbox.py --kind record-read --record-id gateway-100-111111111111
+python3 tools/sandbox.py --kind record-read --record-id gateway-11111111111111111111111111111111
 ```
 
 The JSON after `[sandbox] RECORD_JSON=` is:
@@ -47,10 +48,10 @@ The JSON after `[sandbox] RECORD_JSON=` is:
 ```json
 {
   "record_type": "gateway_result",
-  "gateway_record_id": "gateway-100-111111111111",
+  "gateway_record_id": "gateway-11111111111111111111111111111111",
   "operation": "evaluate",
   "status": "completed",
-  "kernel_id": "kernel-100-aaaaaaaaaaaa",
+  "kernel_id": "kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "result": {
     "all_pass": true,
     "latency_us_geomean": 10.0,
@@ -75,7 +76,7 @@ snapshot when the probe ran, not proof the command evaluated it. Probe output re
 ## Discover a Kernel's Gateway records
 
 ```bash
-python3 tools/sandbox.py --kind record-read --record-id kernel-100-aaaaaaaaaaaa --view gateway-records
+python3 tools/sandbox.py --kind record-read --record-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --view gateway-records
 ```
 
 JSON after the record prefix:
@@ -83,9 +84,9 @@ JSON after the record prefix:
 ```json
 {
   "record_type": "kernel_gateway_records",
-  "kernel_id": "kernel-100-aaaaaaaaaaaa",
+  "kernel_id": "kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "gateway_records": [
-    {"gateway_record_id":"gateway-100-111111111111","operation":"evaluate","status":"completed","role":"subject"}
+    {"gateway_record_id":"gateway-11111111111111111111111111111111","operation":"evaluate","status":"completed","role":"subject"}
   ]
 }
 ```
@@ -96,13 +97,13 @@ This is an index, not all result contents. Read the relevant Gateway IDs separat
 ## Recover exact Kernel source
 
 ```bash
-python3 tools/sandbox.py --kind record-read --record-id kernel-100-aaaaaaaaaaaa --view source --output-path scratch/previous.py
+python3 tools/sandbox.py --kind record-read --record-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --view source --output-path scratch/previous.py
 ```
 
 JSON after the record prefix:
 
 ```json
-{"record_type":"kernel_source","status":"written","kernel_id":"kernel-100-aaaaaaaaaaaa","file":"scratch/previous.py","size_bytes":25}
+{"record_type":"kernel_source","status":"written","kernel_id":"kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","file":"scratch/previous.py","size_bytes":25}
 ```
 
 `size_bytes` depends on the stored source. Read the written file; source is not printed inline.

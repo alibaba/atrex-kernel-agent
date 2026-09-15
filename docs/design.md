@@ -300,6 +300,19 @@ Kernel directly. One explicit Kernel view lists its Gateway records; a separate 
 privately digest-verified source only under `scratch/`. An explicit correctness failure
 in any repetition is retained rather than being hidden by a successful repetition.
 
+Kernel identity is global, not Episode-local: identical source bytes produce the same
+`kernel-<uuid>` across Episodes, Campaigns, restarts, and machines. The UUID uses a fixed
+namespace and the private SHA-256 source digest, independent of operation, hardware, or
+storage path. Different Gateway operations still have separate record IDs. Physical evidence
+remains scoped; knowing a global Kernel ID does not grant access to another Campaign's records.
+Gateway Records use independent UUID4 IDs (`gateway-<uuid>`), not a timestamp/source-prefix
+combination. Experiment, Direction, Direction Event, Runtime request/response, and capture-run IDs
+also use UUID4; creating another object allocates a new ID even if its text or result is identical.
+Kernel IDs alone are content identities (UUID5). Old timestamp-based Kernel/Gateway IDs are not
+accepted or converted. Record ordering uses its persisted timestamp, not UUID lexical order.
+Episode numbers, Shape IDs, and telemetry Campaign/iteration/attempt labels remain scoped labels,
+not globally unique object IDs. Remote Agate Job IDs and provider Session IDs are external identities.
+
 Deduplication does not change execution counts: correctness-only, Profile, Check, Disassemble,
 and Dev execute once. Profile selectors/counters, diagnostic options, inputs, and dependencies
 are part of task identity. Dev additionally hashes the executed command and the actual uploaded
@@ -320,6 +333,15 @@ partial-Shape ABBA are not substitutes for the required full-contract comparison
 measurement requests execute through the same batching, infrastructure retry, and three-call per-Shape median
 logic. In-flight requests are not submitted twice; an infrastructure failure or unfinished execution releases the task
 reservation. Corrupt cached evidence fails closed.
+
+Cancellation without a result or error (including empty objects) is an infrastructure failure,
+not a Candidate verdict. If retries are exhausted, the Gateway record and exact Kernel remain
+available for audit, but no completed task-dedup entry or Supervisor measurement receipt is issued.
+Cancelled jobs with partial output are not completed measurements either. Cache publication and
+trusted reuse both check this boundary. Completed markers from older releases that refer to a
+cancelled or infrastructure-failed record are ignored on the next request, including in authorized
+Episode history; the current task can be reserved and submitted afresh without deleting old records.
+Real completed negative correctness/compiler results remain eligible for deduplication.
 
 Each completed physical ABBA Shape batch is also checkpointed immediately under the private
 `abba-batches/` store. Its identity combines the exact comparison task, requested schedule, Shape

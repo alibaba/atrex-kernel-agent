@@ -92,8 +92,8 @@ class RuntimeRecordsSkillTest(unittest.TestCase):
         measured = example("records.md", "Read a Gateway result")["result"]
         record = gateway._record_episode_evaluation(self.workspace, measured, gateway_kind="run")
         self.assertIsNotNone(record)
-        self.ids["gateway-100-111111111111"] = record["record_id"]
-        self.ids["kernel-100-aaaaaaaaaaaa"] = record["kernel_id"]
+        self.ids["gateway-11111111111111111111111111111111"] = record["record_id"]
+        self.ids["kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] = record["kernel_id"]
         recorded = self.journal_cli(
             "record-experiment",
             example("journal.md", "Measure and record an Experiment"),
@@ -136,8 +136,8 @@ class RuntimeRecordsSkillTest(unittest.TestCase):
 
     def test_historical_result_and_source_examples_match_real_projections(self) -> None:
         self.prepare_experiment()
-        record_id = self.ids["gateway-100-111111111111"]
-        kernel_id = self.ids["kernel-100-aaaaaaaaaaaa"]
+        record_id = self.ids["gateway-11111111111111111111111111111111"]
+        kernel_id = self.ids["kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
         cases = (
             (
                 lambda: gateway._read_gateway_record(self.workspace, record_id),

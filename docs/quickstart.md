@@ -484,12 +484,12 @@ python tools/sandbox.py --kind run \
 python tools/sandbox.py --kind run --mode full \
   --baseline-path scratch/baseline.py --comparison-repeats 2 --no-sync
 python tools/sandbox.py --kind record-read \
-  --record-id gateway-<timestamp>-<kernel-prefix>
+  --record-id gateway-<uuid>
 python tools/sandbox.py --kind record-read \
-  --record-id kernel-<timestamp>-<opaque-id> \
+  --record-id kernel-<uuid> \
   --view gateway-records
 python tools/sandbox.py --kind record-read \
-  --record-id kernel-<timestamp>-<opaque-id> \
+  --record-id kernel-<uuid> \
   --view source \
   --output-path scratch/restored-kernel.py
 python tools/sandbox.py --hardware H20 --ssh user@gpu-host \

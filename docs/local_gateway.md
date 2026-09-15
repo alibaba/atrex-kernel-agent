@@ -115,12 +115,12 @@ and record reads are not subject to duplicate rejection. Read a saved result wit
 
 ```bash
 python tools/sandbox.py --kind record-read \
-  --record-id gateway-<timestamp>-<kernel-prefix>
+  --record-id gateway-<uuid>
 python tools/sandbox.py --kind record-read \
-  --record-id kernel-<timestamp>-<opaque-id> \
+  --record-id kernel-<uuid> \
   --view gateway-records
 python tools/sandbox.py --kind record-read \
-  --record-id kernel-<timestamp>-<opaque-id> \
+  --record-id kernel-<uuid> \
   --view source \
   --output-path scratch/restored-kernel.py
 ```
@@ -130,7 +130,10 @@ records. It returns the same operation-specific bounded Agent projection, includ
 per-Shape latency where that operation produces it. An arbitrary Dev probe remains a Dev record
 containing its command, exit code, bounded stdout/stderr, and synchronized paths; it is never
 presented as evaluator truth. ABBA identifies Incumbent and Candidate Kernel IDs separately.
-Each Candidate has an opaque stable Kernel ID; the Supervisor retains its content digest privately.
+Identical exact Kernel source has one global `kernel-<uuid>` across Episodes and Campaigns;
+the Supervisor retains its content digest privately. Queries still return only authorized history.
+Gateway records use independent `gateway-<uuid>` IDs. Old timestamp-based Kernel/Gateway IDs
+are not supported.
 The `gateway-records` view lists its Evaluate/Profile/Dev/Check/Disassemble records, while the
 separate `source` view verifies and writes exact source beneath `scratch/` without a Gateway job.
 ABBA appears in both Kernels' indexes with an explicit

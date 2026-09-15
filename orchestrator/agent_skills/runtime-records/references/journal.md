@@ -86,7 +86,7 @@ Use the Gateway ID in `scratch/experiment.json`:
   "name": "Fused candidate measurement",
   "hypothesis": "Removing the intermediate reduces traffic",
   "change": "Replaced the two stages with one fused implementation",
-  "gateway_record_ids": ["gateway-100-111111111111"],
+  "gateway_record_ids": ["gateway-11111111111111111111111111111111"],
   "evidence": "Full evaluation passed; per-Shape latency is recorded in the cited result",
   "analysis": "Keep this candidate for independent verification; the result supports the hypothesis",
   "action": "keep_after"

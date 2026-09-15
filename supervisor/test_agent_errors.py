@@ -185,7 +185,7 @@ class AgentErrorsTest(unittest.TestCase):
         self.assertIn("Do not install packages", response["error"]["next_action"])
 
     def test_duplicate_measurement_points_to_a_read_not_another_measurement(self) -> None:
-        record_id = "gateway-100-0123456789ab"
+        record_id = "gateway-0123456789abcdef0123456789abcdef"
         for previous in (record_id, None):
             with self.subTest(previous=previous), self.assertRaises(SystemExit) as rejected:
                 gateway._reject_duplicate_task(previous)

@@ -45,10 +45,10 @@ Examples::
         --requirement 'custom-kernel-package==1' --deps-mode no_deps --no-sync
     python tools/sandbox.py --kind disassemble --hardware REMOTE_GPU --format isa --no-sync
     python tools/sandbox.py --kind env --env-gpu REMOTE_GPU --env-capabilities
-    python tools/sandbox.py --kind record-read --record-id gateway-<timestamp>-<digest>
-    python tools/sandbox.py --kind record-read --record-id kernel-<timestamp>-<id> \
+    python tools/sandbox.py --kind record-read --record-id gateway-<uuid>
+    python tools/sandbox.py --kind record-read --record-id kernel-<uuid> \
         --view gateway-records
-    python tools/sandbox.py --kind record-read --record-id kernel-<timestamp>-<id> \
+    python tools/sandbox.py --kind record-read --record-id kernel-<uuid> \
         --view source --output-path scratch/prior-kernel.py
     python tools/sandbox.py --kind run --hardware H20 --ssh gpu-host --no-sync -- \
         python test_kernel.py --no-memory
@@ -97,6 +97,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -131,6 +132,13 @@ from supervisor.errors import (  # noqa: E402
     AgentRequestError,
     RuntimeStateError,
     error_response,
+)
+from supervisor.identifiers import (  # noqa: E402
+    GATEWAY_RECORD_ID_RE,
+    KERNEL_ARTIFACT_DIGEST_RE,
+    KERNEL_RECORD_ID_RE,
+    kernel_id_for_digest,
+    validate_kernel_identity,
 )
 from supervisor.runner_assets import (  # noqa: E402
     PROFILE_DRIVER,
@@ -307,8 +315,6 @@ MAX_AGENT_DEV_STDERR_BYTES = 16 * 1024
 DIAGNOSTIC_KINDS = frozenset({"check", "disassemble"})
 DEPENDENCY_KINDS = frozenset({"profile", *DIAGNOSTIC_KINDS})
 TYPED_KINDS = frozenset({"run", "profile", *DIAGNOSTIC_KINDS})
-KERNEL_ARTIFACT_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-KERNEL_RECORD_ID_RE = re.compile(r"kernel-[0-9]+-[0-9a-f]{12}")
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -331,7 +337,6 @@ REUSE_GATEWAY_RESULTS_ENV = "ATREX_AKA_REUSE_GATEWAY_RESULTS"
 INTERNAL_MEASUREMENT_ENV = "ATREX_AKA_INTERNAL_MEASUREMENT"
 COMPARISON_RUN_TIMEOUT_ENV = "ATREX_AKA_COMPARISON_RUN_TIMEOUT"
 SUPERVISOR_MEASUREMENT_PREFIX = "__ATREX_SUPERVISOR_MEASUREMENT__="
-GATEWAY_RECORD_ID_RE = re.compile(r"gateway-[0-9]+-[0-9a-f]{12}")
 PROFILE_ENVIRONMENT_KEYS = (
     "PROFILE_ITERS",
     "PROFILE_WARMUP",
@@ -3279,11 +3284,13 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
 
     The production gateway can occasionally cancel a queued job before an
     attempt starts.  Such a response has no command result and no gateway
-    error, so it says nothing about the submitted kernel.  A cancellation
-    carrying either field is a real terminal outcome and must not be retried.
+    error, so it says nothing about the submitted kernel. Nonempty payloads are
+    not blindly resubmitted by this check; explicit infrastructure errors are
+    handled separately. No cancellation counts as a completed measurement.
     """
     return bool(
-        job and job.get("status") == "cancelled" and not job.get("result") and not job.get("error")
+        job and job.get("status") in {"cancelled", "canceled"}
+        and not job.get("result") and not job.get("error")
     )
 
 
@@ -3312,11 +3319,13 @@ def _infrastructure_failure(job: dict | None) -> bool:
     terminal job cannot recover missing logs, a failed Ray runtime environment,
     or another backend-originated failure.
     """
-    if not job or job.get("status") not in {"failed", "cancelled"}:
+    if not job or job.get("status") not in {"failed", "cancelled", "canceled"}:
         return False
+    if _cancelled_without_outcome(job):
+        return True
     error = job.get("error")
     if not isinstance(error, dict):
-        return _cancelled_without_outcome(job)
+        return False
     details = error.get("details")
     details = details if isinstance(details, dict) else {}
     return bool(
@@ -3328,10 +3337,25 @@ def _infrastructure_failure(job: dict | None) -> bool:
 
 
 def _infrastructure_reason(job: dict | None) -> str:
+    if _cancelled_without_outcome(job):
+        return "cancelled_without_outcome"
     error = job.get("error") if job else None
     if isinstance(error, dict):
         return str(error.get("reason") or error.get("error_class") or "infrastructure")
     return "cancelled_without_outcome"
+
+
+def _cacheable_gateway_outcome(value: dict[str, Any]) -> bool:
+    """Normalized payloads may omit status; cancelled/incomplete jobs are never facts."""
+    status = value.get("status")
+    if status in {"cancelled", "canceled", "queued", "pending", "running", "submitted"}:
+        return False
+    if _infrastructure_failure(value):
+        return False
+    if status in {"failed", "error"} and not value.get("error") and not value.get("result"):
+        # A measured negative verdict is evidence; an empty failure envelope is not.
+        return any(key in value for key in ("all_pass", "correct", "passed", "exit_code"))
+    return True
 
 
 def _agate_transport_failure(completed: subprocess.CompletedProcess[str], job: dict | None) -> bool:
@@ -4272,16 +4296,9 @@ def _store_kernel_artifact_at_root(
         identity_path = artifact_dir / "identity.json"
         if identity_path.exists():
             identity = _read_json_file(identity_path, max_bytes=4096)
-            kernel_id = identity.get("kernel_id")
-            recorded_digest = identity.get("kernel_artifact_digest")
-            if (
-                not isinstance(kernel_id, str)
-                or KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None
-                or recorded_digest != digest
-            ):
-                raise RuntimeError("Kernel identity record is invalid")
+            return validate_kernel_identity(identity, digest)
         else:
-            kernel_id = f"kernel-{time.time_ns()}-{os.urandom(6).hex()}"
+            kernel_id = kernel_id_for_digest(digest)
             durable_write_json(
                 identity_path,
                 {
@@ -4321,7 +4338,8 @@ def _record_episode_evaluation(
     except OSError:
         return None
     kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
-    record_id = f"gateway-{time.time_ns()}-{kernel_sha256[:12]}"
+    record_id = f"gateway-{uuid.uuid4().hex}"
+    timestamp = datetime.now(timezone.utc).isoformat()
     evidence_root_value = os.environ.get(SUPERVISOR_EVIDENCE_ROOT_ENV, "").strip()
     raw_evidence_root = Path(evidence_root_value) if evidence_root_value else None
     evidence_root = raw_evidence_root.resolve() if raw_evidence_root is not None else workspace
@@ -4352,7 +4370,9 @@ def _record_episode_evaluation(
     record_dir = record_root / record_id
     kernel_path = record_dir / "kernel.py"
     result_path = record_dir / "result.json"
-    ensure_private_directory(record_dir)
+    ensure_private_directory(record_root)
+    # Never overwrite another immutable record, even if an ID collision occurs.
+    record_dir.mkdir(mode=0o700)
     temporary_kernel = record_dir / ".kernel.py.tmp"
     descriptor = os.open(temporary_kernel, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -4368,6 +4388,7 @@ def _record_episode_evaluation(
             os.close(descriptor)
         temporary_kernel.unlink(missing_ok=True)
     record_value: dict[str, Any] = {
+        "timestamp": timestamp,
         "gateway_kind": gateway_kind,
         "job_id": str(job_id) if job_id else None,
         "kernel_sha256": kernel_sha256,
@@ -4401,7 +4422,7 @@ def _record_episode_evaluation(
     payload = {
         "schema_version": 3,
         "record_id": record_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": timestamp,
         "gateway_kind": gateway_kind,
         "job_id": str(job_id) if job_id else None,
         "kernel_sha256": kernel_sha256,
@@ -4525,14 +4546,7 @@ def _kernel_identity_for_digest(workspace: Path, digest: str) -> dict[str, str]:
         break
     if identity is None:
         raise ValueError("Kernel Artifact Digest does not exist in visible history")
-    kernel_id = identity.get("kernel_id")
-    if (
-        not isinstance(kernel_id, str)
-        or KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None
-        or identity.get("kernel_artifact_digest") != digest
-    ):
-        raise ValueError("Kernel identity record is invalid")
-    return {"kernel_id": kernel_id, "kernel_artifact_digest": digest}
+    return validate_kernel_identity(identity, digest)
 
 
 def _load_kernel_identity(workspace: Path, kernel_id: str) -> dict[str, str]:
@@ -4555,12 +4569,9 @@ def _load_kernel_identity(workspace: Path, kernel_id: str) -> dict[str, str]:
                 identity = _read_json_file(identity_path, max_bytes=4096)
             except ValueError:
                 continue
-            if identity.get("kernel_id") != kernel_id:
+            if kernel_id != identity.get("kernel_id"):
                 continue
-            digest = identity.get("kernel_artifact_digest")
-            if digest != f"sha256:{artifact_dir.name}":
-                raise ValueError("Kernel identity record is inconsistent")
-            return {"kernel_id": kernel_id, "kernel_artifact_digest": str(digest)}
+            return validate_kernel_identity(identity, f"sha256:{artifact_dir.name}")
     raise ValueError("Kernel record does not exist in visible history")
 
 
@@ -4594,43 +4605,18 @@ def _load_gateway_record(workspace: Path, record_id: str) -> dict[str, Any]:
     if not isinstance(kernel_artifact_digest, str) or KERNEL_ARTIFACT_DIGEST_RE.fullmatch(
         kernel_artifact_digest
     ) is None:
-        kernel_artifact_digest = f"sha256:{kernel_sha256}"
+        raise ValueError("Gateway record has an invalid Kernel Artifact digest")
+    if kernel_artifact_digest != f"sha256:{kernel_sha256}":
+        raise ValueError("Gateway record Kernel digests disagree")
     kernel_id = value.get("kernel_id")
     if not isinstance(kernel_id, str) or KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None:
-        try:
-            source = (record_dir / "kernel.py").read_bytes()
-        except OSError as exc:
-            raise ValueError("Gateway record Kernel source is missing") from exc
-        identity = _store_kernel_artifact(workspace, source)
-        if identity["kernel_artifact_digest"] != kernel_artifact_digest:
-            raise ValueError("Gateway record Kernel identity is inconsistent")
-        kernel_id = identity["kernel_id"]
-    else:
-        identity = _kernel_identity_for_digest(workspace, kernel_artifact_digest)
-        if identity["kernel_id"] != kernel_id:
-            raise ValueError("Gateway record Kernel ID is inconsistent")
+        raise ValueError("Gateway record has an invalid Kernel ID")
+    identity = _load_kernel_identity(workspace, kernel_id)
+    if identity["kernel_artifact_digest"] != kernel_artifact_digest:
+        raise ValueError("Gateway record Kernel ID is inconsistent")
     kernel_subject_ids = value.get("kernel_subject_ids")
     if not isinstance(kernel_subject_ids, dict):
         kernel_subject_ids = {}
-    if gateway_kind == "same_allocation_abba" and not kernel_subject_ids:
-        raw_subjects = value.get("kernel_subjects")
-        if isinstance(raw_subjects, dict):
-            for role, hexadecimal in raw_subjects.items():
-                digest = f"sha256:{hexadecimal}"
-                try:
-                    subject = _kernel_identity_for_digest(workspace, digest)
-                except ValueError:
-                    if role != "incumbent":
-                        raise
-                    raw_path = record_dir / "raw-result.json"
-                    raw = _read_json_file(raw_path, max_bytes=64 * 1024 * 1024)
-                    source = raw.get("baseline_source")
-                    if not isinstance(source, str):
-                        raise ValueError("ABBA Gateway record omitted its Incumbent Kernel")
-                    subject = _store_kernel_artifact(workspace, source.encode("utf-8"))
-                    if subject["kernel_artifact_digest"] != digest:
-                        raise ValueError("ABBA Incumbent Kernel digest is inconsistent")
-                kernel_subject_ids[str(role)] = subject["kernel_id"]
     if gateway_kind == "same_allocation_abba" and set(kernel_subject_ids) != {
         "incumbent",
         "candidate",
@@ -4642,16 +4628,20 @@ def _load_gateway_record(workspace: Path, record_id: str) -> dict[str, Any]:
         for subject_id in kernel_subject_ids.values()
     ):
         raise ValueError("ABBA Gateway record contains an invalid Kernel ID")
+    for subject_id in kernel_subject_ids.values():
+        _load_kernel_identity(workspace, subject_id)
     if kernel_subject_ids and kernel_subject_ids.get("candidate") != kernel_id:
         raise ValueError("ABBA Candidate Kernel ID disagrees with its Gateway record")
     return {
         "record_id": record_id,
         "gateway_kind": gateway_kind,
+        "timestamp": value.get("timestamp", ""),
         "kernel_sha256": kernel_sha256,
         "kernel_id": kernel_id,
         "kernel_artifact_digest": kernel_artifact_digest,
         "kernel_subjects": value.get("kernel_subjects"),
         "gateway_task_digest": value.get("gateway_task_digest"),
+        "execution_status": value.get("execution_status"),
         "kernel_subject_ids": kernel_subject_ids,
         "result": result,
         "record_dir": record_dir,
@@ -4770,7 +4760,10 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
                 raise RuntimeError("Supervisor Gateway task marker is invalid")
             record_id = state.get("gateway_record_id")
             if state.get("status") == "completed" and isinstance(record_id, str):
-                return None, record_id
+                if _validated_cached_gateway_record(workspace, task_digest, record_id) is not None:
+                    return None, record_id
+                # Preserve the immutable cancelled record, but replace its poisoned index.
+                state = {}
             pid = state.get("pid")
             if isinstance(pid, int) and pid > 0:
                 try:
@@ -4790,7 +4783,9 @@ def _reserve_gateway_task(workspace: Path, task_digest: str) -> tuple[str | None
                 if state.get("status") == "completed" and isinstance(
                     state.get("gateway_record_id"), str
                 ):
-                    return None, state["gateway_record_id"]
+                    record_id = state["gateway_record_id"]
+                    if _validated_cached_gateway_record(workspace, task_digest, record_id) is not None:
+                        return None, record_id
         durable_write_json(
             marker,
             {
@@ -4811,6 +4806,9 @@ def _complete_gateway_task(
     owner: str,
     gateway_record_id: str,
 ) -> None:
+    if _validated_cached_gateway_record(workspace, task_digest, gateway_record_id) is None:
+        _abandon_gateway_task(workspace, task_digest, owner)
+        return
     with _locked_gateway_task_root(workspace) as root:
         marker = root / f"{task_digest}.json"
         try:
@@ -4860,6 +4858,10 @@ class _GatewayTask:
         if record is None:
             raise RuntimeError("Gateway task could not preserve its measured Kernel")
         self.record_id = record["record_id"]
+        raw = metadata.get("private_result")
+        cache = cache and _cacheable_gateway_outcome(result) and (
+            not isinstance(raw, dict) or _cacheable_gateway_outcome(raw)
+        )
         if cache and self.digest is not None and self.owner is not None:
             _complete_gateway_task(self.workspace, self.digest, self.owner, self.record_id)
         return record
@@ -5373,16 +5375,23 @@ def _agent_gateway_failure(
     error = job.get("error")
     error = error if isinstance(error, dict) else {}
     error_class = str(error.get("error_class") or "unknown")
-    infrastructure = error_class == "infra"
+    cancelled = job.get("status") in {"cancelled", "canceled"}
+    infrastructure = _infrastructure_failure(job) or cancelled
+    if infrastructure:
+        error_class = "infra"
     unknown = error_class == "unknown"
     projected = error_response(
+        "Gateway job was cancelled; no completed Kernel measurement is available."
+        if cancelled else
         "hidden evaluator case failed"
-        if generalized and not infrastructure
+        if generalized and not (infrastructure or unknown)
         else _bounded_text(error.get("message") or "Gateway job failed"),
         code="gateway_infrastructure" if infrastructure else "gateway_job_failed",
         repairable=not (infrastructure or unknown),
         error_class=error_class,
-        reason=_bounded_text(error.get("reason") or "unknown", 128),
+        reason=_bounded_text(error.get("reason") or (
+            "cancelled_without_outcome" if _cancelled_without_outcome(job) else "unknown"
+        ), 128),
         next_action=(
             "The Supervisor's configured retry policy has ended for this request. Do not "
             "change the Kernel to fix this infrastructure failure or start a retry loop. "
@@ -5418,18 +5427,39 @@ def _reject_duplicate_task(previous_record_id: str | None) -> None:
     )))
 
 
-def _reusable_gateway_record(
-    workspace: Path, task_digest: str, record_id: str | None,
-) -> dict[str, Any]:
-    """Trusted consumers may reuse facts; Agents keep the existing duplicate error."""
-    if os.environ.get(REUSE_GATEWAY_RESULTS_ENV) != "1" or record_id is None:
-        _reject_duplicate_task(record_id)
+def _record_has_cacheable_outcome(record: dict[str, Any]) -> bool:
+    return _cacheable_gateway_outcome(record["result"]) and record.get("execution_status") not in {
+        "cancelled", "canceled", "queued", "pending", "running", "submitted",
+    }
+
+
+def _validated_cached_gateway_record(
+    workspace: Path, task_digest: str, record_id: str,
+) -> dict[str, Any] | None:
+    """Check facts behind the index, including markers written by older releases."""
     record = _load_gateway_record(workspace, record_id)
     if record["gateway_task_digest"] != task_digest:
         raise RuntimeError("Gateway cache record does not match the requested measurement contract")
     source = (record["record_dir"] / "kernel.py").read_bytes()
     if hashlib.sha256(source).hexdigest() != record["kernel_sha256"]:
         raise RuntimeError("Gateway cache Kernel source does not match its recorded digest")
+    return record if _record_has_cacheable_outcome(record) else None
+
+
+def _reusable_gateway_record(
+    workspace: Path, task_digest: str, record_id: str | None,
+) -> dict[str, Any]:
+    """Trusted consumers may reuse facts; Agents keep the existing duplicate error."""
+    if record_id is None:
+        _reject_duplicate_task(record_id)
+    record = _validated_cached_gateway_record(workspace, task_digest, record_id)
+    if record is None:
+        raise RuntimeStateError(
+            "The cached Gateway task has no completed outcome and cannot be reused as a measurement.",
+            code="gateway_outcome_unavailable",
+        )
+    if os.environ.get(REUSE_GATEWAY_RESULTS_ENV) != "1":
+        _reject_duplicate_task(record_id)
     return record
 
 
@@ -5455,6 +5485,8 @@ def _emit_supervisor_measurement(
     if os.environ.get(REUSE_GATEWAY_RESULTS_ENV) != "1":
         return
     record = _load_gateway_record(workspace, record_id)
+    if not _record_has_cacheable_outcome(record):
+        return
     print(SUPERVISOR_MEASUREMENT_PREFIX + json.dumps({
         "gateway_record_id": record_id,
         "gateway_kind": record["gateway_kind"],
@@ -5595,11 +5627,13 @@ def _gateway_record_public_result(
     """Return the same bounded semantic result family Agent received when it was recorded."""
     gateway_kind = record["gateway_kind"]
     stored = record["result"]
-    if stored.get("status") in {"failed", "cancelled", "error"} and isinstance(
-        stored.get("error"), dict
+    if not _record_has_cacheable_outcome(record) or (
+        stored.get("status") in {"failed", "cancelled", "error"}
+        and isinstance(stored.get("error"), dict)
     ):
         operation = "evaluate" if gateway_kind == "run" else gateway_kind
-        projected = _agent_gateway_failure(stored, None, generalized=generalized)
+        failure = {**stored, "status": record.get("execution_status") or stored.get("status")}
+        projected = _agent_gateway_failure(failure, None, generalized=generalized)
         if gateway_kind == "dev":
             projected.update(_agent_dev_probe_result(stored))
     elif gateway_kind == "run":
@@ -5696,7 +5730,7 @@ def _visible_gateway_records(workspace: Path) -> list[dict[str, Any]]:
             except ValueError:
                 continue
             seen.add(path.name)
-    return records
+    return sorted(records, key=lambda record: (record["timestamp"], record["record_id"]))
 
 
 def _gateway_record_index_entry(
@@ -5714,6 +5748,7 @@ def _gateway_record_index_entry(
 def _kernel_gateway_records(
     workspace: Path, kernel_id: str
 ) -> list[dict[str, Any]]:
+    _load_kernel_identity(workspace, kernel_id)
     results: list[dict[str, Any]] = []
     for record in _visible_gateway_records(workspace):
         if record["gateway_kind"] == "same_allocation_abba":
@@ -5746,20 +5781,7 @@ def _kernel_artifact_bytes(workspace: Path, kernel_id: str) -> bytes:
         _kernel_artifact_root(workspace) / hexadecimal / "kernel.py",
     )
     if not path.is_file() or path.is_symlink():
-        # Backward-compatible lookup for records created before the content store existed.
-        record = next(
-            (
-                item
-                for item in _visible_gateway_records(workspace)
-                if item["kernel_id"] == kernel_id
-            ),
-            None,
-        )
-        if record is None:
-            raise ValueError("Kernel Artifact does not exist in this Agent workspace")
-        path = record["record_dir"] / "kernel.py"
-        if not path.is_file() or path.is_symlink():
-            raise ValueError("Kernel Artifact source is missing")
+        raise ValueError("Kernel Artifact source is missing")
     try:
         source = path.read_bytes()
     except OSError as exc:
@@ -6971,16 +6993,15 @@ def _execute_typed_gateway(
                     "status": job.get("status"),
                     "error": job.get("error"),
                 }
-                error = job.get("error")
-                infrastructure = isinstance(error, dict) and error.get("error_class") == "infra"
+                cacheable = _cacheable_gateway_outcome(job) and job.get("status") == "failed"
                 record = task.record(
                     failure,
                     gateway_kind=kind,
                     job_id=job.get("job_id"),
                     private_result=job,
-                    cache=not infrastructure and job.get("status") in {"failed", "cancelled"},
+                    cache=cacheable,
                 )
-                if record is not None and not infrastructure:
+                if record is not None and cacheable:
                     _emit_supervisor_measurement(workspace, record["record_id"], reused=False)
                 print(
                     json.dumps(
@@ -7843,7 +7864,7 @@ def _main(argv: list[str] | None = None) -> int:
                         )
                         return ENVIRONMENT_TEMPFAIL
                 job = {
-                    "job_id": f"ssh-{os.getpid()}",
+                    "job_id": f"ssh-{uuid.uuid4().hex}",
                     "status": "succeeded" if ssh_result.returncode == 0 else "failed",
                     "result": {
                         "stdout": ssh_result.stdout,
@@ -7938,8 +7959,9 @@ def _main(argv: list[str] | None = None) -> int:
                 "Gateway returned a non-object job response.", code="gateway_response_invalid"
             )
 
-        if job.get("status") != "succeeded" and (
-            isinstance(job.get("error"), dict) or not isinstance(job.get("result"), dict)
+        if not _cacheable_gateway_outcome(job) or (
+            job.get("status") != "succeeded"
+            and (isinstance(job.get("error"), dict) or not isinstance(job.get("result"), dict))
         ):
             failure = {"status": job.get("status"), "error": job.get("error") or {}}
             if not evaluator_command and not profile_request:
@@ -7947,16 +7969,14 @@ def _main(argv: list[str] | None = None) -> int:
                 remote = remote if isinstance(remote, dict) else {}
                 failure.update({
                     "command": command,
-                    "exit_code": remote.get("exit_code", proc.returncode or 1),
+                    "exit_code": remote.get("exit_code"),
                     "stdout": remote.get("stdout", ""),
                     "stderr": remote.get("stderr", ""),
                 })
-            error = job.get("error")
-            infrastructure = isinstance(error, dict) and error.get("error_class") == "infra"
             record = task.record(
                 failure, gateway_kind="profile" if profile_request else "dev",
                 job_id=job.get("job_id"), private_result=job,
-                cache=not infrastructure and job.get("status") in {"failed", "cancelled"},
+                cache=_cacheable_gateway_outcome(job) and job.get("status") == "failed",
             )
             public = _agent_gateway_failure(job, record, generalized=hide_evaluator_details)
             if not evaluator_command and not profile_request:
@@ -8106,7 +8126,7 @@ def _append_sandbox_telemetry(event: str, **fields: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
-    operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
+    operation_id = f"sandbox-{uuid.uuid4().hex}"
     category = _sandbox_telemetry_category(arguments)
     started = time.monotonic()
     previous_handlers = {

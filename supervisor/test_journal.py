@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from supervisor.errors import AgentRequestError
+from supervisor.identifiers import kernel_id_for_digest
 from supervisor.journal import (
     SupervisorJournalService,
     _has_passing_evaluate,
@@ -24,7 +25,7 @@ def _write_json(path: Path, value: object) -> None:
 
 def _record_kernel(evidence: Path, source: bytes) -> tuple[str, str]:
     digest = "sha256:" + hashlib.sha256(source).hexdigest()
-    kernel_id = "kernel-100-" + digest[-12:]
+    kernel_id = kernel_id_for_digest(digest)
     artifact = evidence / "kernel-artifacts" / "sha256" / digest.removeprefix("sha256:")
     artifact.mkdir(parents=True)
     (artifact / "kernel.py").write_bytes(source)
@@ -32,7 +33,7 @@ def _record_kernel(evidence: Path, source: bytes) -> tuple[str, str]:
         artifact / "identity.json",
         {"kernel_id": kernel_id, "kernel_artifact_digest": digest},
     )
-    gateway_id = "gateway-100-" + digest[-12:]
+    gateway_id = "gateway-" + digest[-32:]
     _write_json(
         evidence / "gateway-records" / gateway_id / "result.json",
         {
@@ -215,7 +216,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             for removed in ("before", "after", "kernel_id", "kernel_artifact_digest", "sequence"):
                 self.assertNotIn(removed, loaded)
 
-            profile_id = "gateway-101-0123456789ab"
+            profile_id = "gateway-11111111111111111111111111111111"
             _write_json(
                 evidence / "gateway-records" / profile_id / "result.json",
                 {
@@ -481,8 +482,8 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             evidence = workspace / "evidence"
             kernel_id, evaluate_id = _record_kernel(evidence, b"def run(x): return x\n")
             digest = "sha256:" + hashlib.sha256(b"def run(x): return x\n").hexdigest()
-            profile_id = "gateway-101-0123456789ab"
-            abba_id = "gateway-102-0123456789ab"
+            profile_id = "gateway-11111111111111111111111111111111"
+            abba_id = "gateway-22222222222222222222222222222222"
             _write_json(
                 evidence / "gateway-records" / profile_id / "result.json",
                 {
@@ -496,11 +497,11 @@ class SupervisorJournalServiceTest(unittest.TestCase):
                 evidence / "gateway-records" / abba_id / "result.json",
                 {
                     "gateway_kind": "same_allocation_abba",
-                    "kernel_id": "kernel-200-aaaaaaaaaaaa",
+                    "kernel_id": "kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "kernel_artifact_digest": digest,
                     "kernel_subject_ids": {
                         "incumbent": kernel_id,
-                        "candidate": "kernel-200-aaaaaaaaaaaa",
+                        "candidate": "kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     },
                     "result": {},
                 },
@@ -508,7 +509,7 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             _, other_id = _record_kernel(evidence, b"def run(x): return x + 1\n")
             others = []
             for offset, kind in enumerate(("dev", "check", "disassemble"), start=103):
-                record_id = f"gateway-{offset}-0123456789ab"
+                record_id = f"gateway-{offset:032x}"
                 _write_json(
                     evidence / "gateway-records" / record_id / "result.json",
                     {
@@ -533,19 +534,19 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             workspace = Path(directory)
             evidence = workspace / "evidence"
             _, gateway_id = _record_kernel(evidence, b"def run(x): return x\n")
-            symlink_id = "gateway-101-aaaaaaaaaaaa"
+            symlink_id = "gateway-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             (evidence / "gateway-records" / symlink_id).symlink_to(
                 evidence / "gateway-records" / gateway_id,
                 target_is_directory=True,
             )
-            broken_id = "gateway-102-aaaaaaaaaaaa"
+            broken_id = "gateway-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             _write_json(evidence / "gateway-records" / broken_id / "result.json", {})
             cases = [
                 (None, "array"),
                 (gateway_id, "array"),
                 (["invalid"], "valid gateway"),
                 ([gateway_id, gateway_id], "duplicates"),
-                (["gateway-999-bbbbbbbbbbbb"], "not visible"),
+                (["gateway-ffffffffffffffffffffffffffffffff"], "not visible"),
                 ([symlink_id], "not visible"),
                 ([broken_id], "invalid"),
             ]
@@ -561,8 +562,8 @@ class SupervisorJournalServiceTest(unittest.TestCase):
             digest = "sha256:" + hashlib.sha256(source).hexdigest()
             _, matching = _record_kernel(evidence, source)
             _, other = _record_kernel(evidence, b"def run(x): return x + 1\n")
-            failed = "gateway-101-aaaaaaaaaaaa"
-            profile = "gateway-102-aaaaaaaaaaaa"
+            failed = "gateway-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            profile = "gateway-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             for record_id, kind, passed in ((failed, "run", False), (profile, "profile", True)):
                 _write_json(
                     evidence / "gateway-records" / record_id / "result.json",

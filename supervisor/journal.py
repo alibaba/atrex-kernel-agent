@@ -24,10 +24,12 @@ from supervisor.direction_genealogy import (
     validate_relationship,
 )
 from supervisor.errors import AgentRequestError, RuntimeStateError, require_fields
-
-GATEWAY_RECORD_ID_RE = re.compile(r"gateway-[0-9]+-[0-9a-f]{12}")
-DIRECTION_ID_RE = re.compile(r"direction_[0-9a-f]{32}")
-EXPERIMENT_ID_RE = re.compile(r"experiment_[0-9a-f]{32}")
+from supervisor.identifiers import (
+    DIRECTION_ID_RE,
+    EXPERIMENT_ID_RE,
+    GATEWAY_RECORD_ID_RE,
+    KERNEL_RECORD_ID_RE,
+)
 
 _PROPOSAL_FIELDS = {
     "action",
@@ -477,7 +479,7 @@ def _validate_record_ids(evidence_root: Path, campaign_root: Path, raw: object) 
             or not isinstance(digest, str)
             or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
             or not isinstance(kernel_id, str)
-            or re.fullmatch(r"kernel-[0-9]+-[0-9a-f]{12}", kernel_id) is None
+            or KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None
         ):
             raise ValueError(
                 f"Gateway Record {record_id} must bind a real Kernel and a GPU operation; "

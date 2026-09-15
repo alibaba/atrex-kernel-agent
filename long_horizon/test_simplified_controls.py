@@ -69,7 +69,7 @@ class GatewayRecordTest(unittest.TestCase):
                 record["kernel_artifact_digest"],
                 "sha256:" + hashlib.sha256(kernel.encode()).hexdigest(),
             )
-            self.assertRegex(record["kernel_id"], r"^kernel-[0-9]+-[0-9a-f]{12}$")
+            self.assertRegex(record["kernel_id"], r"^kernel-[0-9a-f]{32}$")
             record_dir = workspace / sandbox.GATEWAY_RECORDS_PATH / record["record_id"]
             self.assertEqual((record_dir / "kernel.py").read_text(encoding="utf-8"), kernel)
             measurement = json.loads((record_dir / "result.json").read_text(encoding="utf-8"))

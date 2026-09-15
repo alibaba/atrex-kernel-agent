@@ -208,7 +208,7 @@ class SandboxCliTest(unittest.TestCase):
         cases = [
             ["--kind", "run", "--no-sync"],
             ["--kind", "run", "--help"],
-            ["--kind", "record-read", "--record-id", "gateway-100-0123456789ab"],
+            ["--kind", "record-read", "--record-id", "gateway-0123456789abcdef0123456789abcdef"],
             ["--kind", "dev", "--", "python3", "probe.py", "--kind", "episode-report"],
             ["--", "python3", "probe.py", "--kind", "load-direction", "--help"],
             ["--kind", "dev", "--", "python3", "probe.py", "--kind", "wiki-query"],

@@ -28,7 +28,7 @@ class MemoryReportTest(unittest.TestCase):
         self.experiment = {
             "experiment_id": "experiment_" + "1" * 32,
             "name": "layout change", "analysis": "lower latency",
-            "gateway_record_ids": ["gateway-123-0123456789ab"],
+            "gateway_record_ids": ["gateway-0123456789abcdef0123456789abcdef"],
         }
         self.journal = {
             "runtime_managed": True,
