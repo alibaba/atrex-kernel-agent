@@ -258,7 +258,7 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
         normalized: list[NormalizedAgentEvent] = []
         terminal = TokenUsage.unavailable()
         sequence = 0
-        seen_usage_message_ids: set[str] = set()
+        usage_message_positions: dict[str, int] = {}
         for event in _json_events(stdout):
             event_type = event.get("type")
             if event_type == "result":
@@ -279,7 +279,8 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
             message = event.get("message")
             if usage is None and isinstance(message, Mapping):
                 usage = message.get("usage")
-            parsed = token_usage_from_mapping(usage)
+            # Task progress counters are cumulative, not new model responses.
+            parsed = token_usage_from_mapping(usage if event_type == "assistant" else None)
             message_id = (
                 message.get("id")
                 if isinstance(message, Mapping)
@@ -287,8 +288,12 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
                 else None
             )
             duplicate_usage = bool(
-                message_id and message_id in seen_usage_message_ids
+                message_id and message_id in usage_message_positions
             )
+            if parsed.total_tokens is not None and duplicate_usage:
+                # Streaming repeats update the same response, not a second bill.
+                position = usage_message_positions[message_id]
+                normalized[position] = replace(normalized[position], usage=parsed)
             if parsed.total_tokens is not None and not duplicate_usage:
                 normalized.append(
                     NormalizedAgentEvent(
@@ -299,7 +304,7 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
                 )
                 sequence += 1
                 if message_id:
-                    seen_usage_message_ids.add(message_id)
+                    usage_message_positions[message_id] = len(normalized) - 1
             for action, phase, marker_id in _phase_marker_receipts(event):
                 normalized.append(
                     NormalizedAgentEvent(
@@ -397,7 +402,6 @@ class QoderAdapter(ClaudeLikeAdapter):
             "stream-json",
             "--session-id",
             session_id,
-            "--no-session-persistence",
             "--reasoning-effort",
             reasoning_effort,
         ]

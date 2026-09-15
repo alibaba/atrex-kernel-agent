@@ -409,16 +409,23 @@ def run_bounded(
     env: dict | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    proc = spawn_owned_session(
-        command,
-        role="coding-agent",
-        environment=env,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    from ..session_capture import finish_session_capture, start_session_capture
+
+    capture = start_session_capture(command, cwd, dict(os.environ if env is None else env))
+    try:
+        proc = spawn_owned_session(
+            command,
+            role="coding-agent",
+            environment=env,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except BaseException:
+        finish_session_capture(capture, interrupted=True)
+        raise
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
@@ -440,25 +447,34 @@ def run_bounded(
     )
     guard.start()
     timed_out = False
+    interrupted = False
+    communicate = (
+        (lambda timeout=None: capture.communicate(proc, timeout))
+        if capture is not None else proc.communicate
+    )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         process_groups = descendant_process_groups(proc.pid)
         signal_process_groups(process_groups, signal.SIGKILL)
-        stdout, stderr = proc.communicate()
+        stdout, stderr = communicate()
     except BaseException:
+        interrupted = True
         process_groups = descendant_process_groups(proc.pid)
         signal_process_groups(process_groups, signal.SIGTERM)
         try:
-            proc.communicate(timeout=5)
+            communicate(timeout=5)
         except subprocess.TimeoutExpired:
             signal_process_groups(process_groups, signal.SIGKILL)
-            proc.communicate()
+            communicate()
         raise
     finally:
         guard_stop.set()
         guard.join(timeout=1)
+        finish_session_capture(
+            capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
+        )
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (

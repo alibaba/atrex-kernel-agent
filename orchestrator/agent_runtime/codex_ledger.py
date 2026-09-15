@@ -8,16 +8,20 @@ import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..session_capture import CapturedObservation
 
 from .markers import phase_marker_receipts
 from .model import (
     AgentRuntimeCapabilities,
     NormalizedAgentEvent,
     TokenUsage,
+    resequence_agent_events,
     sum_token_usages,
+    token_usage_exceeds,
 )
-
 
 _THREAD_ID = re.compile(r"^[0-9a-fA-F-]{32,64}$")
 
@@ -79,13 +83,15 @@ def _usage(value: object) -> TokenUsage:
     components = (
         _counter(value, "input_tokens"),
         _counter(value, "output_tokens"),
-        _counter(value, "cached_input_tokens"),
-        _counter(value, "cache_write_input_tokens"),
+        _counter(value, "cached_input_tokens") if "cached_input_tokens" in value else 0,
+        _counter(value, "cache_write_input_tokens") if "cache_write_input_tokens" in value else 0,
         _counter(value, "total_tokens"),
     )
     if any(item is None for item in components):
         return TokenUsage.unavailable()
-    return TokenUsage(*components, measurement="exact")
+    if components[0] < components[2]:
+        return TokenUsage.unavailable()
+    return TokenUsage(components[0] - components[2], *components[1:], measurement="exact")
 
 
 CODEX_LEDGER_CAPABILITIES = AgentRuntimeCapabilities(
@@ -100,13 +106,58 @@ def observe_codex_usage(
     observer: "CodexSessionLedgerObserver",
     thread_id: str,
     stream_terminal: TokenUsage,
+    *,
+    captured: CapturedObservation | None = None,
 ) -> tuple[
     tuple[NormalizedAgentEvent, ...],
     TokenUsage,
     AgentRuntimeCapabilities,
     tuple[str, ...],
 ]:
+    try:
+        # Advance even when capture wins, so a later resume's ledger fallback
+        # cannot count this invocation again.
+        observed = _observe_codex_usage(observer, thread_id, stream_terminal)
+    except Exception:
+        if captured is not None and captured.terminal_usage.measurement == "exact":
+            observer.invalidate()
+            return captured[:4]
+        raise
+    if captured is not None and (
+        captured.terminal_usage.measurement == "exact"
+        or captured.capabilities.usage_delta_observed
+        or not captured.capture_complete
+    ):
+        # This may include native child usage that a root-only ledger cannot
+        # replace. Capture health is structured; warnings are diagnostic text only.
+        # A healthy stream-only partial observation can still fall back to the ledger.
+        if (
+            any(event.kind == "phase_marker" for event in observed[0])
+            and not token_usage_exceeds(observed[1], captured.terminal_usage)
+        ):
+            # Retain root rollout marker/delta ordering. Child-only counters
+            # cannot be assigned to a root phase; the larger total leaves them
+            # explicitly unattributed by the existing telemetry machinery.
+            events = [event for event in observed[0] if event.kind != "terminal_usage"]
+            events.append(NormalizedAgentEvent(0, "terminal_usage", captured.terminal_usage))
+            return (
+                resequence_agent_events(events), captured.terminal_usage,
+                replace(captured.capabilities, usage_delta_observed=True),
+                captured.errors + observed[3],
+            )
+        return captured[:4]
+    return observed
+
+
+def _observe_codex_usage(observer, thread_id, stream_terminal):
     if stream_terminal.total_tokens is not None:
+        # Adapter terminal input includes cache reads; native/accounting buckets
+        # are disjoint. Normalize before comparing, never add cache reads twice.
+        if stream_terminal.input_tokens is not None:
+            stream_terminal = replace(
+                stream_terminal,
+                input_tokens=stream_terminal.input_tokens - (stream_terminal.cache_read_tokens or 0),
+            )
         observation = observer.observe_reconciled(thread_id, stream_terminal)
         return (
             observation.events,
@@ -186,6 +237,12 @@ class CodexSessionLedgerObserver:
         self._path: Path | None = None
         self._offset = 0
         self._session_usage: TokenUsage | None = None
+        self._invalidated = False
+
+    def invalidate(self) -> None:
+        # A different accounting source consumed an invocation whose ledger
+        # cursor could not advance. Never replay those old tokens on fallback.
+        self._invalidated = True
 
     def _rollout_paths(self) -> Iterator[Path]:
         root = self.home / "sessions"
@@ -251,6 +308,8 @@ class CodexSessionLedgerObserver:
         return thread_id
 
     def observe(self, thread_id: str) -> CodexLedgerObservation:
+        if self._invalidated:
+            raise CodexLedgerError("Codex ledger cursor missed an accounted invocation")
         path = self._find_rollout_path(thread_id)
         if self._thread_id and thread_id != self._thread_id:
             raise CodexLedgerError("Codex observer cannot switch thread ids")
