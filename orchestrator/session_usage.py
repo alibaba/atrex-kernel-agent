@@ -32,7 +32,11 @@ def _codex_usage(raw: object) -> TokenUsage:
     # Codex's input includes cached input. Our buckets are disjoint.
     value = token_usage_from_mapping(raw)
     cached = raw.get("cached_input_tokens", 0)
-    if not isinstance(cached, int) or isinstance(cached, bool) or cached < 0:
+    cache_write = raw.get("cache_write_input_tokens", 0)
+    if any(
+        not isinstance(count, int) or isinstance(count, bool) or count < 0
+        for count in (cached, cache_write)
+    ):
         return TokenUsage.unavailable()
     if value.input_tokens is None or value.input_tokens < cached:
         return TokenUsage.unavailable()
@@ -40,7 +44,7 @@ def _codex_usage(raw: object) -> TokenUsage:
         value,
         input_tokens=value.input_tokens - cached,
         cache_read_tokens=cached,
-        cache_write_tokens=raw.get("cache_write_input_tokens", 0),
+        cache_write_tokens=cache_write,
     )
 
 
@@ -245,7 +249,10 @@ class UsageAccumulator:
             total = observed
             exact = exact and (
                 _same(observed, self.terminal)
-                or any(_same(total, self.terminal) for total in self.codex_totals.values())
+                or any(
+                    _same(rollout_total, self.terminal)
+                    for rollout_total in self.codex_totals.values()
+                )
             )
             basis = "native_rollout_deltas"
             if not exact:

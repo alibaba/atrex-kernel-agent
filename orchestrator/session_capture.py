@@ -454,7 +454,10 @@ class SessionCapture:
         for reader in self._readers:
             reader.join(timeout=5)
             if reader.is_alive():
-                self.errors.append("provider_pipe_did_not_close")
+                self._capture_error(
+                    "provider_pipe_did_not_close",
+                    TimeoutError("provider pipe reader did not exit within 5s"),
+                )
         return "".join(self._chunks["stdout"]), "".join(self._chunks["stderr"])
 
     def finish(
