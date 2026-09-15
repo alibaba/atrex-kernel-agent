@@ -197,6 +197,10 @@ class Campaign:
     )
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
     handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
+    numerical_gate: str = "auto"  # light locally/SSH; thorough on remote agate
+    repair_numerical_head: bool = False  # resume exploration; promotion still requires every gate
+    numerical_review_timeout: int = 600
+    production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
@@ -586,13 +590,15 @@ class Campaign:
             ]
         return []
 
-    def _review_production_candidate(
+    def _review_production_candidate_once(
         self,
         workspace: Path,
         framework: str,
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
+        from .infrastructure_retry import check_review_service
+
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon
         )
@@ -637,62 +643,60 @@ class Campaign:
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
-            result = run_session(
-                review_workspace,
-                DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
-                timeout=DEPENDENCY_REVIEW_TIMEOUT_S,
-                agent_cli=self.agent_cli,
-                reasoning_effort="high",
-                agent_plugins=False,
-            )
-            self._account(result, "independent production policy review")
-            if result.exit_status != 0 or result.timed_out:
+            try:
+                result = run_session(
+                    review_workspace,
+                    DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
+                    timeout=self.production_review_timeout,
+                    agent_cli=self.agent_cli,
+                    reasoning_effort="high",
+                    agent_plugins=False,
+                )
+                self._account(result, "independent production policy review")
+                check_review_service(result)
+            except ValueError as exc:
+                return [f"independent production policy review failed: {exc}"]
+            changed = []
+            for relative, expected_hash in source_hashes.items():
+                candidate_path = candidate_root / relative
+                if (
+                    not candidate_path.is_file()
+                    or hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                    != expected_hash
+                ):
+                    changed.append(relative)
+            if changed:
                 errors = [
-                    "independent production policy review agent failed "
-                    f"(exit={result.exit_status}, timeout={result.timed_out})"
+                    "independent production policy review modified candidate evidence: "
+                    + ", ".join(sorted(changed))
                 ]
             else:
-                changed = []
-                for relative, expected_hash in source_hashes.items():
-                    candidate_path = candidate_root / relative
-                    if (
-                        not candidate_path.is_file()
-                        or hashlib.sha256(candidate_path.read_bytes()).hexdigest()
-                        != expected_hash
-                    ):
-                        changed.append(relative)
-                if changed:
+                review_path = review_workspace / "dependency_review.json"
+                try:
+                    review_payload = json.loads(
+                        review_path.read_text(encoding="utf-8")
+                    )
+                    errors, review_summary = _validate_production_review(
+                        review_payload,
+                        candidate_files=frozenset(source_hashes),
+                    )
+                except (
+                    OSError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                    ValueError,
+                ) as exc:
                     errors = [
-                        "independent production policy review modified candidate evidence: "
-                        + ", ".join(sorted(changed))
+                        "independent production policy review produced no valid verdict: "
+                        f"{type(exc).__name__}: {exc}"
                     ]
                 else:
-                    review_path = review_workspace / "dependency_review.json"
-                    try:
-                        review_payload = json.loads(
-                            review_path.read_text(encoding="utf-8")
-                        )
-                        errors, review_summary = _validate_production_review(
-                            review_payload,
-                            candidate_files=frozenset(source_hashes),
-                        )
-                    except (
-                        OSError,
-                        UnicodeError,
-                        json.JSONDecodeError,
-                        ValueError,
-                    ) as exc:
-                        errors = [
-                            "independent production policy review produced no valid verdict: "
-                            f"{type(exc).__name__}: {exc}"
-                        ]
-                    else:
-                        status = "accepted" if not errors else "rejected"
-                        print(
-                            f"[production-policy] independent full-candidate review {status}: "
-                            f"{review_summary}",
-                            flush=True,
-                        )
+                    status = "accepted" if not errors else "rejected"
+                    print(
+                        f"[production-policy] independent full-candidate review {status}: "
+                        f"{review_summary}",
+                        flush=True,
+                    )
 
         try:
             reviewed_digest = _production_review_digest(
@@ -726,18 +730,43 @@ class Campaign:
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
         return list(dict.fromkeys([*errors, *persistence_errors]))
 
+    def _review_production_candidate(
+        self,
+        workspace: Path,
+        framework: str,
+        require_gluon: bool,
+    ) -> list[str]:
+        """Bound timeout retries across sessions and supervisor restarts."""
+        from .infrastructure_retry import retry_review
+
+        digest = _production_review_digest(workspace, framework, require_gluon)
+        stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
+        try:
+            return retry_review(
+                workspace, stage,
+                lambda: self._review_production_candidate_once(workspace, framework, require_gluon),
+            )
+        except ValueError as exc:
+            return [f"independent production policy review failed: {exc}"]
+
     def _production_kernel_violations(
         self,
         workspace: Path | None = None,
         *,
         require_gluon: bool = False,
     ) -> list[str]:
-        return production_kernel_violations(
-            workspace or self.workspace,
+        target = workspace or self.workspace
+        violations = production_kernel_violations(
+            target,
             self.framework,
             require_gluon=require_gluon,
             production_reviewer=self._review_production_candidate,
         )
+        if violations:
+            return violations
+        from .numerical_policy import numerical_violations
+
+        return numerical_violations(self, target)
 
     def _link_runtime(self) -> None:
         from long_horizon.store import CampaignStore

@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "profile": "attention",
+  "world_size": 1,
+  "coverage": "compact",
+  "seeds": [
+    1729,
+    104729
+  ],
+  "contract": "Example Q,K,V attention with no mask input and finite floating tensors. If masks/lengths exist, add explicit valid generators or preservation rules; do not assume arbitrary masks are legal.",
+  "cases": [
+    {
+      "id": "softmax_saturation",
+      "purpose": "Large positive dot products need max-subtracted softmax.",
+      "fields": {
+        "q": {
+          "generator": "constant",
+          "value": 8
+        },
+        "k": {
+          "generator": "uniform",
+          "low": 4,
+          "high": 8
+        },
+        "v": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    },
+    {
+      "id": "near_equal_logits",
+      "purpose": "Nearly equal logits exercise normalization.",
+      "fields": {
+        "q": {
+          "generator": "constant",
+          "value": 0.125
+        },
+        "k": {
+          "generator": "near_constant",
+          "center": 0.125,
+          "amplitude": 0.002
+        },
+        "v": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    },
+    {
+      "id": "value_dynamic_range",
+      "purpose": "Broad signed value magnitudes expose cancellation in weighted reduction.",
+      "fields": {
+        "q": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        },
+        "k": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        },
+        "v": {
+          "generator": "log_uniform",
+          "min_exp": -16,
+          "max_exp": 4
+        }
+      }
+    },
+    {
+      "id": "zero_values",
+      "purpose": "Zero values produce zero attention output.",
+      "fields": {
+        "q": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        },
+        "k": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        },
+        "v": {
+          "generator": "constant",
+          "value": 0
+        }
+      }
+    }
+  ]
+}

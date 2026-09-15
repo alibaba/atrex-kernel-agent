@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "profile": "gemm",
+  "world_size": 1,
+  "coverage": "compact",
+  "seeds": [
+    1729,
+    104729
+  ],
+  "contract": "Example for unbounded finite floating A[M,K] @ B[K,N]. Bind real names, legal ranges, bias/transpose/batch semantics from the operator contract before use.",
+  "cases": [
+    {
+      "id": "wide_magnitudes",
+      "purpose": "Independent signs and magnitudes exercise accumulation and output precision.",
+      "fields": {
+        "a": {
+          "generator": "log_uniform",
+          "min_exp": -12,
+          "max_exp": 4
+        },
+        "b": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    },
+    {
+      "id": "cancellation",
+      "purpose": "Alternating A and constant B exercise cancellation along contiguous K.",
+      "fields": {
+        "a": {
+          "generator": "alternating",
+          "amplitude": 1
+        },
+        "b": {
+          "generator": "constant",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": "sparse",
+      "purpose": "Sparse operands expose dropped contributions and zero handling.",
+      "fields": {
+        "a": {
+          "generator": "sparse",
+          "low": -2,
+          "high": 2,
+          "density": 0.05
+        },
+        "b": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    },
+    {
+      "id": "zeros",
+      "purpose": "Exact zero product.",
+      "fields": {
+        "a": {
+          "generator": "constant",
+          "value": 0
+        },
+        "b": {
+          "generator": "uniform",
+          "low": -1,
+          "high": 1
+        }
+      }
+    }
+  ]
+}
