@@ -132,7 +132,12 @@ Slow Git publication cannot block another Session's authorization or request aud
 
 Git-backed coding sessions require Linux Bubblewrap: `auto` selects it when available, and
 `bwrap` requires it explicitly. There is no unsandboxed fallback for these workspaces; `none` is only
-for trusted, non-Git tool tests. Both HOME and CWD point to the persistent, Git-free
+for trusted, non-Git tool tests. This applies to the coordinator even with remote GPU execution.
+Native macOS users must move the Supervisor and coding Agent to Linux; see the
+[platform and Lima migration guide](../docs/platforms.md). The CLI checks platform and executable
+availability before creating workspaces, probing GPUs, or initializing submodules; namespace
+permissions must also permit the actual launch.
+Both HOME and CWD point to the persistent, Git-free
 Agent view at `/home/agent/workspace` (`~`). Selected Skills,
 public task inputs, and credential files are mounted read-only. `tools/`, including `sandbox.py`,
 is a writable Episode-local seed copy; same-Episode recovery preserves its edits and deletions.

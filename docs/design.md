@@ -70,6 +70,11 @@ selected Agent assets are installed in a campaign workspace; the full source tre
 
 ### Authority boundaries
 
+The coding Agent's filesystem boundary requires a Linux coordinator with Bubblewrap, independently
+of where GPU jobs run. Native macOS Campaign execution is not supported by this workflow; see
+[platform support and migration](platforms.md). An HTTP client alone cannot hide same-user host
+files from an unsandboxed Agent, so `auto` does not fall back to `none` for Git-backed workspaces.
+
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |

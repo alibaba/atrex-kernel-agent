@@ -6,6 +6,11 @@ agent in this repository to translate the task into that command and start the c
 
 ## Prerequisites
 
+- A **Linux coordinator** running both the Supervisor and coding Agent, with Bubblewrap (`bwrap`)
+  and permitted user/mount/PID namespaces. This is required even for remote Gateway/SSH GPU jobs.
+  Native macOS coordination is no longer supported by the simplified workflow. Use the
+  [Lima migration guide](platforms.md#macos-migration-with-lima); `--agent-sandbox=none` cannot
+  launch a normal Campaign.
 - `bash`
 - `git`
 - Python 3 and `torch` on the coordinator host
@@ -116,7 +121,8 @@ and Framework Baseline sessions remain separate from this mechanical V0 initiali
 
 ### Start with a coding agent (recommended)
 
-Open Claude Code, Codex, or Qoder in the repository and provide a concrete task prompt. For example:
+Open Claude Code, Codex, or Qoder in the repository **on the Linux coordinator** and provide a
+concrete task prompt. On macOS, first enter the Lima VM described above. For example:
 
 ```text
 Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.

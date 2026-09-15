@@ -65,19 +65,49 @@ def _bwrap_path(value: str) -> str | None:
     return shutil.which(value)
 
 
+_COORDINATOR_GUIDANCE = (
+    "Run the Supervisor and coding Agent together on a Linux coordinator "
+    "with Bubblewrap and permitted user namespaces; a remote Gateway/SSH GPU "
+    "does not provide coordinator isolation. On macOS use a Lima Ubuntu VM "
+    "or a Linux host. See docs/platforms.md for setup and migration."
+)
+
+
+def require_campaign_sandbox(mode: str, executable: str) -> str:
+    """Check coordinator prerequisites before a Git-backed Campaign has side effects."""
+    if mode not in {"auto", "bwrap", "none"}:
+        raise ValueError("Agent sandbox mode must be auto, bwrap, or none")
+    if mode == "none":
+        raise RuntimeError(
+            "Git-backed Agent workspaces require isolation: --agent-sandbox=none "
+            "is only for trusted non-Git tool tests, not optimization campaigns. "
+            + _COORDINATOR_GUIDANCE
+        )
+    system = platform.system()
+    if system != "Linux":
+        raise RuntimeError(
+            f"Unsupported Campaign coordinator: {system}. Native macOS and other "
+            "non-Linux coordinators are not supported by the simplified workflow. "
+            + _COORDINATOR_GUIDANCE
+        )
+    resolved = _bwrap_path(executable)
+    if resolved is None:
+        raise RuntimeError(
+            f"Bubblewrap executable not found on the coordinator: {executable}. "
+            "Install bubblewrap or set --bwrap-executable to a Linux executable. "
+            + _COORDINATOR_GUIDANCE
+        )
+    return resolved
+
+
 def _enabled(mode: str, executable: str) -> str | None:
     if mode == "none":
         return None
-    resolved = _bwrap_path(executable)
     if mode == "bwrap":
-        if platform.system() != "Linux":
-            raise RuntimeError("--agent-sandbox=bwrap requires Linux")
-        if resolved is None:
-            raise RuntimeError(f"Bubblewrap executable not found: {executable}")
-        return resolved
+        return require_campaign_sandbox(mode, executable)
     if mode != "auto":
         raise ValueError("Agent sandbox mode must be auto, bwrap, or none")
-    return resolved if platform.system() == "Linux" else None
+    return _bwrap_path(executable) if platform.system() == "Linux" else None
 
 
 def _translate(value: str, workspace: Path) -> str:
@@ -287,11 +317,9 @@ def wrap_agent_command(
     bwrap = _enabled(mode, bwrap_executable)
     if bwrap is None:
         if _git_common_directory(workspace) is not None:
-            raise RuntimeError(
-                "Git-backed Agent workspaces require --agent-sandbox=bwrap on Linux; "
-                "an unsandboxed process can access Supervisor Git metadata"
-            )
-        return SandboxLaunch(list(command), dict(environment))
+            bwrap = require_campaign_sandbox(mode, bwrap_executable)
+        else:
+            return SandboxLaunch(list(command), dict(environment))
 
     workspace = workspace.resolve()
     repository_root = repository_root.resolve()

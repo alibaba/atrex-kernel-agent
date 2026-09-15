@@ -74,6 +74,7 @@ if __name__ == "__main__":
 
 try:
     from . import agent_runtime as _agent_runtime
+    from .agent_sandbox import require_campaign_sandbox
     from .campaign import Campaign
     from .constants import (
         AGENT_CLI_CHOICES,
@@ -127,6 +128,7 @@ try:
     )
 except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator import agent_runtime as _agent_runtime  # type: ignore[no-redef]
+    from orchestrator.agent_sandbox import require_campaign_sandbox  # type: ignore[no-redef]
     from orchestrator.campaign import Campaign  # type: ignore[no-redef]
     from orchestrator.constants import (  # type: ignore[no-redef]
         AGENT_CLI_CHOICES,
@@ -524,9 +526,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         choices=("auto", "bwrap", "none"),
         default=os.environ.get("ATREX_AKA_AGENT_SANDBOX", "auto"),
         help=(
-            "Coding-agent filesystem isolation: auto enables Bubblewrap on Linux when "
-            "available; Git-backed Agent workspaces require it and fail closed otherwise. "
-            "none is only for trusted non-Git tool tests (default: auto)."
+            "Campaign coordinators require Linux + Bubblewrap, even with a remote GPU. "
+            "auto selects bwrap; none is only for trusted non-Git tool tests, not campaigns. "
+            "macOS: run Supervisor and Agent in Lima Ubuntu; see docs/platforms.md "
+            "(default: auto)."
         ),
     )
     ap.add_argument(
@@ -784,6 +787,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         ap.error("--sandbox-ssh-gpu requires --sandbox-ssh")
     if args.environment_poll_interval <= 0:
         ap.error("--environment-poll-interval must be positive")
+    try:
+        require_campaign_sandbox(args.agent_sandbox, args.bwrap_executable)
+    except RuntimeError as exc:
+        ap.error(str(exc))
     if shutil.which(args.agent_cli) is None:
         ap.error(f"--agent-cli executable not found on PATH: {args.agent_cli}")
     if args.agent_cli == "codex":

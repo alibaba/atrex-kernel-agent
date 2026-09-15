@@ -46,6 +46,12 @@ AKA supports:
 
 ## Quick Start
 
+**Breaking platform requirement in the simplified workflow:** optimization campaigns require
+a **Linux coordinator with Bubblewrap**, including when GPU execution uses a remote Gateway or
+SSH host. The Supervisor and coding Agent run on that coordinator. Native macOS campaign execution
+is not supported; `--agent-sandbox=none` is not a bypass. macOS users should run both processes in
+a Lima Ubuntu VM or on a Linux host. See [platform support and migration](docs/platforms.md).
+
 See the [Quick Start guide](docs/quickstart.md) for prerequisites and complete runnable examples of
 the orchestrated optimization loop.
 
