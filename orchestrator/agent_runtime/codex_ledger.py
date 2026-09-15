@@ -8,7 +8,10 @@ import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..session_capture import CapturedObservation
 
 from .markers import phase_marker_receipts
 from .model import (
@@ -103,7 +106,7 @@ def observe_codex_usage(
     thread_id: str,
     stream_terminal: TokenUsage,
     *,
-    captured=None,
+    captured: CapturedObservation | None = None,
 ) -> tuple[
     tuple[NormalizedAgentEvent, ...],
     TokenUsage,
@@ -115,16 +118,19 @@ def observe_codex_usage(
         # cannot count this invocation again.
         observed = _observe_codex_usage(observer, thread_id, stream_terminal)
     except Exception:
-        if captured is not None and captured[1].measurement == "exact":
+        if captured is not None and captured.terminal_usage.measurement == "exact":
             observer.invalidate()
-            return captured
+            return captured[:4]
         raise
-    if captured is not None and (captured[1].measurement == "exact" or captured[2].usage_delta_observed or any(
-        "capture" in warning or "pipe" in warning for warning in captured[3]
-    )):
+    if captured is not None and (
+        captured.terminal_usage.measurement == "exact"
+        or captured.capabilities.usage_delta_observed
+        or not captured.capture_complete
+    ):
         # This may include native child usage that a root-only ledger cannot
-        # replace. Reconciliation must not silently lose children or capture errors.
-        return captured
+        # replace. Capture health is structured; warnings are diagnostic text only.
+        # A healthy stream-only partial observation can still fall back to the ledger.
+        return captured[:4]
     return observed
 
 

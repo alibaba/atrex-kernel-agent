@@ -15,6 +15,7 @@ from contextvars import ContextVar
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
 
 from .session_tail import CaptureBudget, CaptureLimits, TranscriptTail
 from .session_transcript import (
@@ -26,6 +27,20 @@ from .session_transcript import (
 )
 from .session_usage import UsageAccumulator
 
+if TYPE_CHECKING:
+    from .agent_runtime.model import AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage
+
+
+class CapturedObservation(NamedTuple):
+    """Accounting observation plus capture health, independent of warning wording."""
+
+    events: tuple[NormalizedAgentEvent, ...]
+    terminal_usage: TokenUsage
+    capabilities: AgentRuntimeCapabilities
+    errors: tuple[str, ...]
+    capture_complete: bool
+
+
 _LAST_CAPTURE: ContextVar[tuple[str, dict] | None] = ContextVar("aka_session_capture", default=None)
 
 
@@ -33,7 +48,7 @@ def clear_capture() -> None:
     _LAST_CAPTURE.set(None)
 
 
-def captured_observation(stdout: str, events, capabilities):
+def captured_observation(stdout: str, events, capabilities) -> CapturedObservation | None:
     """Use the current invocation's native accounting, never an unrelated run."""
     from .agent_runtime.model import NormalizedAgentEvent, TokenUsage, resequence_agent_events
 
@@ -53,8 +68,10 @@ def captured_observation(stdout: str, events, capabilities):
     usage = TokenUsage(**total)
     normalized.append(NormalizedAgentEvent(0, "terminal_usage", usage))
     capabilities = replace(capabilities, usage_delta_observed=bool(report["responses"]))
-    return resequence_agent_events(normalized), usage, capabilities, tuple(
-        [*report["warnings"], *report.get("capture_errors", [])]
+    return CapturedObservation(
+        resequence_agent_events(normalized), usage, capabilities,
+        tuple([*report["warnings"], *report.get("capture_errors", [])]),
+        report["capture_complete"],
     )
 
 

@@ -224,11 +224,11 @@ def normalize_stream(
             observation_errors += ledger_errors
         except Exception as exc:
             if captured is not None:
-                events, terminal_usage, capabilities, capture_errors = captured
+                events, terminal_usage, capabilities, capture_errors = captured[:4]
                 observation_errors += capture_errors
             observation_errors += (f"codex_ledger_unavailable:{type(exc).__name__}",)
     elif captured is not None:
-        return captured
+        return captured[:4]
     return events, terminal_usage, capabilities, observation_errors
 
 

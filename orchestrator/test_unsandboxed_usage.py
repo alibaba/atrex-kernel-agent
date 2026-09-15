@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 from long_horizon.main_adapter import normalize_stream
 from orchestrator.agent_runtime.codex_ledger import CodexSessionLedgerObserver
-from orchestrator.agent_runtime.model import AgentRunRequest
+from orchestrator.agent_runtime.model import AgentRunRequest, AgentRuntimeCapabilities
 from orchestrator.agent_runtime.runtime import CodexRuntime
-from orchestrator.session_capture import SessionCapture, clear_capture
+from orchestrator.session_capture import SessionCapture, captured_observation, clear_capture
 from orchestrator.supervisor_runtime import SupervisorRuntime, SupervisorRuntimeConfig, activate_supervisor_runtime
 from orchestrator.test_session_capture import assistant, lines, usage
 
@@ -244,6 +244,69 @@ class UnsandboxedUsageTests(unittest.TestCase):
         self.assertEqual(result.terminal_usage.measurement, "exact")
         self.assertEqual(result.terminal_usage.total_tokens, 110)
         self.assertEqual(result.session_id, ROOT_ID)
+
+    def codex_entrypoint_observations(self, stream, home):
+        observer = CodexSessionLedgerObserver(home)
+        normalized = normalize_stream("codex", stream, session_id=ROOT_ID, codex_observer=observer)
+        # Ledger cursors must advance even when capture is selected.
+        self.assertEqual(observer._session_usage.total_tokens, 110)
+        runtime = CodexRuntime(process_runner=lambda *a, **k: (stream, "", 0, False))
+        with patch("orchestrator.agent_runtime.runtime.CodexTemporaryHome") as temporary:
+            temporary.return_value.open.return_value = home
+            temporary.return_value.close.return_value = None
+            result = runtime.run(AgentRunRequest(self.root, "prompt", 5))
+        return {
+            "long_horizon": normalized,
+            "runtime": (result.events, result.terminal_usage, result.capabilities, result.observation_errors),
+        }
+
+    def test_incomplete_capture_is_preserved_independently_of_error_wording(self):
+        home = self.root / "ledger"
+        self.write(home / f"sessions/rollout-{ROOT_ID}.jsonl", lines(metadata(ROOT_ID), count()))
+        stream = codex_stream()
+        for label in ("stdout_capture_write", "codex_session_identity", "storage_write_failure"):
+            with self.subTest(label=label):
+                capture = SessionCapture(self.root / "captures", backend="codex", command=["codex", "prompt"], provider_home=None, context={})
+                capture._capture_error(label, OSError("disk full"))
+                report = self.finish(capture, stream)
+                self.assertFalse(report["capture_complete"])
+                self.assertEqual(report["response_count"], 0)
+                observed = captured_observation(stream, (), AgentRuntimeCapabilities(True, True, False))
+                self.assertIsNotNone(observed)
+                self.assertFalse(observed.capture_complete)
+                self.assertFalse(observed.capabilities.usage_delta_observed)
+                for entrypoint, (_, total, capabilities, errors) in self.codex_entrypoint_observations(stream, home).items():
+                    with self.subTest(entrypoint=entrypoint):
+                        self.assertEqual(total.measurement, "partial")
+                        self.assertEqual(total.total_tokens, 110)
+                        self.assertFalse(capabilities.usage_delta_observed)
+                        self.assertIn(f"{label}:OSError:disk full", errors)
+
+    def test_warning_text_cannot_block_healthy_stream_only_ledger_fallback(self):
+        home = self.root / "ledger"
+        self.write(home / f"sessions/rollout-{ROOT_ID}.jsonl", lines(metadata(ROOT_ID), count()))
+        stream = codex_stream()
+        capture = SessionCapture(self.root / "captures", backend="codex", command=["codex", "prompt"], provider_home=None, context={})
+        original_report = capture._usage.report
+
+        def report_with_note(*args, **kwargs):
+            report = original_report(*args, **kwargs)
+            report["warnings"].append("provider note: capture pipe delivered terminal counters only")
+            return report
+
+        with patch.object(capture._usage, "report", side_effect=report_with_note):
+            report = self.finish(capture, stream)
+        self.assertTrue(report["capture_complete"])
+        self.assertEqual(report["total"]["measurement"], "partial")
+        observed = captured_observation(stream, (), AgentRuntimeCapabilities(True, True, False))
+        self.assertIsNotNone(observed)
+        self.assertTrue(observed.capture_complete)
+        for entrypoint, (_, total, capabilities, errors) in self.codex_entrypoint_observations(stream, home).items():
+            with self.subTest(entrypoint=entrypoint):
+                self.assertEqual(total.measurement, "exact")
+                self.assertEqual(total.total_tokens, 110)
+                self.assertTrue(capabilities.usage_delta_observed)
+                self.assertEqual(errors, ())
 
     def test_codex_failed_ledger_retains_partial_capture(self):
         stream = codex_stream()

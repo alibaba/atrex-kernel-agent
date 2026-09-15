@@ -188,9 +188,10 @@ Native usage capture does not depend on bwrap. With `--agent-sandbox=none` (or `
 without bwrap), capture uses the CLI's actual configuration directory, including
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME`. It captures only the requested session and its
 children, not unrelated sessions or credentials in the same Home. Pre-invocation
-native history is excluded on resume. Codex's stream-only partial capture does not
-block an available ledger reconciliation in either session entry point; an exact
-capture including child usage is never replaced by a root-only total. Sandbox mode
+native history is excluded on resume. Codex's healthy stream-only partial capture does not
+block an available ledger reconciliation in either session entry point. A capture that includes
+child counters or has `capture_complete=false` is not replaced by a root-only total; capture health
+is passed as a structured flag, never inferred from warning text. Sandbox mode
 alone neither downgrades complete usage nor upgrades incomplete usage to `exact`.
 
 Capture file failures do not terminate the CLI: each stdout/stderr reader keeps draining to EOF

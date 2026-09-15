@@ -275,13 +275,13 @@ class CliAgentRuntime:
                 observation_errors += ledger_errors
             except Exception as exc:
                 if captured is not None:
-                    events, terminal_usage, capabilities, capture_errors = captured
+                    events, terminal_usage, capabilities, capture_errors = captured[:4]
                     observation_errors += capture_errors
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",
                 )
         elif captured is not None:
-            events, terminal_usage, capabilities, capture_errors = captured
+            events, terminal_usage, capabilities, capture_errors = captured[:4]
             observation_errors += capture_errors
         if codex_temporary_home is not None:
             cleanup_error = codex_temporary_home.close()
