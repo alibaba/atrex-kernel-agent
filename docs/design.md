@@ -206,6 +206,16 @@ This is guidance within the existing phase constraints, not an additional enforc
 Plans stay in the Direction Journal; no separate draft/plan files are required. Baseline retains
 its separate implementation-and-smoke procedure.
 
+Installation mounts restore exact executable files (including resolved symlink targets), the selected
+npm package and its installed runtime dependencies, and Python environment libraries/configuration.
+They never restore a whole Home-level directory such as `.claude`, `.qoder`, `.local`, `.nvm`, or a
+project checkout. A venv inside a project does not expose that project's source or state. Executable
+aliases remain available at their original paths, but sibling Provider histories and credentials do
+not; login material still uses the explicit Provider credential mounts into the session Home.
+Installation sources/destinations that overlap private Runtime paths or Provider state are rejected.
+Unknown launchers receive only their exact executable and shebang interpreter; missing dependencies
+must be installed in a supported package/runtime layout, never fixed by mounting a broader parent.
+
 The sandbox restores only these assets, not their private parent directory. Existing sessions retain
 their asset snapshot. Supervisor profiling helpers and evaluator inputs are still injected into
 GPU jobs when required. Directions, Experiments, and Episode reports use the HTTP client; Agents

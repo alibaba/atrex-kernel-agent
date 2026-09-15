@@ -14,11 +14,11 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 from .agent_assets import DEFAULT_AGENT_SKILLS, initialize_writable_tools, materialize_agent_assets
+from .agent_installations import installation_mounts
 from .agent_workspace import AgentWorkspace, project_reference_tree
 
 VISIBLE_WORKSPACE = Path("/home/agent/workspace")
@@ -237,36 +237,6 @@ def _git_common_directory(workspace: Path) -> Path | None:
     return (workspace / value).resolve() if not value.is_absolute() else value.resolve()
 
 
-def _installation_roots(
-    command: list[str],
-    backends: tuple[str, ...],
-    environment: Mapping[str, str],
-    host_home: Path,
-) -> tuple[Path, ...]:
-    paths: list[Path] = []
-    for executable in (
-        command[0] if command else "",
-        *backends,
-        sys.executable,
-    ):
-        resolved = (
-            Path(executable)
-            if Path(executable).is_absolute()
-            else Path(shutil.which(executable, path=environment.get("PATH")) or "")
-        )
-        if not resolved.is_absolute():
-            continue
-        try:
-            relative = resolved.absolute().relative_to(host_home)
-        except ValueError:
-            continue
-        if relative.parts:
-            root = host_home / relative.parts[0]
-            if root.is_dir() and not root.is_symlink():
-                paths.append(root)
-    return tuple(dict.fromkeys(paths))
-
-
 def _credential_mounts(
     backends: tuple[str, ...],
     host_home: Path,
@@ -418,14 +388,15 @@ def wrap_agent_command(
     # in Atrex Runtime's BwrapProcessLauncher, hide the host Home, the complete
     # AKA checkout, and the parent containing this worktree before restoring
     # only the explicitly scoped paths below.
-    for hidden in _minimal_hidden_paths(
+    hidden_paths = _minimal_hidden_paths(
         (
             host_home,
             repository_root,
             workspace.parent,
             *hidden_host_paths,
         )
-    ):
+    )
+    for hidden in hidden_paths:
         argv += ["--tmpfs", str(hidden)]
         created.add(hidden.as_posix())
     resolver = Path("/etc/resolv.conf").resolve()
@@ -462,8 +433,25 @@ def wrap_agent_command(
             _install_link(view / "reference-projects", references)
             _mount(argv, references, references, writable=False, created=created)
 
-    for root in _installation_roots(command, backends, environment, host_home):
-        _mount(argv, root, root, writable=False, created=created)
+    for source, destination in installation_mounts(
+        command, backends, environment, host_home,
+        hidden_paths=(Path("/home"), Path("/root"), Path("/tmp"), Path("/run"), *hidden_paths),
+        forbidden_paths=(
+            *hidden_host_paths, view, provider_homes, provider_home,
+            VISIBLE_WORKSPACE, repository_root / ".git", repository_root / "supervisor",
+            repository_root / "orchestrator",
+        ),
+    ):
+        if source == destination:
+            _mount(argv, source, destination, writable=False, created=created)
+        else:
+            # Preserve entrypoint realpath semantics (notably npm __dirname).
+            # Binding a JS file over its bin symlink breaks package resolution.
+            for parent in _parents(destination):
+                if parent not in created:
+                    argv += ["--dir", parent]
+                    created.add(parent)
+            argv += ["--symlink", str(source), str(destination)]
 
     credential_mounts, state_overlays = _credential_mounts(
         backends, host_home, provider_home
