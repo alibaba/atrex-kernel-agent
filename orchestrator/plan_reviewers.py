@@ -82,6 +82,18 @@ def _probe_reviewer(
     environment.update(boundary_environment or {})
     environment["ATREX_AGENT_CLI"] = agent_cli
     environment["ATREX_AGENT_SANDBOX_BACKEND"] = matching_backend
+    sandboxed = environment.get("ATREX_AGENT_SANDBOX") == "bwrap"
+    workspace = workspace.resolve()
+    input_files = {
+        "availability_probe.md": draft if draft.is_absolute() else workspace / draft,
+        "availability_proposal.md": proposal if proposal.is_absolute() else workspace / proposal,
+    }
+    if sandboxed:
+        # Preserve the native cwd, but expose only this probe's explicit packet.
+        # These virtual paths do not create/overwrite files in the real workspace.
+        environment["ATREX_AGENT_WORKSPACE_ROLE"] = "plan-review-probe"
+        draft = workspace / "availability_probe.md"
+        proposal = workspace / "availability_proposal.md"
     # A parent campaign's decision must never suppress a fresh campaign's one-time probe.
     for enabled_name, reason_name in REVIEWER_ENVIRONMENT.values():
         environment.pop(enabled_name, None)
@@ -97,11 +109,12 @@ def _probe_reviewer(
                 "--timeout",
                 str(timeout_s),
             ]
-        if environment.get("ATREX_AGENT_SANDBOX") == "bwrap":
+        if sandboxed:
             from .agent_runtime.process import run_bounded
 
             stdout, stderr, code, timed_out = run_bounded(
-                command, draft.parent, timeout_s + 15, environment,
+                command, workspace, timeout_s + 15, environment,
+                auxiliary_input_files=input_files,
             )
             if timed_out:
                 raise subprocess.TimeoutExpired(command, timeout_s + 15)
@@ -215,14 +228,15 @@ def discover_plan_reviewers(
 
     timeout_s = _probe_timeout()
     with tempfile.TemporaryDirectory(prefix="atrex-plan-reviewer-probe-") as directory:
-        draft = Path(directory) / "availability_probe.md"
+        probe_root = Path(directory).resolve()
+        draft = probe_root / "availability_probe.md"
         draft.write_text(
             "# Plan reviewer availability probe\n\n"
             "Confirm that this reviewer can receive a bounded GPU-kernel plan draft and return "
             "the requested structured review sections. No repository inspection is needed.\n",
             encoding="utf-8",
         )
-        proposal = Path(directory) / "availability_proposal.md"
+        proposal = probe_root / "availability_proposal.md"
         proposal.write_text(
             "# Candidate Proposal\n\n"
             "- Evidence: the reviewer availability probe draft requests a bounded response.\n"

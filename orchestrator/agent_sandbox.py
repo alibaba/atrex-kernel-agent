@@ -17,6 +17,7 @@ from pathlib import Path
 from .agent_home import HOST_HOME_ENV, PREPARED_ENV, _directory, projected_backends
 from .agent_installations import installation_mounts
 from .agent_workspace import WORKSPACE_LAYOUTS, WORKSPACE_ROLE_ENV, AuxiliaryWorkspace
+from .recovery_processes import HANDOFF_ID_ENV
 from .sandbox_launch import SandboxLaunch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -111,7 +112,14 @@ def _git_directory(workspace: Path) -> Path | None:
     return common
 
 
-def _grant_environment_paths(argv: list[str], environment: dict[str, str], workspace: Path) -> None:
+def _grant_environment_paths(
+    argv: list[str],
+    environment: dict[str, str],
+    workspace: Path,
+    *,
+    host_home: Path,
+    session_home_root: Path,
+) -> None:
     # These grants are transitional: legacy sandbox.py still packages private
     # evaluator inputs, writes Wiki feedback, and records phase markers itself.
     for variable, writable, directory in (
@@ -139,6 +147,12 @@ def _grant_environment_paths(argv: list[str], environment: dict[str, str], works
             raise ValueError(f"Refusing broad legacy path grant: {variable}")
         if source.resolve() != source:
             raise ValueError(f"Legacy path grant must not traverse symlinks: {variable}")
+        # Validate the actual directory grant, not just the requested file.
+        # HOME already points into the sandbox; host_home is the operator Home.
+        if host_home.is_relative_to(source):
+            raise ValueError(f"Legacy path grant would expose host Home: {variable}")
+        if source.is_relative_to(session_home_root) or session_home_root.is_relative_to(source):
+            raise ValueError(f"Legacy path grant overlaps Agent Session Homes: {variable}")
         if writable:
             with _directory(source):
                 pass
@@ -150,9 +164,12 @@ def wrap_agent_command(
     command: list[str],
     workspace: Path,
     environment: dict[str, str],
+    *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[SandboxLaunch, AuxiliaryWorkspace | None]:
     executable = sandbox_executable(environment)
     if executable is None:
+        if auxiliary_input_files:
+            raise ValueError("Explicit auxiliary inputs require a Bubblewrap auxiliary workspace")
         return SandboxLaunch(list(command), dict(environment)), None
     workspace = workspace.resolve(strict=True)
     if REPOSITORY_ROOT.is_relative_to(workspace):
@@ -164,11 +181,20 @@ def wrap_agent_command(
     role = environment.get(WORKSPACE_ROLE_ENV, "optimizer")
     if role != "optimizer" and role not in WORKSPACE_LAYOUTS:
         raise ValueError(f"Unknown Agent workspace role: {role}")
-    view = AuxiliaryWorkspace(workspace, home, role) if role != "optimizer" else None
+    if role == "optimizer" and auxiliary_input_files:
+        raise ValueError("Explicit auxiliary inputs require an auxiliary workspace role")
+    view = (
+        AuxiliaryWorkspace(workspace, home, role, input_files=auxiliary_input_files)
+        if role != "optimizer" else None
+    )
     try:
-        argv = [
-            executable,
-            "--die-with-parent",
+        argv = [executable]
+        # Only a durable handoff owner controls the sandbox lifetime. Direct
+        # launches preserve native behavior on Supervisor/spawning-thread death.
+        # spawn_owned_session validates the handoff before starting its wrapper.
+        if environment.get(HANDOFF_ID_ENV):
+            argv.append("--die-with-parent")
+        argv.extend((
             "--new-session",
             "--unshare-user",
             "--unshare-pid",
@@ -179,7 +205,7 @@ def wrap_agent_command(
             "aka-agent",
             "--cap-drop",
             "ALL",
-        ]
+        ))
         # Empty-root allowlist, not a read-only bind of the host root. In
         # particular, /home, /root, /opt and Supervisor storage are absent.
         for name in SYSTEM_PATHS:
@@ -217,7 +243,10 @@ def wrap_agent_command(
                 if bench.is_symlink():
                     raise ValueError("Legacy Atrex-Bench must be the code-only workspace copy")
                 _mount(argv, bench, bench)
-            _grant_environment_paths(argv, environment, workspace)
+            _grant_environment_paths(
+                argv, environment, workspace,
+                host_home=host_home, session_home_root=home.parent,
+            )
         forbidden = (workspace, home.parent, REPOSITORY_ROOT / ".git")
         installations = projected_backends(environment) + (("agate",) if view is None else ())
         for source, destination in installation_mounts(

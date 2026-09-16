@@ -454,7 +454,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
                     default=os.environ.get("ATREX_AGENT_SANDBOX", "none"),
                     help="Coordinator-side Agent isolation; none preserves native macOS/Linux execution (default), bwrap requires Linux.")
     ap.add_argument("--bwrap-executable", default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"))
-    ap.add_argument("--agent-read-only-path", action="append", default=[], metavar="PATH",
+    ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
                     help="Explicit extra read-only host path granted at the same path inside the Agent sandbox (repeatable).")
     ap.add_argument(
         "--sandbox-hardware",
@@ -703,7 +703,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
                             "ATREX_BWRAP_EXECUTABLE": args.bwrap_executable,
                             "PATH": os.environ.get("PATH", "")})
         args.agent_read_only_path = [str(Path(path).expanduser().resolve(strict=True))
-                                     for path in args.agent_read_only_path]
+                                     for path in (args.agent_read_only_path or [])]
     except (RuntimeError, ValueError, OSError) as error:
         ap.error(str(error))
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(

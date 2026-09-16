@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -33,13 +34,34 @@ def reset_episode_scratch(workspace: Path) -> None:
 
 
 class AuxiliaryWorkspace:
-    def __init__(self, workspace: Path, home: Path, role: str):
+    def __init__(
+        self, workspace: Path, home: Path, role: str,
+        *, input_files: dict[str, Path] | None = None,
+    ):
         self.workspace = workspace
         self.inputs, self.outputs = WORKSPACE_LAYOUTS[role]
+        input_files = dict(input_files or {})
+        if set(input_files) - set(self.inputs):
+            raise ValueError("Explicit auxiliary files must use declared input names")
         self.root = Path(tempfile.mkdtemp(prefix="view-", dir=home.parent))
         try:
             count, total = 0, 0
+
+            def copy_file(source: Path, destination: Path) -> None:
+                nonlocal count, total
+                content = _regular_bytes(source, limit=16 * 1024 * 1024 + 1)
+                count, total = count + 1, total + len(content)
+                if count > 4096 or total > 16 * 1024 * 1024:
+                    raise ValueError("Auxiliary input view exceeds 4096 files / 16 MiB")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+
             for name in (*self.inputs, *self.outputs):
+                if name in input_files:
+                    # Supervisor-supplied files may live outside the Campaign.
+                    # Snapshot only these regular files, never their directory.
+                    copy_file(input_files[name], self.root / name)
+                    continue
                 source = workspace / name
                 if not source.exists() and not source.is_symlink():
                     continue
@@ -55,12 +77,7 @@ class AuxiliaryWorkspace:
                     if path.is_dir():
                         destination.mkdir(parents=True, exist_ok=True)
                         continue
-                    content = _regular_bytes(path, limit=16 * 1024 * 1024 + 1)
-                    count, total = count + 1, total + len(content)
-                    if count > 4096 or total > 16 * 1024 * 1024:
-                        raise ValueError("Auxiliary input view exceeds 4096 files / 16 MiB")
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(content)
+                    copy_file(path, destination)
             (self.root / "scratch").mkdir(exist_ok=True)
         except BaseException:
             self.close()
@@ -83,4 +100,14 @@ class AuxiliaryWorkspace:
                 Path(temporary).unlink(missing_ok=True)
 
     def close(self) -> None:
-        shutil.rmtree(self.root)
+        primary_error = sys.exception()
+        try:
+            shutil.rmtree(self.root)
+        except Exception as cleanup_error:
+            if primary_error is None:
+                raise
+            # Cleanup is still attempted on interruption, failed publication and
+            # failed construction, but must not replace the original exception.
+            primary_error.add_note(
+                f"Auxiliary workspace cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}"
+            )

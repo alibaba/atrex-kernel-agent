@@ -417,7 +417,10 @@ class Campaign:
                 # Only the reviewer's own directory enters the Agent namespace,
                 # not the entire Long Horizon archive/control directory.
                 state_file = state_file.parent / "reviewer-state" / state_file.name
-            environment[env_name] = str(state_file.absolute())
+                state_file = state_file.absolute()
+            else:
+                state_file = state_file.resolve()
+            environment[env_name] = str(state_file)
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         if self.sandbox_ssh:
@@ -436,8 +439,13 @@ class Campaign:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
         # Query events from disposable episode worktrees must land in the
         # incumbent workspace, where the completion hook can retain them.
+        wiki_profile_root = self.workspace / ".gpu_wiki_profile"
+        # Preserve lexical paths for bwrap's mount validation; native sessions
+        # retain the existing symlink and '..' canonicalization.
         environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            (self.workspace / ".gpu_wiki_profile").absolute()
+            wiki_profile_root.absolute()
+            if self.agent_sandbox == "bwrap"
+            else wiki_profile_root.resolve()
         )
         environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment

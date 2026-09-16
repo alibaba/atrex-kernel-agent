@@ -19,11 +19,15 @@ flowchart TD
     FD --> SPAWN["recovery_processes.spawn_owned_session"]
     NATIVE --> SPAWN
     SPAWN --> CAPTURE["PR1 Session capture<br/>Pipes + native transcripts + usage"]
-    CAPTURE --> EXIT["Exit / timeout cleanup<br/>Finalize capture; publish allowed auxiliary output"]
+    CAPTURE --> EXIT["Finalize capture<br/>Publish auxiliary output only on success<br/>Always clean up temporary view"]
     WRAP -->|Unsupported host or invalid grant| FAIL["Fail before starting Agent<br/>No silent unsandboxed fallback"]
 ```
 
 The command and workspace retain their original absolute paths inside the namespace. Existing prompts, tools, Git worktree links and native-session discovery therefore do not need path rewriting. `HOME`, Provider config roots and XDG directories point to the isolated Home before ledger observers and capture are initialized. Recovery-owned launches pass the anonymous argument FD through their ownership wrapper; the parent closes it after spawning.
+
+Campaign reviewer-state and Wiki-profile environment paths keep their lexical absolute form only in `bwrap` mode, so mount validation can detect symlinks. Native `none` mode retains the existing `Path.resolve()` behavior, including symlink resolution and `..` normalization.
+
+Direct launches omit Bubblewrap's `--die-with-parent`, preserving the native path's process-lifetime behavior: Supervisor or spawning-thread exit alone does not kill the Agent. This does not guarantee survival of lost output pipes or automatic reattachment. Recovery handoffs retain the flag, binding the sandbox to the durable ownership wrapper rather than the original Supervisor; the existing cleanup guardian remains responsible for orphan cleanup. Timeouts and explicit interruptions still use the existing process-group termination logic in both modes.
 
 ## Usage and rollback
 
@@ -66,7 +70,9 @@ Environment inheritance otherwise follows the existing CLI contract. Model and l
 
 ## Auxiliary sessions
 
-Supervisor-launched auxiliary sessions receive a temporary allowlist view at their original working directory. Inputs are mounted read-only; only declared output files are copied back with bounded, no-follow reads. Other files written in that view are discarded. The existing caller still validates report contents.
+Supervisor-launched auxiliary sessions receive a temporary allowlist view at their original working directory. Inputs are mounted read-only; only declared output files are copied back with bounded, no-follow reads after normal process completion with exit code zero and no policy/environment termination. Timeout, interruption, process failure or guard termination skips publication and leaves existing destination reports unchanged. Other files written in that view are discarded. The existing caller still validates report contents.
+
+Temporary-view cleanup is attempted whether publication succeeds, fails or is skipped. If cleanup also fails while another exception is propagating, it adds a diagnostic note to that exception instead of replacing it. A publication error on an otherwise successful session still propagates to the caller.
 
 | Role | Read-only inputs | Returned files |
 | --- | --- | --- |
@@ -75,6 +81,8 @@ Supervisor-launched auxiliary sessions receive a temporary allowlist view at the
 | Baseline exit review | `crash_record.json`, `candidate/` | `resume.json` |
 | Baseline correctness review | `context/` | `correctness_review.md` |
 | Plan-reviewer availability probe | `availability_probe.md`, `availability_proposal.md` | None; existing stdout protocol |
+
+Availability probes use the Campaign workspace as `cwd` in both native and Bubblewrap modes. Their draft/proposal remain Supervisor-created temporary files; Bubblewrap snapshots them under the two declared input names in its read-only view and passes those virtual paths to the helper. No probe files are written to the real Campaign, and neither the temporary source directory nor other Campaign files are mounted. Changing `cwd` does not grant access to undeclared relative-path configuration files.
 
 The allowlist contains at most 4,096 files / 16 MiB; each returned file is limited to 8 MiB. These roles receive no campaign Git, Gateway/private-reference, Wiki-history or recovery-state mounts. Public problem generation is the explicit trusted preprocessing exception that reads exact shapes to create the public contract; optimization sessions do not inherit its input view.
 
@@ -90,6 +98,8 @@ This step must not remove capabilities before their Supervisor replacements exis
 | Agent packages/calls `tools/sandbox.py` | Code-only workspace Atrex-Bench copy and exact evaluator input directory, read-only; legacy Agate configuration/credentials | HTTP GPU/Wiki Runtime, PR3 |
 | Agent writes phase/recovery/Wiki evidence and Journal live mirror | Scoped telemetry, recovery-state, Wiki-profile, reviewer-state and live-memory directories as needed for append/atomic replace | Runtime records/Journal, PR3–5 |
 
+Writable file grants include the containing directory to support atomic replacement and lock files. Validation checks that actual directory before creating or mounting it: it must not be the operator Home or an ancestor, traverse symlinks, or overlap the `.atrex-agent-homes` root in either direction. The current Session Home is mounted only through the dedicated Home setup, never through these legacy environment grants. Use a dedicated log/state subdirectory rather than placing a granted file directly under the operator Home.
+
 These grants are deliberately narrower than host access but **are not a complete authority boundary against a malicious Agent**. In particular, Git and legacy control/evidence paths are still Agent-accessible, and the old private-shape protection is a workflow rule rather than a filesystem barrier from the Agent-side packager. This PR does not claim immutable Supervisor ledgers or hidden Git/private evaluation inputs. It must not be presented as the final simplified architecture.
 
 The Agent shares the host network so existing model, Gateway, Wiki and SSH clients continue to work. There is no new network allowlist, cgroup resource quota, measurement retry policy, Journal protocol, or promotion rule in this step. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
@@ -100,7 +110,7 @@ In `bwrap` mode, a newly materialized Episode starts with an empty `scratch/`. R
 
 ## Verification
 
-Local fixtures are kept outside this repository, following its review convention. Checks cover no-sandbox compatibility, unsupported-host failure, minimal installation mounts, Provider-state isolation, safe Home reseeding, anonymous argument ownership, auxiliary input/output rules and scratch symlinks. Linux subprocess checks use temporary fake Agents, including the real Codex adapter launch path, without model/GPU calls.
+Local fixtures are kept outside this repository, following its review convention. Checks cover no-sandbox compatibility, repeated CLI parsing, unsupported-host failure, minimal installation mounts, Provider-state isolation, rejection of host-Home/Session-Home legacy grants, safe Home reseeding, anonymous argument ownership, auxiliary input/output rules and scratch symlinks. Linux subprocess checks use temporary fake Agents, including the real Codex adapter launch path, without model/GPU calls. Lifecycle checks cover direct Supervisor/spawning-thread exit, handoff survival across Supervisor exit, ownership-wrapper death cleanup, and timeout cleanup.
 
 On Lima Ubuntu (Python 3.14.4, Bubblewrap 0.11.1), the isolation suite passes, including actual read-only mounts, hidden host files, Git worktree commits, native Session capture, recovery-wrapper FD propagation and timeout cleanup. PR1's external 111-check regression suite also passes on the native path. Installed Claude 2.1.235, Codex 0.148.0 and Qoder 1.1.28 execute `--version` inside the namespace. Pi is not installed in that VM; live authentication, model calls and GPU end-to-end campaigns were not exercised.
 

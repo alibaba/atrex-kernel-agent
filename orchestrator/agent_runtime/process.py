@@ -407,6 +407,7 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
     from ..agent_home import prepare_agent_environment
@@ -418,7 +419,9 @@ def run_bounded(
         cwd, dict(os.environ if env is None else env),
         (env or {}).get("ATREX_TELEMETRY_ATTEMPT_ID") or "\0".join(command),
     )
-    launch, view = wrap_agent_command(command, cwd, environment_values)
+    launch, view = wrap_agent_command(
+        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
+    )
     capture = start_session_capture(command, cwd, environment_values)
     try:
         proc = spawn_owned_session(
@@ -458,6 +461,7 @@ def run_bounded(
         daemon=True,
     )
     guard.start()
+    completed = False
     timed_out = False
     interrupted = False
     communicate = (
@@ -466,6 +470,7 @@ def run_bounded(
     )
     try:
         stdout, stderr = communicate(timeout=timeout)
+        completed = True
     except subprocess.TimeoutExpired:
         timed_out = True
         # spawn_owned_session creates this PGID. Keep it even if the group
@@ -484,15 +489,27 @@ def run_bounded(
             communicate()
         raise
     finally:
-        guard_stop.set()
-        guard.join(timeout=1)
-        finish_session_capture(
-            capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
-        )
-        if view:
-            try:
+        try:
+            guard_stop.set()
+            guard.join(timeout=1)
+            finish_session_capture(
+                capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
+            )
+            # A killed/failed auxiliary session may leave a syntactically valid
+            # but incomplete report. Only normal, successful completion can
+            # replace the caller's report; timeout draining is not completion.
+            if (
+                view is not None
+                and completed
+                and not timed_out
+                and not interrupted
+                and proc.returncode == 0
+                and not dependency_violations
+                and not environment_failures
+            ):
                 view.publish()
-            finally:
+        finally:
+            if view is not None:
                 view.close()
     returncode = proc.returncode
     if dependency_violations:
