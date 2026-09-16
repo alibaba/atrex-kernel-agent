@@ -1,5 +1,11 @@
 # GPU Wiki
 
+In an AKA campaign, use the enabled `gpu-wiki.query` plugin through
+`python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json`.
+The input is a JSON object with a `request` string and optional `max_records`, `max_bytes`,
+and `exclude`. Follow the campaign's injected plugin instructions. The direct commands below
+remain available for standalone Wiki maintenance and queries.
+
 GPU Wiki is the structured knowledge system used by ATREX Kernel Agent (AKA).
 It turns optimization traces and agent sessions into validated JSON knowledge,
 serves that knowledge through a lightweight query path, and mines completed AKA

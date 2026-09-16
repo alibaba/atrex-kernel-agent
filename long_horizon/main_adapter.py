@@ -101,6 +101,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     link_runtime(
         workspace,
         native,
+        plugin_registry=campaign.plugin_registry,
         is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
     )
     install_workspace_policy(
@@ -127,6 +128,7 @@ def episode_directives(
             "Gate findings: " + "; ".join(repair[1])
         )
     return {
+        "plugins": campaign.plugin_directive("fast_episode" if fast else "episode"),
         "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": (
             campaign._fast_sandbox_directive()

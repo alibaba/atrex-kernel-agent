@@ -157,37 +157,18 @@ option before `--`, which routes the job through the dev interface.
 
 Search in this order and stop when one actionable direction is supported:
 
-1. **GPU Wiki through the natural-language front door.** Profile first, then describe the measured
-   problem rather than trying to guess query flags. PPU is the exception: start from the decisive
-   evidence selected by `ppu-acu-joint-profile`, whether or not it required a new profile:
-
-   ```bash
-   python3 gpu-wiki/tools/query_nl.py "<your description>" --brief
-   python3 gpu-wiki/tools/query_nl.py --file research_request.txt
-   ```
-
-   Include the true target product and authoritative runtime architecture exactly as supplied. Ask for
-   the full product specification and relevant architecture/ISA facts so the response contains isolated
-   `hardware_wiki` and `kernel_wiki` records. Also include the operator, framework, shapes, dtypes,
-   profile numbers, what was already tried, exact failures, competing hypotheses, and the fact that would
-   end this line of work. For a PPU iteration that skipped profiling, identify the source, compiler,
-   clean-benchmark, or prior PPU evidence used instead. Do not translate the hardware identity or
-   pre-compress the prose into keywords.
-
-   Read the compact response before acting: records are keyed by stable id, every `payload` is isolated,
-   `store` distinguishes `gpu_wiki` from namespaced `internal_gpu_wiki` records,
-   `match.arch` states its reach, and `notes` reports deterministic normalization, widening, truncation,
-   or store gaps. Pass `--exclude <ids-already-read>` on later queries and use `--max-bytes` for a hard
-   context bound. The structured `query_wiki.py` and `query_hardware.py` tools remain available when the
-   exact address is already known; never drop architecture scope to manufacture a match.
-   Copy the response's top-level `query_id` and each used record's own emitted canonical `wiki_id`
-   exactly so the decisive experiment can declare its Wiki attribution in the native journal. Never
-   reconstruct them from response mapping keys or prose.
-2. `reference-projects/` only when the local wiki is insufficient.
+1. **Enabled knowledge tools.** Read `.atrex_plugins/instructions.md` and inspect
+   `python3 tools/plugin.py list`. Follow the session's phase-specific plugin instructions.
+   Profile first, then describe measured symptoms, exact product/runtime architecture, operator,
+   framework, shapes/dtypes, failed attempts and the fact needed for the next decision. On PPU,
+   use the decisive evidence selected by `ppu-acu-joint-profile`, even when no new profile was needed.
+   Preserve source IDs and attribution exactly. Respect architecture scope and context budgets.
+   If no suitable plugin is enabled, continue with available references; never invoke a disabled tool.
+2. `reference-projects/` only when the enabled knowledge tools are absent or insufficient.
 3. Public primary sources only when local sources do not answer the question.
 
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
-repeating local parameter tweaks. Record stable Wiki ids and the evidence-to-action chain.
+repeating local parameter tweaks. Record stable source ids and the evidence-to-action chain.
 
 ### 4. Plan a coherent direction
 
@@ -240,7 +221,7 @@ progress view in the incumbent workspace.
 
 ```bash
 <JOURNAL_CLI> append --path <JOURNAL_PATH> \
-  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":""},"decision":"keep_as_best|promote|reject_and_continue|revert|pivot|blocked","wiki_usage_status":"declared","wiki_query_ids":["<emitted-query-id>"],"wiki_usage":[{"query_id":"<emitted-query-id>","wiki_id":"<emitted-canonical-wiki-id>","disposition":"applied|partially_applied|reference_only|rejected","use":"...","evidence":"..."}]}'
+  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":""},"decision":"keep_as_best|promote|reject_and_continue|revert|pivot|blocked","wiki_usage_status":"not_queried"}'
 ```
 
 Use `declared` only with non-empty `wiki_usage`. Include `wiki_query_ids` for both `declared` and
