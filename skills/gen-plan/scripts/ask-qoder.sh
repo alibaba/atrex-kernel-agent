@@ -208,6 +208,12 @@ timeout = int(sys.argv[1])
 session_file = pathlib.Path(sys.argv[2]) if sys.argv[2] else None
 command = sys.argv[3:]
 environment = os.environ.copy()
+if session_file is not None and environment.get("ATREX_QODER_REVIEW_HOME"):
+    home = pathlib.Path(environment["ATREX_QODER_REVIEW_HOME"])
+    environment["HOME"] = str(home)
+    for variable, relative in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache"),
+                               ("XDG_DATA_HOME", ".local/share"), ("XDG_STATE_HOME", ".local/state")):
+        environment[variable] = str(home / relative)
 environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
 
 

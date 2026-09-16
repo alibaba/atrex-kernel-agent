@@ -2016,6 +2016,8 @@ class LongHorizonCampaign:
                     "fast_trials", self.fast_trials if fast_mode else None
                 )
                 if active.get("resumed_from_phase") == "preparing":
+                    if self.base_campaign.agent_sandbox == "bwrap":
+                        worktree.reset_scratch()
                     main_adapter.link_episode_runtime(
                         self.base_campaign, worktree.path
                     )
@@ -2037,6 +2039,8 @@ class LongHorizonCampaign:
                 }
                 store.save_active(active)
                 worktree.materialize(self.workspace)
+                if self.base_campaign.agent_sandbox == "bwrap":
+                    worktree.reset_scratch()
                 active.update(
                     {
                         "episode_branch": worktree.branch,
@@ -2092,6 +2096,9 @@ class LongHorizonCampaign:
             telemetry_environment.update(
                 self.base_campaign.agent_environment(episode_mode=episode_mode)
             )
+            if self.base_campaign.agent_sandbox == "bwrap":
+                # The legacy Journal still updates its canonical live mirror.
+                telemetry_environment["ATREX_JOURNAL_LIVE_FILE"] = str(store.live_memory_path)
             policy_stop: Event | None = None
             policy_executor: ThreadPoolExecutor | None = None
             policy_future: Future[None] | None = None

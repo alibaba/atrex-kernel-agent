@@ -9,6 +9,8 @@ agent in this repository to translate the task into that command and start the c
 Running sessions write live conversations and provider usage records. See
 [Session observability](session-observability.md) for paths, accounting semantics, and privacy limits.
 
+Coordinator-side Agent isolation is optional: add `--agent-sandbox bwrap` on Linux with Bubblewrap and permitted user namespaces. `--agent-sandbox none` remains the default and preserves native macOS/Linux execution. This is separate from the GPU execution sandbox. See [Agent workspace isolation](agent-workspace-isolation.md) for Provider configuration, extra read-only grants, scope limits and rollback.
+
 - `bash`
 - `git`
 - Python 3 and `torch` on the coordinator host
@@ -54,7 +56,7 @@ cd atrex-kernel-agent
   containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
   the generalized public contract using schema `atrex.agent_problem.v1`.
 
-Production native campaigns never expose detailed shapes to baseline or optimization sessions. If
+Production native campaigns omit detailed shapes from baseline/optimization prompts and public workspace inputs. The legacy Agent-side evaluator packager still needs a scoped private-input path; this is not yet a filesystem secrecy boundary against the coding Agent (see the isolation guide's compatibility grants). If
 `agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
 preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
 `reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public

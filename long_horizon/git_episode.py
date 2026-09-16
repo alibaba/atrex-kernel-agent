@@ -220,6 +220,11 @@ class EpisodeWorktree:
             return "candidate kernel.py still contains timeline profiling probes", paths
         return "", paths
 
+    def reset_scratch(self) -> None:
+        from orchestrator.agent_workspace import reset_episode_scratch
+
+        reset_episode_scratch(self.path)
+
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:
         destination.mkdir(parents=True, exist_ok=True)
         committed_patch = _git(
