@@ -15,7 +15,7 @@ The target users are Campaign operators diagnosing failed or stalled runs, resea
 | Duplicate stream/native records or exported child usage | Counters reconcile without counting duplicate copies; uncertain coverage is explicitly `partial` or `unavailable`. |
 | Capture disabled | No new capture directory or capture monitor/readers; functional stdout/stderr, exit status, and existing stream/ledger accounting remain available. |
 
-Recorded-format fixtures and real local subprocesses verify these contracts. Production overhead, mean time to diagnose failures, and end-to-end Token savings have not been benchmarked; no quantitative improvement is claimed for those metrics.
+Recorded-format fixtures and real local subprocesses verify these contracts. A [capture-off/on benchmark](session-capture-performance.md) measures process latency, Supervisor CPU time, and peak memory at three transcript sizes, with raw samples and reproduction commands. It is a synthetic capture-workload measurement, not a production Agent slowdown or Token-saving claim; diagnosis time and end-to-end savings have not been benchmarked.
 
 ## Capture lifecycle
 
@@ -151,6 +151,10 @@ The measurement states are:
 
 Repeated stream/native copies of the same response are counted once. Claude cumulative task-progress notifications are not new responses. Codex cumulative rollout counters are reduced to invocation deltas; cached input is not added twice. Root terminal totals are not blindly added to child usage because the terminal may already include children.
 
+Pi Capture and its adapter share the final-event usage parser: `message_end` (assistant/tool result) and `compaction_end.result.usage` both contribute to the invocation total. A complete stream ending in `agent_settled` preserves exact accounting, including compaction. Pi native entry IDs are not shared response IDs, so stream and native totals are not added together. The complete stream is preferred; if native evidence supplies larger or missing counters, component maxima preserve that evidence with `partial` status and `pi_stream_native_usage_mismatch`. Native-only or unsettled observations remain partial. This is conservative reconciliation, not an exact reconstruction of unseen child calls; the report uses one source's response rows rather than presenting duplicate copies as separate bills.
+
+Qoder all-zero token placeholders are treated as unavailable, matching its adapter. A credits-only result therefore has `total_tokens: null`, `measurement: "unavailable"`, and separately recorded credits, not zero consumed tokens. Positive exported native token counters are still retained as partial evidence when the terminal has no usable token total.
+
 Existing Phase Marker ordering is retained. Native-only child usage without a reliable position in the root phase sequence contributes to the total, not to an invented phase attribution. Detailed per-response counters remain available in the usage report even when phase attribution is incomplete.
 
 If Codex ledger reconciliation fails, the ledger cursor is invalidated before fallback, regardless of whether Capture is exact, partial, or unavailable. Available Capture usage is preserved; otherwise the caller keeps its existing stream fallback. The invocation observation reports `codex_ledger_unavailable:<ExceptionType>` and does not qualify for usage-verified resume. A later call cannot replay this invocation through the invalidated cursor. A successful Capture does not hide ledger failures.
@@ -182,3 +186,5 @@ python3 orchestrator/optimize.py --help
 ```
 
 Regression tests are maintained outside this repository. Local validation uses recorded-format fixtures and real Python subprocesses instead of paid Agent CLIs. It covers native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, complete functional stdout/stderr, pipe draining after write/parser failures, ledger-failure diagnostics and resume qualification, normal exit, timeout, Long Horizon invocation archives, and the kill switch (including destination precedence, stale-observation clearing, environment propagation, and stream/ledger fallback). Boundary regressions also cover a larger ledger versus incomplete Capture, partial-fallback cursor invalidation, output arriving more than five seconds after the root exits, timeout/interruption after leader exit, and oversized native lines spanning multiple polls. The CLI smoke check alone does not verify these behaviors.
+
+Provider-accounting regressions additionally check Pi compaction (120 + 60 = 180 exact tokens), Pi stream/native copies without shared IDs (120, not 240), repeated independent Pi responses, native/stream arrival order, native-only and resumed observations, and Qoder credits-only zero placeholders. Real subprocess checks verify the persisted usage report and the accounting returned to callers, not only the parser in isolation.
