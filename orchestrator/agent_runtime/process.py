@@ -456,12 +456,14 @@ def run_bounded(
         stdout, stderr = communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        process_groups = descendant_process_groups(proc.pid)
+        # spawn_owned_session creates this PGID. Keep it even if the group
+        # leader has exited/reaped while descendants still hold stdout/stderr.
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGKILL)
         stdout, stderr = communicate()
     except BaseException:
         interrupted = True
-        process_groups = descendant_process_groups(proc.pid)
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGTERM)
         try:
             communicate(timeout=5)

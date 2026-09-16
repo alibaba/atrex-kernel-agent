@@ -266,6 +266,8 @@ class CliAgentRuntime:
                 )
                 observation_errors += ledger_errors
             except Exception as exc:
+                # Also cover failures before observe_codex_usage (thread lookup).
+                codex_observer.invalidate()
                 if captured is not None:
                     events, terminal_usage, capabilities, capture_errors = captured[:4]
                     observation_errors += capture_errors

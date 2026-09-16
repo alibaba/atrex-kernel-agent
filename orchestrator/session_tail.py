@@ -91,6 +91,8 @@ class TranscriptTail:
         self.captured_bytes = 0
         self.identity = None
         self.pending = bytearray()
+        self.dropping_line = False
+        self.incomplete = False
         self.stopped = False
         self.invalidated = False
         self.history_incomplete = False
@@ -110,7 +112,8 @@ class TranscriptTail:
         finally:
             self.identity = history.identity
             self.invalidated = history.invalidated
-            self.history_incomplete = history.stopped or self.stopped
+            self.history_incomplete = history.stopped or history.incomplete or self.stopped
+            self.dropping_line = history.dropping_line
             self.stopped = self.stopped or history.invalidated
 
     def read(
@@ -168,10 +171,25 @@ class TranscriptTail:
                 consumed = 0
                 while True:
                     newline = self.pending.find(b"\n", consumed)
+                    if self.dropping_line:
+                        if newline < 0:
+                            consumed = len(self.pending)
+                            break
+                        self.dropping_line = False
+                        consumed = newline + 1
+                        continue
                     if newline < 0:
+                        if len(self.pending) - consumed > budget.limits.line_bytes:
+                            self.dropping_line = True
+                            self.incomplete = True
+                            budget.warning("native_line_bytes_exceeded")
+                            consumed = len(self.pending)
                         break
                     if newline + 1 - consumed > budget.limits.line_bytes:
-                        break
+                        self.incomplete = True
+                        budget.warning("native_line_bytes_exceeded")
+                        consumed = newline + 1
+                        continue
                     if not budget.record():
                         self.stopped = True
                         self.pending.clear()
@@ -180,11 +198,6 @@ class TranscriptTail:
                     consumed = newline + 1
                 if consumed:
                     del self.pending[:consumed]
-                if len(self.pending) > budget.limits.line_bytes:
-                    self.stopped = True
-                    self.pending.clear()
-                    budget.warning("native_line_bytes_exceeded")
-                    return
             if final and self.pending:
                 if budget.record():
                     yield bytes(self.pending)

@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import threading
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import replace
@@ -95,6 +97,11 @@ def _atomic(path: Path, text: str) -> None:
 def start_session_capture(command: list[str], cwd: Path, environment: dict[str, str]):
     """Observe an Agent invocation without changing its command or environment."""
     clear_capture()
+    # Check before path resolution, native discovery, or capture construction.
+    # Clearing the prior observation also keeps disabled invocations on the
+    # existing stream/ledger path, even if their stdout matches an earlier run.
+    if environment.get("ATREX_SESSION_CAPTURE", "1").strip() == "0":
+        return None
     backend = environment.get("ATREX_AGENT_CLI") or (Path(command[0]).name if command else "")
     if backend not in {"claude", "codex", "qodercli", "pi"}:
         return None
@@ -441,6 +448,7 @@ class SessionCapture:
                 self._capture_error("native_capture", error)
 
     def communicate(self, process, timeout: float | None = None) -> tuple[str, str]:
+        deadline = None if timeout is None else time.monotonic() + timeout
         if not self._readers:
             for name in ("stdout", "stderr"):
                 reader = threading.Thread(
@@ -452,12 +460,12 @@ class SessionCapture:
             self._monitor.start()
         process.wait(timeout=timeout)  # TimeoutExpired handled by the existing process guard.
         for reader in self._readers:
-            reader.join(timeout=5)
+            # A descendant may still hold the pipe after the CLI exits. Normal
+            # return requires EOF; a deadline covers both process and pipe wait.
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            reader.join(timeout=remaining)
             if reader.is_alive():
-                self._capture_error(
-                    "provider_pipe_did_not_close",
-                    TimeoutError("provider pipe reader did not exit within 5s"),
-                )
+                raise subprocess.TimeoutExpired(process.args, timeout)
         return "".join(self._chunks["stdout"]), "".join(self._chunks["stderr"])
 
     def finish(

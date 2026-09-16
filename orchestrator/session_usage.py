@@ -11,7 +11,9 @@ import math
 from dataclasses import asdict, replace
 
 from .agent_runtime.adapter import token_usage_from_mapping, token_usage_from_model_usage
-from .agent_runtime.model import TokenUsage, subtract_token_usage, sum_token_usages
+from .agent_runtime.model import (
+    TokenUsage, merge_token_usage_evidence, subtract_token_usage, sum_token_usages,
+)
 
 COMPONENTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
 
@@ -88,19 +90,6 @@ def _credits(stdout: str, finished: bool) -> dict:
         else "partial",
         "scope": "provider_terminal; child credits are not added again",
     }
-
-
-def _upper_bound(left: TokenUsage, right: TokenUsage) -> TokenUsage:
-    values = {}
-    for key in COMPONENTS:
-        known = [getattr(row, key) for row in (left, right) if getattr(row, key) is not None]
-        values[key] = max(known) if known else None
-    total = max(
-        left.total_tokens or 0, right.total_tokens or 0, sum(v or 0 for v in values.values())
-    )
-    if left.total_tokens is None and right.total_tokens is None:
-        return TokenUsage.unavailable()
-    return TokenUsage(**values, total_tokens=total, measurement="partial")
 
 
 class UsageAccumulator:
@@ -263,7 +252,7 @@ class UsageAccumulator:
             if not _same(observed, self.terminal):
                 warnings.append("terminal_excludes_subagents; native child usage included")
         else:
-            total = _upper_bound(observed, self.terminal)
+            total = merge_token_usage_evidence(observed, self.terminal)
             exact = False
             basis = "unreconciled_provider_counters"
             warnings.append(

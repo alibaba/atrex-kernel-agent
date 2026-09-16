@@ -230,6 +230,7 @@ def normalize_stream(
             ) = observe_codex_usage(codex_observer, session_id, terminal_usage, captured=captured)
             observation_errors += ledger_errors
         except Exception as exc:
+            codex_observer.invalidate()
             if captured is not None:
                 events, terminal_usage, capabilities, capture_errors = captured[:4]
                 observation_errors += capture_errors

@@ -18,6 +18,7 @@ from .model import (
     AgentRuntimeCapabilities,
     NormalizedAgentEvent,
     TokenUsage,
+    merge_token_usage_evidence,
     resequence_agent_events,
     sum_token_usages,
     token_usage_exceeds,
@@ -119,10 +120,10 @@ def observe_codex_usage(
         # cannot count this invocation again.
         observed = _observe_codex_usage(observer, thread_id, stream_terminal)
     except Exception as exc:
-        if captured is not None and captured.terminal_usage.measurement == "exact":
-            observer.invalidate()
-            # Exact capture can still account for this invocation, but the failed
-            # ledger must remain visible to diagnostics and resume qualification.
+        # Capture (including partial usage) or the caller's stream fallback may
+        # consume this invocation. A stale ledger cursor must never replay it.
+        observer.invalidate()
+        if captured is not None:
             return (
                 captured.events,
                 captured.terminal_usage,
@@ -138,6 +139,28 @@ def observe_codex_usage(
         # This may include native child usage that a root-only ledger cannot
         # replace. Capture health is structured; warnings are diagnostic text only.
         # A healthy stream-only partial observation can still fall back to the ledger.
+        if any(
+            getattr(observed[1], key) is not None
+            and (
+                getattr(captured.terminal_usage, key) is None
+                or getattr(observed[1], key) > getattr(captured.terminal_usage, key)
+            )
+            for key in (
+                "input_tokens", "output_tokens", "cache_read_tokens",
+                "cache_write_tokens", "total_tokens",
+            )
+        ):
+            # The root ledger can supply counters missing from an incomplete
+            # native tree, but may overlap Capture's child-inclusive total.
+            # Preserve both as partial evidence, never sum them or silently
+            # replace a larger verified counter with a smaller Capture value.
+            usage = merge_token_usage_evidence(observed[1], captured.terminal_usage)
+            events = [event for event in observed[0] if event.kind != "terminal_usage"]
+            events.append(NormalizedAgentEvent(0, "terminal_usage", usage))
+            return (
+                resequence_agent_events(events), usage, observed[2],
+                captured.errors + observed[3] + ("codex_capture_ledger_mismatch",),
+            )
         if (
             any(event.kind == "phase_marker" for event in observed[0])
             and not token_usage_exceeds(observed[1], captured.terminal_usage)
