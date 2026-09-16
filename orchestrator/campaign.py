@@ -384,6 +384,8 @@ class Campaign:
         )
 
     def _episode_plan_reviewers(self, episode_mode: str) -> tuple[str, ...]:
+        if episode_mode == "goal":
+            episode_mode = "full"
         if episode_mode not in ("fast", "full"):
             raise ValueError(f"unsupported episode mode: {episode_mode}")
         return tuple(
@@ -406,13 +408,15 @@ class Campaign:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
         if episode_mode:
+            environment["ATREX_EPISODE_MODE"] = episode_mode
             enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
+            reviewer_mode = "full" if episode_mode == "goal" else episode_mode
             for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():
                 if reviewer in enabled_reviewers:
                     continue
                 environment[enabled_name] = "0"
                 environment[reason_name] = (
-                    f"disabled by --no-{episode_mode}-episode-ask-{reviewer}"
+                    f"disabled by --no-{reviewer_mode}-episode-ask-{reviewer}"
                 )
         if self.long_reviewer_session:
             env_name = _LONG_REVIEWER_SESSION_ENV[self.long_reviewer_session]

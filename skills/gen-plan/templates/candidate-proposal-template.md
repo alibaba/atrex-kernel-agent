@@ -4,7 +4,8 @@
 
 - Measured evidence: <profile, benchmark, source, or prior-episode observation>
 - Inference: <what the evidence implies about the bottleneck>
-- Optimization category: <exactly one category>
+- Episode mode: <Python-supplied mode, default full>
+- Optimization category: <exactly one category for fast/full; roadmap categories for goal>
 - Proposed action: <smallest coherent implementation direction>
 - Expected mechanism: <why the proposed action should affect the measured bottleneck>
 

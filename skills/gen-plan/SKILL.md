@@ -19,6 +19,13 @@ implementation.
 
 `--direct` and `--discussion` are mutually exclusive.
 
+## Episode mode
+
+Python supplies `ATREX_EPISODE_MODE` (default: `full`). Fast/full plans must contain exactly
+one coherent optimization category. Goal plans may cover multiple evidence-backed directions,
+including interacting algorithm, layout, and kernel changes; validate the combined result.
+The campaign selects the mode and reviewer configuration.
+
 ## Hard boundaries
 
 - During this workflow, persist only the requested plan file. Consultation helpers may use
@@ -60,14 +67,14 @@ Build an evidence-to-action chain:
 
 1. Identify the measured bottleneck or failure.
 2. Connect the evidence to a concrete inference.
-3. Select exactly one coherent optimization category for the plan.
+3. Select exactly one coherent optimization category for fast/full, or an evidence-backed roadmap for goal.
 4. Identify the smallest concrete file changes that test that inference.
 5. Define correctness, performance, rollback, and stop conditions.
 
 Before consulting either reviewer, populate
 `skills/gen-plan/templates/candidate-proposal-template.md` in automatically removed process scratch.
 This frozen candidate proposal is not the final plan. It must state the selected evidence-to-action
-chain, exactly one optimization category, target paths and symbols, the expected mechanism, scope
+chain, the episode mode and permitted optimization categories, target paths and symbols, the expected mechanism, scope
 constraints, rejected directions, validation and falsification conditions, and unresolved
 assumptions. Do not persist the candidate proposal in the campaign workspace.
 
@@ -157,8 +164,8 @@ follows:
 1. Adopt a suggestion only when it strengthens the selected evidence-to-action chain, closes a
    correctness gap, or makes validation more deterministic.
 2. Reject suggestions that contradict measured evidence, violate campaign constraints, or introduce
-   another optimization category.
-3. Defer suggestions that are plausible but need evidence outside the current direction.
+   another optimization category in fast/full mode.
+3. Defer suggestions that are plausible but need evidence outside the current plan.
 4. Resolve conflicting suggestions explicitly, stating the evidence that selected one or rejected
    both.
 5. Convert unresolved reviewer questions into conservative assumptions or pending decisions
@@ -169,7 +176,7 @@ reviewer and supporting evidence; if the candidate remains unchanged, state why 
 justify a change.
 
 Available reviewers are advisory, not authoritative. The final plan must remain a superset of the
-human draft and must still contain exactly one optimization category.
+human draft and must still contain exactly one optimization category in fast/full mode.
 
 Use `skills/gen-plan/templates/gen-plan-template.md` as the output schema. Replace every placeholder
 with concrete content. The plan must include:
@@ -178,7 +185,7 @@ with concrete content. The plan must include:
 - Codex and Qoder consultation status (including configured-disabled status), available material
   findings, agreements, disagreements, and the suggestions adopted, rejected, or deferred with
   reasons;
-- exactly one optimization category and its evidence-to-inference-to-action chain;
+- the episode mode, its permitted optimization categories, and evidence-to-inference-to-action chains;
 - acceptance criteria in `AC-N` form, each with positive and negative tests;
 - upper and lower scope boundaries plus allowed and prohibited choices;
 - exact target paths and a dependency-ordered implementation sequence;
@@ -199,7 +206,7 @@ Before writing, verify that the plan:
 - uses available reviews selectively and records the disposition of material suggestions and
   conflicts;
 - records the frozen candidate and the evidence-based changes made after review;
-- proposes only one attributable optimization category;
+- proposes only one attributable optimization category in fast/full mode, or an attributable roadmap in goal mode;
 - names concrete files and validation commands;
 - distinguishes correctness from performance evidence;
 - has deterministic, measurable acceptance and rollback conditions; and

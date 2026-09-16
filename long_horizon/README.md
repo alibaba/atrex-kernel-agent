@@ -71,7 +71,7 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Production numerical safety
 
-Production V1, resume and fast/full candidates use the same numerical gate,
+Production V1, resume and fast/full/goal candidates use the same numerical gate,
 independent of framework/dependency review. The gate works with the Atrex
 `input.py` / `reference.py` / `shapes.json` contract. Attention, GEMM, norm and
 other/fused operators share one runner, schedule and reviewer; the engine has no
@@ -226,3 +226,41 @@ executable path or command name, otherwise sandbox setup raises `FileNotFoundErr
 Falling back could bypass a campaign wrapper's endpoint or execution policy. Leave
 it unset to use the existing adjacent-to-Python and then PATH discovery order.
 This configuration failure is not an infrastructure outage and is not retried.
+
+## Goal scheduling
+
+After at least 50 completed episodes and more than 3 consecutive non-promotions,
+Python schedules a `goal` episode. It persists the single `episode_mode` value in
+`active_episode.json`'s existing `mode` field and preserves it during recovery.
+The same value reaches prompts and plan reviewers through `ATREX_EPISODE_MODE`.
+Fast/full episodes retain their single-direction planning and prompt handoff rules;
+goal episodes may work through a broader operator roadmap and preserve the best
+validated checkpoint until the roadmap is complete or exhausted.
+
+Goal episodes use the full-episode reviewer settings, the shared production
+validation and ABBA promotion gates, and at least 20 same-session handoff recovery
+continuations on backends that support them. Goal admission takes precedence over `--max-stall`
+once its trigger is met. For ordinary non-blocked outcomes without mandatory conversion,
+`--max-stall` from 1 to 3 can stop a campaign even after 50 completed episodes,
+because the stall counter has not yet exceeded 3. With `--max-stall >= 4`, the
+stall stop can fire before 50 completed episodes; after that, reaching the stop
+threshold also selects goal mode and bypasses the stall stop. Zero disables the
+stall stop. Episode, version and token budgets retain their existing behavior.
+
+Recovery deliberately uses one interpretation in all paths: a persisted mode wins;
+a legacy record without a mode uses its recorded episode number and the configured
+fast-episode range (fast inside that range, full outside it), including completed
+handoff verification. Missing episode numbers do not select fast mode; the existing
+worktree/recovery checks handle the incomplete record. Legacy mode inference never
+selects goal. This aligns `_recover_interrupted` and `_recover_completed_handoff`
+with `run()` admission.
+
+![Episode mode scheduling and recovery](../assets/episode-mode-state-machine.svg)
+
+The diagram maps to `long_horizon/campaign.py`: `_episode_mode` selects or restores
+mode, `run()` checks budgets and admits episodes, `_recover_interrupted` restores or
+archives active work, `_recover_completed_handoff` rechecks terminal handoffs, and
+`_record_terminal_episode` updates counters and canonical memory. Recovery runs
+before the next admission budget check, so a completed handoff can be finalized
+before a budget stops further exploration. The [diagram source](../assets/episode-mode-state-machine.dot)
+is kept alongside the rendered SVG.

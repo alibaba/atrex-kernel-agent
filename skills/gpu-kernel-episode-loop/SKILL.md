@@ -29,6 +29,13 @@ values you fill in from the campaign, or a choice among the listed alternatives,
 The episode prompt's ownership rules, execution boundary, mode policy, and framework-escalation
 directive outrank this skill. Where they conflict, follow the prompt.
 
+## Episode mode
+
+Use the Python-supplied `ATREX_EPISODE_MODE` (default: `full`), as defined in
+`skills/gen-plan/SKILL.md`. Fast/full episodes advance one coherent engineering direction.
+Goal episodes can repeat this loop across a roadmap of directions, preserving the best
+validated checkpoint until the roadmap is complete or exhausted.
+
 ## Telemetry
 
 Telemetry is best-effort and must not block engineering work. Mark phase boundaries with standalone
@@ -45,7 +52,7 @@ text into telemetry.
 
 ## Loop
 
-Repeat this evidence loop until the direction yields a mature candidate or is exhausted. The numbered
+Repeat this evidence loop until the direction (fast/full) or roadmap (goal) yields a mature candidate or is exhausted. The numbered
 steps map onto the telemetry phases above: `profile`, `research`, `planning`, `implementation`,
 `correctness`/`benchmark`, and `recording`.
 
@@ -177,8 +184,8 @@ rollback points, and measurable acceptance criteria. For a PPU iteration that di
 profile, record the decisive PPU evidence selected by its routing skill instead. Then produce
 `<PLAN_FILE>` with the backend-native plan generator `<PLAN_GENERATOR>`.
 
-The episode may contain multiple related experiments, but they must advance one coherent engineering
-direction. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
+Fast/full episodes may contain multiple related experiments, but they must advance one coherent
+engineering direction. Goal episodes may plan and validate multiple directions. Checkpoint useful intermediate states so failed sub-steps can be reverted without losing
 the whole direction.
 
 ### 5. Implement and repair
@@ -231,8 +238,9 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 
 ## Leaving the loop
 
-Leave the loop as soon as one coherent candidate passes the full development correctness check and
-has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
+In fast/full mode, leave the loop as soon as one coherent candidate passes the full development correctness check and
+has credible performance evidence, or as soon as the direction is exhausted or blocked. In goal mode, finish or exhaust the roadmap
+and restore the best validated checkpoint, or report a blocker. Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
 PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
 `skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
