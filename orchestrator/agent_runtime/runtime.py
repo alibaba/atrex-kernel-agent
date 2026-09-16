@@ -62,6 +62,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
             if parsed.total_tokens is not None:
                 terminal = parsed
             continue
+        if event.get("type") == "system":
+            # Subagent task progress is cumulative, not a response usage delta.
+            continue
         usage = event.get("usage")
         message = event.get("message")
         if usage is None and isinstance(message, Mapping):
@@ -242,6 +245,9 @@ class CliAgentRuntime:
             self._adapter.capabilities,
             usage_delta_observed=any(event.kind == "usage_delta" for event in events),
         )
+        from ..session_capture import captured_observation
+
+        captured = captured_observation(stdout, events, capabilities)
         if codex_observer is not None:
             observed_session_id = codex_thread_id_from_stream(stdout)
             try:
@@ -256,13 +262,21 @@ class CliAgentRuntime:
                     capabilities,
                     ledger_errors,
                 ) = observe_codex_usage(
-                    codex_observer, observed_session_id, terminal_usage
+                    codex_observer, observed_session_id, terminal_usage, captured=captured,
                 )
                 observation_errors += ledger_errors
             except Exception as exc:
+                # Also cover failures before observe_codex_usage (thread lookup).
+                codex_observer.invalidate()
+                if captured is not None:
+                    events, terminal_usage, capabilities, capture_errors = captured[:4]
+                    observation_errors += capture_errors
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",
                 )
+        elif captured is not None:
+            events, terminal_usage, capabilities, capture_errors = captured[:4]
+            observation_errors += capture_errors
         if codex_temporary_home is not None:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:

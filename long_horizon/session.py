@@ -233,13 +233,20 @@ class LongSessionRunner:
             )
             if ledger_failed:
                 codex_ledger_usable = False
+            from orchestrator.session_capture import captured_observation
+
+            captured = captured_observation(stdout, events, capabilities)
+            native_usage_observed = bool(
+                captured is not None and captured.capabilities.usage_delta_observed
+            )
             ledger_usage_observed = bool(
                 is_codex
                 and capabilities.usage_delta_observed
-                and not ledger_failed
+                and (not ledger_failed or native_usage_observed)
             )
             resume_usage_qualified = bool(
                 ledger_usage_observed
+                and terminal_usage.measurement == "exact"
                 and not any(
                     value.startswith("codex_")
                     for value in observation_errors

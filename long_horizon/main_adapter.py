@@ -217,6 +217,9 @@ def normalize_stream(
         adapter.capabilities,
         usage_delta_observed=any(event.kind == "usage_delta" for event in events),
     )
+    from orchestrator.session_capture import captured_observation
+
+    captured = captured_observation(stdout, events, capabilities)
     if agent_cli == "codex" and codex_observer is not None and session_id:
         try:
             (
@@ -224,10 +227,16 @@ def normalize_stream(
                 terminal_usage,
                 capabilities,
                 ledger_errors,
-            ) = observe_codex_usage(codex_observer, session_id, terminal_usage)
+            ) = observe_codex_usage(codex_observer, session_id, terminal_usage, captured=captured)
             observation_errors += ledger_errors
         except Exception as exc:
+            codex_observer.invalidate()
+            if captured is not None:
+                events, terminal_usage, capabilities, capture_errors = captured[:4]
+                observation_errors += capture_errors
             observation_errors += (f"codex_ledger_unavailable:{type(exc).__name__}",)
+    elif captured is not None:
+        return captured[:4]
     return events, terminal_usage, capabilities, observation_errors
 
 

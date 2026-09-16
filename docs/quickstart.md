@@ -6,6 +6,9 @@ agent in this repository to translate the task into that command and start the c
 
 ## Prerequisites
 
+Running sessions write live conversations and provider usage records. See
+[Session observability](session-observability.md) for paths, accounting semantics, and privacy limits.
+
 - `bash`
 - `git`
 - Python 3 and `torch` on the coordinator host
