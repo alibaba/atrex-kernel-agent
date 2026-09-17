@@ -17,7 +17,8 @@ def _finite_number(value: object) -> float | None:
     number = float(value)
     return number if math.isfinite(number) else None
 
-def _bounded_text(value: object, limit: int = 1000) -> str:
+def bounded_text(value: object, limit: int = 1000) -> str:
+    """Format an optional diagnostic value using a character-count limit."""
     text = str(value or "")
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -39,7 +40,7 @@ def _agent_profile_metric(value: object) -> object | None:
     if isinstance(value, (int, float)):
         return value if math.isfinite(float(value)) else None
     if isinstance(value, str):
-        return _bounded_text(value, 256)
+        return bounded_text(value, 256)
     if not isinstance(value, dict):
         return None
     projected: dict[str, object] = {}
@@ -51,7 +52,7 @@ def _agent_profile_metric(value: object) -> object | None:
         if item is None or isinstance(item, (int, float)):
             projected[key] = item
         elif isinstance(item, str):
-            projected[key] = _bounded_text(item, 256)
+            projected[key] = bounded_text(item, 256)
     return projected or None
 
 def _agent_profile_kernel(raw: dict[str, Any], *, total_duration_us: float) -> dict[str, Any]:
@@ -59,7 +60,7 @@ def _agent_profile_kernel(raw: dict[str, Any], *, total_duration_us: float) -> d
     projected: dict[str, Any] = {}
     name = raw.get("name", raw.get("kernel_name"))
     if isinstance(name, str) and name:
-        projected["name"] = _bounded_text(name, 512)
+        projected["name"] = bounded_text(name, 512)
     duration_us = _profile_duration_us(raw)
     if duration_us is not None:
         projected["duration_us"] = duration_us
@@ -92,7 +93,7 @@ def _agent_profile_kernel(raw: dict[str, Any], *, total_duration_us: float) -> d
             projected[field] = value
     bound = raw.get("bound")
     if isinstance(bound, str) and bound:
-        projected["bound"] = _bounded_text(bound, 64)
+        projected["bound"] = bounded_text(bound, 64)
     elif "compute_sol_pct" in projected and "memory_sol_pct" in projected:
         projected["bound"] = (
             "compute" if projected["compute_sol_pct"] > projected["memory_sol_pct"] else "memory"
@@ -104,7 +105,7 @@ def _agent_profile_kernel(raw: dict[str, Any], *, total_duration_us: float) -> d
         for key, value in list(metrics.items())[:MAX_AGENT_PROFILE_METRICS]:
             metric = _agent_profile_metric(value)
             if metric is not None:
-                projected_metrics[_bounded_text(key, 256)] = metric
+                projected_metrics[bounded_text(key, 256)] = metric
         if projected_metrics:
             projected["metrics"] = projected_metrics
     return projected
@@ -113,7 +114,7 @@ def _agent_clock_lock(value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     projected = {
-        key: (_bounded_text(item, 256) if isinstance(item, str) else item)
+        key: (bounded_text(item, 256) if isinstance(item, str) else item)
         for key, item in value.items()
         if key in {"requested", "applied", "locked", "supported", "status", "reason"}
         and isinstance(item, (bool, str, int, float))
@@ -143,7 +144,7 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, (bool, str, int, float)) and not (
             isinstance(value, float) and not math.isfinite(value)
         ):
-            projected[key] = _bounded_text(value, 256) if isinstance(value, str) else value
+            projected[key] = bounded_text(value, 256) if isinstance(value, str) else value
     exit_code = result.get("exit_code")
     if isinstance(exit_code, int) and not isinstance(exit_code, bool):
         projected["exit_code"] = exit_code
@@ -152,10 +153,10 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         projected["clock_lock"] = clock_lock
     summary = result.get("summary")
     if isinstance(summary, str) and summary:
-        projected["summary"] = _bounded_text(summary, 2000)
+        projected["summary"] = bounded_text(summary, 2000)
     error = result.get("error")
     if error:
-        projected["error"] = _bounded_text(error, 1000)
+        projected["error"] = bounded_text(error, 1000)
 
     projected["kernel_count"] = len(kernels)
     if total_duration_us > 0.0:
@@ -166,7 +167,7 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         )
         dominant_name = dominant.get("name", dominant.get("kernel_name"))
         if isinstance(dominant_name, str) and dominant_name:
-            projected["dominant_kernel"] = _bounded_text(dominant_name, 512)
+            projected["dominant_kernel"] = bounded_text(dominant_name, 512)
 
     weighted_duration = 0.0
     weighted_sol = 0.0
@@ -193,7 +194,7 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
 def _agent_diagnostic_item(value: object) -> object | None:
     """Project one compiler diagnostic without exposing request or worker state."""
     if isinstance(value, str):
-        return _bounded_text(value, 2000)
+        return bounded_text(value, 2000)
     if not isinstance(value, dict):
         return None
     projected: dict[str, object] = {}
@@ -221,7 +222,7 @@ def _agent_diagnostic_item(value: object) -> object | None:
     for key in text_fields:
         item = value.get(key)
         if isinstance(item, str) and item:
-            projected[key] = _bounded_text(item, 2000 if key == "message" else 512)
+            projected[key] = bounded_text(item, 2000 if key == "message" else 512)
     for key in numeric_fields:
         item = value.get(key)
         if (
@@ -255,7 +256,7 @@ def _agent_check_result(result: dict[str, Any]) -> dict[str, Any]:
         if value is None or isinstance(value, (bool, int, float, str)):
             if isinstance(value, float) and not math.isfinite(value):
                 continue
-            projected[key] = _bounded_text(value, 512) if isinstance(value, str) else value
+            projected[key] = bounded_text(value, 512) if isinstance(value, str) else value
     for key in (
         "registers",
         "registers_per_thread",
@@ -284,7 +285,7 @@ def _agent_check_result(result: dict[str, Any]) -> dict[str, Any]:
             projected["diagnostics_omitted"] = len(diagnostics) - MAX_AGENT_DIAGNOSTICS
     error = result.get("error")
     if error:
-        projected["error"] = _bounded_text(error, 4000)
+        projected["error"] = bounded_text(error, 4000)
     return projected
 
 def _bounded_utf8_text(
@@ -293,15 +294,21 @@ def _bounded_utf8_text(
     *,
     marker: str = "assembly",
 ) -> tuple[str, int]:
+    if limit < 0:
+        raise ValueError("UTF-8 text limit must be non-negative")
     encoded = value.encode("utf-8", errors="replace")
     if len(encoded) <= limit:
         return value, 0
     marker_bytes = f"\n... <{marker} truncated by Supervisor Runtime> ...\n".encode()
-    budget = max(0, limit - len(marker_bytes))
+    if limit < len(marker_bytes):
+        # The marker must fit too; tiny limits retain only a valid UTF-8 prefix.
+        text = encoded[:limit].decode("utf-8", errors="ignore")
+        return text, len(encoded) - len(text.encode("utf-8"))
+    budget = limit - len(marker_bytes)
     head_size = budget * 2 // 3
     tail_size = budget - head_size
     head = encoded[:head_size].decode("utf-8", errors="ignore")
-    tail = encoded[-tail_size:].decode("utf-8", errors="ignore")
+    tail = encoded[-tail_size:].decode("utf-8", errors="ignore") if tail_size else ""
     text = head + marker_bytes.decode() + tail
     return text, len(encoded) - len(text.encode("utf-8"))
 
@@ -328,9 +335,9 @@ def _agent_disassembly_result(
         if value is None or isinstance(value, (bool, int, float, str)):
             if isinstance(value, float) and not math.isfinite(value):
                 continue
-            projected[key] = _bounded_text(value, 512) if isinstance(value, str) else value
+            projected[key] = bounded_text(value, 512) if isinstance(value, str) else value
     if "format" not in projected and isinstance(result.get("fmt"), str):
-        projected["format"] = _bounded_text(result["fmt"], 64)
+        projected["format"] = bounded_text(result["fmt"], 64)
 
     kernels = result.get("kernels")
     if isinstance(kernels, list):
@@ -409,7 +416,7 @@ def _agent_disassembly_result(
             projected["assembly"]["bytes_omitted"] = bytes_omitted
     error = result.get("error")
     if error:
-        projected["error"] = _bounded_text(error, 4000)
+        projected["error"] = bounded_text(error, 4000)
     return projected
 
 def _positive_number(value: object) -> float | None:
@@ -434,9 +441,9 @@ def evaluation(result: dict) -> dict:
             str(key)[:128]: item for key, item in list(shapes.items())[:4096]
             if _finite_number(item) is not None
         }
-    value["failures"] = [_bounded_text(item) for item in (result.get("failures") or [])[:8]]
+    value["failures"] = [bounded_text(item) for item in (result.get("failures") or [])[:8]]
     value["actionable_diagnostics"] = [
-        {key: _bounded_text(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
+        {key: bounded_text(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
         for row in (result.get("actionable_diagnostics") or [])[:8] if isinstance(row, dict)
     ]
     return value
@@ -450,17 +457,22 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
         prefix = next((prefix for prefix in (
             "[test_kernel] RESULT_JSON=", "[sandbox] PROFILE_JSON=",
             "[sandbox] CHECK_JSON=", "[sandbox] DISASSEMBLE_JSON=",
+            "[sandbox] ABBA_JSON=",
         ) if line.startswith(prefix)), None)
         if prefix:
             try:
                 raw = json.loads(line[len(prefix):])
                 if not isinstance(raw, dict):
                     raise ValueError("not an object")
+                if prefix == "[sandbox] ABBA_JSON=" and generalized and raw.get("error"):
+                    raw["error"] = "Hidden-case diagnostics withheld; ask the operator to inspect the failure."
                 formatter = {
                     "[test_kernel] RESULT_JSON=": evaluation,
                     "[sandbox] PROFILE_JSON=": _agent_profile_result,
                     "[sandbox] CHECK_JSON=": _agent_check_result,
                     "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
+                    # compare() already emits abba()'s public metric projection.
+                    "[sandbox] ABBA_JSON=": dict,
                 }[prefix]
                 projected.append(prefix + json.dumps(formatter(raw), ensure_ascii=False))
             except (ValueError, TypeError):
@@ -469,8 +481,16 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
             projected.append(line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
     if generalized and process.returncode and not wiki:
-        stdout = "\n".join(line for line in projected if line.startswith("[test_kernel] RESULT_JSON="))
-        stderr = "GPU request failed; hidden-case diagnostics withheld. Ask the operator to inspect the failure.\n"
+        # A completed comparison can fail correctness while still providing
+        # useful, public per-side results. Keep them without exposing raw logs.
+        stdout = "\n".join(line for line in projected if line.startswith((
+            "[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON=",
+        )))
+        stderr = (
+            "ABBA comparison failed; see ABBA_JSON for baseline/candidate results; hidden-case diagnostics withheld.\n"
+            if any(line.startswith("[sandbox] ABBA_JSON=") for line in projected)
+            else "GPU request failed; hidden-case diagnostics withheld. Ask the operator to inspect the failure.\n"
+        )
     for path in sorted((path for path in private_paths if path), key=len, reverse=True):
         stdout, stderr = stdout.replace(path, "<supervisor>"), stderr.replace(path, "<supervisor>")
     result = {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}
@@ -593,7 +613,7 @@ def _agent_abba_public_result(
             for row in rows
         ],
         "shape_batch_count": payload.get("shape_batch_count", 1),
-        "error": _bounded_text(payload.get("error"), 1000) if payload.get("error") else None,
+        "error": bounded_text(payload.get("error"), 1000) if payload.get("error") else None,
     }
 
 def abba(payload, schedule, shape_ids, repeats):

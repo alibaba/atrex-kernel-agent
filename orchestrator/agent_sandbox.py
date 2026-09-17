@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .agent_home import HOST_HOME_ENV, PREPARED_ENV, _directory, projected_backends
+from .agent_home import HOST_HOME_ENV, PREPARED_ENV, open_private_directory, projected_backends
 from .agent_installations import installation_mounts
 from .agent_workspace import WORKSPACE_LAYOUTS, WORKSPACE_ROLE_ENV, AuxiliaryWorkspace
 from .recovery_processes import HANDOFF_ID_ENV
@@ -151,7 +151,7 @@ def _grant_environment_paths(
         if source.is_relative_to(session_home_root) or session_home_root.is_relative_to(source):
             raise ValueError(f"Legacy path grant overlaps Agent Session Homes: {variable}")
         if writable:
-            with _directory(source):
+            with open_private_directory(source):
                 pass
         if source.exists():
             _mount(argv, source, source, writable=writable)

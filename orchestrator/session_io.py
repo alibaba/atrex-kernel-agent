@@ -85,17 +85,14 @@ def _render(template_path: Path, **kw: str) -> str:
 def ensure_submodules(platform: str = "", arch: str = "") -> None:
     """Initialize submodules required by the optimization pipeline.
 
-    Always covers gpu-wiki/3rdparty (KernelWiki) and 3rdparty/ncu-report-skill.
+    Always covers 3rdparty/ncu-report-skill. KernelWiki's Agent-facing skill
+    and the GPU Wiki JSON stores are repository-native, not submodules.
     PPU campaigns also require their vendor reference projects: without those
     working trees the framework-baseline catalog silently contains no usable
     PPU implementation sources.
     Idempotent: already-initialized submodules are untouched.
     """
     needed = [
-        (
-            "gpu-wiki/3rdparty/",
-            REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md",
-        ),
         (
             "3rdparty/ncu-report-skill",
             REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",

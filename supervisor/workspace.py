@@ -6,8 +6,8 @@ import stat
 import uuid
 from pathlib import Path
 
-from orchestrator.agent_home import _directory
-from orchestrator.session_tail import _regular_bytes
+from orchestrator.agent_home import open_private_directory
+from orchestrator.session_tail import read_regular_bytes
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
@@ -29,7 +29,7 @@ def relative_path(value: str) -> Path:
 
 def read_input(workspace: Path, value: str, *, limit: int = MAX_FILE_BYTES) -> bytes:
     path = relative_path(value)
-    data = _regular_bytes(workspace / path, limit=limit + 1)
+    data = read_regular_bytes(workspace / path, limit=limit + 1)
     if len(data) > limit:
         raise ValueError("Request input file exceeds the size limit")
     return data
@@ -65,7 +65,7 @@ def publish(workspace: Path, relative: str, data: bytes, *, append: bool = False
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("Unsafe publication path")
-    with _directory(workspace / path.parent) as parent:
+    with open_private_directory(workspace / path.parent) as parent:
         if append:
             descriptor = os.open(path.name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
                                  0o600, dir_fd=parent)

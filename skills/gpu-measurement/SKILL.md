@@ -22,4 +22,4 @@ Numbers in those results are measured facts; interpretation is your responsibili
 
 Missing/revoked capability or transport failure is an infrastructure blocker.
 Do not bypass the Runtime or blindly retry an operation whose outcome is unknown.
-The existing Gateway retry policy remains unchanged in this PR.
+Gateway retry policy is owned by the Supervisor; do not add client-side retries.

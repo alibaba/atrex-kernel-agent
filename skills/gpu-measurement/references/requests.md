@@ -21,6 +21,22 @@ python3 tools/sandbox.py --kind disassemble --format ptx --no-sync
 python3 tools/sandbox.py --kind env
 ```
 
+Choose one spelling for evaluator controls:
+
+```bash
+# Shorthand: no explicit command.
+python3 tools/sandbox.py --kind run --multi-seed 3 --timed-runs 100 --no-sync
+# Explicit command: evaluator controls belong after test_kernel.py.
+python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --multi-seed 3 --timed-runs 100 --no-memory
+```
+
+Top-level `--version`, `--multi-seed`, `--shape-id` and `--timed-runs` require
+`--kind run` without an explicit command. Mixing these top-level controls with a
+command is rejected before execution; they are not merged or silently ignored.
+Explicit shorthand controls require a compatible typed evaluation route and
+cannot silently fall back to Dev. ABBA still accepts `--version` and
+`--timed-runs` without a command; Shape/seed overrides remain unsupported.
+
 Profile, Check and Disassemble accept repeatable `--requirement 'package==version'`
 and `--deps-mode freeze_installed|no_deps`; these affect only the remote job.
 Profile also supports `--profiler`, `--profile-counter`, `--kernel-regex`,

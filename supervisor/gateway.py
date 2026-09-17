@@ -91,6 +91,7 @@ from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
 )
+from supervisor.projection import bounded_text  # noqa: E402
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
@@ -240,7 +241,6 @@ TYPED_KINDS = frozenset({"run", "profile", "check", "disassemble"})
 MAX_CUSTOM_INPUT_SOURCE_BYTES = 128 * 1024
 MAX_CUSTOM_SHAPES_BYTES = 256 * 1024
 ENV_RESULT_PREFIX = "[sandbox] ENV_JSON="
-from supervisor.projection import _bounded_text
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -266,7 +266,7 @@ PROFILE_ENVIRONMENT_KEYS = (
 )
 
 
-def _read_workspace_override(
+def read_workspace_override(
     workspace: Path,
     value: str,
     *,
@@ -320,7 +320,7 @@ def _run_environment_query(args: argparse.Namespace) -> int:
     """Expose the read-only Agate environment contract through the Supervisor."""
     if args.ssh:
         raise SystemExit("sandbox: --kind env requires an Agate Gateway endpoint")
-    executable = _find_agate()
+    executable = find_agate()
     url = _resolved_gateway_url(
         executable,
         url=args.url,
@@ -362,7 +362,7 @@ def _run_environment_query(args: argparse.Namespace) -> int:
         if completed.returncode:
             raise SystemExit(
                 "sandbox: env query failed: "
-                + _bounded_text(completed.stderr or completed.stdout, 2000)
+                + bounded_text(completed.stderr or completed.stdout, 2000)
             )
         try:
             value = json.loads(completed.stdout)
@@ -406,7 +406,7 @@ def _safe_relative(value: str) -> str:
     return normalized
 
 
-def _find_agate() -> str | None:
+def find_agate() -> str | None:
     """Find agate beside the active Python before consulting the shell PATH."""
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
@@ -1149,7 +1149,7 @@ def _option_values(parts: list[str], name: str) -> list[str]:
     return values
 
 
-def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
+def read_json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
             raise ValueError(f"required typed-gateway input is missing: {path.name}")
@@ -1196,7 +1196,7 @@ def _distributed_evaluation_world_size(metadata: object) -> int:
 
 
 def _workspace_num_gpus(workspace: Path) -> int:
-    metadata = _json_object(
+    metadata = read_json_object(
         _evaluator_input_path(workspace, "metadata.json", required=False)
     )
     return _distributed_evaluation_world_size(metadata)
@@ -1235,14 +1235,14 @@ def _fp4_correctness_max_rel_l2(
 
 def _is_generalized_workspace(workspace: Path) -> bool:
     """Return whether production policy enables private exact-case handling."""
-    state = _json_object(workspace / MODE_STATE_FILENAME) or {}
+    state = read_json_object(workspace / MODE_STATE_FILENAME) or {}
     return (
         state.get("mode") == "production"
         and (workspace / AGENT_PROBLEM_FILENAME).is_file()
     )
 
 
-def _private_reference_dir(workspace: Path) -> Path | None:
+def private_reference_dir(workspace: Path) -> Path | None:
     """Resolve private evaluator inputs only for a generalized production workspace."""
     if not _is_generalized_workspace(workspace):
         return None
@@ -1269,7 +1269,7 @@ def _private_reference_dir(workspace: Path) -> Path | None:
 
 
 def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> Path:
-    private_dir = _private_reference_dir(workspace)
+    private_dir = private_reference_dir(workspace)
     path = (
         (private_dir / filename) if private_dir is not None else (workspace / filename)
     )
@@ -1279,7 +1279,7 @@ def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> 
 
 
 def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
-    private_dir = _private_reference_dir(workspace)
+    private_dir = private_reference_dir(workspace)
     if private_dir is None:
         return {}
     inputs: dict[str, Path] = {}
@@ -1292,7 +1292,7 @@ def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
     return inputs
 
 
-def _sort_shape_id(shape_id: str) -> tuple[int, object]:
+def shape_id_sort_key(shape_id: str) -> tuple[int, object]:
     return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
 
@@ -1300,15 +1300,15 @@ def _private_profile_case(
     workspace: Path, env_items: Iterable[str]
 ) -> tuple[str, bytes] | None:
     """Materialize exactly one private real shape for an ephemeral remote profile."""
-    private_dir = _private_reference_dir(workspace)
+    private_dir = private_reference_dir(workspace)
     if private_dir is None:
         return None
-    shapes = _json_object(private_dir / "shapes.json", required=True)
+    shapes = read_json_object(private_dir / "shapes.json", required=True)
     if not shapes:
         raise ValueError("private shapes.json must contain a non-empty object")
     environment = _parse_env_items(env_items)
     shape_id = environment.get("PROFILE_SHAPE_ID") or sorted(
-        (str(value) for value in shapes), key=_sort_shape_id
+        (str(value) for value in shapes), key=shape_id_sort_key
     )[0]
     entry = shapes.get(shape_id)
     if not isinstance(entry, dict):
@@ -1350,7 +1350,7 @@ def _typed_workspace_limitation(
             "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
         )
 
-    solution = _json_object(workspace / "solution.json")
+    solution = read_json_object(workspace / "solution.json")
     if solution is not None:
         sources = solution.get("sources")
         if isinstance(sources, list):
@@ -1467,7 +1467,7 @@ def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[
     return command_environment, gateway_environment
 
 
-def _typed_request(
+def build_typed_request(
     workspace: Path,
     hardware: str,
     timeout: int,
@@ -1522,14 +1522,14 @@ def _typed_request(
     if launch_count is not None and launch_count <= 0:
         raise ValueError("--launch-count must be positive")
 
-    shapes = _json_object(
+    shapes = read_json_object(
         _evaluator_input_path(workspace, "shapes.json", required=True), required=True
     )
     assert shapes is not None
     custom_input_source: str | None = None
     custom_shapes = False
     if evaluation_input_path is not None:
-        custom_input_source = _read_workspace_override(
+        custom_input_source = read_workspace_override(
             workspace,
             evaluation_input_path,
             field="input-path",
@@ -1538,7 +1538,7 @@ def _typed_request(
         if not custom_input_source.strip():
             raise ValueError("--input-path must contain a non-empty input generator")
     if evaluation_shapes_path is not None:
-        shapes_source = _read_workspace_override(
+        shapes_source = read_workspace_override(
             workspace,
             evaluation_shapes_path,
             field="shapes-path",
@@ -1559,7 +1559,7 @@ def _typed_request(
                 raise ValueError("each --shapes-path record must be a JSON object")
         shapes = custom_shape_value
         custom_shapes = True
-    solution = _json_object(workspace / "solution.json") or {}
+    solution = read_json_object(workspace / "solution.json") or {}
     languages = solution.get("languages")
     if not isinstance(languages, list):
         languages = []
@@ -1571,7 +1571,7 @@ def _typed_request(
     if kind in DIAGNOSTIC_KINDS:
         if not shapes:
             raise ValueError("diagnostic evaluator Shape contract is empty")
-        selected_shape_id = sorted((str(value) for value in shapes), key=_sort_shape_id)[0]
+        selected_shape_id = sorted((str(value) for value in shapes), key=shape_id_sort_key)[0]
         shape = shapes.get(selected_shape_id)
         if not isinstance(shape, dict):
             raise ValueError(f"shape {selected_shape_id!r} must be an object")
@@ -1642,7 +1642,7 @@ def _typed_request(
             ("metadata.json", "metadata"),
             ("roofline.json", "roofline"),
         ):
-            value = _json_object(_evaluator_input_path(workspace, filename, required=False))
+            value = read_json_object(_evaluator_input_path(workspace, filename, required=False))
             if value is not None:
                 if requested_shape_ids and isinstance(value.get("shapes"), dict):
                     value = dict(value)
@@ -2252,18 +2252,19 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
                 "the default preserves the standard evaluator workflow."
             ),
         )
-    parser.add_argument("--version", default=None, help="Evaluation version label, e.g. v3.")
+    parser.add_argument("--version", default=None,
+                        help="Evaluation version label, e.g. v3 (--kind run, no explicit command).")
     parser.add_argument(
             "--multi-seed", type=int, default=None,
-            help="Additional correctness seeds for --kind run.",
+            help="Additional correctness seeds for --kind run without an explicit command.",
         )
     parser.add_argument(
             "--shape-id", action="append", default=[],
-            help="Opaque evaluation Shape id (repeatable; default: all).",
+            help="Opaque evaluation Shape id (--kind run, no explicit command; repeatable; default: all).",
         )
     parser.add_argument(
             "--timed-runs", type=int, default=None,
-            help="Native evaluator timing iterations for --kind run.",
+            help="Native evaluator timing iterations for --kind run without an explicit command.",
         )
     parser.add_argument(
             "--baseline-path",
@@ -3073,7 +3074,7 @@ def _gateway_json(
     return result
 
 
-def _run_direct_job(
+def run_direct_job(
     *,
     url: str,
     kind: str,
@@ -3146,7 +3147,7 @@ def _run_direct_gateway(
     spec: dict[str, Any] = {"target_hardware": [hardware]}
     if num_gpus > 1:
         spec["num_gpus"] = num_gpus
-    return _run_direct_job(
+    return run_direct_job(
         url=url,
         kind="dev",
         timeout=timeout,
@@ -3163,7 +3164,7 @@ def _run_direct_gateway(
     )
 
 
-def _job_response(stdout: str) -> dict | None:
+def parse_job_response(stdout: str) -> dict | None:
     """Return an agate job response when stdout is complete JSON."""
     try:
         result = json.loads(stdout)
@@ -3264,7 +3265,7 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
-def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
+def gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
     """Budget typed gateway queueing separately from evaluator runtime.
 
     Typed eval/profile jobs accept a larger enclosing deadline than their evaluator
@@ -3300,7 +3301,7 @@ def _resume_interrupted_agate_wait(
     Submission is deliberately non-blocking so the sandbox knows the job id and
     can cancel it if its own parent terminates the sandbox while it is polling.
     """
-    initial_job = _job_response(initial.stdout or "")
+    initial_job = parse_job_response(initial.stdout or "")
     if initial_job and initial_job.get("status") in {
         "succeeded",
         "failed",
@@ -3341,7 +3342,7 @@ def _resume_interrupted_agate_wait(
         )
         if resumed.stderr:
             stderr_parts.append(resumed.stderr.rstrip())
-        job = _job_response(resumed.stdout or "")
+        job = parse_job_response(resumed.stdout or "")
         if job and job.get("status") in {"succeeded", "failed", "cancelled"}:
             break
         if not job:
@@ -3366,7 +3367,7 @@ def _run_agate_once(
     """Submit one agate job, then wait while keeping its id available for cleanup."""
     wait_started = time.monotonic()
     submitted = subprocess.run([*agate, "--no-wait"], capture_output=True, text=True)
-    job = _job_response(submitted.stdout or "")
+    job = parse_job_response(submitted.stdout or "")
     if submitted.returncode or not job:
         return submitted
     job_id = job["job_id"]
@@ -3385,7 +3386,7 @@ def _run_agate_once(
         _forget_agate_job(job_id)
 
 
-def _run_agate_with_cancel_retry(
+def run_agate_with_cancel_retry(
     *,
     agate: list[str],
     executable: str,
@@ -3404,7 +3405,7 @@ def _run_agate_with_cancel_retry(
         command_timeout=command_timeout,
         wait_budget=wait_budget,
     )
-    first_job = _job_response(first.stdout or "")
+    first_job = parse_job_response(first.stdout or "")
     fallback = (
         _l20n_failover_command(agate)
         if _ray_submit_version_mismatch(first_job)
@@ -3425,7 +3426,7 @@ def _run_agate_with_cancel_retry(
             command_timeout=command_timeout,
             wait_budget=max(1, int(deadline - time.monotonic())),
         )
-        first_job = _job_response(first.stdout or "")
+        first_job = parse_job_response(first.stdout or "")
     while _ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(
         first_job
     ):
@@ -3454,7 +3455,7 @@ def _run_agate_with_cancel_retry(
             command_timeout=command_timeout,
             wait_budget=remaining - delay,
         )
-        first_job = _job_response(first.stdout or "")
+        first_job = parse_job_response(first.stdout or "")
     if not _cancelled_without_outcome(first_job):
         return first
 
@@ -3482,7 +3483,7 @@ def _run_agate_with_cancel_retry(
     )
 
 
-def _typed_agate_command(
+def build_typed_agate_command(
     executable: str,
     args: argparse.Namespace,
     workspace: Path,
@@ -3535,7 +3536,7 @@ def _typed_agate_command(
             "--wait-timeout",
             str(args.timeout + queue_wait_grace),
             "--job-timeout",
-            str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
+            str(gateway_job_timeout(args.timeout, queue_wait_grace)),
         ]
         for item in args.env:
             command += ["--env-var", item]
@@ -3547,7 +3548,7 @@ def _typed_agate_command(
     # shapes/reference files locally to assemble its typed eval payload, so point
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
-    reference_dir = reference_dir or _private_reference_dir(workspace) or workspace
+    reference_dir = reference_dir or private_reference_dir(workspace) or workspace
     command += ["--gpu", args.hardware]
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
     if num_gpus > 1:
@@ -3570,7 +3571,7 @@ def _typed_agate_command(
         "--wait-timeout",
         str(args.timeout + queue_wait_grace),
         "--job-timeout",
-        str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
+        str(gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
     if kind == "run":
         command += ["--mode", str(request.get("mode") or "full"), "--set", "warmup_iters=5"]
@@ -3625,7 +3626,7 @@ def _request_shape_ids(request: dict[str, Any]) -> list[str]:
     return sorted((str(shape_id) for shape_id in shapes), key=sort_key)
 
 
-def _shape_batches(shape_ids: list[str], batch_size: int) -> list[list[str]]:
+def batch_shape_ids(shape_ids: list[str], batch_size: int) -> list[list[str]]:
     return [
         shape_ids[offset : offset + batch_size]
         for offset in range(0, len(shape_ids), batch_size)
@@ -3712,7 +3713,7 @@ def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]
     return failures
 
 
-def _bounded_actionable_diagnostic(value: object, *, limit: int = 6000) -> str:
+def bounded_actionable_diagnostic(value: object, *, limit: int = 6000) -> str:
     """Keep useful compiler/exception context without emitting unbounded tracebacks."""
     text = str(value or "").replace("\x00", "").strip()
     if len(text) <= limit:
@@ -3755,7 +3756,7 @@ def _compile_diagnostics(
     if "status" in compile_result:
         if compile_result.get("status") == "passed":
             return []
-        message = _bounded_actionable_diagnostic(
+        message = bounded_actionable_diagnostic(
             compile_result.get("reason") or compile_result.get("status")
         )
         return (
@@ -3771,7 +3772,7 @@ def _compile_diagnostics(
         status = status if isinstance(status, dict) else {}
         if status.get("status") == "passed":
             continue
-        message = _bounded_actionable_diagnostic(
+        message = bounded_actionable_diagnostic(
             status.get("reason") or status.get("status") or "missing"
         )
         if message in seen_messages:
@@ -3808,7 +3809,7 @@ def _candidate_exception_diagnostics(
         for reason in reasons:
             if not _looks_like_candidate_exception(reason):
                 continue
-            message = _bounded_actionable_diagnostic(reason)
+            message = bounded_actionable_diagnostic(reason)
             if not message or message in seen:
                 continue
             seen.add(message)
@@ -4176,7 +4177,7 @@ def _with_workspace_performance_score(
     if not isinstance(candidate_by_shape, dict) or not candidate_by_shape:
         return result
     try:
-        baseline = _json_object(workspace / "memory" / "v0.json") or {}
+        baseline = read_json_object(workspace / "memory" / "v0.json") or {}
     except ValueError:
         return result
     performance = baseline.get("performance")
@@ -4296,9 +4297,35 @@ def _record_profile_job(
             _download_oss_artifact(artifact, output_dir / artifact_name)
 
 
+def _top_level_evaluation_options(args: argparse.Namespace) -> list[str]:
+    return [option for option, value in (
+        ("--version", args.version), ("--multi-seed", args.multi_seed),
+        ("--shape-id", args.shape_id or None), ("--timed-runs", args.timed_runs),
+    ) if value is not None]
+
+
+def validate_evaluation_options(args: argparse.Namespace) -> None:
+    """Reject ignored top-level evaluator controls before either entry point executes."""
+    options = _top_level_evaluation_options(args)
+    if not options:
+        return
+    names = ", ".join(options)
+    if args.kind != "run":
+        raise ValueError(f"Top-level {names} require --kind run; remove them for --kind {args.kind}")
+    if args.command not in ([], ["--"]):
+        raise ValueError(
+            f"Top-level {names} cannot be combined with an explicit command. "
+            "Omit the command to use the evaluator shorthand, or move these options "
+            "after test_kernel.py in the explicit command, e.g. "
+            "--kind run -- python3 test_kernel.py --multi-seed 3. "
+            "Do not specify evaluator controls in both places."
+        )
+
+
 def _requires_typed_request(args: argparse.Namespace) -> bool:
     """New explicit typed controls cannot be silently discarded by Dev fallback."""
-    return any((args.evaluation_input_path, args.evaluation_shapes_path, args.evaluation_mode,
+    return any((_top_level_evaluation_options(args),
+                args.evaluation_input_path, args.evaluation_shapes_path, args.evaluation_mode,
                 args.kernel_name, args.profile_source, args.profile_shape_id,
                 args.launch_skip is not None, args.launch_count is not None,
                 args.requirement, args.deps_mode))
@@ -4315,7 +4342,7 @@ def _run_typed_gateway(
     """Run agate run/profile, returning None only for a documented dev fallback."""
     generalized = _is_generalized_workspace(workspace)
     try:
-        request = _typed_request(
+        request = build_typed_request(
             workspace,
             args.hardware,
             args.timeout,
@@ -4345,7 +4372,7 @@ def _run_typed_gateway(
 
     expected_shape_ids = _request_shape_ids(request)
     shape_batches = (
-        _shape_batches(
+        batch_shape_ids(
             expected_shape_ids,
             getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
         )
@@ -4381,7 +4408,7 @@ def _run_typed_gateway(
         )
         return 0
 
-    agate_executable = _find_agate()
+    agate_executable = find_agate()
     try:
         with tempfile.TemporaryDirectory(prefix="atrex-shape-batches-") as temp_dir:
             batch_root = Path(temp_dir)
@@ -4394,7 +4421,7 @@ def _run_typed_gateway(
                     _shape_batch_request(request, shape_ids) if batched else request
                 )
                 if args.url and agate_executable is None:
-                    return _run_direct_job(
+                    return run_direct_job(
                         url=args.url,
                         kind="eval" if kind == "run" else kind,
                         payload=batch_request,
@@ -4410,7 +4437,7 @@ def _run_typed_gateway(
                     # full shapes.json and defeat --shape-id smoke selection.
                     reference_dir = batch_root / f"batch-{batch_index:04d}"
                     _shape_batch_reference(batch_request["reference"], reference_dir)
-                agate = _typed_agate_command(
+                agate = build_typed_agate_command(
                     agate_executable,
                     args,
                     workspace,
@@ -4420,12 +4447,12 @@ def _run_typed_gateway(
                     reference_dir,
                     batch_root / f"sidecar-{batch_index:04d}",
                 )
-                return _run_agate_with_cancel_retry(
+                return run_agate_with_cancel_retry(
                     agate=agate,
                     executable=agate_executable,
                     url=args.url,
                     gateway_profile=args.gateway_profile,
-                    command_timeout=_gateway_job_timeout(
+                    command_timeout=gateway_job_timeout(
                         args.timeout, queue_wait_grace
                     ),
                     wait_budget=args.timeout + queue_wait_grace,
@@ -4475,7 +4502,7 @@ def _run_typed_gateway(
             return None
         if proc.stderr and not generalized:
             print(proc.stderr.rstrip(), file=sys.stderr)
-        job = _job_response(proc.stdout or "")
+        job = parse_job_response(proc.stdout or "")
         if job is None:
             if proc.stdout and not generalized:
                 print(proc.stdout.rstrip())
@@ -4547,6 +4574,10 @@ def _run_typed_gateway(
 
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        validate_evaluation_options(args)
+    except ValueError as exc:
+        raise SystemExit(f"sandbox: {exc}") from exc
     if not args.hardware:
         raise SystemExit("sandbox: --hardware or ATREX_SANDBOX_GPU is required")
     # Explicit endpoint flags override inherited sandbox endpoint variables.  This
@@ -4625,12 +4656,16 @@ def _main(argv: list[str] | None = None) -> int:
         if args.command or (args.env_capabilities and not args.env_gpu):
             raise SystemExit("sandbox: env takes no command; --env-capabilities requires --env-gpu")
         return _run_environment_query(args)
-    if args.kind in DIAGNOSTIC_KINDS:
-        from supervisor.operations import diagnostic
-        return diagnostic(sys.modules[__name__], args, Path(args.workspace).resolve(), queue_wait_grace)
-    if args.baseline_path:
-        from supervisor.operations import compare
-        return compare(sys.modules[__name__], args, Path(args.workspace).resolve(), queue_wait_grace)
+    if args.kind in DIAGNOSTIC_KINDS or args.baseline_path:
+        from supervisor.operations import compare, diagnostic
+        operation = diagnostic if args.kind in DIAGNOSTIC_KINDS else compare
+        label = args.kind if args.kind in DIAGNOSTIC_KINDS else "ABBA comparison"
+        try:
+            return operation(sys.modules[__name__], args, Path(args.workspace).resolve(), queue_wait_grace)
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise SystemExit(
+                f"sandbox: {label} failed: {bounded_actionable_diagnostic(exc)}"
+            ) from exc
     if args.command in ([], ["--"]) and args.kind == "run":
         args.command = ["python3", "test_kernel.py", "--no-memory"]
         for option, value in (("--version", args.version), ("--multi-seed", args.multi_seed),
@@ -4749,6 +4784,12 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
+        if _requires_typed_request(args):
+            raise SystemExit(
+                f"sandbox: explicit typed {gateway_kind} options cannot be honored "
+                f"({typed_limitation}); no Dev fallback was submitted. "
+                "Use a compatible typed Gateway/workspace or remove the unsupported options."
+            )
         typed_fallback_kind = gateway_kind
         gateway_kind = "dev"
 
@@ -4832,7 +4873,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
         if command_environment:
             command = shlex.join(["env", *command_environment]) + " " + command
-    agate_executable = None if args.ssh else _find_agate()
+    agate_executable = None if args.ssh else find_agate()
     direct_http = bool(args.url and agate_executable is None)
     standard_oss_gateway = bool(
         agate_executable
@@ -5153,7 +5194,7 @@ def _main(argv: list[str] | None = None) -> int:
                 ) from exc
         else:
             try:
-                proc = _run_agate_with_cancel_retry(
+                proc = run_agate_with_cancel_retry(
                     agate=agate,
                     executable=agate_executable or "agate",
                     url=args.url,

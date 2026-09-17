@@ -39,6 +39,20 @@ FORBIDDEN = frozenset({"--preflight", "--check-health"})
 WIKI_STORES = {"query_nl": "--store-root", "query_wiki": "--json-store", "query_hardware": "--store"}
 
 
+class RequestValidationError(ValueError):
+    """A repairable request error detected before execution can start."""
+
+
+@contextmanager
+def _validating_request():
+    # Only request decoding/preparation belongs here, never execution, output
+    # publication, response projection/encoding or temporary-directory cleanup.
+    try:
+        yield
+    except (ValueError, UnicodeError) as error:
+        raise RequestValidationError(str(error)) from error
+
+
 class _RequestParser(argparse.ArgumentParser):
     def error(self, message):
         raise ValueError(f"{message}; use --kind OPERATION --help for accepted arguments")
@@ -49,8 +63,10 @@ def parse_gateway(argv):
     options = argv[:argv.index("--")] if "--" in argv else argv
     if "--help" in options or "-h" in options:
         return None
-    from supervisor.gateway import build_parser
-    return build_parser(_RequestParser).parse_args(argv)
+    from supervisor.gateway import build_parser, validate_evaluation_options
+    args = build_parser(_RequestParser).parse_args(argv)
+    validate_evaluation_options(args)
+    return args
 
 
 def failure(message: str, *, repairable: bool = True) -> dict:
@@ -180,15 +196,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.reply(404, failure("Unknown endpoint"))
             return
         try:
-            if self.headers.get("Transfer-Encoding"):
-                raise ValueError("Transfer-Encoding is unsupported; supply Content-Length")
-            length = int(self.headers.get("Content-Length", "-1"))
-            if not 0 <= length <= MAX_REQUEST_BYTES:
-                self.reply(413, failure("Request exceeds 2 MiB or has no Content-Length"))
-                return
-            request = json.loads(self.rfile.read(length))
-            if not isinstance(request, dict):
-                raise ValueError("Request must be a JSON object")
+            with _validating_request():
+                if self.headers.get("Transfer-Encoding"):
+                    raise ValueError("Transfer-Encoding is unsupported; supply Content-Length")
+                length = int(self.headers.get("Content-Length", "-1"))
+                if not 0 <= length <= MAX_REQUEST_BYTES:
+                    self.reply(413, failure("Request exceeds 2 MiB or has no Content-Length"))
+                    return
+                request = json.loads(self.rfile.read(length))
+                if not isinstance(request, dict):
+                    raise ValueError("Request must be a JSON object")
             with capability.lock:
                 with owner.lock:
                     if owner.closed or owner.capabilities.get(token) is not capability:
@@ -196,7 +213,7 @@ class _Handler(BaseHTTPRequestHandler):
                         return
                 result = owner.execute(capability, self.path, request)
             self.reply(200, result)
-        except (ValueError, UnicodeError) as error:
+        except RequestValidationError as error:
             self.reply(400, failure(str(error)))
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -221,8 +238,8 @@ class SupervisorRuntime:
             workspace = config.workspace.resolve()
             scope = hashlib.sha256(str(workspace).encode()).hexdigest()[:16]
             self.audit_root = workspace.parent / ".atrex-supervisor-runtime" / scope
-            from .agent_home import _directory
-            with _directory(self.audit_root):
+            from .agent_home import open_private_directory
+            with open_private_directory(self.audit_root):
                 pass
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
@@ -327,45 +344,49 @@ class SupervisorRuntime:
             self.slots.release()
 
     def execute(self, capability: Capability, route: str, request: dict) -> dict:
-        allowed = {"argv"} if route.endswith("execute") else {"argv", "tool"}
-        if set(request) != allowed:
-            raise ValueError(f"Request fields must be {sorted(allowed)}")
-        argv = validated_argv(request["argv"])
+        with _validating_request():
+            allowed = {"argv"} if route.endswith("execute") else {"argv", "tool"}
+            if set(request) != allowed:
+                raise ValueError(f"Request fields must be {sorted(allowed)}")
+            argv = validated_argv(request["argv"])
         environment = dict(self.environment)
         environment.update(capability.context)
         for key in (OWNER_ENV, URL_ENV, TOKEN_ENV, "ATREX_PRIVATE_REFERENCE_DIR"):
             environment.pop(key, None)
         with tempfile.TemporaryDirectory(dir=self.root, prefix="request-") as temporary:
             staged = Path(temporary)
-            if route.endswith("query"):
-                command = self._wiki_command(capability, request["tool"], argv, staged, environment)
-                kind = "wiki"
-            else:
-                argv = filter_options(argv, AUTHORITY, FORBIDDEN)
-                parsed = parse_gateway(argv)
-                if parsed is not None and parsed.kind != "env":
-                    snapshot(capability.workspace, staged)
-                (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
-                # The canonical driver is trusted code, not a mutable Agent input.
-                if self.config.atrex_bench_root:
-                    from .constants import ATREX_BENCH_HARNESS
-                    shutil.copy2(ATREX_BENCH_HARNESS, staged / "test_kernel.py")
-                # Querying candidate files never grants access to other workspaces.
-                # The trusted evaluator checkout is shared, not copied per Session.
-                if self.config.atrex_bench_root:
-                    environment["ATREX_BENCH_RUNTIME_ROOT"] = str(self.config.atrex_bench_root)
-                if self.config.private_reference_dir:
-                    environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.config.private_reference_dir)
-                # Keep the pre-PR evaluation log for the existing report compiler;
-                # immutable Kernel/Measurement IDs and dedup arrive in PR4.
-                (staged / ".atrex_long_horizon").mkdir()
-                (staged / ".atrex_long_horizon/journal.json").write_text("{}")
-                if parsed is not None:
-                    for value in ([] if parsed.no_sync else parsed.sync or ["profiles"]):
-                        if relative_path(value).parts[0] not in {"profiles", "scratch"}:
-                            raise ValueError("--sync must be inside profiles/ or scratch/")
-                command = self.config.command(staged) + argv
-                kind = "gateway"
+            with _validating_request():
+                if route.endswith("query"):
+                    command = self._wiki_command(capability, request["tool"], argv, staged, environment)
+                    kind = "wiki"
+                else:
+                    argv = filter_options(argv, AUTHORITY, FORBIDDEN)
+                    parsed = parse_gateway(argv)
+                    if parsed is not None and parsed.kind != "env":
+                        snapshot(capability.workspace, staged)
+                    (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
+                    # The canonical driver is trusted code, not a mutable Agent input.
+                    if self.config.atrex_bench_root:
+                        from .constants import ATREX_BENCH_HARNESS
+                        shutil.copy2(ATREX_BENCH_HARNESS, staged / "test_kernel.py")
+                    # Querying candidate files never grants access to other workspaces.
+                    # The trusted evaluator checkout is shared, not copied per Session.
+                    if self.config.atrex_bench_root:
+                        environment["ATREX_BENCH_RUNTIME_ROOT"] = str(self.config.atrex_bench_root)
+                    if self.config.private_reference_dir:
+                        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.config.private_reference_dir)
+                    # Keep the pre-PR evaluation log for the existing report compiler;
+                    # immutable Kernel/Measurement IDs and dedup arrive in PR4.
+                    (staged / ".atrex_long_horizon").mkdir()
+                    (staged / ".atrex_long_horizon/journal.json").write_text("{}")
+                    if parsed is not None:
+                        for value in ([] if parsed.no_sync else parsed.sync or ["profiles"]):
+                            if relative_path(value).parts[0] not in {"profiles", "scratch"}:
+                                raise ValueError("--sync must be inside profiles/ or scratch/")
+                    command = self.config.command(staged) + argv
+                    kind = "gateway"
+            # From this point execution may have submitted a job. Failures must
+            # never be classified as repairable argument errors by the handler.
             process = self._run(command, staged, environment, capability)
             if self.audit_root:
                 publish(self.audit_root, f"request-{uuid.uuid4().hex}.json", json.dumps({
@@ -435,17 +456,16 @@ class SupervisorRuntime:
                 publish(workspace, relative, data)
         log = staged / EPISODE_EVALUATIONS_PATH
         if log.is_file():
-            from orchestrator.session_tail import _regular_bytes
+            from orchestrator.session_tail import read_regular_bytes
             publish(workspace, EPISODE_EVALUATIONS_PATH,
-                    _regular_bytes(log, limit=MAX_FILE_BYTES), append=True)
+                    read_regular_bytes(log, limit=MAX_FILE_BYTES), append=True)
 
 
 @contextmanager
 def session_environment(workspace: Path, environment: dict[str, str]):
     owner_id = environment.get(OWNER_ENV)
     if not owner_id:
-        yield environment
-        return
+        raise RuntimeError("Campaign Runtime owner is required for a managed Session")
     with _RUNTIME_LOCK:
         runtime = _RUNTIMES.get(owner_id)
     if runtime is None:

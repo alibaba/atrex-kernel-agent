@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from .session_tail import _regular_bytes
+from .session_tail import read_regular_bytes
 
 STATE_FILES = {
     "claude": (".claude.json", ".claude/settings.json", ".claude/.credentials.json"),
@@ -48,8 +49,11 @@ def projected_backends(environment: dict[str, str]) -> tuple[str, ...]:
 
 
 @contextmanager
-def _directory(path: Path):
-    """Walk/create private directories without following Agent-created symlinks."""
+def open_private_directory(path: Path) -> Iterator[int]:
+    """Yield a pinned directory FD; create missing components with mode 0700.
+
+    No component may be a symlink. This context owns and closes the returned FD.
+    """
     path = Path(os.path.abspath(path))
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -68,10 +72,10 @@ def _seed(source: Path, destination: Path) -> None:
     if not source.exists():
         return
     # Reject links/devices and bound each configuration file, including auth.
-    content = _regular_bytes(source, limit=8 * 1024 * 1024 + 1)
+    content = read_regular_bytes(source, limit=8 * 1024 * 1024 + 1)
     if len(content) > 8 * 1024 * 1024:
         raise ValueError(f"Provider configuration file exceeds 8 MiB: {source.name}")
-    with _directory(destination.parent) as parent:
+    with open_private_directory(destination.parent) as parent:
         try:
             descriptor = os.open(
                 destination.name,
@@ -144,7 +148,7 @@ def prepare_agent_environment(
     home = state_root / key
     if home.is_symlink():
         raise ValueError("Agent Home cannot be a symlink")
-    with _directory(home):
+    with open_private_directory(home):
         pass
     for backend in projected_backends(values):
         _seed_provider(backend, host_home, home, values)
@@ -157,12 +161,12 @@ def prepare_agent_environment(
             if not session_file:
                 continue
             reviewer_home = Path(session_file).parent / f"{backend}-home"
-            with _directory(reviewer_home):
+            with open_private_directory(reviewer_home):
                 pass
             _seed_provider(backend, host_home, reviewer_home, values)
             if backend == "codex":
                 reviewer_home = reviewer_home / ".codex"
-                with _directory(reviewer_home):
+                with open_private_directory(reviewer_home):
                     pass
             values[f"ATREX_{name}_REVIEW_HOME"] = str(reviewer_home)
     # GPU configuration stays in the Supervisor; only legacy Git identity is
@@ -170,11 +174,11 @@ def prepare_agent_environment(
     if role == "optimizer":
         values.update(_git_identity(workspace, values))
     for variable, relative in CONFIG_ROOTS.values():
-        with _directory(home / relative):
+        with open_private_directory(home / relative):
             pass
         values[variable] = str(home / relative)
     for name in (".cache", ".config", ".local/share", ".local/state", ".qoder", ".qodersec"):
-        with _directory(home / name):
+        with open_private_directory(home / name):
             pass
     values.update(
         HOME=str(home),
