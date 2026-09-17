@@ -73,6 +73,8 @@ points.
 
 ### Authority boundaries
 
+An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wraps coordinator-side sessions with Bubblewrap. It adds scoped filesystem/Provider views without changing this lifecycle; the default native path remains available. Legacy campaign Git, evaluator packaging and Agent-written metadata retain explicit compatibility grants until their separate Supervisor migrations. This is not yet a fully private Supervisor control plane.
+
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
@@ -80,10 +82,7 @@ points.
 | GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
-The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
-incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
-supervisor does not generate optimization code: it validates, measures, records, and promotes
-exact committed sources.
+The optimization protocol requires the Agent to edit its candidate worktree, not the incumbent or evaluator inputs. The supervisor validates, measures, records, and promotes exact committed sources; the Agent does not decide promotion. This is not yet a claim of complete filesystem enforcement: the optional launch boundary retains the legacy Git, evaluator-packaging and metadata grants documented in the isolation guide.
 
 ## Supported Entry Point
 

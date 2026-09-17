@@ -407,16 +407,28 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    from ..session_capture import finish_session_capture, start_session_capture
+    from ..agent_home import prepare_agent_environment
+    from ..agent_sandbox import wrap_agent_command
+    from ..session_capture import clear_capture, finish_session_capture, start_session_capture
 
-    capture = start_session_capture(command, cwd, dict(os.environ if env is None else env))
+    clear_capture()
+    environment_values = prepare_agent_environment(
+        cwd, dict(os.environ if env is None else env),
+        (env or {}).get("ATREX_TELEMETRY_ATTEMPT_ID") or "\0".join(command),
+    )
+    launch, view = wrap_agent_command(
+        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
+    )
+    capture = start_session_capture(command, cwd, environment_values)
     try:
         proc = spawn_owned_session(
-            command,
+            launch.command,
             role="coding-agent",
-            environment=env,
+            environment=environment_values,
+            **({"inherited_fds": launch.pass_fds} if launch.pass_fds else {}),
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -425,11 +437,14 @@ def run_bounded(
         )
     except BaseException:
         finish_session_capture(capture, interrupted=True)
+        if view:
+            view.close()
         raise
+    finally:
+        launch.close()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
-    environment_values = os.environ if env is None else env
     environment_state_file = str(
         environment_values.get("ATREX_ENVIRONMENT_STATE_FILE", "")
     )
@@ -446,6 +461,7 @@ def run_bounded(
         daemon=True,
     )
     guard.start()
+    completed = False
     timed_out = False
     interrupted = False
     communicate = (
@@ -454,6 +470,7 @@ def run_bounded(
     )
     try:
         stdout, stderr = communicate(timeout=timeout)
+        completed = True
     except subprocess.TimeoutExpired:
         timed_out = True
         # spawn_owned_session creates this PGID. Keep it even if the group
@@ -472,11 +489,28 @@ def run_bounded(
             communicate()
         raise
     finally:
-        guard_stop.set()
-        guard.join(timeout=1)
-        finish_session_capture(
-            capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
-        )
+        try:
+            guard_stop.set()
+            guard.join(timeout=1)
+            finish_session_capture(
+                capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
+            )
+            # A killed/failed auxiliary session may leave a syntactically valid
+            # but incomplete report. Only normal, successful completion can
+            # replace the caller's report; timeout draining is not completion.
+            if (
+                view is not None
+                and completed
+                and not timed_out
+                and not interrupted
+                and proc.returncode == 0
+                and not dependency_violations
+                and not environment_failures
+            ):
+                view.publish()
+        finally:
+            if view is not None:
+                view.close()
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (

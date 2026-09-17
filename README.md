@@ -60,6 +60,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | --- | --- |
 | [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
+| [Agent Workspace Isolation](docs/agent-workspace-isolation.md) | Opt-in coordinator Bubblewrap boundary, scoped Provider Homes, and legacy compatibility grants |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.

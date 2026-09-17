@@ -67,7 +67,10 @@ def _probe_reviewer(
     workspace: Path,
     agent_cli: str,
     timeout_s: int,
+    boundary_environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if not draft.is_absolute() or not proposal.is_absolute():
+        raise ValueError("Plan reviewer probe draft and proposal paths must be absolute")
     helper_name, matching_backend = _REVIEWER_SPECS[reviewer]
     if agent_cli == matching_backend:
         return {
@@ -78,14 +81,27 @@ def _probe_reviewer(
 
     helper = REPO_ROOT / "skills" / "gen-plan" / "scripts" / helper_name
     environment = os.environ.copy()
+    environment.update(boundary_environment or {})
     environment["ATREX_AGENT_CLI"] = agent_cli
+    environment["ATREX_AGENT_SANDBOX_BACKEND"] = matching_backend
+    sandboxed = environment.get("ATREX_AGENT_SANDBOX") == "bwrap"
+    workspace = workspace.resolve()
+    input_files = {
+        "availability_probe.md": draft,
+        "availability_proposal.md": proposal,
+    }
+    if sandboxed:
+        # Preserve the native cwd, but expose only this probe's explicit packet.
+        # These virtual paths do not create/overwrite files in the real workspace.
+        environment["ATREX_AGENT_WORKSPACE_ROLE"] = "plan-review-probe"
+        draft = workspace / "availability_probe.md"
+        proposal = workspace / "availability_proposal.md"
     # A parent campaign's decision must never suppress a fresh campaign's one-time probe.
     for enabled_name, reason_name in REVIEWER_ENVIRONMENT.values():
         environment.pop(enabled_name, None)
         environment.pop(reason_name, None)
     try:
-        completed = subprocess.run(
-            [
+        command = [
                 "bash",
                 str(helper),
                 "--input",
@@ -94,14 +110,20 @@ def _probe_reviewer(
                 str(proposal),
                 "--timeout",
                 str(timeout_s),
-            ],
-            cwd=str(workspace),
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_s + 15,
-        )
+            ]
+        if sandboxed:
+            from .agent_runtime.process import run_bounded
+
+            stdout, stderr, code, timed_out = run_bounded(
+                command, workspace, timeout_s + 15, environment,
+                auxiliary_input_files=input_files,
+            )
+            if timed_out:
+                raise subprocess.TimeoutExpired(command, timeout_s + 15)
+            completed = subprocess.CompletedProcess(command, code, stdout, stderr)
+        else:
+            completed = subprocess.run(command, cwd=str(workspace), env=environment,
+                                       text=True, capture_output=True, check=False, timeout=timeout_s + 15)
     except subprocess.TimeoutExpired:
         return {
             "available": False,
@@ -173,6 +195,7 @@ def discover_plan_reviewers(
     *,
     agent_cli: str,
     reviewers: tuple[str, ...] | None = None,
+    boundary_environment: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Load cached decisions and probe only newly requested reviewers."""
     requested_names = tuple(_REVIEWER_SPECS if reviewers is None else reviewers)
@@ -185,6 +208,9 @@ def discover_plan_reviewers(
     workspace = workspace.resolve()
     cache_path = workspace / PLAN_REVIEWER_CACHE
     cached = _load_cache(cache_path)
+    sandbox = (boundary_environment or {}).get("ATREX_AGENT_SANDBOX", "none")
+    if cached is not None and cached.get("agent_sandbox", "none") != sandbox:
+        cached = None
     if cached is not None and cached.get("agent_cli") != agent_cli:
         cached = None
     cached_reviewers = dict(cached["reviewers"]) if cached is not None else {}
@@ -204,14 +230,15 @@ def discover_plan_reviewers(
 
     timeout_s = _probe_timeout()
     with tempfile.TemporaryDirectory(prefix="atrex-plan-reviewer-probe-") as directory:
-        draft = Path(directory) / "availability_probe.md"
+        probe_root = Path(directory).resolve()
+        draft = probe_root / "availability_probe.md"
         draft.write_text(
             "# Plan reviewer availability probe\n\n"
             "Confirm that this reviewer can receive a bounded GPU-kernel plan draft and return "
             "the requested structured review sections. No repository inspection is needed.\n",
             encoding="utf-8",
         )
-        proposal = Path(directory) / "availability_proposal.md"
+        proposal = probe_root / "availability_proposal.md"
         proposal.write_text(
             "# Candidate Proposal\n\n"
             "- Evidence: the reviewer availability probe draft requests a bounded response.\n"
@@ -233,6 +260,7 @@ def discover_plan_reviewers(
                     workspace,
                     agent_cli,
                     timeout_s,
+                    boundary_environment,
                 )
                 for name in missing_names
             }
@@ -244,6 +272,7 @@ def discover_plan_reviewers(
 
     value = {
         "schema_version": PLAN_REVIEWER_CACHE_SCHEMA_VERSION,
+        "agent_sandbox": sandbox,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "agent_cli": agent_cli,
         "probe_timeout_seconds": timeout_s,

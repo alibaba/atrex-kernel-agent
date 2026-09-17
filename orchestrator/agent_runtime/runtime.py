@@ -191,6 +191,9 @@ class CliAgentRuntime:
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
+        from ..agent_home import PREPARED_ENV, prepare_agent_environment
+
+        environment = prepare_agent_environment(request.workspace, environment, session_id)
         codex_observer = None
         codex_temporary_home = None
         pre_observation_errors: tuple[str, ...] = ()
@@ -198,8 +201,13 @@ class CliAgentRuntime:
         isolated_home_ready = False
         if self.id == "codex":
             try:
-                codex_temporary_home = CodexTemporaryHome(codex_home(environment))
-                isolated_home = codex_temporary_home.open()
+                if environment.get(PREPARED_ENV):
+                    # PR2 has already created a unique, mounted Session Home.
+                    # A second /tmp Home would be hidden by bwrap's private /tmp.
+                    isolated_home = codex_home(environment)
+                else:
+                    codex_temporary_home = CodexTemporaryHome(codex_home(environment))
+                    isolated_home = codex_temporary_home.open()
                 isolated_home_ready = True
                 environment["CODEX_HOME"] = str(isolated_home)
                 codex_observer = CodexSessionLedgerObserver(isolated_home)

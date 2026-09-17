@@ -163,6 +163,8 @@ codex_model = sys.argv[7]
 session_file = pathlib.Path(sys.argv[8]) if sys.argv[8] else None
 context_files = [pathlib.Path(item) for item in sys.argv[9 : 9 + context_count]]
 environment = os.environ.copy()
+if session_file is not None and environment.get("ATREX_CODEX_REVIEW_HOME"):
+    environment["CODEX_HOME"] = environment["ATREX_CODEX_REVIEW_HOME"]
 environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
 environment.pop("CODEX_THREAD_ID", None)
 environment.pop("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", None)

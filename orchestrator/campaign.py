@@ -189,6 +189,9 @@ class Campaign:
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
+    agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
+    bwrap_executable: str = "bwrap"
+    agent_read_only_paths: tuple[str, ...] = ()
     optimization_mode: str = (
         "leaderboard"  # permissive contest flow or strict production gate
     )
@@ -335,6 +338,7 @@ class Campaign:
                     timeout=min(self.setup_timeout, 1_800),
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
+                    extra_environment=self.agent_boundary_environment("problem-generation"),
                 )
                 self._account(result, f"agent problem generation attempt {attempt + 1}")
                 generated = staging / AGENT_PROBLEM_FILENAME
@@ -382,9 +386,18 @@ class Campaign:
             if enabled
         )
 
+    def agent_boundary_environment(self, role: str = "optimizer") -> dict[str, str]:
+        return {
+            "ATREX_AGENT_SANDBOX": self.agent_sandbox,
+            "ATREX_BWRAP_EXECUTABLE": self.bwrap_executable,
+            "ATREX_AGENT_READ_ONLY_PATHS": json.dumps(self.agent_read_only_paths),
+            "ATREX_AGENT_WORKSPACE_ROLE": role,
+        }
+
     def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
+        environment.update(self.agent_boundary_environment())
         if episode_mode:
             enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
             for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():
@@ -400,7 +413,14 @@ class Campaign:
                 self.workspace
                 / f".atrex_long_horizon/{self.long_reviewer_session}_reviewer_session.json"
             )
-            environment[env_name] = str(state_file.resolve())
+            if self.agent_sandbox == "bwrap":
+                # Only the reviewer's own directory enters the Agent namespace,
+                # not the entire Long Horizon archive/control directory.
+                state_file = state_file.parent / "reviewer-state" / state_file.name
+                state_file = state_file.absolute()
+            else:
+                state_file = state_file.resolve()
+            environment[env_name] = str(state_file)
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         if self.sandbox_ssh:
@@ -419,8 +439,13 @@ class Campaign:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
         # Query events from disposable episode worktrees must land in the
         # incumbent workspace, where the completion hook can retain them.
+        wiki_profile_root = self.workspace / ".gpu_wiki_profile"
+        # Preserve lexical paths for bwrap's mount validation; native sessions
+        # retain the existing symlink and '..' canonicalization.
         environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            (self.workspace / ".gpu_wiki_profile").resolve()
+            wiki_profile_root.absolute()
+            if self.agent_sandbox == "bwrap"
+            else wiki_profile_root.resolve()
         )
         environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
@@ -439,6 +464,7 @@ class Campaign:
             self.workspace,
             agent_cli=self.agent_cli,
             reviewers=reviewers,
+            boundary_environment=self.agent_boundary_environment("plan-review-probe"),
         )
         self._plan_reviewer_environment = plan_reviewer_environment(value)
         statuses = []
@@ -640,6 +666,7 @@ class Campaign:
                 agent_cli=self.agent_cli,
                 reasoning_effort="high",
                 agent_plugins=False,
+                extra_environment=self.agent_boundary_environment("production-review"),
             )
             self._account(result, "independent production policy review")
             if result.exit_status != 0 or result.timed_out:
@@ -1661,6 +1688,7 @@ class Campaign:
                         agent_cli=supervisor_cli,
                         reasoning_effort="high",
                         agent_plugins=False,
+                        extra_environment=self.agent_boundary_environment("baseline-exit-review"),
                     )
                 except Exception as exc:
                     print(
@@ -2049,6 +2077,7 @@ class Campaign:
                     agent_cli=agent_cli,
                     reasoning_effort="max",
                     agent_plugins=False,
+                    extra_environment=self.agent_boundary_environment("baseline-correctness-review"),
                 )
                 if result.exit_status != 0 or result.timed_out:
                     detail = result.stderr_tail or result.stdout_tail

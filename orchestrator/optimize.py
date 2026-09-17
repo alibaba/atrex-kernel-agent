@@ -450,6 +450,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Target hardware, e.g. B200 / H20 / MI308X "
         "(cannot be deduced from the op dir).",
     )
+    ap.add_argument("--agent-sandbox", choices=("none", "bwrap"),
+                    default=os.environ.get("ATREX_AGENT_SANDBOX", "none"),
+                    help="Coordinator-side Agent isolation; none preserves native macOS/Linux execution (default), bwrap requires Linux.")
+    ap.add_argument("--bwrap-executable", default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"))
+    ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
+                    help="Explicit extra read-only host path granted at the same path inside the Agent sandbox (repeatable).")
     ap.add_argument(
         "--sandbox-hardware",
         default="",
@@ -690,6 +696,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
+    from orchestrator.agent_sandbox import sandbox_executable
+
+    try:
+        sandbox_executable({"ATREX_AGENT_SANDBOX": args.agent_sandbox,
+                            "ATREX_BWRAP_EXECUTABLE": args.bwrap_executable,
+                            "PATH": os.environ.get("PATH", "")})
+        args.agent_read_only_path = [str(Path(path).expanduser().resolve(strict=True))
+                                     for path in (args.agent_read_only_path or [])]
+    except (RuntimeError, ValueError, OSError) as error:
+        ap.error(str(error))
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
         args.workspace_suffix
     ):
@@ -924,6 +940,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         sandbox_timeout=args.sandbox_timeout,
         atrex_bench_root=op.get("atrex_bench_root", ""),
         agent_cli=args.agent_cli,
+        agent_sandbox=args.agent_sandbox,
+        bwrap_executable=args.bwrap_executable,
+        agent_read_only_paths=tuple(args.agent_read_only_path),
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
