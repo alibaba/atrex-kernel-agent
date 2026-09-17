@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import shlex
 import shutil
@@ -408,6 +409,8 @@ class Campaign:
             wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
             workspace=self.workspace,
+            request_timeout=float(os.environ.get("ATREX_AKA_REQUEST_TIMEOUT_SECONDS", "1800")),
+            queue_timeout=float(os.environ.get("ATREX_AKA_QUEUE_TIMEOUT_SECONDS", "60")),
         ))
 
     def close_runtime(self) -> None:

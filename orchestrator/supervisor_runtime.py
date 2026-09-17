@@ -5,6 +5,7 @@ import json
 import argparse
 import hashlib
 import logging
+import math
 import os
 import secrets
 import signal
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -21,7 +23,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from supervisor.workspace import MAX_FILE_BYTES, publish, read_input, relative_path, snapshot
+from supervisor.gateway import EPISODE_EVALUATIONS_PATH, build_parser, validate_evaluation_options
+from supervisor.workspace import MAX_FILE_BYTES, MAX_TOTAL_BYTES, publish, read_input, relative_path, snapshot
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -63,7 +66,6 @@ def parse_gateway(argv):
     options = argv[:argv.index("--")] if "--" in argv else argv
     if "--help" in options or "-h" in options:
         return None
-    from supervisor.gateway import build_parser, validate_evaluation_options
     args = build_parser(_RequestParser).parse_args(argv)
     validate_evaluation_options(args)
     return args
@@ -132,6 +134,14 @@ class RuntimeConfig:
     task_id: str = ""
     optimization_mode: str = "leaderboard"
     workspace: Path | None = None
+    request_timeout: float = 1800
+    queue_timeout: float = 60
+
+    def __post_init__(self):
+        for name in ("request_timeout", "queue_timeout"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"Runtime {name} must be a finite positive number of seconds")
 
     def command(self, workspace: Path) -> list[str]:
         result = [sys.executable, str(ROOT / "supervisor/gateway.py"),
@@ -155,6 +165,9 @@ class Capability:
     workspace: Path
     context: dict[str, str]
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Set only while holding this capability's request lock.
+    deadline: float | None = field(default=None, repr=False)
+    request_id: str = ""
 
 
 class _Server(ThreadingHTTPServer):
@@ -176,6 +189,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Connection", "close")
+        if getattr(self, "request_id", None):
+            self.send_header("X-Request-ID", self.request_id)
         self.end_headers()
         self.close_connection = True
         self.wfile.write(payload)
@@ -186,6 +201,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         owner = self.server.owner
+        self.request_id = uuid.uuid4().hex
+        deadline = time.monotonic() + owner.config.request_timeout
         token = self.headers.get("Authorization", "").removeprefix("Bearer ")
         with owner.lock:
             capability = owner.capabilities.get(token) if not owner.closed else None
@@ -206,7 +223,7 @@ class _Handler(BaseHTTPRequestHandler):
                 request = json.loads(self.rfile.read(length))
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object")
-            with capability.lock:
+            with owner.request_lock(capability, deadline, self.request_id):
                 with owner.lock:
                     if owner.closed or owner.capabilities.get(token) is not capability:
                         self.reply(401, failure("Session capability revoked", repairable=False))
@@ -218,7 +235,12 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
-            logging.getLogger(__name__).exception("Supervisor Runtime request failed")
+            # Keep the traceback on the operator's stderr (logging.lastResort
+            # handles an unconfigured Campaign logger), never in the response.
+            # In particular, an exception that quotes the bearer must not leak it.
+            diagnostic = traceback.format_exc().replace(token, "[Session capability]")
+            logging.getLogger(__name__).error("Supervisor Runtime request %s failed\n%s",
+                                              self.request_id, diagnostic)
             self.reply(503, failure("Runtime could not confirm the operation outcome", repairable=False))
 
 
@@ -246,7 +268,14 @@ class SupervisorRuntime:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         with _RUNTIME_LOCK:
             _RUNTIMES[self.owner_id] = self
-        self.thread.start()
+        try:
+            self.thread.start()
+        except BaseException:
+            with _RUNTIME_LOCK:
+                _RUNTIMES.pop(self.owner_id, None)
+            self.server.server_close()
+            self.temporary.cleanup()
+            raise
 
     @property
     def url(self) -> str:
@@ -295,21 +324,50 @@ class SupervisorRuntime:
         with self.lock:
             return not self.closed and any(value is capability for value in self.capabilities.values())
 
-    def _run(self, command, cwd, environment, capability):
-        while not self.slots.acquire(timeout=0.2):
+    def _acquire(self, lock, capability, deadline):
+        wait_deadline = min(deadline, time.monotonic() + self.config.queue_timeout)
+        while True:
             if not self._live(capability):
                 raise RuntimeError("Session revoked")
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("Supervisor request queue deadline exceeded; no executor started")
+            if lock.acquire(timeout=min(0.2, remaining)):
+                return
+
+    @contextmanager
+    def request_lock(self, capability, deadline, request_id):
+        self._acquire(capability.lock, capability, deadline)
+        capability.deadline, capability.request_id = deadline, request_id
+        try:
+            yield
+        finally:
+            capability.deadline, capability.request_id = None, ""
+            capability.lock.release()
+
+    def _run(self, command, cwd, environment, capability):
+        deadline = capability.deadline or (time.monotonic() + self.config.request_timeout)
+        self._acquire(self.slots, capability, deadline)
         try:
             if not self._live(capability):
                 raise RuntimeError("Session revoked")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Supervisor request deadline exceeded before execution")
             with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
                 process = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
                                            stdout=output, stderr=errors, start_new_session=True)
                 try:
-                    deadline = time.monotonic() + self.config.timeout + 14400 + 120
+                    started = time.monotonic()
+                    next_notice = started + 60
                     while process.poll() is None:
+                        now = time.monotonic()
+                        if now >= next_notice:
+                            logging.getLogger(__name__).warning(
+                                "Supervisor Runtime request %s still running after %.0fs; %.0fs until deadline",
+                                capability.request_id or "direct", now - started, max(0, deadline - now))
+                            next_notice = now + 60
                         oversized = os.fstat(output.fileno()).st_size + os.fstat(errors.fileno()).st_size > 64 * 1024 * 1024
-                        if time.monotonic() > deadline or not self._live(capability) or oversized:
+                        if now >= deadline or not self._live(capability) or oversized:
                             try:
                                 os.killpg(process.pid, signal.SIGTERM)
                             except ProcessLookupError:
@@ -389,14 +447,16 @@ class SupervisorRuntime:
             # never be classified as repairable argument errors by the handler.
             process = self._run(command, staged, environment, capability)
             if self.audit_root:
-                publish(self.audit_root, f"request-{uuid.uuid4().hex}.json", json.dumps({
+                publish(self.audit_root, f"request-{capability.request_id or uuid.uuid4().hex}.json", json.dumps({
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "operation": kind, "argv": argv, "exit_code": process.returncode,
                     "stdout": process.stdout, "stderr": process.stderr,
                     "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
                 }, ensure_ascii=False).encode())
             if kind == "gateway":
-                self._publish_legacy_outputs(capability.workspace, staged, parsed)
+                self._publish_evaluation_log(capability.workspace, staged)
+                if process.returncode == 0:
+                    self._publish_legacy_outputs(capability.workspace, staged, parsed)
             from supervisor.projection import project_response
             return project_response(process, generalized=self.config.private_reference_dir is not None,
                                     wiki=kind == "wiki", private_paths=(str(staged), str(self.root),
@@ -435,30 +495,49 @@ class SupervisorRuntime:
     def _publish_legacy_outputs(self, workspace, staged, args):
         # Profile artifacts remain part of the old Agent workflow. Only these
         # declared output trees can be returned, not source or control files.
-        from supervisor.gateway import EPISODE_EVALUATIONS_PATH
         if args is None:
             return
-        for value in ([] if args.no_sync else (args.sync or ["profiles"])):
-            path = relative_path(value)
-            if path.parts[0] not in {"profiles", "scratch"}:
-                raise ValueError("--sync must be inside profiles/ or scratch/")
-            source = staged / path
-            files = [source] if source.is_file() else list(source.rglob("*")) if source.is_dir() else []
-            total = 0
-            for item in files:
-                if not item.is_file() or item.is_symlink():
-                    continue
-                relative = item.relative_to(staged).as_posix()
-                data = read_input(staged, relative)
-                total += len(data)
-                if total > 64 * 1024 * 1024:
-                    raise ValueError("Synchronized output exceeds 64 MiB")
-                publish(workspace, relative, data)
+        # Validate the entire union before changing any Agent output. Spool to
+        # private disk instead of retaining up to 64 MiB of payloads in memory.
+        total, visited = 0, 0
+        paths = set()
+        with tempfile.TemporaryDirectory(dir=self.root, prefix="outputs-") as temporary:
+            ready = Path(temporary)
+            for value in ([] if args.no_sync else (args.sync or ["profiles"])):
+                path = relative_path(value)
+                if path.parts[0] not in {"profiles", "scratch"}:
+                    raise ValueError("--sync must be inside profiles/ or scratch/")
+                source = staged / path
+                if source.is_symlink():
+                    raise ValueError("Synchronized output cannot be a symlink")
+                files = source.rglob("*") if source.is_dir() else [source]
+                for item in files:
+                    visited += 1
+                    if visited > 4096:
+                        raise ValueError("Synchronized output exceeds 4096 entries")
+                    if not item.is_file() or item.is_symlink():
+                        continue
+                    relative = item.relative_to(staged).as_posix()
+                    if relative in paths:
+                        continue
+                    data = read_input(staged, relative, limit=min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
+                    total += len(data)
+                    paths.add(relative)
+                    publish(ready, relative, data)
+            for relative in sorted(paths):
+                publish(workspace, relative, read_input(ready, relative))
+
+    def _publish_evaluation_log(self, workspace, staged):
+        # Failed correctness evaluations still belong in the legacy evidence
+        # log, but their partial profiles/scratch files do not belong in outputs.
         log = staged / EPISODE_EVALUATIONS_PATH
         if log.is_file():
             from orchestrator.session_tail import read_regular_bytes
+            data = read_regular_bytes(log, limit=MAX_FILE_BYTES + 1)
+            if len(data) > MAX_FILE_BYTES:
+                raise ValueError("Evaluation log exceeds the size limit")
             publish(workspace, EPISODE_EVALUATIONS_PATH,
-                    read_regular_bytes(log, limit=MAX_FILE_BYTES), append=True)
+                    data, append=True)
 
 
 @contextmanager

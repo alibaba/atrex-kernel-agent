@@ -87,6 +87,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
+from orchestrator.session_tail import read_regular_bytes  # noqa: E402
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
@@ -273,21 +274,26 @@ def read_workspace_override(
     field: str,
     max_bytes: int,
 ) -> str:
-    """Read one regular Agent-authored override without following it outside the workspace."""
+    """Read an Agent-authored override safely even in a concurrently writable workspace.
+
+    Open each path component with O_NOFOLLOW and a pinned parent directory FD.
+    The final open is nonblocking and fstat must identify a regular file; read
+    at most max_bytes + 1 bytes before size/UTF-8 validation. This also protects
+    standalone callers that do not use the HTTP Runtime's private snapshot.
+    """
+    if max_bytes < 0:
+        raise ValueError(f"--{field} byte limit must be non-negative")
     normalized = _safe_relative(value)
     parts = PurePosixPath(normalized).parts
     if parts[0] in INPUT_SKIP_DIRS or normalized in INPUT_SKIP_PATHS:
         raise ValueError(f"--{field} cannot read Runtime or protected workspace state")
-    root = workspace.resolve()
-    path = workspace / normalized
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"--{field} must name a regular workspace file")
     try:
-        resolved = path.resolve(strict=True)
-        resolved.relative_to(root)
+        payload = read_regular_bytes(workspace / normalized, limit=max_bytes + 1)
     except (OSError, ValueError) as exc:
-        raise ValueError(f"--{field} resolves outside the workspace") from exc
-    payload = resolved.read_bytes()
+        raise ValueError(
+            f"--{field} must name a readable regular workspace file; "
+            "symlinks are not allowed in any path component"
+        ) from exc
     if len(payload) > max_bytes:
         raise ValueError(f"--{field} exceeds the {max_bytes} byte limit")
     try:

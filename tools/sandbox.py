@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 RUNTIME_URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -32,6 +33,18 @@ def proxy_command(path: str, payload: dict) -> int:
     url, token = os.environ.get(RUNTIME_URL_ENV, ""), os.environ.get(RUNTIME_TOKEN_ENV, "")
     if not url or not token:
         print("sandbox: this tool requires a live Supervisor Session; launch through optimize.py.", file=sys.stderr)
+        return 75
+    # Never send the Session bearer to an overridden remote URL, URL userinfo,
+    # path or query. A Supervisor always advertises this exact loopback origin.
+    try:
+        address = urllib.parse.urlsplit(url)
+        if (address.scheme != "http" or address.hostname != "127.0.0.1"
+                or address.port is None or address.port == 0
+                or address.username is not None or address.password is not None
+                or address.path not in {"", "/"} or address.query or address.fragment):
+            raise ValueError("invalid Runtime origin")
+    except ValueError:
+        print("sandbox: Runtime URL must be an HTTP 127.0.0.1 origin with an explicit port.", file=sys.stderr)
         return 75
     request = urllib.request.Request(
         url.rstrip("/") + path, data=json.dumps(payload).encode(),
