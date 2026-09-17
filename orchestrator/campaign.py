@@ -394,10 +394,35 @@ class Campaign:
             "ATREX_AGENT_WORKSPACE_ROLE": role,
         }
 
+    def start_runtime(self) -> None:
+        from .supervisor_runtime import RuntimeConfig, SupervisorRuntime
+
+        if getattr(self, "_supervisor_runtime", None) is not None:
+            return
+        self._supervisor_runtime = SupervisorRuntime(RuntimeConfig(
+            hardware=self.sandbox_hardware or self.platform, timeout=self.sandbox_timeout,
+            url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
+            ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
+            health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
+            atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
+            wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
+            optimization_mode=self.optimization_mode,
+            workspace=self.workspace,
+        ))
+
+    def close_runtime(self) -> None:
+        runtime = getattr(self, "_supervisor_runtime", None)
+        if runtime is not None:
+            runtime.close()
+            self._supervisor_runtime = None
+
     def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
         environment.update(self.agent_boundary_environment())
+        self.start_runtime()
+        from .supervisor_runtime import OWNER_ENV
+        environment[OWNER_ENV] = self._supervisor_runtime.owner_id
         if episode_mode:
             enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
             for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():

@@ -48,6 +48,7 @@ promotion; it is not a second CLI.
 │   ├── session_io.py                  # Coding-agent sessions, dependency review, sandbox I/O
 │   ├── workspace_state.py             # Canonical memory, git facts, stall counter
 │   ├── workspace_runtime.py           # Workspace runtime links, agent skills, directives
+│   ├── supervisor_runtime.py          # Campaign HTTP GPU/Wiki service and Session authorization
 │   ├── hardware.py                    # Vendor/framework identity and Gluon escalation
 │   ├── constants.py                   # Shared paths, policy defaults, state filenames
 │   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
@@ -58,9 +59,10 @@ promotion; it is not a second CLI.
 ├── agents/                            # Baseline Agent definition injected into campaign workspaces
 ├── skills/                            # Backend-local workflows, including adaptive PPU profiling
 ├── tools/
-│   ├── sandbox.py                     # Remote packaging and execution boundary
+│   ├── sandbox.py                     # Session-scoped HTTP GPU/Wiki client
 │   ├── memory_manager.py              # Structured iteration memory manager
 │   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
+├── supervisor/                        # Private GPU packaging, execution and result projection
 ├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
 ├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
 ├── reference-projects/                # Optional source-search repositories
@@ -73,16 +75,16 @@ points.
 
 ### Authority boundaries
 
-An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wraps coordinator-side sessions with Bubblewrap. It adds scoped filesystem/Provider views without changing this lifecycle; the default native path remains available. Legacy campaign Git, evaluator packaging and Agent-written metadata retain explicit compatibility grants until their separate Supervisor migrations. This is not yet a fully private Supervisor control plane.
+An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wraps coordinator-side sessions with Bubblewrap; the default native path remains available. The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) owns packaging, credentials and private evaluator inputs and authorizes requests against each Session's workspace. Legacy campaign Git and Agent-written metadata retain explicit compatibility grants until their separate migrations. This is not yet a fully private Supervisor control plane.
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
 | Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
 | Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
-| GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
+| GPU execution | `tools/sandbox.py` HTTP client → Supervisor Runtime → `supervisor/gateway.py` | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
-The optimization protocol requires the Agent to edit its candidate worktree, not the incumbent or evaluator inputs. The supervisor validates, measures, records, and promotes exact committed sources; the Agent does not decide promotion. This is not yet a claim of complete filesystem enforcement: the optional launch boundary retains the legacy Git, evaluator-packaging and metadata grants documented in the isolation guide.
+The optimization protocol requires the Agent to edit its candidate worktree, not the incumbent or evaluator inputs. The supervisor validates, measures, records, and promotes exact committed sources; the Agent does not decide promotion. This is not yet a claim of complete filesystem enforcement: the optional launch boundary retains the legacy Git and metadata grants documented in the isolation guide.
 
 ## Supported Entry Point
 
@@ -173,11 +175,7 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 ### Sandbox execution
 
-All correctness, benchmark, and profiling work crosses
-`tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
-submits evaluator or profiler work to the configured remote executor, and synchronizes only the
-requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
-the coordinator.
+Agent correctness, benchmark, and profiling work crosses the `tools/sandbox.py` HTTP client. The Campaign Runtime snapshots authorized files; its private `supervisor/gateway.py` builds the remote input allowlist, supplies evaluator inputs, submits work and projects results. Agent output publication is limited to declared `profiles/` or `scratch/` paths. The trusted independent verifier calls the same private executor directly. Campaign memory, plans, edits, episode state and Git history stay on the coordinator.
 
 The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
 profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
@@ -336,9 +334,7 @@ boundary. Profiling selects an opaque id from canonical memory and injects only 
 the ephemeral remote profile job; the complete hidden shape table never enters the workspace.
 Optimization feedback retains aggregate results plus real per-shape latency keyed by opaque shape id,
 while withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
-runtime is copied into the workspace without linking its checkout-level `data/` tree. Sandbox private
-shape injection, opaque-shape profiling, and generalized result masking require the persisted workspace
-mode to be `production`. Leaderboard always retains legacy exact-shape exposure, regardless of whether
+runtime copy used by legacy independent verification contains no checkout-level `data/` tree and is masked from Runtime-managed Bubblewrap sessions. Agent requests use the Supervisor's evaluator checkout. Private shape injection, opaque-shape profiling and generalized result masking use the Campaign's trusted `production` mode, materialized into the private request snapshot rather than read from Agent-edited metadata. Leaderboard retains legacy exact-shape exposure, regardless of whether
 the source operator also contains a public problem contract.
 
 ### Production policy

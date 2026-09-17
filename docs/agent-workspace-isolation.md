@@ -2,7 +2,7 @@
 
 AKA can launch coding-agent sessions inside a Linux Bubblewrap namespace. This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. It is opt-in: `--agent-sandbox none` remains the default on Linux and macOS.
 
-This is the second step of the simplified AKA split. It introduces a launch boundary without migrating GPU/Wiki requests, Journal, Git ownership, or acceptance policy. Setup, Framework Baseline, Fast/Full Episodes, prompts, phase markers, and candidate validation remain in place.
+This launch boundary was introduced in the second step of the simplified AKA split. The subsequent [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) moves GPU/Wiki requests out of Agent sessions. Setup, Framework Baseline, Fast/Full Episodes, phase markers, Journal, Git ownership and candidate validation remain in place.
 
 ## Launch lifecycle
 
@@ -25,7 +25,7 @@ flowchart TD
 
 The command and workspace retain their original absolute paths inside the namespace. Existing prompts, tools, Git worktree links and native-session discovery therefore do not need path rewriting. `HOME`, Provider config roots and XDG directories point to the isolated Home before ledger observers and capture are initialized. Recovery-owned launches pass the anonymous argument FD through their ownership wrapper; the parent closes it after spawning.
 
-Campaign reviewer-state and Wiki-profile environment paths keep their lexical absolute form only in `bwrap` mode, so mount validation can detect symlinks. Native `none` mode retains the existing `Path.resolve()` behavior, including symlink resolution and `..` normalization.
+Campaign reviewer-state environment paths keep their lexical absolute form only in `bwrap` mode, so mount validation can detect symlinks. Native `none` mode retains the existing `Path.resolve()` behavior, including symlink resolution and `..` normalization. Wiki-profile paths are now Supervisor-only and no longer create Agent mounts.
 
 Direct launches omit Bubblewrap's `--die-with-parent`, preserving the native path's process-lifetime behavior: Supervisor or spawning-thread exit alone does not kill the Agent. This does not guarantee survival of lost output pipes or automatic reattachment. Recovery handoffs retain the flag, binding the sandbox to the durable ownership wrapper rather than the original Supervisor; the existing cleanup guardian remains responsible for orphan cleanup. Timeouts and explicit interruptions still use the existing process-group termination logic in both modes.
 
@@ -60,13 +60,13 @@ The namespace starts from an empty root, not a read-only copy of the host root. 
 - Read-only system runtime directories and selected OS configuration/certificate files, minimal `/dev`, a private PID namespace and `/proc`, and private `/tmp` and `/run`.
 - The current Optimizer workspace, writable at its original path, plus read-only repository tools, skills and reference assets needed by the existing symlink-based workspace.
 - A writable, per-Session Provider Home under `<workspace-parent>/.atrex-agent-homes/<key>/`. Different workspaces/Sessions receive separate copies; same-Session resume keeps its Home. Homes are outside the candidate Git tree.
-- Minimal executable files, recognized npm packages/dependencies and Python installation libraries needed by the CLI and the legacy Agate client. Discovery never restores an entire first-level directory under the operator Home. Installation aliases pointing into Provider history/auth state or the private Session storage are rejected.
+- Minimal executable files, recognized npm packages/dependencies and Python installation libraries needed by the CLI. Runtime-managed sessions do not add an Agate installation mount. Discovery never restores an entire first-level directory under the operator Home. Installation aliases pointing into Provider history/auth state or the private Session storage are rejected.
 
 Only selected login/settings files are seeded for the active backend and enabled external plan reviewers. Claude/Qoder/Codex/Pi transcript trees, caches and arbitrary global plugins are not copied. Qoder's `.auth/user` and `machine_id` are included; its entire `.qoder` or `.qodersec` tree is not mounted. Destination directory traversal does not follow Agent-created symlinks. Existing Session-local settings are preserved on resume, and changes never write back to the operator Home.
 
 These are copies, not live credential synchronization: refreshed host login state does not overwrite an existing Session Home. State files are private to the owning OS user and can contain credentials and raw conversations. Retain them for resume, and remove them only after that Session is stopped and no longer needed. PR1 capture remains outside the workspace by default and uses the same isolated Home; do not explicitly relocate capture into an Agent-writable path if it must remain private.
 
-Environment inheritance otherwise follows the existing CLI contract. Model and legacy Gateway credentials intentionally supplied to the Agent remain usable by it. Environment values are passed through an anonymous `bwrap --args FD`, not `--setenv KEY secret` in the process command line. This is not protection against a privileged host operator or another process with equivalent OS credentials.
+Environment inheritance otherwise follows the existing CLI contract. Model credentials intentionally supplied to the Agent remain usable by it. Gateway credentials are removed before launch; the Agent receives a workspace-scoped HTTP capability instead. New Homes do not copy Agate configuration, and old copies are masked for resumed Runtime-managed sessions. Environment values are passed through an anonymous `bwrap --args FD`, not `--setenv KEY secret` in the process command line. This is not protection against a privileged host operator or another process with equivalent OS credentials.
 
 ## Auxiliary sessions
 
@@ -90,19 +90,19 @@ Provider-created child Agents and plan helpers launched from within an Optimizer
 
 ## Legacy grants and scope limits
 
-This step must not remove capabilities before their Supervisor replacements exist:
+The remaining compatibility grants do not change optimization or acceptance:
 
 | Existing behavior retained | Explicit compatibility grant | Later ownership migration |
 | --- | --- | --- |
 | Agent commits the candidate | Current campaign Git common directory, writable; only user name/email copied from global Git configuration | Supervisor-owned Git/promotion, PR6 |
-| Agent packages/calls `tools/sandbox.py` | Code-only workspace Atrex-Bench copy and exact evaluator input directory, read-only; legacy Agate configuration/credentials | HTTP GPU/Wiki Runtime, PR3 |
-| Agent writes phase/recovery/Wiki evidence and Journal live mirror | Scoped telemetry, recovery-state, Wiki-profile, reviewer-state and live-memory directories as needed for append/atomic replace | Runtime records/Journal, PR3–5 |
+| Agent calls `tools/sandbox.py` | HTTP client and per-invocation capability; no evaluator/private-input/Gateway-credential grant | Implemented by the Supervisor GPU/Wiki Runtime |
+| Agent writes phase/recovery evidence and Journal live mirror | Scoped telemetry, recovery-state, reviewer-state and live-memory directories as needed for append/atomic replace | Runtime records/Journal, PR4–5 |
 
 Writable file grants include the containing directory to support atomic replacement and lock files. Validation checks that actual directory before creating or mounting it: it must not be the operator Home or an ancestor, traverse symlinks, or overlap the `.atrex-agent-homes` root in either direction. The current Session Home is mounted only through the dedicated Home setup, never through these legacy environment grants. Use a dedicated log/state subdirectory rather than placing a granted file directly under the operator Home.
 
-These grants are deliberately narrower than host access but **are not a complete authority boundary against a malicious Agent**. In particular, Git and legacy control/evidence paths are still Agent-accessible, and the old private-shape protection is a workflow rule rather than a filesystem barrier from the Agent-side packager. This PR does not claim immutable Supervisor ledgers or hidden Git/private evaluation inputs. It must not be presented as the final simplified architecture.
+These grants are deliberately narrower than host access but **are not a complete authority boundary against a malicious Agent**. Git and legacy control/evidence paths remain Agent-accessible. The private evaluator/reference paths now stay outside the Agent namespace, while Runtime results use bounded projections. Arbitrary GPU probe code is still untrusted; this is not a semantic data-loss-prevention guarantee for everything a probe could print. Immutable Supervisor ledgers and hidden Git belong to later changes.
 
-The Agent shares the host network so existing model, Gateway, Wiki and SSH clients continue to work. There is no new network allowlist, cgroup resource quota, measurement retry policy, Journal protocol, or promotion rule in this step. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
+The Agent shares the host network for model and loopback Runtime access; Gateway/Wiki/SSH operations now run on the Supervisor. There is no new network allowlist, cgroup resource quota, measurement retry policy, Journal protocol, or promotion rule. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
 
 ## Scratch lifecycle
 

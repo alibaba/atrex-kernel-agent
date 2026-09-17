@@ -22,6 +22,8 @@ supervisor control.
 The repository has one supported entry point, `orchestrator/optimize.py`. The internal
 `long_horizon/` package supplies the episode engine; it is not a second CLI.
 
+The Campaign-owned [Supervisor GPU/Wiki Runtime](docs/supervisor-runtime.md) handles Agent measurement and knowledge requests through a scoped HTTP client, keeping Gateway credentials and evaluator packaging on the coordinator.
+
 ![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
 
 AKA supports:

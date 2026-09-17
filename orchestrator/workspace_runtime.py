@@ -22,13 +22,13 @@ def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
             "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
             f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-            f"`KernelWiki`, and `gen-plan`. Invoke a named skill with {syntax}."
+            f"`KernelWiki`, `gpu-measurement`, and `gen-plan`. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
         f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-        "and `KernelWiki`."
+        "`gpu-measurement`, and `KernelWiki`."
     )
 
 
@@ -133,10 +133,10 @@ def link_runtime(
     # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
     # so selecting a different --agent-cli does not change the available optimization knowledge.
     ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    kw_src = REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki"
+    kw_src = REPO_ROOT / "skills" / "KernelWiki"
     agents_src = REPO_ROOT / "agents"
     project_skills = REPO_ROOT / "skills"
-    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline"]
+    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline", "gpu-measurement"]
     if is_ppu:
         runtime_skill_names.append("ppu-acu-joint-profile")
     else:
@@ -151,6 +151,8 @@ def link_runtime(
         runtime_skills_dir.mkdir(parents=True, exist_ok=True)
         for src, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
             dst = runtime_skills_dir / name
+            if name == "KernelWiki" and dst.is_symlink():
+                dst.unlink()
             if src.exists() and not dst.exists():
                 os.symlink(src, dst)
         for name in runtime_skill_names:
@@ -190,6 +192,8 @@ def link_runtime(
                 os.symlink(source, destination)
     for source, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
         destination = agent_skills_dir / name
+        if name == "KernelWiki" and destination.is_symlink():
+            destination.unlink()
         if source.exists() and not destination.exists():
             os.symlink(source, destination)
     gi = workspace / ".gitignore"

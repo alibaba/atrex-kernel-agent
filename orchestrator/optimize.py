@@ -1011,6 +1011,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         trace_status = "interrupted"
         raise
     finally:
+        campaign.close_runtime()
         write_trace_retention_manifest(
             campaign.workspace,
             trace_status,

@@ -165,14 +165,10 @@ def prepare_agent_environment(
                 with _directory(reviewer_home):
                     pass
             values[f"ATREX_{name}_REVIEW_HOME"] = str(reviewer_home)
-    # Agate remains an Agent-side client until PR3. Copy configuration only,
-    # never the operator's job cache or Wiki query/session history.
+    # GPU configuration stays in the Supervisor; only legacy Git identity is
+    # still needed by the optimizer until the separate Git-ownership migration.
     if role == "optimizer":
         values.update(_git_identity(workspace, values))
-        _seed(host_home / ".atrex/config.json", home / ".atrex/config.json")
-        for name in ("config.json", "config.yaml", "config.toml"):
-            _seed(host_home / ".config/agate" / name, home / ".config/agate" / name)
-            _seed(host_home / ".agate" / name, home / ".agate" / name)
     for variable, relative in CONFIG_ROOTS.values():
         with _directory(home / relative):
             pass

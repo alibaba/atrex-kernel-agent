@@ -481,7 +481,7 @@ def _sandbox_command(
     private_reference_dir: Path | None = None,
     preflight: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    """Run the private GPU executor for trusted Supervisor verification."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
         raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
     cmd = [
@@ -538,7 +538,7 @@ def _sandbox_command(
             except ProcessLookupError:
                 pass
         try:
-            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # The private executor handles SIGTERM with bounded SSH cleanup;
             # allow that 15-second cleanup window to persist a retry marker.
             return process.communicate(timeout=20)
         except subprocess.TimeoutExpired:
