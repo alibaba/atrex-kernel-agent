@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sys
@@ -104,10 +105,16 @@ class AuxiliaryWorkspace:
         try:
             shutil.rmtree(self.root)
         except Exception as cleanup_error:
-            if primary_error is None:
-                raise
-            # Cleanup is still attempted on interruption, failed publication and
-            # failed construction, but must not replace the original exception.
-            primary_error.add_note(
-                f"Auxiliary workspace cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}"
+            message = (
+                f"Auxiliary workspace cleanup failed; temporary view may remain at {self.root}: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
             )
+            if primary_error is not None:
+                primary_error.add_note(message)
+            else:
+                # Cleanup is diagnostic: preserve both successful results and
+                # returned failure/timeout statuses, even if the log sink fails.
+                try:
+                    logging.getLogger(__name__).warning(message)
+                except Exception:
+                    pass

@@ -69,6 +69,8 @@ def _probe_reviewer(
     timeout_s: int,
     boundary_environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if not draft.is_absolute() or not proposal.is_absolute():
+        raise ValueError("Plan reviewer probe draft and proposal paths must be absolute")
     helper_name, matching_backend = _REVIEWER_SPECS[reviewer]
     if agent_cli == matching_backend:
         return {
@@ -85,8 +87,8 @@ def _probe_reviewer(
     sandboxed = environment.get("ATREX_AGENT_SANDBOX") == "bwrap"
     workspace = workspace.resolve()
     input_files = {
-        "availability_probe.md": draft if draft.is_absolute() else workspace / draft,
-        "availability_proposal.md": proposal if proposal.is_absolute() else workspace / proposal,
+        "availability_probe.md": draft,
+        "availability_proposal.md": proposal,
     }
     if sandboxed:
         # Preserve the native cwd, but expose only this probe's explicit packet.

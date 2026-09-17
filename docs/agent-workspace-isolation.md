@@ -72,7 +72,7 @@ Environment inheritance otherwise follows the existing CLI contract. Model and l
 
 Supervisor-launched auxiliary sessions receive a temporary allowlist view at their original working directory. Inputs are mounted read-only; only declared output files are copied back with bounded, no-follow reads after normal process completion with exit code zero and no policy/environment termination. Timeout, interruption, process failure or guard termination skips publication and leaves existing destination reports unchanged. Other files written in that view are discarded. The existing caller still validates report contents.
 
-Temporary-view cleanup is attempted whether publication succeeds, fails or is skipped. If cleanup also fails while another exception is propagating, it adds a diagnostic note to that exception instead of replacing it. A publication error on an otherwise successful session still propagates to the caller.
+Temporary-view cleanup is attempted whether publication succeeds, fails or is skipped. If cleanup also fails while another exception is propagating, it adds a diagnostic note to that exception instead of replacing it. Otherwise it logs a warning with the residual view path without changing the returned stdout, stderr, exit status or timeout flag; a logging failure also cannot replace the result. The temporary view may remain on disk and need later cleanup. A publication error on an otherwise successful session still propagates to the caller.
 
 | Role | Read-only inputs | Returned files |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Temporary-view cleanup is attempted whether publication succeeds, fails or is sk
 | Baseline correctness review | `context/` | `correctness_review.md` |
 | Plan-reviewer availability probe | `availability_probe.md`, `availability_proposal.md` | None; existing stdout protocol |
 
-Availability probes use the Campaign workspace as `cwd` in both native and Bubblewrap modes. Their draft/proposal remain Supervisor-created temporary files; Bubblewrap snapshots them under the two declared input names in its read-only view and passes those virtual paths to the helper. No probe files are written to the real Campaign, and neither the temporary source directory nor other Campaign files are mounted. Changing `cwd` does not grant access to undeclared relative-path configuration files.
+Availability probes use the Campaign workspace as `cwd` in both native and Bubblewrap modes. Their draft/proposal remain Supervisor-created temporary files, passed as absolute paths; relative packet paths are rejected before launch. Bubblewrap snapshots them under the two declared input names in its read-only view and passes those virtual paths to the helper. No probe files are written to the real Campaign, and neither the temporary source directory nor other Campaign files are mounted. Changing `cwd` does not grant access to undeclared relative-path configuration files.
 
 The allowlist contains at most 4,096 files / 16 MiB; each returned file is limited to 8 MiB. These roles receive no campaign Git, Gateway/private-reference, Wiki-history or recovery-state mounts. Public problem generation is the explicit trusted preprocessing exception that reads exact shapes to create the public contract; optimization sessions do not inherit its input view.
 
