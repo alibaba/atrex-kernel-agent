@@ -246,7 +246,7 @@ verifying any deferred remote cleanup.
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
+GPU evaluations and full-mode profiles use the `tools/sandbox.py` HTTP client and the Campaign-owned [Supervisor Runtime](supervisor-runtime.md) on `--sandbox-hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
 
@@ -430,16 +430,23 @@ it advances campaign state, including failed, pivoted, blocked, and interrupted 
 
 ### Direct sandbox and profiling
 
-The sandbox boundary can also be used directly for validation and profiling:
+Inside a live Agent Session, use the scoped client (the Campaign already selected the target):
 
 ```bash
-python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
+python3 tools/sandbox.py --no-sync -- python3 test_kernel.py --no-memory
+python3 tools/sandbox.py --sync profiles/v1 -- \
   bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
-python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
+```
+
+For standalone operator diagnostics outside an Agent Session, run the private executable from the AKA checkout. It uses operator credentials and is not mounted into Agent sandboxes:
+
+```bash
+python3 supervisor/gateway.py --workspace /path/to/campaign --hardware REMOTE_GPU \
+  --url https://your-gateway --no-sync -- python3 test_kernel.py --no-memory
+python3 supervisor/gateway.py --workspace /path/to/campaign --hardware H20 --ssh user@gpu-host \
   --ssh-gpu 0 \
   --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
-  --no-sync -- python test_kernel.py --no-memory
+  --no-sync -- python3 test_kernel.py --no-memory
 ```
 
 Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,

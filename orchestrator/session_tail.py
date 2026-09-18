@@ -38,7 +38,12 @@ def _open_regular(path: Path):
     return stream
 
 
-def _regular_bytes(path: Path, limit: int = -1) -> bytes:
+def read_regular_bytes(path: Path, limit: int = -1) -> bytes:
+    """Read at most limit bytes from a regular file, refusing symlinks in its path.
+
+    A negative limit reads the whole file. Size validation belongs to the caller:
+    read one byte beyond the allowed size to detect an oversized input.
+    """
     with _open_regular(path) as stream:
         return stream.read(limit)
 

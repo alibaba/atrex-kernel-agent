@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .session_tail import _regular_bytes
+from .session_tail import read_regular_bytes
 
 WORKSPACE_ROLE_ENV = "ATREX_AGENT_WORKSPACE_ROLE"
 WORKSPACE_LAYOUTS = {
@@ -50,7 +50,7 @@ class AuxiliaryWorkspace:
 
             def copy_file(source: Path, destination: Path) -> None:
                 nonlocal count, total
-                content = _regular_bytes(source, limit=16 * 1024 * 1024 + 1)
+                content = read_regular_bytes(source, limit=16 * 1024 * 1024 + 1)
                 count, total = count + 1, total + len(content)
                 if count > 4096 or total > 16 * 1024 * 1024:
                     raise ValueError("Auxiliary input view exceeds 4096 files / 16 MiB")
@@ -89,7 +89,7 @@ class AuxiliaryWorkspace:
             source = self.root / name
             if not source.exists() and not source.is_symlink():
                 continue
-            content = _regular_bytes(source, limit=8 * 1024 * 1024 + 1)
+            content = read_regular_bytes(source, limit=8 * 1024 * 1024 + 1)
             if len(content) > 8 * 1024 * 1024:
                 raise ValueError(f"Auxiliary output exceeds 8 MiB: {name}")
             descriptor, temporary = tempfile.mkstemp(prefix=".report-", dir=self.workspace)

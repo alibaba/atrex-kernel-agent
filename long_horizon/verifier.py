@@ -20,7 +20,7 @@ DEFAULT_SHAPE_BATCH_SIZE = 4
 DEFAULT_SHAPE_BATCH_WORKERS = 4
 
 
-def _payload_from_stdout(stdout: str) -> dict[str, Any]:
+def parse_abba_payload(stdout: str) -> dict[str, Any]:
     """Extract the long-horizon ABBA payload from ordinary sandbox stdout."""
     for line in reversed(stdout.splitlines()):
         if not line.startswith(ABBA_RESULT_PREFIX):
@@ -155,11 +155,12 @@ def _merge_batch_results(
     return merged
 
 
-def _merge_batch_payloads(
+def merge_abba_batch_payloads(
     payloads: list[dict[str, Any]],
     schedule: list[dict[str, int | str]],
     shape_ids: list[str],
 ) -> dict[str, Any]:
+    """Combine batch results for a shared ABBA schedule and complete Shape set."""
     if len(payloads) == 1:
         return payloads[0]
     for payload in payloads:
@@ -527,7 +528,7 @@ class GatewayABBAValidator:
                 )
                 output = process.stdout + "\n" + process.stderr
                 if process.returncode == 0:
-                    payload = _payload_from_stdout(process.stdout)
+                    payload = parse_abba_payload(process.stdout)
                     atomic_write_json(workspace / result_relative, payload)
                     return payload
                 if attempt == 0 and any(
@@ -566,7 +567,7 @@ class GatewayABBAValidator:
                 raise
             finally:
                 executor.shutdown(wait=True, cancel_futures=True)
-            payload = _merge_batch_payloads(payloads, schedule, expected_shape_ids)
+            payload = merge_abba_batch_payloads(payloads, schedule, expected_shape_ids)
         except (
             subprocess.SubprocessError,
             RuntimeError,

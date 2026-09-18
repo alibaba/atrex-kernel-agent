@@ -1,8 +1,8 @@
 """Opt-in Bubblewrap launch boundary, without migrating the legacy Agent workflow.
 
 Only system runtime paths, selected installations, this workspace and explicit
-grants enter the namespace. Campaign Git/Gateway access remains an intentional
-compatibility grant until their Supervisor ownership is introduced separately.
+grants enter the namespace. Campaign Git remains a compatibility grant; GPU/Wiki
+operations use the Supervisor HTTP service rather than Agent-side credentials.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .agent_home import HOST_HOME_ENV, PREPARED_ENV, _directory, projected_backends
+from .agent_home import HOST_HOME_ENV, PREPARED_ENV, open_private_directory, projected_backends
 from .agent_installations import installation_mounts
 from .agent_workspace import WORKSPACE_LAYOUTS, WORKSPACE_ROLE_ENV, AuxiliaryWorkspace
 from .recovery_processes import HANDOFF_ID_ENV
@@ -120,11 +120,8 @@ def _grant_environment_paths(
     host_home: Path,
     session_home_root: Path,
 ) -> None:
-    # These grants are transitional: legacy sandbox.py still packages private
-    # evaluator inputs, writes Wiki feedback, and records phase markers itself.
+    # Journal, phase markers and reviewer state remain legacy grants until PR5/6.
     for variable, writable, directory in (
-        ("ATREX_PRIVATE_REFERENCE_DIR", False, True),
-        ("ATREX_WIKI_PROFILE_ROOT", True, True),
         ("ATREX_TELEMETRY_TRACE", True, False),
         ("ATREX_ENVIRONMENT_STATE_FILE", True, False),
         ("ATREX_JOURNAL_LIVE_FILE", True, False),
@@ -154,7 +151,7 @@ def _grant_environment_paths(
         if source.is_relative_to(session_home_root) or session_home_root.is_relative_to(source):
             raise ValueError(f"Legacy path grant overlaps Agent Session Homes: {variable}")
         if writable:
-            with _directory(source):
+            with open_private_directory(source):
                 pass
         if source.exists():
             _mount(argv, source, source, writable=writable)
@@ -236,19 +233,30 @@ def wrap_agent_command(
                     )
                 if not common.is_relative_to(workspace):
                     _mount(argv, common, common, writable=True)
-            # Preserve the existing symlink-based tools/skills layout, but never
-            # bind the entire AKA checkout, its .git, or its workspaces.
+            # Keep Supervisor's legacy evaluator copy available for independent
+            # acceptance, but mask it from Agent sessions using the HTTP service.
             bench = workspace / "atrex-bench"
             if bench.is_dir():
                 if bench.is_symlink():
                     raise ValueError("Legacy Atrex-Bench must be the code-only workspace copy")
-                _mount(argv, bench, bench)
+                if environment.get("ATREX_AKA_RUNTIME_URL"):
+                    argv.extend(("--tmpfs", str(bench)))
+                else:
+                    _mount(argv, bench, bench)
+            if environment.get("ATREX_AKA_RUNTIME_URL"):
+                argv.extend(("--tmpfs", str(workspace / ".gpu_wiki_profile")))
+                # A resumed PR2 Home may still contain old Gateway credentials.
+                # Mask those copies without changing the operator's files.
+                for relative in (".atrex", ".agate", ".config/agate"):
+                    argv.extend(("--tmpfs", str(home / relative)))
             _grant_environment_paths(
                 argv, environment, workspace,
                 host_home=host_home, session_home_root=home.parent,
             )
         forbidden = (workspace, home.parent, REPOSITORY_ROOT / ".git")
-        installations = projected_backends(environment) + (("agate",) if view is None else ())
+        installations = projected_backends(environment)
+        if view is None and not environment.get("ATREX_AKA_RUNTIME_URL"):
+            installations += ("agate",)
         for source, destination in installation_mounts(
             command,
             installations,

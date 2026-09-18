@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .agent_runtime.codex_ledger import codex_thread_id_from_stream
-from .session_tail import _regular_bytes
+from .session_tail import read_regular_bytes
 
 DISCOVERY_INTERVAL_SECONDS = 5.0
 
@@ -115,7 +115,7 @@ class HostSessionTranscripts:
         if cached is None and len(self._metadata) >= self.max_files:
             self.on_limit()
             return "", ""
-        payload = _regular_bytes(path, limit=65536)
+        payload = read_regular_bytes(path, limit=65536)
         for line in payload.splitlines()[:32]:
             try:
                 event = json.loads(line)

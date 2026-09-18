@@ -409,6 +409,21 @@ def run_bounded(
     env: dict | None = None,
     *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[str, str, int, bool]:
+    environment = dict(os.environ if env is None else env)
+    if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
+        return _run_bounded(command, cwd, timeout, environment,
+                            auxiliary_input_files=auxiliary_input_files)
+    from ..supervisor_runtime import session_environment
+
+    with session_environment(cwd, environment) as environment:
+        return _run_bounded(command, cwd, timeout, environment,
+                            auxiliary_input_files=auxiliary_input_files)
+
+
+def _run_bounded(
+    command: list[str], cwd: Path, timeout: int | None, env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
+) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
     from ..agent_home import prepare_agent_environment
     from ..agent_sandbox import wrap_agent_command

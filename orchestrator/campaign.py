@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import shlex
 import shutil
@@ -159,6 +160,22 @@ _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
     ".md",
     ".py",
 }
+
+
+def _runtime_timeout_from_environment(name: str, default: float | None = None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            f"{name} must be a finite positive number of seconds; "
+            f"set a value greater than 0 or unset {name} to use the default"
+        ) from None
+    return value
 
 
 @dataclass
@@ -394,10 +411,42 @@ class Campaign:
             "ATREX_AGENT_WORKSPACE_ROLE": role,
         }
 
+    def start_runtime(self) -> None:
+        from .supervisor_runtime import RuntimeConfig, SupervisorRuntime
+
+        if getattr(self, "_supervisor_runtime", None) is not None:
+            return
+        try:
+            request_timeout = _runtime_timeout_from_environment("ATREX_AKA_REQUEST_TIMEOUT_SECONDS")
+            queue_timeout = _runtime_timeout_from_environment("ATREX_AKA_QUEUE_TIMEOUT_SECONDS", 60)
+        except ValueError as error:
+            raise SystemExit(f"orchestrator: {error}") from None
+        self._supervisor_runtime = SupervisorRuntime(RuntimeConfig(
+            hardware=self.sandbox_hardware or self.platform, timeout=self.sandbox_timeout,
+            url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
+            ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
+            health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
+            atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
+            wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
+            optimization_mode=self.optimization_mode,
+            workspace=self.workspace,
+            request_timeout=request_timeout,
+            queue_timeout=queue_timeout,
+        ))
+
+    def close_runtime(self) -> None:
+        runtime = getattr(self, "_supervisor_runtime", None)
+        if runtime is not None:
+            runtime.close()
+            self._supervisor_runtime = None
+
     def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
         private_dir = self.private_reference_dir
         environment = dict(self._plan_reviewer_environment)
         environment.update(self.agent_boundary_environment())
+        self.start_runtime()
+        from .supervisor_runtime import OWNER_ENV
+        environment[OWNER_ENV] = self._supervisor_runtime.owner_id
         if episode_mode:
             enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
             for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():

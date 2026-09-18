@@ -85,17 +85,14 @@ def _render(template_path: Path, **kw: str) -> str:
 def ensure_submodules(platform: str = "", arch: str = "") -> None:
     """Initialize submodules required by the optimization pipeline.
 
-    Always covers gpu-wiki/3rdparty (KernelWiki) and 3rdparty/ncu-report-skill.
+    Always covers 3rdparty/ncu-report-skill. KernelWiki's Agent-facing skill
+    and the GPU Wiki JSON stores are repository-native, not submodules.
     PPU campaigns also require their vendor reference projects: without those
     working trees the framework-baseline catalog silently contains no usable
     PPU implementation sources.
     Idempotent: already-initialized submodules are untouched.
     """
     needed = [
-        (
-            "gpu-wiki/3rdparty/",
-            REPO_ROOT / "gpu-wiki" / "3rdparty" / "KernelWiki" / "README.md",
-        ),
         (
             "3rdparty/ncu-report-skill",
             REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
@@ -481,7 +478,7 @@ def _sandbox_command(
     private_reference_dir: Path | None = None,
     preflight: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    """Run the private GPU executor for trusted Supervisor verification."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
         raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
     cmd = [
@@ -538,7 +535,7 @@ def _sandbox_command(
             except ProcessLookupError:
                 pass
         try:
-            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # The private executor handles SIGTERM with bounded SSH cleanup;
             # allow that 15-second cleanup window to persist a retry marker.
             return process.communicate(timeout=20)
         except subprocess.TimeoutExpired:
