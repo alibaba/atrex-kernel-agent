@@ -27,11 +27,15 @@ def relative_path(value: str) -> Path:
     return path
 
 
+class InputSizeLimitError(ValueError):
+    """A regular workspace file exceeded its bounded read budget."""
+
+
 def read_input(workspace: Path, value: str, *, limit: int = MAX_FILE_BYTES) -> bytes:
     path = relative_path(value)
     data = read_regular_bytes(workspace / path, limit=limit + 1)
     if len(data) > limit:
-        raise ValueError("Request input file exceeds the size limit")
+        raise InputSizeLimitError("Request input file exceeds the size limit")
     return data
 
 

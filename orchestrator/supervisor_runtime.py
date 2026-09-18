@@ -23,13 +23,18 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from supervisor.gateway import EPISODE_EVALUATIONS_PATH, build_parser, validate_evaluation_options
-from supervisor.workspace import MAX_FILE_BYTES, MAX_TOTAL_BYTES, publish, read_input, relative_path, snapshot
+from supervisor.gateway import (
+    EPISODE_EVALUATIONS_PATH, build_parser, configured_queue_wait_grace, validate_evaluation_options,
+)
+from supervisor.workspace import (
+    MAX_FILE_BYTES, MAX_TOTAL_BYTES, InputSizeLimitError, publish, read_input, relative_path, snapshot,
+)
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
 TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+DISPATCH_RETRY_SECONDS = 5
 ROOT = Path(__file__).resolve().parents[1]
 _RUNTIMES: dict[str, "SupervisorRuntime"] = {}
 _RUNTIME_LOCK = threading.RLock()
@@ -44,6 +49,14 @@ WIKI_STORES = {"query_nl": "--store-root", "query_wiki": "--json-store", "query_
 
 class RequestValidationError(ValueError):
     """A repairable request error detected before execution can start."""
+
+
+class RequestDispatchTimeout(RuntimeError):
+    """A queue/deadline failure known to precede executor creation."""
+
+
+class SessionRevokedError(RuntimeError):
+    """Authorization was lost before executor creation."""
 
 
 @contextmanager
@@ -71,10 +84,10 @@ def parse_gateway(argv):
     return args
 
 
-def failure(message: str, *, repairable: bool = True) -> dict:
+def failure(message: str, *, repairable: bool = True, next_action: str | None = None) -> dict:
     return {"ok": False, "repairable": repairable, "error": {
         "message": message[:2000],
-        "next_action": ("Correct the arguments, using full option names, then retry."
+        "next_action": next_action or ("Correct the arguments, using full option names, then retry."
                         if repairable else "Report this blocker; do not bypass the Runtime or resubmit blindly."),
     }}
 
@@ -134,12 +147,15 @@ class RuntimeConfig:
     task_id: str = ""
     optimization_mode: str = "leaderboard"
     workspace: Path | None = None
-    request_timeout: float = 1800
+    # None preserves the Gateway execution + remote queue grace + cleanup budget.
+    request_timeout: float | None = None
     queue_timeout: float = 60
 
     def __post_init__(self):
         for name in ("request_timeout", "queue_timeout"):
             value = getattr(self, name)
+            if name == "request_timeout" and value is None:
+                continue
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"Runtime {name} must be a finite positive number of seconds")
 
@@ -183,12 +199,14 @@ class _Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(10)
 
-    def reply(self, status, result):
+    def reply(self, status, result, *, retry_after: int | None = None):
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Connection", "close")
+        if retry_after is not None:
+            self.send_header("Retry-After", str(retry_after))
         if getattr(self, "request_id", None):
             self.send_header("X-Request-ID", self.request_id)
         self.end_headers()
@@ -202,7 +220,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         owner = self.server.owner
         self.request_id = uuid.uuid4().hex
-        deadline = time.monotonic() + owner.config.request_timeout
+        deadline = time.monotonic() + owner.request_timeout_seconds
         token = self.headers.get("Authorization", "").removeprefix("Bearer ")
         with owner.lock:
             capability = owner.capabilities.get(token) if not owner.closed else None
@@ -232,6 +250,21 @@ class _Handler(BaseHTTPRequestHandler):
             self.reply(200, result)
         except RequestValidationError as error:
             self.reply(400, failure(str(error)))
+        except RequestDispatchTimeout as error:
+            if not owner._live(capability):
+                self.reply(401, failure("Session capability revoked", repairable=False))
+                return
+            result = failure(str(error), next_action=(
+                f"No job was submitted by this request. Wait at least {DISPATCH_RETRY_SECONDS} seconds, "
+                "then retry the same request unchanged with backoff. Do not retry in a tight loop."))
+            result["error"]["code"] = "request_not_started"
+            result["retry_after_seconds"] = DISPATCH_RETRY_SECONDS
+            logging.getLogger(__name__).warning(
+                "Supervisor Runtime request %s timed out before dispatch; safe to retry after backoff",
+                self.request_id)
+            self.reply(429, result, retry_after=DISPATCH_RETRY_SECONDS)
+        except SessionRevokedError:
+            self.reply(401, failure("Session capability revoked", repairable=False))
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
@@ -248,6 +281,9 @@ class SupervisorRuntime:
     def __init__(self, config: RuntimeConfig):
         self.config = config
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
+        self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
+        # Freeze the same value for the enclosing deadline and its subprocesses.
+        self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
         self.owner_id = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.capabilities: dict[str, Capability] = {}
@@ -280,6 +316,12 @@ class SupervisorRuntime:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    @property
+    def request_timeout_seconds(self) -> float:
+        if self.config.request_timeout is not None:
+            return self.config.request_timeout
+        return self.config.timeout + self.gateway_queue_wait_grace + 120
 
     def close(self):
         with self.lock:
@@ -328,10 +370,10 @@ class SupervisorRuntime:
         wait_deadline = min(deadline, time.monotonic() + self.config.queue_timeout)
         while True:
             if not self._live(capability):
-                raise RuntimeError("Session revoked")
+                raise SessionRevokedError("Session revoked")
             remaining = wait_deadline - time.monotonic()
             if remaining <= 0:
-                raise RuntimeError("Supervisor request queue deadline exceeded; no executor started")
+                raise RequestDispatchTimeout("Supervisor request queue deadline exceeded; no executor started")
             if lock.acquire(timeout=min(0.2, remaining)):
                 return
 
@@ -346,14 +388,14 @@ class SupervisorRuntime:
             capability.lock.release()
 
     def _run(self, command, cwd, environment, capability):
-        deadline = capability.deadline or (time.monotonic() + self.config.request_timeout)
+        deadline = capability.deadline or (time.monotonic() + self.request_timeout_seconds)
         self._acquire(self.slots, capability, deadline)
         try:
-            if not self._live(capability):
-                raise RuntimeError("Session revoked")
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Supervisor request deadline exceeded before execution")
             with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+                if not self._live(capability):
+                    raise SessionRevokedError("Session revoked")
+                if time.monotonic() >= deadline:
+                    raise RequestDispatchTimeout("Supervisor request deadline exceeded; no executor started")
                 process = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
                                            stdout=output, stderr=errors, start_new_session=True)
                 try:
@@ -520,7 +562,19 @@ class SupervisorRuntime:
                     relative = item.relative_to(staged).as_posix()
                     if relative in paths:
                         continue
-                    data = read_input(staged, relative, limit=min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
+                    # Only successful bounded reads increase total, so remaining
+                    # stays non-negative. Enforce both budgets on every read.
+                    remaining = MAX_TOTAL_BYTES - total
+                    try:
+                        data = read_input(staged, relative, limit=min(MAX_FILE_BYTES, remaining))
+                    except InputSizeLimitError as error:
+                        if remaining <= MAX_FILE_BYTES:
+                            message = (f"Synchronized output exceeds cumulative size limit of {MAX_TOTAL_BYTES} bytes; "
+                                       f"{remaining} bytes remain while reading {relative!r}")
+                        else:
+                            message = (f"Synchronized output file {relative!r} exceeds per-file size limit "
+                                       f"of {MAX_FILE_BYTES} bytes; {remaining} bytes remain in the sync budget")
+                        raise ValueError(message) from error
                     total += len(data)
                     paths.add(relative)
                     publish(ready, relative, data)

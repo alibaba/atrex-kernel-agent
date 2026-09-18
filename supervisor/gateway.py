@@ -80,7 +80,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -3271,6 +3271,18 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
+def configured_queue_wait_grace(environment: Mapping[str, str] | None = None) -> int:
+    """Read the operator's remote queue budget consistently in both executors."""
+    values = os.environ if environment is None else environment
+    try:
+        grace = int(values.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)))
+    except ValueError as error:
+        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer") from error
+    if grace < 0:
+        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
+    return grace
+
+
 def gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
     """Budget typed gateway queueing separately from evaluator runtime.
 
@@ -4642,17 +4654,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
-        queue_wait_grace = int(
-            os.environ.get(
-                "ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)
-            )
-        )
+        queue_wait_grace = configured_queue_wait_grace()
     except ValueError as exc:
-        raise SystemExit(
-            "sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer"
-        ) from exc
-    if queue_wait_grace < 0:
-        raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
+        raise SystemExit(f"sandbox: {exc}") from exc
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
     args.health_command = combined_health_command(

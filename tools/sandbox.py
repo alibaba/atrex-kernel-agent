@@ -65,6 +65,9 @@ def proxy_command(path: str, payload: dict) -> int:
         except (ValueError, UnicodeError):
             value = None
         print(json.dumps(value) if isinstance(value, dict) else f"sandbox: HTTP {error.code}", file=sys.stderr)
+        # A confirmed pre-dispatch 429 and an unknown-outcome 503 both use
+        # temporary-failure exit 75. The JSON repairable/code/next_action fields
+        # distinguish safe backoff from escalation; never auto-resubmit here.
         return 2 if error.code in {400, 404, 413, 422} else 75
     except (OSError, urllib.error.URLError) as error:
         print(

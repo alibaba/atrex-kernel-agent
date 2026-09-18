@@ -22,4 +22,7 @@ Numbers in those results are measured facts; interpretation is your responsibili
 
 Missing/revoked capability or transport failure is an infrastructure blocker.
 Do not bypass the Runtime or blindly retry an operation whose outcome is unknown.
-Gateway retry policy is owned by the Supervisor; do not add client-side retries.
+Gateway retry policy is owned by the Supervisor; do not add automatic client-side retry loops.
+If the Runtime explicitly returns `repairable: true` with `error.code: "request_not_started"`,
+this request submitted no job: wait at least `retry_after_seconds`, then retry unchanged
+with backoff. This permission does not apply to transport failures or unknown outcomes.

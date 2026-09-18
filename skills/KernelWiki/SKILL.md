@@ -19,6 +19,10 @@ The existing `gpu-wiki/tools/query_nl.py`, `query_wiki.py` and
 `query_hardware.py` commands are equivalent Session clients. The Supervisor owns
 stores, bridge execution and query telemetry; never override their host paths.
 
+For `repairable: true` with `error.code: "request_not_started"`, wait at least
+`retry_after_seconds` before retrying the unchanged query with backoff. The query
+executor has not started. Do not blindly retry transport failures or unknown outcomes.
+
 Check coverage before restrictive type filters. Read the returned source, scope,
 payload and notes. A zero-match fallback sample is labelled, not advice for your
 question. A missing hardware spec is not permission to substitute another GPU.

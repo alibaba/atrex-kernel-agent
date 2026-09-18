@@ -400,6 +400,7 @@ class Campaign:
 
         if getattr(self, "_supervisor_runtime", None) is not None:
             return
+        request_timeout = os.environ.get("ATREX_AKA_REQUEST_TIMEOUT_SECONDS")
         self._supervisor_runtime = SupervisorRuntime(RuntimeConfig(
             hardware=self.sandbox_hardware or self.platform, timeout=self.sandbox_timeout,
             url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
@@ -409,7 +410,7 @@ class Campaign:
             wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
             workspace=self.workspace,
-            request_timeout=float(os.environ.get("ATREX_AKA_REQUEST_TIMEOUT_SECONDS", "1800")),
+            request_timeout=float(request_timeout) if request_timeout is not None else None,
             queue_timeout=float(os.environ.get("ATREX_AKA_QUEUE_TIMEOUT_SECONDS", "60")),
         ))
 
