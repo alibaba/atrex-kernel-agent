@@ -93,6 +93,7 @@ from orchestrator.ssh_health import (  # noqa: E402
     combined_health_command,
 )
 from supervisor.projection import bounded_text  # noqa: E402
+from supervisor.gateway_jobs import bundle_digest, command_identity, execute_job, payload_identity  # noqa: E402
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
@@ -1248,11 +1249,11 @@ def _is_generalized_workspace(workspace: Path) -> bool:
     )
 
 
-def private_reference_dir(workspace: Path) -> Path | None:
+def private_reference_dir(workspace: Path, *, environment: Mapping[str, str] | None = None) -> Path | None:
     """Resolve private evaluator inputs only for a generalized production workspace."""
     if not _is_generalized_workspace(workspace):
         return None
-    raw = os.environ.get(PRIVATE_REFERENCE_ENV, "")
+    raw = (os.environ if environment is None else environment).get(PRIVATE_REFERENCE_ENV, "")
     if not raw:
         raise ValueError(
             f"{PRIVATE_REFERENCE_ENV} is required for generalized Atrex-Bench evaluation"
@@ -1284,8 +1285,8 @@ def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> 
     return path
 
 
-def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
-    private_dir = private_reference_dir(workspace)
+def _private_evaluator_inputs(workspace: Path, *, environment=None) -> dict[str, Path]:
+    private_dir = private_reference_dir(workspace, environment=environment)
     if private_dir is None:
         return {}
     inputs: dict[str, Path] = {}
@@ -1735,14 +1736,15 @@ def build_typed_request(
 
 
 def _make_atrex_bench_runtime_bundle(
-    workspace: Path, *, evaluator_only: bool = False
+    workspace: Path, *, evaluator_only: bool = False, environment=None
 ) -> str | None:
     """Package the canonical native evaluator separately from workspace state.
 
     The compressed runtime is split into multiple uploaded files by ``main``
     because agate's worker places each file value in one Linux argv entry.
     """
-    runtime_link = Path(os.environ.get("ATREX_BENCH_RUNTIME_ROOT", str(workspace / "atrex-bench")))
+    values = os.environ if environment is None else environment
+    runtime_link = Path(values.get("ATREX_BENCH_RUNTIME_ROOT", str(workspace / "atrex-bench")))
     if not runtime_link.is_dir():
         return None
     runtime_root = runtime_link
@@ -2047,7 +2049,8 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
     )
     parser.add_argument(
         "--kind",
-        choices=("auto", "run", "profile", "dev", "check", "disassemble", "env"),
+        choices=("auto", "run", "profile", "dev", "check", "disassemble", "env",
+                 "record-read", "kernel-read", "kernel-records"),
         default="auto",
         help=(
             "Gateway interface to use. auto routes test_kernel.py to run, profiler "
@@ -2055,6 +2058,9 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
             "jobs fall back to dev only when their source contract is unsupported."
         ),
     )
+    parser.add_argument("--record-id", help="Recorded Gateway result to read (no GPU submission)")
+    parser.add_argument("--kernel-id", help="Kernel identity to read or list measurements for")
+    parser.add_argument("--output-path", help="Write Kernel source to a workspace-relative scratch/ file")
     parser.add_argument(
         "--gateway-profile",
         choices=("pre", "prod"),
@@ -3089,39 +3095,37 @@ def run_direct_job(
     queue_wait_grace: int,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
-    prior_note = ""
-    for submission in range(2):
+    def submit():
         accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
-        deadline = time.monotonic() + timeout + queue_wait_grace
+        return subprocess.CompletedProcess([], 0, json.dumps(accepted), "")
+
+    def poll(initial, remaining):
+        job = json.loads(initial.stdout)
+        job_id = job["job_id"]
+        deadline = time.monotonic() + remaining
         try:
             while True:
+                if job.get("status") in ("succeeded", "failed", "cancelled", "canceled"):
+                    return subprocess.CompletedProcess(
+                        args=["direct-gateway", kind, job_id],
+                        returncode=0 if job.get("status") == "succeeded" else 1,
+                        stdout=json.dumps(job), stderr="",
+                    )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
                 wait_for = min(30.0, remaining)
-                job = _gateway_json(
-                    url,
-                    "GET",
-                    f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}",
-                    None,
-                    wait_for + 10,
-                )
-                if job.get("status") in ("succeeded", "failed", "cancelled"):
-                    if submission == 0 and _cancelled_without_outcome(job):
-                        prior_note = (
-                            f"[sandbox] gateway cancelled job_id={job_id} without a "
-                            "result/error; resubmitted once"
-                        )
-                        break
-                    return subprocess.CompletedProcess(
-                        args=["direct-gateway", kind, job_id],
-                        returncode=0 if job.get("status") == "succeeded" else 1,
-                        stdout=json.dumps(job),
-                        stderr=prior_note,
-                    )
+                try:
+                    job = _gateway_json(url, "GET", f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}",
+                                        None, wait_for + 10)
+                except (OSError, GatewayHTTPError) as error:
+                    if isinstance(error, GatewayHTTPError) and error.status < 500 and error.status != 429:
+                        raise
+                    # An accepted job keeps its ID across polling outages.
+                    time.sleep(min(5, max(0, deadline - time.monotonic())))
         except BaseException:
             try:
                 _gateway_json(url, "POST", f"/v1/jobs/{job_id}/cancel", {}, 10)
@@ -3129,9 +3133,8 @@ def run_direct_job(
                 pass
             raise
 
-    raise AssertionError(
-        "unreachable: direct gateway retry loop returned no terminal job"
-    )
+    return execute_job({"url": url, "kind": kind, "payload": payload_identity(payload)}, submit, poll,
+                       wait_budget=timeout + queue_wait_grace)
 
 
 def _run_direct_gateway(
@@ -3181,20 +3184,6 @@ def parse_job_response(stdout: str) -> dict | None:
     return result
 
 
-def _cancelled_without_outcome(job: dict | None) -> bool:
-    """Return whether a job was cancelled before producing any outcome.
-
-    The production gateway can occasionally cancel a queued job before an
-    attempt starts.  Such a response has no command result and no gateway
-    error, so it says nothing about the submitted kernel.  A cancellation
-    carrying either field is a real terminal outcome and must not be retried.
-    """
-    return bool(
-        job
-        and job.get("status") == "cancelled"
-        and not job.get("result")
-        and not job.get("error")
-    )
 
 
 def _ray_submit_version_mismatch(job: dict | None) -> bool:
@@ -3206,13 +3195,6 @@ def _ray_submit_version_mismatch(job: dict | None) -> bool:
     )
 
 
-def _queue_timeout_before_start(job: dict | None) -> bool:
-    error = job.get("error") if job else None
-    return bool(
-        isinstance(error, dict)
-        and error.get("reason") == "timeout"
-        and "never started executing" in str(error.get("message", ""))
-    )
 
 
 def _l20n_failover_command(agate: list[str]) -> list[str] | None:
@@ -3373,35 +3355,6 @@ def _resume_interrupted_agate_wait(
     )
 
 
-def _run_agate_once(
-    *,
-    agate: list[str],
-    executable: str,
-    url: str,
-    gateway_profile: str | None,
-    command_timeout: int,
-    wait_budget: int,
-) -> subprocess.CompletedProcess[str]:
-    """Submit one agate job, then wait while keeping its id available for cleanup."""
-    wait_started = time.monotonic()
-    submitted = subprocess.run([*agate, "--no-wait"], capture_output=True, text=True)
-    job = parse_job_response(submitted.stdout or "")
-    if submitted.returncode or not job:
-        return submitted
-    job_id = job["job_id"]
-    _track_agate_job(job_id, executable, url, gateway_profile)
-    try:
-        return _resume_interrupted_agate_wait(
-            executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
-            command_timeout=command_timeout,
-            wait_budget=wait_budget,
-            elapsed=time.monotonic() - wait_started,
-            initial=submitted,
-        )
-    finally:
-        _forget_agate_job(job_id)
 
 
 def run_agate_with_cancel_retry(
@@ -3412,93 +3365,38 @@ def run_agate_with_cancel_retry(
     gateway_profile: str | None,
     command_timeout: int,
     wait_budget: int,
+    request_identity: dict | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Retry transient gateway-only failures without blaming the submitted kernel."""
-    deadline = time.monotonic() + wait_budget
-    first = _run_agate_once(
-        agate=agate,
-        executable=executable,
-        url=url,
-        gateway_profile=gateway_profile,
-        command_timeout=command_timeout,
-        wait_budget=wait_budget,
-    )
-    first_job = parse_job_response(first.stdout or "")
-    fallback = (
-        _l20n_failover_command(agate)
-        if _ray_submit_version_mismatch(first_job)
-        else None
-    )
-    if fallback is not None:
-        agate = fallback
-        print(
-            "[sandbox] L20N submit cluster unavailable; retrying on l20n-ray",
-            file=sys.stderr,
-            flush=True,
-        )
-        first = _run_agate_once(
-            agate=agate,
-            executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
-            command_timeout=command_timeout,
-            wait_budget=max(1, int(deadline - time.monotonic())),
-        )
-        first_job = parse_job_response(first.stdout or "")
-    while _ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(
-        first_job
-    ):
-        remaining = int(deadline - time.monotonic())
-        if remaining <= 1:
-            return first
-        delay = min(60, remaining - 1) if _ray_submit_version_mismatch(first_job) else 0
-        if delay:
-            print(
-                f"[sandbox] gateway Ray submit compatibility outage; retrying in {delay}s",
-                file=sys.stderr,
-                flush=True,
-            )
-            time.sleep(delay)
-        else:
-            print(
-                "[sandbox] gateway queue timeout before job start; resubmitting",
-                file=sys.stderr,
-                flush=True,
-            )
-        first = _run_agate_once(
-            agate=agate,
-            executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
-            command_timeout=command_timeout,
-            wait_budget=remaining - delay,
-        )
-        first_job = parse_job_response(first.stdout or "")
-    if not _cancelled_without_outcome(first_job):
-        return first
+    """Recover accepted jobs and retry confirmed infrastructure failures."""
+    current = list(agate)
+    def submit():
+        return subprocess.run([*current, "--no-wait"], capture_output=True, text=True)
 
-    first_job_id = first_job.get("job_id")
-    second = _run_agate_once(
-        agate=agate,
-        executable=executable,
-        url=url,
-        gateway_profile=gateway_profile,
-        command_timeout=command_timeout,
-        wait_budget=wait_budget,
-    )
-    note = (
-        f"[sandbox] gateway cancelled job_id={first_job_id} without a result/error; "
-        "resubmitted once"
-    )
-    stderr_parts = [
-        part.rstrip() for part in (first.stderr, note, second.stderr) if part
-    ]
-    return subprocess.CompletedProcess(
-        args=second.args,
-        returncode=second.returncode,
-        stdout=second.stdout,
-        stderr="\n".join(stderr_parts),
-    )
+    def poll(initial, remaining):
+        job = parse_job_response(initial.stdout or "")
+        if job is None:
+            return initial
+        job_id = job["job_id"]
+        _track_agate_job(job_id, executable, url, gateway_profile)
+        try:
+            result = _resume_interrupted_agate_wait(
+                executable=executable, url=url, gateway_profile=gateway_profile,
+                command_timeout=command_timeout, wait_budget=remaining, elapsed=0, initial=initial,
+            )
+            if _ray_submit_version_mismatch(parse_job_response(result.stdout or "")):
+                fallback = _l20n_failover_command(current)
+                if fallback is not None:
+                    current[:] = fallback
+                    print("[sandbox] L20N submit cluster unavailable; retrying on l20n-ray", file=sys.stderr)
+            return result
+        finally:
+            _forget_agate_job(job_id)
+
+    identity = dict(request_identity) if request_identity is not None else {"command": command_identity(agate)}
+    if isinstance(identity.get("request"), dict):
+        identity["request"] = payload_identity(identity["request"])
+    return execute_job(identity | {"url": url, "profile": gateway_profile},
+                       submit, poll, wait_budget=wait_budget)
 
 
 def build_typed_agate_command(
@@ -3868,7 +3766,7 @@ def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
     return nested[0] if len(nested) == 1 else None
 
 
-def _metadata_speedup_mean(
+def metadata_speedup_mean(
     metadata: object,
     shape_ids: list[str],
     latency_by_shape: dict[str, float],
@@ -3990,7 +3888,7 @@ def _optimizer_result_from_eval(
     )
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
     speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
         if require_performance
         else (None, [])
     )
@@ -4056,7 +3954,7 @@ def _merge_optimizer_results(
                 break
 
     speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
         if require_performance
         else (None, [])
     )
@@ -4474,6 +4372,7 @@ def _run_typed_gateway(
                         args.timeout, queue_wait_grace
                     ),
                     wait_budget=args.timeout + queue_wait_grace,
+                    request_identity={"kind": kind, "request": batch_request},
                 )
 
             batch_items = list(enumerate(shape_batches))
@@ -4592,6 +4491,8 @@ def _run_typed_gateway(
 
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.kind in {"record-read", "kernel-read", "kernel-records"}:
+        raise SystemExit("sandbox: record queries require tools/sandbox.py inside a live Campaign Session")
     try:
         validate_evaluation_options(args)
     except ValueError as exc:
@@ -5211,6 +5112,10 @@ def _main(argv: list[str] | None = None) -> int:
                     gateway_profile=args.gateway_profile,
                     command_timeout=_dev_gateway_job_timeout(args.timeout),
                     wait_budget=args.timeout + queue_wait_grace,
+                    request_identity={"kind": "dev", "command": command, "hardware": args.hardware,
+                                      "timeout": args.timeout, "env": gateway_environment,
+                                      "inputs": bundle_digest(base64.b64decode(bundle)),
+                                      "evaluator": bundle_digest(base64.b64decode(runtime_bundle)) if runtime_bundle else None},
                 )
             except FileNotFoundError as exc:
                 raise SystemExit(
@@ -5275,6 +5180,90 @@ def _main(argv: list[str] | None = None) -> int:
     if isinstance(remote_rc, int):
         return remote_rc
     return 0 if job.get("status") == "succeeded" else (proc.returncode or 1)
+
+
+def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, dict[str, bytes]]:
+    """Freeze the task's semantic inputs, excluding Episode/version/output paths."""
+    command = list(args.command)
+    if command and command[0] == "--":
+        command = command[1:]
+    if command in ([], ["--"]):
+        command = (["python3", "profile_driver.py"] if args.kind == "profile" else
+                   ["python3", "test_kernel.py", "--no-memory"])
+        if args.multi_seed is not None:
+            command += ["--multi-seed", str(args.multi_seed)]
+        if args.timed_runs is not None:
+            command += ["--timed-runs", str(args.timed_runs)]
+        for shape in args.shape_id or []:
+            command += ["--shape-id", shape]
+    kind = _requested_gateway_kind(args.kind, command)
+    operation = "same_allocation_abba" if args.baseline_path else ("evaluate" if kind == "run" else kind)
+    if args.baseline_path:
+        from supervisor.operations import validate_comparison
+        validate_comparison(args)
+    evaluator = kind == "run" or bool(args.baseline_path)
+    selected = set(_evaluation_input_paths(workspace, command) if evaluator else
+                   _command_input_paths(workspace, command, args.input))
+    selected.add("kernel.py")
+    for value in args.input or []:
+        selected.update(_expand_workspace_input(workspace, value))
+    for value in (args.baseline_path, args.evaluation_input_path, args.evaluation_shapes_path):
+        if value:
+            selected.add(_safe_relative(value))
+    # Typed Check/Profile/Disassemble also depend on the exact construction/input
+    # contract even when their command does not name the evaluator.
+    private = _private_evaluator_inputs(workspace, environment=environment)
+    selected.update(private)
+    for name in ("reference.py", "input.py", "shapes.json", "metadata.json", "roofline.json",
+                 "definition.json", "workload.jsonl", "solution.json"):
+        if (workspace / name).is_file():
+            selected.add(name)
+    files = {}
+    for name in sorted(selected):
+        path = private.get(name, workspace / name)
+        if not path.is_file():
+            continue
+        data = read_regular_bytes(path, limit=16 * 1024 * 1024 + 1)
+        if len(data) > 16 * 1024 * 1024 or sum(map(len, files.values())) + len(data) > 64 * 1024 * 1024:
+            raise ValueError("Measurement inputs exceed the snapshot limit")
+        files[name] = data
+    # Hash evaluator code rather than its mutable checkout path. Bundles already
+    # select the minimal evaluator tree and enforce their own size limits.
+    evaluator_bundle = _make_atrex_bench_runtime_bundle(workspace, evaluator_only=True, environment=environment) if evaluator else None
+    evaluator_files = {}
+    if evaluator_bundle:
+        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(evaluator_bundle)), mode="r:gz") as archive:
+            for member in archive:
+                if member.isfile():
+                    with archive.extractfile(member) as source:
+                        evaluator_files[member.name] = hashlib.sha256(source.read()).hexdigest()
+    normalized = []
+    index = 0
+    for_command = _is_test_kernel_command(command)
+    while index < len(command):
+        item = command[index]
+        if for_command and item == "--version":
+            index += 2
+            continue
+        if not (for_command and (item == "--no-memory" or item.startswith("--version="))):
+            normalized.append(item)
+        index += 1
+    options = {key: value for key, value in vars(args).items() if key not in {
+        "workspace", "command", "version", "sync", "no_sync", "dry_run", "output_path", "record_id", "kernel_id",
+        "multi_seed", "timed_runs", "shape_id",
+    }}
+    options["kind"] = kind
+    options["command"] = normalized
+    if args.baseline_path and args.baseline_path not in files:
+        raise ValueError("--baseline-path must name an existing regular workspace file")
+    if "kernel.py" not in files and operation != "dev":
+        raise ValueError("Measurement requires an existing kernel.py")
+    options["gateway_environment"] = {name: environment[name] for name in (
+        "AGATE_URL", "ATREX_SANDBOX_PROFILE", *PROFILE_ENVIRONMENT_KEYS,
+    ) if name in environment}
+    return {"schema_version": 1, "operation": operation, "options": options,
+            "inputs": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
+            "evaluator": evaluator_files}, files
 
 
 def _sandbox_telemetry_category(arguments: list[str]) -> str:

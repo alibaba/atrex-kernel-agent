@@ -20,6 +20,13 @@ Read [requests.md](references/requests.md) for request examples. Use
 `[test_kernel] RESULT_JSON=`; Profile returns `[sandbox] PROFILE_JSON=`.
 Numbers in those results are measured facts; interpretation is your responsibility.
 
+Measurements return a `gateway_record_id` and `kernel_id`. Identical tasks across
+Episodes are rejected with `duplicate_gateway_task` and the previous Record ID:
+read it using `--kind record-read --record-id ID` instead of resubmitting.
+Version labels do not request a fresh measurement. See the record-query examples
+in [requests.md](references/requests.md). Record reads return the saved result,
+not another GPU execution; a saved rejection still has a nonzero exit code.
+
 Missing/revoked capability or transport failure is an infrastructure blocker.
 Do not bypass the Runtime or blindly retry an operation whose outcome is unknown.
 Gateway retry policy is owned by the Supervisor; do not add automatic client-side retry loops.

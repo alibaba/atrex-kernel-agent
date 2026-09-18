@@ -42,6 +42,21 @@ and `--deps-mode freeze_installed|no_deps`; these affect only the remote job.
 Profile also supports `--profiler`, `--profile-counter`, `--kernel-regex`,
 `--profile-shape-id`, `--launch-skip`, and `--top-kernels`.
 
+Reuse recorded facts across Episodes. Replace these placeholder IDs with values
+returned by the Runtime; these queries do not submit GPU jobs:
+
+```bash
+python3 tools/sandbox.py --kind record-read --record-id gateway-0123456789abcdef0123456789abcdef
+python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-0123456789abcdef0123456789abcdef --output-path scratch/previous.py
+python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-0123456789abcdef0123456789abcdef
+```
+
+`record-read` prints the same saved public result and preserves its exit code.
+`kernel-read` copies exact measured source into `scratch/`. `kernel-records` lists
+that Kernel's Record IDs, operations and timestamps without loading every result.
+Dev probes also produce Record IDs even when their output is not an evaluation.
+A duplicate-task error means the result already exists, not that the Kernel failed.
+
 Use `--sync profiles/path` or `--sync scratch/path` for returned files.
 Paths must be workspace-relative and must not traverse symlinks or `..`.
 Do not request control files or changes to Kernel source via remote outputs.
