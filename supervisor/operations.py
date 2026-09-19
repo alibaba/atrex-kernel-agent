@@ -81,6 +81,7 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                 gateway_profile=args.gateway_profile,
                 command_timeout=gateway.gateway_job_timeout(args.timeout, queue_wait_grace),
                 wait_budget=args.timeout + queue_wait_grace,
+                request_identity={"kind": args.kind, "request": request},
             )
     job = gateway.parse_job_response(process.stdout or "")
     if not job or job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
@@ -92,11 +93,7 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     return 0
 
 
-def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
-    """Use the existing same-allocation AB/BA runner, without PR4 caching/repeats."""
-    from long_horizon.verifier import verification_schedule, parse_abba_payload, merge_abba_batch_payloads
-    from supervisor.projection import abba
-
+def validate_comparison(args) -> None:
     if args.kind != "run" or args.evaluation_mode == "correctness_only":
         raise ValueError("--baseline-path requires --kind run in full mode")
     if not 1 <= args.comparison_repeats <= 20:
@@ -104,6 +101,16 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     if (args.command or args.evaluation_input_path or args.evaluation_shapes_path
             or args.shape_id or args.multi_seed is not None):
         raise ValueError("ABBA uses the canonical full contract; command/input/shape/seed overrides are unsupported")
+
+
+def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
+    """Checkpoint each completed physical batch before running the next one."""
+    from long_horizon.verifier import verification_schedule, parse_abba_payload, merge_abba_batch_payloads
+    from supervisor.projection import abba
+    from supervisor.abba_checkpoints import AbbaBatchStore, validate_batch
+    from supervisor.measurement_records import JOB_ROOT_ENV
+
+    validate_comparison(args)
     baseline = gateway.read_workspace_override(
         workspace, args.baseline_path, field="baseline-path", max_bytes=16 * 1024 * 1024,
     )
@@ -132,6 +139,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         command += ["--timed-runs", str(args.timed_runs)]
     batches = [ids] if sol else gateway.batch_shape_ids(ids, args.shape_batch_size)
     payloads = []
+    checkpoints = AbbaBatchStore(Path(os.environ[JOB_ROOT_ENV])) if os.environ.get(JOB_ROOT_ENV) else None
     for index, shapes in enumerate(batches):
         request = control / f"request-{index}.json"
         result = control / f"result-{index}.json"
@@ -159,6 +167,12 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         nested += ["--", "python3", str((control / "test_kernel.py").relative_to(workspace)),
                    str(request.relative_to(workspace)), str(result.relative_to(workspace))]
         batch = f"ABBA batch {index + 1}/{len(batches)}"
+        identity = {"schedule": schedule, "shape_ids": shapes, "batch": index}
+        if checkpoints:
+            saved = checkpoints.load(identity)
+            if saved is not None:
+                payloads.append(saved["payload"])
+                continue
         try:
             process = subprocess.run(nested, cwd=workspace, env=os.environ.copy(), capture_output=True,
                                      text=True, timeout=args.timeout + queue_wait_grace + 120)
@@ -169,7 +183,11 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         if process.returncode:
             raise _abba_batch_error(gateway, batch, f"exited with code {process.returncode}", process.stderr)
         try:
-            payloads.append(parse_abba_payload(process.stdout))
+            payload = parse_abba_payload(process.stdout)
+            validate_batch(payload, schedule, shapes)
+            if checkpoints:
+                checkpoints.save(identity, payload, stdout=process.stdout, stderr=process.stderr)
+            payloads.append(payload)
         except ValueError as exc:
             raise _abba_batch_error(gateway, batch, f"returned an invalid result ({exc})", process.stderr) from exc
     try:

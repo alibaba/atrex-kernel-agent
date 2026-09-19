@@ -7,6 +7,9 @@ Existing GPU command syntax is preserved, for example:
   python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
 Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
 wiki-hardware. Use --kind OPERATION --help for the operation's request options.
+Read saved results with --kind record-read --record-id gateway-...;
+copy source with --kind kernel-read --kernel-id kernel-... --output-path scratch/kernel.py;
+list a Kernel's measurements with --kind kernel-records --kernel-id kernel-....
 No direct Agate fallback is performed when the Runtime is unavailable.
 """
 from __future__ import annotations

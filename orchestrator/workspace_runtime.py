@@ -183,6 +183,8 @@ def link_runtime(
             shutil.rmtree(legacy_path)
     if project_skills.is_dir():
         for source in project_skills.iterdir():
+            if source.name == "KernelWiki":
+                continue  # The explicit link migration below handles stale/broken links.
             if source.name == "ppu-acu-joint-profile" and not is_ppu:
                 continue
             if not (source / "SKILL.md").is_file():
