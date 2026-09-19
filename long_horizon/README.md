@@ -71,11 +71,9 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Correctness validation
 
-The random-input acceptance policy addresses reported optimization runs in which
-the independent distribution-stress gate and numerical reviewer were too strict
-for the operators under optimization to pass, blocking further progress. Required
-multi-seed checks and correctness-passing ABBA verification remain the acceptance
-criteria, with the evaluator's existing comparison metrics and tolerances.
+Required multi-seed checks, independent dependency/framework review and
+correctness-passing ABBA verification use the evaluator's existing metrics and
+tolerances. Numerical review adds a bounded experiment-and-repair loop.
 
 Correctness uses the immutable evaluator's ordinary random input generator over the
 full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
@@ -88,12 +86,39 @@ apply. The transport adapter and typed sandbox requests use the same selection.
 V1 runs the base random case plus five additional correctness cases. Optimization
 episodes retain their required random-seed checks, and candidate promotion requires
 correctness-passing incumbent/candidate ABBA evaluation. `--multi-seed N` requests
-N additional random cases; `--correctness-only` skips timing. Inputs come directly
-from the operator's `input.py` without distribution rewriting or suite authoring.
+N additional random cases; `--correctness-only` skips timing. Ordinary validation
+uses the operator's original `input.py` generator.
 
-Production admission and promotion retain independent dependency/framework review.
-Numerical acceptance comes from the evaluator's random-input results. Resume checks
-production policy, then continues normal optimization and candidate verification.
+The numerical reviewer may suggest up to three targeted distributions with
+candidate and contract evidence. It has no rejection verdict. The supervisor
+executes them through the immutable evaluator in isolated GPU allocations, using
+at most three matching workloads, two seeds and all ranks per distribution. Public
+input constraints select the relevant dispatch regime without disclosing hidden
+workloads. Generators address actual tensor ABI leaves (including `lhs.0` for tuple
+members), preserve unmentioned structural inputs and retain comparator tolerances.
+Unsupported suggestions remain explicitly advisory, not invented executable tests.
+
+Passing the requested probes closes the suggestion without another subjective
+review. A complete failing receipt produces `needs_repair` feedback, including the
+distribution and comparison metrics. V1 gets up to two supplemental repair turns,
+independent of its ordinary bring-up recovery. Episodes receive feedback before
+terminal handoff acceptance and resume the same coding session within the configured
+handoff budget. The updated candidate reruns the same probes before normal admission
+or promotion; no failed candidate is accepted on repair-budget exhaustion.
+
+Incomplete receipts, input-generation failures and unsupported workload selection
+are `needs_validation`, not kernel correctness failures. The planner gets one bounded
+probe-plan repair before reporting a validation blocker. Failed experiments cannot
+be silently dropped or converted to passing evidence. Confirmed service outages use
+the infrastructure recovery policy below. Supplemental correctness probes never enter
+ABBA timing aggregates.
+
+Read `verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json` for
+agent feedback and `supplemental-*/numerical_result.json` for audit records. Pending
+probe plans persist under `.atrex_numerical_advice/` in the private reference directory
+or `.atrex_long_horizon/numerical_advice/` in the canonical workspace; coding-agent edits to feedback files do
+not change the in-memory plan. Restarts rerun the probes against the current candidate.
+In-process cache keys include candidate, contract, evaluator and workload contents.
 
 ## Infrastructure recovery during validation
 

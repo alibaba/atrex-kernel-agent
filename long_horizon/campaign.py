@@ -920,7 +920,9 @@ class LongHorizonCampaign:
             return (
                 "candidate journal must be finalized after the exact candidate commit"
             )
-        return ""
+        # Run while the coding session is still resumable. A measured probe
+        # failure becomes focused repair feedback, not a terminal rejection.
+        return self.base_campaign._supplemental_numerical_feedback(worktree.path)
 
     def _copy_runtime_artifacts(
         self, worktree: EpisodeWorktree, episode_dir: Path
@@ -1260,7 +1262,9 @@ class LongHorizonCampaign:
                 "status": (
                     "PASS"
                     if measurement_complete
-                    else ("FAIL" if violation else "UNKNOWN")
+                    else ("FAIL" if violation and not violation.startswith(
+                        "Supplemental validation is incomplete"
+                    ) else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),
@@ -1321,6 +1325,9 @@ class LongHorizonCampaign:
                     "production policy rejected candidate: "
                     + "; ".join(policy_violations)
                 )
+        if not violation:
+            # Normally cached by _completion_check; also covers recovered handoffs.
+            violation = self.base_campaign._supplemental_numerical_feedback(worktree.path)
         verification: VerificationResult | None = None
         accepted = False
         if not violation:
