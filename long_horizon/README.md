@@ -71,6 +71,12 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Correctness validation
 
+The random-input acceptance policy addresses reported optimization runs in which
+the independent distribution-stress gate and numerical reviewer were too strict
+for the operators under optimization to pass, blocking further progress. Required
+multi-seed checks and correctness-passing ABBA verification remain the acceptance
+criteria, with the evaluator's existing comparison metrics and tolerances.
+
 Correctness uses the immutable evaluator's ordinary random input generator over the
 full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
 `allclose` (`atol=1e-2`, `rtol=0.05` by default). NVFP4 operators use relative L2 error
