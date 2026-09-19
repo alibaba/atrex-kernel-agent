@@ -139,7 +139,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         command += ["--timed-runs", str(args.timed_runs)]
     batches = [ids] if sol else gateway.batch_shape_ids(ids, args.shape_batch_size)
     payloads = []
-    checkpoints = AbbaBatchStore(Path(os.environ[JOB_ROOT_ENV]), []) if os.environ.get(JOB_ROOT_ENV) else None
+    checkpoints = AbbaBatchStore(Path(os.environ[JOB_ROOT_ENV])) if os.environ.get(JOB_ROOT_ENV) else None
     for index, shapes in enumerate(batches):
         request = control / f"request-{index}.json"
         result = control / f"result-{index}.json"

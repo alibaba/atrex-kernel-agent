@@ -5,6 +5,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,8 @@ RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
 KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")
 JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
+MAX_RECORD_HEADER_BYTES = 16 * 1024
+RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
 
 
 def digest(value: object) -> str:
@@ -42,6 +45,54 @@ def read_json(path: Path, *, limit: int = MAX_RECORD_BYTES) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Measurement evidence must be an object")
     return value
+
+
+def read_record_header(path: Path) -> dict:
+    """Read bounded listing metadata, not a validated measurement.
+
+    private_write sorts JSON keys, placing these fields before request/response.
+    Stop decoding once the header is complete; never load a response to list it.
+    Noncanonical or oversized headers are skipped by the listing caller.
+    """
+    # Canonical records use ASCII JSON escapes, so a bounded prefix cannot
+    # split a UTF-8 code point in one of our records.
+    text = read_regular_bytes(path, limit=MAX_RECORD_HEADER_BYTES).decode("utf-8")
+    decoder = json.JSONDecoder()
+    header, seen = {}, set()
+
+    def whitespace(index):
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        return index
+
+    index = whitespace(0)
+    if text[index:index + 1] != "{":
+        raise ValueError("Gateway record header must be an object")
+    index = whitespace(index + 1)
+    while True:
+        key, index = decoder.raw_decode(text, index)
+        if not isinstance(key, str) or key in seen:
+            raise ValueError("Gateway record header has an invalid or duplicate key")
+        seen.add(key)
+        index = whitespace(index)
+        if text[index:index + 1] != ":":
+            raise ValueError("Gateway record header is malformed")
+        # Refuse to decode large payload fields if required metadata is absent
+        # or misplaced. The listing must not turn into a full-record read.
+        if key not in RECORD_HEADER_FIELDS and key != "cacheable":
+            raise ValueError("Gateway record listing header is incomplete")
+        value, index = decoder.raw_decode(text, whitespace(index + 1))
+        if key in RECORD_HEADER_FIELDS:
+            header[key] = value
+        index = whitespace(index)
+        separator = text[index:index + 1]
+        if separator not in {",", "}"}:
+            raise ValueError("Gateway record header is malformed or exceeds its size limit")
+        if RECORD_HEADER_FIELDS <= header.keys():
+            return header
+        if separator != ",":
+            raise ValueError("Gateway record listing header is incomplete")
+        index = whitespace(index + 1)
 
 
 def private_write(path: Path, value: object) -> None:
@@ -203,12 +254,34 @@ class MeasurementStore:
     def kernel_records(self, kernel_id: str) -> list[dict]:
         self.read_kernel(kernel_id)  # Validate identity and visibility first.
         rows = []
-        for path in sorted((self.root / "records").glob("gateway-*/record.json")):
-            record = self.read(path.parent.name)
-            if any(item["kernel_id"] == kernel_id for item in record["kernels"].values()):
+        skipped = 0
+        for path in (self.root / "records").glob("gateway-*/record.json"):
+            try:
+                if not RECORD_ID.fullmatch(path.parent.name):
+                    raise ValueError("Invalid Gateway record directory")
+                record = read_record_header(path)
+                if (record["gateway_record_id"] != path.parent.name
+                        or not isinstance(record["operation"], str) or not record["operation"]
+                        or not isinstance(record["created_at"], str)
+                        or not isinstance(record["kernels"], dict)):
+                    raise ValueError("Invalid Gateway record header")
+                datetime.fromisoformat(record["created_at"])
+                kernel_ids = []
+                for item in record["kernels"].values():
+                    if (not isinstance(item, dict) or not isinstance(item.get("kernel_id"), str)
+                            or not KERNEL_ID.fullmatch(item["kernel_id"])):
+                        raise ValueError("Invalid Kernel identity in Gateway record header")
+                    kernel_ids.append(item["kernel_id"])
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                skipped += 1
+                continue
+            if kernel_id in kernel_ids:
                 rows.append({"gateway_record_id": record["gateway_record_id"],
                              "operation": record["operation"], "created_at": record["created_at"]})
-        return rows
+        if skipped:
+            logging.getLogger(__name__).warning(
+                "Skipped %d unreadable Gateway record headers while listing Kernel %s", skipped, kernel_id)
+        return sorted(rows, key=lambda row: row["gateway_record_id"])
 
 
 class MeasurementTask:

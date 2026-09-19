@@ -93,7 +93,9 @@ from orchestrator.ssh_health import (  # noqa: E402
     combined_health_command,
 )
 from supervisor.projection import bounded_text  # noqa: E402
-from supervisor.gateway_jobs import bundle_digest, command_identity, execute_job, payload_identity  # noqa: E402
+from supervisor.gateway_jobs import (  # noqa: E402
+    SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
+)
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
@@ -1742,6 +1744,8 @@ def _make_atrex_bench_runtime_bundle(
 
     The compressed runtime is split into multiple uploaded files by ``main``
     because agate's worker places each file value in one Linux argv entry.
+    Evaluator links are materialized as regular files so the uploaded snapshot
+    and its digest describe the same code, independent of checkout link targets.
     """
     values = os.environ if environment is None else environment
     runtime_link = Path(values.get("ATREX_BENCH_RUNTIME_ROOT", str(workspace / "atrex-bench")))
@@ -1762,7 +1766,10 @@ def _make_atrex_bench_runtime_bundle(
         )
 
     archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+    # This is the Supervisor-selected evaluator, not the Agent input tree.
+    # is_file() follows links; tarfile must snapshot their contents as well,
+    # rather than emitting links to paths unavailable on the remote worker.
+    with tarfile.open(fileobj=archive, mode="w:gz", dereference=True) as tf:
         if evaluator_only:
             evaluator_files = [package / "__init__.py", utils_module]
             # Newer Atrex-Bench releases re-export the Python evaluation API
@@ -3096,7 +3103,15 @@ def run_direct_job(
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     def submit():
-        accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        try:
+            accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        except GatewayHTTPError as error:
+            process = subprocess.CompletedProcess([], 1, error.detail, str(error))
+            response = job_from_process(process)
+            if response and isinstance(response.get("job_id"), str) and response["job_id"]:
+                # Acceptance evidence wins over the HTTP error status.
+                return process
+            raise SubmissionRejected(process, error.status) from error
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
@@ -5184,6 +5199,7 @@ def _main(argv: list[str] | None = None) -> int:
 
 def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, dict[str, bytes]]:
     """Freeze the task's semantic inputs, excluding Episode/version/output paths."""
+    baseline_path = _safe_relative(args.baseline_path) if args.baseline_path else None
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
@@ -5197,17 +5213,19 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
         for shape in args.shape_id or []:
             command += ["--shape-id", shape]
     kind = _requested_gateway_kind(args.kind, command)
-    operation = "same_allocation_abba" if args.baseline_path else ("evaluate" if kind == "run" else kind)
-    if args.baseline_path:
+    operation = "same_allocation_abba" if baseline_path else ("evaluate" if kind == "run" else kind)
+    if baseline_path:
         from supervisor.operations import validate_comparison
         validate_comparison(args)
-    evaluator = kind == "run" or bool(args.baseline_path)
+    evaluator = kind == "run" or bool(baseline_path)
     selected = set(_evaluation_input_paths(workspace, command) if evaluator else
                    _command_input_paths(workspace, command, args.input))
     selected.add("kernel.py")
     for value in args.input or []:
         selected.update(_expand_workspace_input(workspace, value))
-    for value in (args.baseline_path, args.evaluation_input_path, args.evaluation_shapes_path):
+    if baseline_path:
+        selected.add(baseline_path)
+    for value in (args.evaluation_input_path, args.evaluation_shapes_path):
         if value:
             selected.add(_safe_relative(value))
     # Typed Check/Profile/Disassemble also depend on the exact construction/input
@@ -5254,7 +5272,8 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     }}
     options["kind"] = kind
     options["command"] = normalized
-    if args.baseline_path and args.baseline_path not in files:
+    options["baseline_path"] = baseline_path
+    if baseline_path and baseline_path not in files:
         raise ValueError("--baseline-path must name an existing regular workspace file")
     if "kernel.py" not in files and operation != "dev":
         raise ValueError("Measurement requires an existing kernel.py")

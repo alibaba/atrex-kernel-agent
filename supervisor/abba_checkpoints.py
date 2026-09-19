@@ -62,38 +62,35 @@ def validate_batch(
 
 
 class AbbaBatchStore:
-    def __init__(self, evidence_root: Path, history_roots: list[Path]) -> None:
+    def __init__(self, evidence_root: Path) -> None:
         self.root = evidence_root / "abba-batches"
-        self.roots = [self.root, *(root / "abba-batches" for root in reversed(history_roots))]
 
     def load(self, identity: dict[str, Any]) -> dict[str, Any] | None:
         key = _digest(identity)
-        for root in self.roots:
-            path = root / f"{key}.json"
-            if root.is_symlink() or path.is_symlink():
-                raise RuntimeError("ABBA batch checkpoint path is unsafe")
-            if not path.exists():
-                continue
-            try:
-                envelope = read_json(path, limit=MAX_CHECKPOINT_BYTES)
-                value = envelope["record"]
-                if envelope["content_digest"] != _digest(value) or value["identity"] != identity:
-                    raise ValueError("checkpoint digest or request identity mismatch")
-                if (
-                    not isinstance(value["completed_at"], str)
-                    or not isinstance(value["stdout"], str)
-                    or not isinstance(value["stderr"], str)
-                ):
-                    raise ValueError("incomplete checkpoint")
-                validate_batch(value["payload"], identity["schedule"], identity["shape_ids"])
-                from long_horizon.verifier import parse_abba_payload
+        path = self.root / f"{key}.json"
+        if self.root.is_symlink() or path.is_symlink():
+            raise RuntimeError("ABBA batch checkpoint path is unsafe")
+        if not path.exists():
+            return None
+        try:
+            envelope = read_json(path, limit=MAX_CHECKPOINT_BYTES)
+            value = envelope["record"]
+            if envelope["content_digest"] != _digest(value) or value["identity"] != identity:
+                raise ValueError("checkpoint digest or request identity mismatch")
+            if (
+                not isinstance(value["completed_at"], str)
+                or not isinstance(value["stdout"], str)
+                or not isinstance(value["stderr"], str)
+            ):
+                raise ValueError("incomplete checkpoint")
+            validate_batch(value["payload"], identity["schedule"], identity["shape_ids"])
+            from long_horizon.verifier import parse_abba_payload
 
-                if parse_abba_payload(value["stdout"]) != value["payload"]:
-                    raise ValueError("checkpoint payload disagrees with captured execution output")
-                return value
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise RuntimeError(f"ABBA batch checkpoint is invalid: {key}") from exc
-        return None
+            if parse_abba_payload(value["stdout"]) != value["payload"]:
+                raise ValueError("checkpoint payload disagrees with captured execution output")
+            return value
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError(f"ABBA batch checkpoint is invalid: {key}") from exc
 
     def save(
         self, identity: dict[str, Any], payload: dict[str, Any], *, stdout: str, stderr: str

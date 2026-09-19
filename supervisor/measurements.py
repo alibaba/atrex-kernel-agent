@@ -102,8 +102,9 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                                     "repetitions": runtime.measurement_repetitions}
     operation = request["operation"]
     kernels = {"candidate": store.kernel(inputs["kernel.py"])} if "kernel.py" in inputs else {}
-    if args.baseline_path:
-        kernels["baseline"] = store.kernel(inputs[args.baseline_path])
+    baseline_path = request["options"]["baseline_path"]
+    if baseline_path:
+        kernels["baseline"] = store.kernel(inputs[baseline_path])
     try:
         with store.reserve(request, kernels) as task:
             for name, source in inputs.items():
@@ -132,8 +133,6 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                 responses.append(response)
                 sample = result_from_response(response, operation)
                 states = [read_json(path) for path in directory.glob("**/jobs/*/state.json")]
-                if not states:
-                    states = [read_json(path) for path in (directory / "jobs").glob("*/state.json")]
                 pending = pending or any(state.get("phase") != "terminal" for state in states)
                 cacheable = cacheable and bool(states) and all(
                     state.get("phase") == "terminal" and cacheable_job(job_from_process(subprocess.CompletedProcess(
@@ -148,14 +147,14 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                 if process.returncode != 0 or sample is None or not cacheable:
                     break
             response = responses[-1]
-            if len(samples) == repetitions and all(row.get("exit_code") == 0 for row in responses):
-                result = aggregate(samples, operation) if operation in {"evaluate", "same_allocation_abba"} else samples[-1]
-                if operation == "evaluate" and repetitions > 1 and "metadata.json" in inputs:
-                    latencies = result.get("latency_us_by_shape", {})
+            aggregated_result = None
+            if repetitions > 1 and len(samples) == repetitions and all(row.get("exit_code") == 0 for row in responses):
+                aggregated_result = aggregate(samples, operation)
+                if operation == "evaluate" and "metadata.json" in inputs:
+                    latencies = aggregated_result.get("latency_us_by_shape", {})
                     score, failures = metadata_speedup_mean(json.loads(inputs["metadata.json"]), list(latencies), latencies)
                     if not failures and score is not None:
-                        result.update(performance_score=score, speedup_vs_ref_mean=score)
-                response = dict(response, stdout=PREFIXES[operation] + json.dumps(result) + "\n")
+                        aggregated_result.update(performance_score=score, speedup_vs_ref_mean=score)
             # IDs are attached to the same public payload stored and re-read.
             prefix = PREFIXES.get(operation)
             identity = {"gateway_record_id": task.record_id}
@@ -163,12 +162,15 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                 identity["kernel_id"] = kernels["candidate"]["kernel_id"]
             if "baseline" in kernels:
                 identity["baseline_kernel_id"] = kernels["baseline"]["kernel_id"]
-            lines = []
-            for line in response["stdout"].splitlines():
-                if prefix and line.startswith(prefix):
-                    line = prefix + json.dumps(json.loads(line[len(prefix):]) | identity)
-                lines.append(line)
-            if not any(prefix and line.startswith(prefix) for line in lines):
+            # Keep projected warnings/progress/diagnostics in place. Only the
+            # last result marker represents the sample selected for aggregation.
+            lines = response["stdout"].splitlines()
+            markers = [index for index, line in enumerate(lines) if prefix and line.startswith(prefix)]
+            for index in markers:
+                value = (aggregated_result if aggregated_result is not None and index == markers[-1]
+                         else json.loads(lines[index][len(prefix):]))
+                lines[index] = prefix + json.dumps(value | identity)
+            if not markers:
                 lines.append("[sandbox] RECORD_JSON=" + json.dumps(identity | {"operation": operation,
                              "status": "succeeded" if response["exit_code"] == 0 else "failed"}))
             response = dict(response, stdout="\n".join(lines) + "\n")

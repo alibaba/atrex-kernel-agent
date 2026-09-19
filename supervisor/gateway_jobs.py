@@ -1,4 +1,4 @@
-"""Physical-job recovery: poll known IDs; resubmit only confirmed infra outcomes."""
+"""Physical-job recovery: poll known IDs; retry confirmed rejections/infra outcomes."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ import hashlib
 import io
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -14,6 +15,43 @@ import tarfile
 from pathlib import Path
 
 from supervisor.measurement_records import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
+
+
+class SubmissionRejected(RuntimeError):
+    """The submit transport received a definitive rejection, not an accepted job."""
+
+    def __init__(self, process: subprocess.CompletedProcess, status: int | None = None):
+        self.process = process
+        self.retryable = status is not None and (status == 429 or 500 <= status < 600)
+        super().__init__(f"Gateway rejected submission with HTTP {status}" if status is not None
+                         else "Agate CLI rejected submission before dispatch")
+
+
+def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionRejected | None:
+    """Recognize pre-dispatch CLI errors; arbitrary stderr is not proof of safety."""
+    if process.returncode == 0:
+        return None
+    response = job_from_process(process)
+    streams = (process.stdout or "") + "\n" + (process.stderr or "")
+    if (response and response.get("job_id")) or re.search(r"\b(?:submitted\s+)?job_id[=:]\s*\S+", streams):
+        return None
+    # Agate's GatewayError formatter, used by its --no-wait submit commands.
+    match = re.search(r"(?m)^agate: \[([45]\d{2})\](?:\s|$)", process.stderr or "")
+    if match:
+        return SubmissionRejected(process, int(match[1]))
+    # argparse exits before args.func can dispatch. Do not generalize this to
+    # arbitrary code-2 errors: they can also occur after a request was accepted.
+    if (process.returncode == 2 and re.match(r"usage: agate\b", process.stderr or "")
+            and re.search(r"(?m)^agate(?: [\w-]+)*: error: ", process.stderr or "")):
+        return SubmissionRejected(process)
+    # Also accept structured CLI HTTP-error envelopes, but never infer a
+    # pre-dispatch rejection from error_class=infra or exit code alone.
+    if response and response.get("error"):
+        status = response.get("http_status", response.get("status_code"))
+        if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
+            return SubmissionRejected(process, status)
+    return None
+
 
 def retry_kind(job: object) -> str | None:
     if not isinstance(job, dict) or job.get("status") not in {"failed", "cancelled", "canceled"}:
@@ -175,8 +213,6 @@ def execute_job(identity: object, submit, poll, *, wait_budget: float) -> subpro
             state = read_json(directory / "state.json")
         except FileNotFoundError:
             pass
-        if state.get("phase") == "submitting":
-            raise EvidenceUnavailable("Prior Gateway submission has no confirmed job ID; operator reconciliation required")
         if state and state.get("identity") != identity:
             raise EvidenceUnavailable("Gateway job checkpoint identity is inconsistent; operator reconciliation required")
     deadline = time.monotonic() + wait_budget
@@ -193,33 +229,60 @@ def execute_job(identity: object, submit, poll, *, wait_budget: float) -> subpro
                 private_write(directory / f"submission-{submission:04d}-{phase}.json", value)
         return value
 
+    rejection = None
+    if state.get("phase") == "submitting":
+        data = state.get("process")
+        if isinstance(data, dict):
+            rejection = submission_rejection(subprocess.CompletedProcess(
+                [], data["returncode"], data["stdout"], data["stderr"]))
+        if rejection is None:
+            raise EvidenceUnavailable("Prior Gateway submission has no confirmed job ID; operator reconciliation required")
+        # Recover old checkpoints only when they actually contain a definitive
+        # rejection. A bare pre-POST marker still has an unknown outcome.
+
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Gateway request retry/poll budget exhausted")
-        if state.get("phase") in {"accepted", "terminal"}:
-            data = state["process"]
-            process = subprocess.CompletedProcess([], data["returncode"], data["stdout"], data["stderr"])
+        if rejection is None:
+            if state.get("phase") in {"accepted", "terminal"}:
+                data = state["process"]
+                process = subprocess.CompletedProcess([], data["returncode"], data["stdout"], data["stderr"])
+            else:
+                submission += 1
+                save("submitting")
+                try:
+                    process = submit()
+                except SubmissionRejected as error:
+                    rejection = error
+                    process = error.process
+                job = job_from_process(process)
+                if rejection is None and (not job or not isinstance(job.get("job_id"), str) or not job["job_id"]):
+                    rejection = submission_rejection(process)
+                    if rejection is None:
+                        # No reliable ID or explicit rejection: retain the
+                        # uncertain submission, never guess that retry is safe.
+                        save("submitting", process)
+                        return process
+                if rejection is None:
+                    state = save("accepted", process)
+        if rejection is not None:
+            process = rejection.process
+            state = save("rejected", process)
+            if not rejection.retryable:
+                return process
+            rejection = None
+            kind = "submission"
         else:
-            submission += 1
-            save("submitting")
-            process = submit()
             job = job_from_process(process)
-            if not job or not isinstance(job.get("job_id"), str):
-                # No reliable ID: retain the uncertain submission, never cache it
-                # as a Candidate failure or automatically submit again.
-                save("submitting", process)
-                return process
-            state = save("accepted", process)
-        job = job_from_process(process)
-        if state.get("phase") != "terminal":
-            process = poll(process, max(1, int(deadline - time.monotonic())))
-            job = job_from_process(process)
-            if not job or job.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
-                # Keep the accepted ID so a later request polls that same job.
-                return process
-            state = save("terminal", process)
-        kind = retry_kind(job)
+            if state.get("phase") != "terminal":
+                process = poll(process, max(1, int(deadline - time.monotonic())))
+                job = job_from_process(process)
+                if not job or job.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
+                    # Keep the accepted ID so a later request polls that same job.
+                    return process
+                state = save("terminal", process)
+            kind = retry_kind(job)
         if kind is None or (kind in {"timeout", "cancelled"} and retries.get(kind, 0) >= 1):
             return process
         retries[kind] = retries.get(kind, 0) + 1
@@ -229,7 +292,7 @@ def execute_job(identity: object, submit, poll, *, wait_budget: float) -> subpro
             return process
         print(f"[sandbox] Gateway {kind} failure; resubmitting after {delay}s (retry {count})",
               file=sys.stderr, flush=True)
-        # Every returned infra terminal includes a known outcome. In particular
+        # Rejections and retryable infra terminals have a known outcome.
         # logs_unavailable + backend_state=succeeded needs a NEW job, not get().
         state = save("retry_pending")
         time.sleep(delay)
