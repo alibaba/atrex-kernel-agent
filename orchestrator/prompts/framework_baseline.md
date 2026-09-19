@@ -142,7 +142,11 @@ exact evaluator cases are private. Use that evidence before creating a custom di
 defect and rerun this same bounded command. Numeric hidden-case details remain masked. Once smoke passes, do
 not edit `kernel.py` again and do not launch another evaluator. Leave the passing candidate in the worktree;
 the supervisor will run policy review and one combined full-workload base-performance + multi-seed gate in
-parallel, then write memory and commit mechanically.
+parallel, followed by any targeted numerical probes suggested by its reviewer. Measured probe failures
+return as focused repair feedback: fix the candidate, rerun the bounded smoke command and finish again.
+The supervisor reruns the requested probes; passing them closes the suggestion without another numerical
+review veto. It then writes memory and commits mechanically. Incomplete probes are validation blockers,
+not proof of a kernel defect; preserve the implementation and report the blocker without editing the harness.
 
 Never rely on:
 - Input data values being stable across calls (no memoization / precomputation of outputs)
