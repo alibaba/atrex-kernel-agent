@@ -630,18 +630,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Independent production dependency review timeout in seconds (default: 600).",
     )
     ap.add_argument(
-        "--numerical-review-timeout", type=int, default=600,
-        help="Independent numerical safety review timeout in seconds (default: 600).",
-    )
-    ap.add_argument(
-        "--repair-numerical-head", action="store_true",
-        help="Resume a dependency-compliant production HEAD for numerical repair when its numerical gate fails; candidate promotion still requires all gates.",
-    )
-    ap.add_argument(
-        "--numerical-gate", choices=("auto", "light", "thorough"), default="auto",
-        help="Numerical gate depth: auto uses light for SSH/loopback and thorough for remote agate; remote cases run concurrently.",
-    )
-    ap.add_argument(
         "--verify-repeats",
         type=int,
         default=DEFAULT_VERIFY_REPEATS,
@@ -961,10 +949,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
         handoff_resumes=args.handoff_resumes,
-        numerical_gate=args.numerical_gate,
-        repair_numerical_head=args.repair_numerical_head,
         production_review_timeout=args.production_review_timeout,
-        numerical_review_timeout=args.numerical_review_timeout,
         verify_repeats=args.verify_repeats,
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,

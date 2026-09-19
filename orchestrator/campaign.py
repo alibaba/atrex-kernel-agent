@@ -197,9 +197,6 @@ class Campaign:
     )
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
     handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
-    numerical_gate: str = "auto"  # light locally/SSH; thorough on remote agate
-    repair_numerical_head: bool = False  # resume exploration; promotion still requires every gate
-    numerical_review_timeout: int = 600
     production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
@@ -768,18 +765,12 @@ class Campaign:
         *,
         require_gluon: bool = False,
     ) -> list[str]:
-        target = workspace or self.workspace
-        violations = production_kernel_violations(
-            target,
+        return production_kernel_violations(
+            workspace or self.workspace,
             self.framework,
             require_gluon=require_gluon,
             production_reviewer=self._review_production_candidate,
         )
-        if violations:
-            return violations
-        from .numerical_policy import numerical_violations
-
-        return numerical_violations(self, target)
 
     def _link_runtime(self) -> None:
         from long_horizon.store import CampaignStore
