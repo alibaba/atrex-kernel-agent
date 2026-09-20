@@ -17,6 +17,44 @@ DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
+TRUSTED_SANDBOX_ENTRYPOINTS = frozenset({
+    (Path(__file__).resolve().parents[2] / "tools" / "sandbox.py").resolve(),
+})
+
+
+def register_sandbox_entrypoints(*paths: Path) -> None:
+    """Register supervisor-owned transport scripts before launching agents."""
+    global TRUSTED_SANDBOX_ENTRYPOINTS
+    if any(not path.is_absolute() for path in paths):
+        raise ValueError("sandbox entrypoints must be absolute paths")
+    TRUSTED_SANDBOX_ENTRYPOINTS |= frozenset(path.resolve() for path in paths)
+
+
+def _python_entrypoint(tokens: list[str]) -> tuple[str, str]:
+    """Parse interpreter options without treating script arguments as Python code."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            return "script", tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token == "--check-hash-based-pycs":
+            index += 2
+        elif token.startswith("--"):
+            index += 1
+        elif token.startswith("-") and token != "-":
+            # Python accepts combined flags such as -uc and attached -cCODE.
+            for offset, flag in enumerate(token[1:], start=1):
+                if flag in {"c", "m"}:
+                    value = token[offset + 1:] or (tokens[index + 1] if index + 1 < len(tokens) else "")
+                    return ("code" if flag == "c" else "module"), value
+                if flag in {"W", "X"}:
+                    if offset == len(token) - 1:
+                        index += 1
+                    break
+            index += 1
+        else:
+            return "script", token
+    return "", ""
 
 
 class ProcessRunner(Protocol):
@@ -85,7 +123,7 @@ def python_import_roots(code: str, *, _depth: int = 0) -> set[str]:
     return roots
 
 
-def dependency_process_violation(argv: list[str]) -> str | None:
+def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) -> str | None:
     """Describe a forbidden dependency build or host GPU action, if any."""
     if not argv:
         return None
@@ -217,11 +255,11 @@ def dependency_process_violation(argv: list[str]) -> str | None:
         ):
             return True
         if re.fullmatch(r"python[0-9.]*", executable):
-            if any(Path(token).name == "local_gateway.py" for token in tokens[1:3]):
+            mode, entry = _python_entrypoint(tokens)
+            if mode == "script" and Path(entry).name == "local_gateway.py":
                 return "serve" in lowered[1:]
-            if "-c" in tokens:
-                code_index = tokens.index("-c") + 1
-                code = tokens[code_index].lower() if code_index < len(tokens) else ""
+            if mode == "code":
+                code = entry.lower()
                 if protected_state in code and re.search(
                     r"(?:rmtree|unlink|remove|rename|replace|sqlite3)", code
                 ):
@@ -258,18 +296,22 @@ def dependency_process_violation(argv: list[str]) -> str | None:
         if executable in {"ncu", "rocprof", "rocprofv3", "compute-sanitizer"}:
             return "GPU profiler executed directly on the host"
         if re.fullmatch(r"python[0-9.]*", executable):
-            if len(tokens) > 1 and Path(tokens[1]).name == "sandbox.py":
+            mode, entry = _python_entrypoint(tokens)
+            script = ((cwd or Path.cwd()) / entry).resolve() if mode == "script" and entry else None
+            if script in TRUSTED_SANDBOX_ENTRYPOINTS:
                 return None
-            if len(tokens) > 1 and Path(tokens[1]).name in {
+            if mode == "script" and Path(entry).name in {path.name for path in TRUSTED_SANDBOX_ENTRYPOINTS}:
+                return "unregistered sandbox transport executed on the host"
+            if mode == "script" and Path(entry).name in {
                 "kernel.py",
                 "test_kernel.py",
                 "profile_driver.py",
             }:
                 return "kernel/evaluator executed directly on the host"
-            if "-c" in tokens:
-                code_index = tokens.index("-c") + 1
-                code = tokens[code_index] if code_index < len(tokens) else ""
-                imports = python_import_roots(code)
+            if mode == "module" and entry.split(".", 1)[0] in {"kernel", "test_kernel", "profile_driver"}:
+                return "kernel/evaluator executed directly on the host"
+            if mode == "code":
+                imports = python_import_roots(entry)
                 if "kernel" in imports:
                     return "kernel imported directly on the host"
                 if imports & {"flashinfer", "flash_attn", "xformers", "vllm"}:
@@ -387,7 +429,7 @@ def dependency_guard(
             signal_process_groups(process_groups, signal.SIGKILL)
             return
         for pid, argv in descendant_process_commands(proc.pid):
-            reason = dependency_process_violation(argv)
+            reason = dependency_process_violation(argv, cwd=Path(f"/proc/{pid}/cwd").resolve())
             if reason is None:
                 continue
             rendered = " ".join(argv)
