@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-RELATIONSHIPS = ("retry", "refinement", "reimplementation", "correction", "port", "combination")
+RELATIONSHIPS = ("refinement", "correction", "combination")
 RELATIONSHIP_FIELDS = frozenset(
     {
         "relationship",
@@ -56,7 +56,11 @@ def validate_relationship(
     if kind is None and not parents and not evidence and supersedes is None:
         return {}
     if kind not in RELATIONSHIPS:
-        raise ValueError(f"relationship must be one of {', '.join(RELATIONSHIPS)}")
+        raise ValueError(
+            f"relationship must be one of {', '.join(RELATIONSHIPS)}; "
+            "reuse the existing Direction for an unchanged hypothesis and record "
+            "implementation changes as Experiments"
+        )
     for parent in parents:
         if parent not in directions:
             raise ValueError(

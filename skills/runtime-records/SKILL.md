@@ -9,6 +9,8 @@ allowed-tools: "Bash Read"
 Use `python3 tools/sandbox.py` inside a controller-registered Long Horizon Episode.
 Setup and Framework Baseline keep their existing finish procedures. This Skill does not replace
 the Episode's planning, profiling, Fast/Full, Wiki attribution, Phase Marker or verification policy.
+Fast-mode experiment/evaluation minimums apply to `candidate_ready`/`pivot`, not `blocked`; all
+statuses still require valid report fields and no in-progress Directions.
 
 Choose one Journal interface before recording experiments. Existing local Journal commands remain
 supported. If using Runtime Journal, replace only local append/finalize and manual handoff with

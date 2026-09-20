@@ -1,6 +1,6 @@
 # Journal and worked Episode example
 
-Choose Runtime Journal before the first Experiment; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums still apply.
+Choose Runtime Journal before the first Experiment; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums apply to `candidate_ready` and `pivot`, not `blocked`; a blocked report still needs a nonempty blocker and must satisfy every other report/lifecycle check.
 
 This example links one exploration to its measured Kernel and terminal report. It is not a mandatory
 optimization strategy or permission to run operations forbidden by the phase. Create request files
@@ -207,7 +207,7 @@ If exploration found no candidate to advance, use:
 {"status":"pivot","summary":"The explored change did not improve the incumbent; try a different direction"}
 ```
 
-Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. Journals may be empty if no Direction needs closing.
+Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. In Full mode, Journals may be empty if no Direction needs closing. Fast-mode pivot reports still require the configured experiment/evaluation minimums.
 Save to the same report path and call `episode-report` as above; the response is
 `{"status":"accepted","message":"Report accepted and recorded"}`.
 
@@ -219,7 +219,7 @@ If infrastructure or missing authority prevents progress:
 {"status":"blocked","summary":"Cannot obtain the required measurement","blocker":"The Runtime reports that the GPU service is unavailable"}
 ```
 
-Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. A blocked report can be submitted
+Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. Fast-mode minimum counts do not apply to blocked reports. A blocked report can be submitted
 without an Experiment only if no Direction needs closing. Otherwise record actual Kernel-bound
 diagnostic evidence, then block/defer with an unresolved assessment. If no Gateway Record exists,
 closure remains blocked and normal session recovery handles the failure; never fabricate evidence.
@@ -269,10 +269,17 @@ and exact Kernel identity. Subsequent reads of a Direction include newly associa
 
 ## Derived Directions
 
-Reuse the same ID for an unchanged hypothesis. A proposal for a revised hypothesis may add
-`relationship`: `retry`, `refinement`, `reimplementation`, `correction`, `port`, or `combination`, plus
-`derived_from_direction_ids` and/or `derived_from_experiment_ids` from visible history. Each list
-allows at most 32 unique IDs. Explain the derivation in `rationale`.
+Reuse the same ID for an unchanged hypothesis; use `start` to resume a closed Direction. A new
+implementation of that hypothesis is an Experiment, not a new ancestry kind. For a changed
+hypothesis, a proposal may add one of these `relationship` values:
+
+- `refinement`: narrow or extend a parent hypothesis, such as focusing a tiling idea on register pressure.
+- `correction`: revise a mistaken parent hypothesis while preserving the original record.
+- `combination`: combine ideas from two or more distinct parent Directions, such as fusion and layout changes.
+
+Add `derived_from_direction_ids` and/or `derived_from_experiment_ids` from visible history. Each list
+allows at most 32 unique IDs. Explain the derivation in `rationale`; these labels do not establish
+that a hypothesis is correct. Cross-Campaign/DSL porting is not supported by this Journal.
 
 A relationship needs a parent; `combination` needs two distinct parent Directions, directly or via
 Experiments. A `correction` may set `supersedes_direction_id` to one parent; this does not change that

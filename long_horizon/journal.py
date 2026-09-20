@@ -930,11 +930,27 @@ def validate_terminal(
             return "episode journal finalization does not match private runtime journal"
         if private.get("candidate_commit") != value.get("candidate_commit"):
             return "episode journal candidate_commit does not match private runtime journal"
-        private_experiments = private.get("experiments")
-        if not isinstance(private_experiments, list):
-            return "private runtime journal has invalid experiments"
-        if not value.get("experiments") and private_experiments:
+        experiment_ids = []
+        for label, journal in (("private runtime journal", private), ("episode journal", value)):
+            rows = journal.get("experiments")
+            if not isinstance(rows, list):
+                return f"{label} has invalid experiments"
+            if any(
+                not isinstance(row, dict)
+                or not isinstance(row.get("experiment_id"), str)
+                or not row["experiment_id"].strip()
+                for row in rows
+            ):
+                return f"{label} has invalid experiment IDs"
+            ids = {row["experiment_id"] for row in rows}
+            if len(ids) != len(rows):
+                return f"{label} has duplicate experiment IDs"
+            experiment_ids.append(ids)
+        private_ids, projected_ids = experiment_ids
+        if private_ids - projected_ids:
             return "episode journal omits private runtime experiments"
+        if projected_ids - private_ids:
+            return "episode journal contains unknown runtime experiments"
         verified_runtime_projection = True
     experiments = value.get("experiments")
     if not isinstance(experiments, list) or (
