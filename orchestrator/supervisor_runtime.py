@@ -29,6 +29,8 @@ from supervisor.gateway import (
 from supervisor.workspace import (
     MAX_FILE_BYTES, MAX_TOTAL_BYTES, InputSizeLimitError, publish, read_input, relative_path, snapshot,
 )
+from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
+from supervisor.measurements import QUERY_KINDS
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -128,7 +130,8 @@ def filter_options(argv: list[str], owned: frozenset[str], forbidden: frozenset[
 def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
-            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT"}}
+            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, "ATREX_AKA_MEASUREMENT_REPETITIONS",
+                            "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT"}}
 
 
 @dataclass(frozen=True)
@@ -282,6 +285,10 @@ class SupervisorRuntime:
         self.config = config
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
         self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
+        repetitions = self.environment.get("ATREX_AKA_MEASUREMENT_REPETITIONS", "1")
+        if repetitions not in {"1", "3"}:
+            raise ValueError("ATREX_AKA_MEASUREMENT_REPETITIONS must be 1 or 3")
+        self.measurement_repetitions = int(repetitions)
         # Freeze the same value for the enclosing deadline and its subprocesses.
         self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
         self.owner_id = secrets.token_urlsafe(32)
@@ -299,6 +306,7 @@ class SupervisorRuntime:
             from .agent_home import open_private_directory
             with open_private_directory(self.audit_root):
                 pass
+        self.measurements = MeasurementStore((self.audit_root or self.root) / "measurements")
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -387,7 +395,7 @@ class SupervisorRuntime:
             capability.deadline, capability.request_id = None, ""
             capability.lock.release()
 
-    def _run(self, command, cwd, environment, capability):
+    def run_executor(self, command, cwd, environment, capability):
         deadline = capability.deadline or (time.monotonic() + self.request_timeout_seconds)
         self._acquire(self.slots, capability, deadline)
         try:
@@ -462,6 +470,9 @@ class SupervisorRuntime:
                 else:
                     argv = filter_options(argv, AUTHORITY, FORBIDDEN)
                     parsed = parse_gateway(argv)
+                    if parsed is not None and parsed.kind in QUERY_KINDS:
+                        from supervisor.measurements import query
+                        return query(self.measurements, parsed, capability.workspace)
                     if parsed is not None and parsed.kind != "env":
                         snapshot(capability.workspace, staged)
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
@@ -475,8 +486,7 @@ class SupervisorRuntime:
                         environment["ATREX_BENCH_RUNTIME_ROOT"] = str(self.config.atrex_bench_root)
                     if self.config.private_reference_dir:
                         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.config.private_reference_dir)
-                    # Keep the pre-PR evaluation log for the existing report compiler;
-                    # immutable Kernel/Measurement IDs and dedup arrive in PR4.
+                    # Keep the legacy report compiler's log alongside private records.
                     (staged / ".atrex_long_horizon").mkdir()
                     (staged / ".atrex_long_horizon/journal.json").write_text("{}")
                     if parsed is not None:
@@ -485,25 +495,35 @@ class SupervisorRuntime:
                                 raise ValueError("--sync must be inside profiles/ or scratch/")
                     command = self.config.command(staged) + argv
                     kind = "gateway"
+            if kind == "gateway" and parsed is not None and parsed.kind != "env" and not parsed.dry_run:
+                from supervisor.measurements import execute
+                # Parse the Supervisor's authority flags too, so the exact target,
+                # execution timeout and transport enter the task identity.
+                effective = parse_gateway(command[2:])
+                return execute(self, capability, staged, effective, argv, environment, command)
             # From this point execution may have submitted a job. Failures must
             # never be classified as repairable argument errors by the handler.
-            process = self._run(command, staged, environment, capability)
-            if self.audit_root:
-                publish(self.audit_root, f"request-{capability.request_id or uuid.uuid4().hex}.json", json.dumps({
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "operation": kind, "argv": argv, "exit_code": process.returncode,
-                    "stdout": process.stdout, "stderr": process.stderr,
-                    "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
-                }, ensure_ascii=False).encode())
+            process = self.run_executor(command, staged, environment, capability)
+            self.audit_process(capability, kind, argv, process)
             if kind == "gateway":
-                self._publish_evaluation_log(capability.workspace, staged)
+                self.publish_evaluation_log(capability.workspace, staged)
                 if process.returncode == 0:
-                    self._publish_legacy_outputs(capability.workspace, staged, parsed)
+                    self.publish_legacy_outputs(capability.workspace, staged, parsed)
             from supervisor.projection import project_response
             return project_response(process, generalized=self.config.private_reference_dir is not None,
                                     wiki=kind == "wiki", private_paths=(str(staged), str(self.root),
                                     str(self.config.private_reference_dir or ""), str(ROOT),
                                     self.config.url, str(self.config.atrex_bench_root or "")))
+
+    def audit_process(self, capability, kind, argv, process, record_id=None):
+        if self.audit_root:
+            publish(self.audit_root, f"request-{capability.request_id or uuid.uuid4().hex}.json", json.dumps({
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "operation": kind, "argv": argv, "exit_code": process.returncode,
+                "stdout": process.stdout, "stderr": process.stderr,
+                "gateway_record_id": record_id,
+                "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
+            }, ensure_ascii=False).encode())
 
     def _wiki_command(self, capability, tool, argv, staged, environment):
         if not isinstance(tool, str) or tool not in WIKI_STORES:
@@ -534,7 +554,7 @@ class SupervisorRuntime:
         environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
         return [sys.executable, str(ROOT / "gpu-wiki/tools" / f"{tool}.py"), *argv]
 
-    def _publish_legacy_outputs(self, workspace, staged, args):
+    def publish_legacy_outputs(self, workspace, staged, args):
         # Profile artifacts remain part of the old Agent workflow. Only these
         # declared output trees can be returned, not source or control files.
         if args is None:
@@ -581,7 +601,7 @@ class SupervisorRuntime:
             for relative in sorted(paths):
                 publish(workspace, relative, read_input(ready, relative))
 
-    def _publish_evaluation_log(self, workspace, staged):
+    def publish_evaluation_log(self, workspace, staged):
         # Failed correctness evaluations still belong in the legacy evidence
         # log, but their partial profiles/scratch files do not belong in outputs.
         log = staged / EPISODE_EVALUATIONS_PATH
