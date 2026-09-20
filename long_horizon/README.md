@@ -95,7 +95,14 @@ executes them through the immutable evaluator in isolated GPU allocations, using
 at most three matching workloads, two seeds and all ranks per distribution. Public
 input constraints select the relevant dispatch regime without disclosing hidden
 workloads. Generators address actual tensor ABI leaves (including `lhs.0` for tuple
-members), preserve unmentioned structural inputs and retain comparator tolerances.
+members) and preserve unmentioned structural inputs. Supplemental floating-point
+outputs use the evaluator's relative L2 comparator with a fixed threshold of
+`1e-3` per output tensor: `||candidate - reference||2 / max(||reference||2, 1e-12)`.
+This replaces elementwise allclose for these regenerated distributions; absolute
+and elementwise relative errors remain diagnostic. Non-finite outputs, structural
+mismatches and forbidden input mutations still fail through the evaluator. The
+supervisor records the comparison policy in feedback; reviewers and coding agents
+cannot change it. Ordinary workload validation retains its original comparator.
 Unsupported suggestions remain explicitly advisory, not invented executable tests.
 
 Passing the requested probes closes the suggestion without another subjective

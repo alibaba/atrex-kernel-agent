@@ -18,6 +18,10 @@ Do not equate a dtype's representable range with a proven production value bound
 State range assumptions explicitly. Respect documented bounds, coupled invariants,
 packed representations, structural indices, lengths and output buffers. Compare
 against the actual reference, not a hypothetical higher-precision implementation.
+Supplemental floating-point outputs are compared by the evaluator using relative
+L2 <= 1e-3 per output tensor, with finite-value and structural checks retained.
+Elementwise absolute/relative errors are diagnostics, not supplemental rejection
+criteria. This supervisor-owned threshold is fixed; do not propose tolerances.
 
 Request at most three targeted cases. For example, a claim about saturation of
 FP8 P*V accumulation may justify tied logits, same-sign large V and sufficiently

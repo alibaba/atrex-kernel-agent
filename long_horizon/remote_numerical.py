@@ -3,7 +3,8 @@
 
 The original generator supplies tensor metadata and unchanged structural inputs.
 Only the requested tensor leaves are regenerated; tuple/list/dict ABIs are preserved.
-Correctness, tolerances and input-mutation checks remain owned by the evaluator.
+Supplemental floating outputs use relative L2; structural and mutation checks
+remain owned by the evaluator.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import sys
 import time
 
 PREFIX = "__ATREX_NUMERICAL_RESULT__="
+MAX_REL_L2 = 1e-3
 GENERATORS = {"uniform", "log_uniform", "sparse", "alternating", "constant", "ramp", "packed_bytes", "near_constant"}
 
 
@@ -280,6 +282,7 @@ def run(request_path):
                         for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
                             cached.unlink()
                     command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
+                               "--correctness-max-rel-l2", str(MAX_REL_L2),
                                "--multi-seed", "0", "--seed", str(seed), "--shape-id", shape_id]
                     try:
                         remaining = deadline - time.monotonic()

@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import uuid
 
-from long_horizon.remote_numerical import PREFIX, validate_suite, validation_schedule
+from long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
 from long_horizon.store import VERIFY_DIR
 from .durable_state import durable_write_json
 from .infrastructure_retry import (
@@ -253,7 +253,8 @@ def supplemental_feedback(campaign, workspace):
     if review is None and plan_path.is_file():
         review = json.loads(plan_path.read_text())
         validate_suite(review["suite"])
-    record = {"schema_version": 1, "evidence_digest": validation_digest}
+    record = {"schema_version": 1, "evidence_digest": validation_digest,
+              "comparison": {"metric": "relative_l2", "max_rel_l2": MAX_REL_L2}}
     try:
         if review is None:
             review = _request_review(campaign, workspace, files, digest)
