@@ -75,7 +75,11 @@ def _validate_review(value, digest):
 def _request_review(campaign, workspace, files, digest, previous=None):
     from .session_io import run_session
 
+    attempt = 0
     def review_once():
+        nonlocal attempt
+        timeout = campaign.production_review_timeout * (1 if attempt == 0 else 2)
+        attempt += 1
         with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
             root = Path(temporary)
             for name, source in files.items():
@@ -85,17 +89,42 @@ def _request_review(campaign, workspace, files, digest, previous=None):
             request = {"evidence_digest": digest, "previous_validation": previous}
             (root / "review_request.json").write_text(json.dumps(request, indent=2))
             result = run_session(
-                root, PROMPT.read_text(), timeout=campaign.production_review_timeout,
+                root, PROMPT.read_text(), timeout=timeout,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
             )
             campaign._account(result, "numerical supplemental-test planning")
-            check_review_service(result)
+            response = root / "numerical_review.json"
+            record = {"evidence_digest": digest, "session_id": result.session_id,
+                      "timeout_s": timeout, "exit_status": result.exit_status,
+                      "timed_out": result.timed_out, "response_written": response.is_file()}
+            record_path = workspace / VERIFY_DIR / f"numerical_planning-{uuid.uuid4().hex}.json"
+            durable_write_json(record_path, record, indent=2)
             if _digest({name: root / name for name in files}) != digest:
                 raise ValueError("numerical reviewer modified supplied evidence")
-            value = json.loads((root / "numerical_review.json").read_text())
-            return _validate_review(value, digest)
+            # A timed-out CLI may already have written the requested plan before
+            # hanging on its final response. Validate that artifact rather than
+            # discarding it with the temporary session directory.
+            if not result.timed_out:
+                check_review_service(result)
+            try:
+                value = json.loads(response.read_text())
+                record["response"] = value
+                _validate_review(value, digest)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                record["validation_error"] = str(exc)
+                check_review_service(result)
+                raise
+            else:
+                record["validated"] = True
+                if result.timed_out:
+                    print("[numerical-supplement] recovered valid plan from timed-out reviewer", flush=True)
+                return value
+            finally:
+                durable_write_json(record_path, record, indent=2, ensure_ascii=False)
 
-    return retry_review(workspace, f"numerical-advice:{digest}", review_once)
+    context = hashlib.sha256(json.dumps(previous, sort_keys=True).encode()).hexdigest()
+    stage = f"numerical-advice:{digest}:{campaign.agent_cli}:{campaign.production_review_timeout}:{context}"
+    return retry_review(workspace, stage, review_once)
 
 
 def _probe_status(batch, plan, suite, shapes):

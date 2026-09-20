@@ -112,6 +112,8 @@ requested probe; a complete counterexample goes directly to the coding agent.
 Suggestions with no matching available workload remain recorded as unsupported
 advisories and do not block executable cases or promotion. They are never recorded
 as passing tests and are reconsidered when the workload set changes.
+The sandbox privacy filter retains failure receipt counts and aggregate numerical
+metrics, while withholding private workload values and raw evaluator exceptions.
 
 Incomplete receipts and input-generation failures are `needs_validation`, not kernel
 correctness failures. The planner gets one bounded probe-plan repair before reporting
@@ -119,6 +121,12 @@ a validation blocker; this does not consume a coding-agent repair. Failed experi
 be silently dropped or converted to passing evidence. Confirmed service outages use
 the infrastructure recovery policy below. Supplemental correctness probes never enter
 ABBA timing aggregates.
+
+Numerical planning retries a timed-out session once with twice the configured
+production-review timeout. A complete, valid plan already written at timeout is
+usable only after its evidence digest and unchanged source files are verified.
+Missing or invalid plans remain validation blockers. Planning attempts and any
+written responses are recorded as `numerical_planning-*.json` beside the feedback.
 
 Read `verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json` for
 agent feedback and `supplemental-*/numerical_result.json` for audit records. Pending

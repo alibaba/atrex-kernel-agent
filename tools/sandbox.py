@@ -3825,11 +3825,25 @@ def _public_numerical_result_line(line: str) -> str:
     for row in payload.get("runs", []):
         item = {key: row.get(key) for key in (
             "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
-            "shape_count", "seeds", "world_size", "selection_digest", "numerical_metrics")}
+            "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
+        # Preserve the driver's failure receipt across the privacy boundary.
+        # Raw evaluator/input exceptions can contain hidden workload values.
+        item["input_error"] = (
+            "input generation or evaluator execution incomplete; private diagnostics withheld"
+            if row.get("input_error") else ""
+        )
         result = row.get("result")
         item["result"] = ({key: result.get(key) for key in (
             "all_pass", "max_abs_err", "max_rel_err", "evaluator")}
             if isinstance(result, dict) else None)
+        if isinstance(result, dict):
+            metrics = result.get("numerical_metrics") or {}
+            item["result"]["numerical_metrics"] = {
+                key: value for key, value in metrics.items()
+                if key in {"relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff",
+                           "max_elementwise_rel_diff", "max_abs_err", "max_rel_err"}
+                and (value is None or type(value) in {int, float} and math.isfinite(value))
+            }
         public["runs"].append(item)
     if payload.get("error"):
         public["error"] = "numerical evaluator failed; private diagnostics withheld"
