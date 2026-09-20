@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 import uuid
 import shutil
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -67,6 +69,11 @@ def git_text(workspace: Path, *args: str, check: bool = True) -> str:
 
 def git_head(workspace: Path) -> str:
     return git_text(workspace, "rev-parse", "HEAD")
+
+
+def git_blob(workspace: Path, revision: str, path: str) -> bytes:
+    """Read an exact controller-selected committed file."""
+    return _git(workspace, "show", f"{revision}:{path}", binary=True).stdout
 
 
 def working_changes(workspace: Path) -> list[str]:
@@ -225,6 +232,60 @@ class EpisodeWorktree:
 
         reset_episode_scratch(self.path)
 
+    def commit_candidate(self, expected_source: bytes) -> str:
+        """Seal exactly the measured bytes, using a private index and a HEAD CAS.
+
+        Never ask Git to reread an Agent-writable candidate or run commit hooks.
+        The real Episode worktree is not mounted in the Agent namespace.
+        """
+        from supervisor.workspace import publish
+
+        head = git_head(self.path)
+        if git_text(self.path, "symbolic-ref", "--quiet", "--short", "HEAD") != self.branch:
+            raise RuntimeError("Supervisor candidate branch does not match the Episode")
+        if _git(self.path, "merge-base", "--is-ancestor", self.base_commit, head, check=False).returncode:
+            raise RuntimeError("candidate is not descended from the Episode baseline")
+        if any(marker.encode() in expected_source for marker in TIMELINE_PROBE_MARKERS):
+            raise ValueError("candidate kernel.py still contains timeline profiling probes")
+        if _git(self.path, "show", f"{self.base_commit}:kernel.py", binary=True).stdout == expected_source:
+            raise ValueError("candidate has no Kernel change; report pivot or select another")
+        violation = protected_violation(working_changes(self.path))
+        if violation:
+            raise RuntimeError(violation)
+        if any(path != "kernel.py" for path in changed_paths(self.path, self.base_commit, head)):
+            raise RuntimeError("candidate may change only kernel.py relative to its baseline")
+        if any(path != "kernel.py" for path in git_text(self.path, "diff", "--cached", "--name-only").splitlines()):
+            raise RuntimeError("Supervisor index contains unexpected staged files")
+        if _git(self.path, "show", f"{head}:kernel.py", binary=True).stdout != expected_source:
+            blob = subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"], cwd=self.path,
+                input=expected_source, capture_output=True, check=True,
+            ).stdout.decode().strip()
+            with tempfile.TemporaryDirectory(prefix="aka-candidate-index-") as temporary:
+                environment = os.environ | {
+                    "GIT_INDEX_FILE": str(Path(temporary) / "index"),
+                    "GIT_AUTHOR_NAME": "AKA Supervisor", "GIT_COMMITTER_NAME": "AKA Supervisor",
+                    "GIT_AUTHOR_EMAIL": "supervisor@atrex.local", "GIT_COMMITTER_EMAIL": "supervisor@atrex.local",
+                }
+
+                def run(*args: str) -> str:
+                    return subprocess.run(["git", *args], cwd=self.path, env=environment,
+                                          capture_output=True, text=True, check=True).stdout.strip()
+
+                run("read-tree", head)
+                run("update-index", "--add", "--cacheinfo", f"100644,{blob},kernel.py")
+                tree = run("write-tree")
+                commit = run("-c", "commit.gpgSign=false", "commit-tree", tree,
+                             "-p", head, "-m", f"Episode {self.episode}: selected Kernel")
+                run("update-ref", "HEAD", commit, head)
+                head = commit
+        publish(self.path, "kernel.py", expected_source)
+        _git(self.path, "read-tree", head)
+        violation, _ = self.validate_candidate(head)
+        if violation:
+            raise RuntimeError(violation)
+        return head
+
     def archive(self, destination: Path, candidate_commit: str = "HEAD") -> Path:
         destination.mkdir(parents=True, exist_ok=True)
         committed_patch = _git(
@@ -286,6 +347,9 @@ def promote_candidate(
 ) -> str:
     if git_head(incumbent_workspace) != base_commit:
         raise RuntimeError("incumbent advanced during episode; refusing promotion")
+    from .promotion_audit import AUDIT_TRAILER, write_promotion_audit
+
+    audit_digest = write_promotion_audit(incumbent_workspace, episode, evidence)
     try:
         subprocess.run(
             ["git", "merge", "--squash", "--no-commit", candidate_commit],
@@ -302,13 +366,11 @@ def promote_candidate(
             raise RuntimeError(violation)
         memory_dir = incumbent_workspace / "memory"
         memory_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(memory_dir / f"long_horizon_e{episode:04d}.json", evidence)
         atomic_write_json(memory_dir / f"v{memory_version}.json", memory_record)
         subprocess.run(
             [
                 "git",
                 "add",
-                f"memory/long_horizon_e{episode:04d}.json",
                 f"memory/v{memory_version}.json",
             ],
             cwd=str(incumbent_workspace),
@@ -324,10 +386,9 @@ def promote_candidate(
                 "commit",
                 "--only",
                 "-m",
-                f"episode {episode}: promote verified long-horizon candidate",
+                f"episode {episode}: promote verified long-horizon candidate\n\n{AUDIT_TRAILER}{audit_digest}",
                 "--",
                 "kernel.py",
-                f"memory/long_horizon_e{episode:04d}.json",
                 f"memory/v{memory_version}.json",
             ],
             cwd=str(incumbent_workspace),
@@ -335,7 +396,6 @@ def promote_candidate(
             capture_output=True,
             text=True,
         )
-        return git_head(incumbent_workspace)
     except Exception:
         subprocess.run(
             ["git", "reset", "--hard", base_commit],
@@ -345,6 +405,8 @@ def promote_candidate(
             stderr=subprocess.DEVNULL,
         )
         raise
+    # A read failure after commit must not reset a successful promotion.
+    return git_head(incumbent_workspace)
 
 
 def record_episode_outcome(

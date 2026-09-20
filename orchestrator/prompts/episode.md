@@ -1,12 +1,12 @@
 # Kernel optimization episode {{EPISODE}}
 
-Own one complete engineering direction in this isolated Git worktree. Continue through as many
+Own one complete engineering direction in this Git-free Episode workspace. Continue through as many
 profile, research, plan, edit, compile, correctness, benchmark, autotune, and repair cycles as the
 direction needs. Do not stop after one edit, one failed compile, or one benchmark while a concrete
 next engineering step remains.
 
 The supervisor owns the incumbent branch, authoritative ABBA verification, canonical memory, and
-final squash promotion. You own only this episode branch and its structured evidence.
+final squash promotion. You own the candidate source and submit structured evidence through Runtime tools.
 
 ## Context
 
@@ -14,10 +14,6 @@ final squash promotion. You own only this episode branch and its structured evid
 - Canonical version produced by the supervisor: `v{{VERSION}}`
 - Platform: `{{PLATFORM}}`
 - Framework: `{{FRAMEWORK}}`
-- Incumbent commit: `{{BASE_COMMIT}}`
-- Episode branch: `{{EPISODE_BRANCH}}`
-- Journal: `{{JOURNAL_PATH}}`
-- Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
 - `tools/`, `reference/`, `skills/`, `reference-projects/`, and `gpu-wiki/` are linked into the worktree.
 {{AGENT_RUNTIME}}
@@ -26,18 +22,12 @@ final squash promotion. You own only this episode branch and its structured evid
 
 ## Journal interface
 
-The local Journal commands below remain the default. Before the first Experiment, you may instead
-choose the Supervisor-owned interface in `skills/runtime-records/SKILL.md`: update/load Directions,
-record/load Experiments using Gateway Record IDs, and submit `episode-report`. In that case, replace
-only local Journal append/finalize and manual handoff publication with those tools; do not mix the
-two interfaces. Keep the required engineering loop, Wiki attribution, Phase Markers and Git rules.
-Commit the candidate yourself and include its full `candidate_commit` in the report. Validation
-errors can be corrected and resubmitted; acceptance still requires independent verification.
+Use `skills/runtime-records/SKILL.md`: register Directions, record Experiments with returned
+Gateway Record IDs, and submit `episode-report`. Keep the prescribed planning/research,
+Wiki attribution and Phase Marker workflow. Git, private Journals, handoffs and acceptance are
+Supervisor-owned. Do not run Git commands or search for Git metadata.
 
-Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
-branch are allowed, but every commit must contain only `kernel.py`. Plans, profiles, discussion
-transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add
-them to Git. Never edit evaluator or ground-truth files, including `test_kernel.py`,
+Never edit evaluator or ground-truth files, including `test_kernel.py`,
 `profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
 `agent_problem.json`, `metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. For generalized
 Atrex-Bench tasks, do not search outside the workspace for the source operator directory or hidden
@@ -87,7 +77,7 @@ When conversion is mandatory, treat the whole episode as a Triton-to-Gluon lower
 2. Extract TTGIR before writing Gluon and derive layouts from the real kernel; never fabricate them.
 3. Preserve algorithm, tiling, signatures, and evaluator behavior. Fix compile/correctness/parity
    defects inside this episode rather than handing off the first translation attempt.
-4. A terminal candidate must be committed Gluon, correctness-passing in development, and plausibly
+4. A terminal candidate must be Gluon, correctness-passing in development, and plausibly
    within 5% of the incumbent. The supervisor independently enforces parity.
 
 ## Prior iteration state
@@ -97,9 +87,7 @@ the canonical `memory/v*.json` records in the workspace. Treat those records as 
 and do not repeat a rejected direction unless new evidence or a materially different implementation
 changes the expected result. On PPU, reusable profiler conclusions are under
 `profile_evidence.accepted_ppu_diagnostics`; compare their specialization, workload, device, launch
-topology, pipeline identity, and invalidation conditions before reusing them. Detailed within-episode
-journals remain archived under
-`.atrex_long_horizon/episodes/` and are not part of the inherited prompt context.
+topology, pipeline identity, and invalidation conditions before reusing them. Use Runtime list/load tools for detailed Direction/Experiment history; private archives are not workspace inputs.
 
 ## Wiki attribution contract
 
@@ -126,8 +114,7 @@ or `no_material_use`; it cannot claim `not_queried`. Every experiment must set
 queried. For `declared` and `no_material_use`, include `wiki_query_ids` with every Wiki query considered
 by the experiment; omit it for `not_queried`. In later experiments, use `not_queried` when the
 experiment neither issued a new query nor reconsidered a previous response; do not carry an earlier
-query id forward unless its response informed that experiment. Record `evaluation.correctness`, `evaluation.performance`, optional evaluator latency/hash,
-and an explicit decision so attribution can be joined to the experiment outcome.
+query id forward unless its response informed that experiment. Cite `gateway_record_ids` for measured correctness/performance and explain your decision in `analysis`.
 Malformed Wiki telemetry is diagnostic only: the journal drops bad rows into `wiki_usage_errors`
 without invalidating the optimization experiment or its terminal handoff.
 
@@ -146,8 +133,6 @@ Bind its placeholders to this episode:
 | `<PROFILE_DIR>` | `profiles/episode_{{EPISODE}}` |
 | `<PLAN_DRAFT>` | `plans/v{{VERSION}}_draft.md` |
 | `<PLAN_FILE>` | `plans/v{{VERSION}}_plan.md` |
-| `<JOURNAL_CLI>` | `{{JOURNAL_COMMAND}}` |
-| `<JOURNAL_PATH>` | `{{JOURNAL_PATH_SHELL}}` |
 
 `<PLAN_GENERATOR>` is the backend-native plan generator for this session:
 
@@ -159,49 +144,31 @@ secondary tweaks; those belong to a later episode and version.
 
 ## Terminal contract
 
-Reach exactly one evidence-backed terminal state:
-
-1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` matches that exact
-   commit, protected files are unchanged, and development correctness/performance supports
-   independent verification. Uncommitted intermediate artifacts may remain in the worktree.
-2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
-3. `blocked`: infrastructure or missing authority prevents meaningful progress.
-
-For `candidate_ready`, append the final evidence, commit only `kernel.py`, then finalize the journal.
-The candidate commit must be the episode `HEAD`, and its complete diff from the incumbent must name
-exactly `kernel.py`:
+Close all active Directions, then submit a request file through:
 
 ```bash
-git add -- kernel.py
-git commit -m "v{{VERSION}}: kernel candidate"
-candidate_commit=$(git rev-parse HEAD)
-{{JOURNAL_COMMAND}} finalize --path {{JOURNAL_PATH_SHELL}} --state candidate_ready \
-  --candidate-commit "$candidate_commit" \
-  --outcome-json '{"summary":"...","next_directions":["..."],"selected_experiment_index":N}'
+python3 tools/sandbox.py --kind episode-report --request-file scratch/episode-report.json
 ```
 
-Use the one-based journal index of the experiment selected for handoff. Its structured evaluation
-must pass correctness and its decision must be `promote` or `keep_as_best`.
-
-For a PPU full episode, the outcome may also include `accepted_ppu_diagnostics` following
-`skills/ppu-acu-joint-profile/SKILL.md`. Include only profiler evidence that still applies to the
-terminal probe-free kernel and bind each row to an accepted decision-grade artifact by path,
-SHA-256, schema, and evidence id. Omit the field or use an empty list when there is no reusable
-evidence. The supervisor verifies those bindings before writing rows into canonical memory.
-
-For `pivot` or `blocked`, finalize with that state and omit `--candidate-commit`. The journal must
-contain at least one structured experiment and a non-empty outcome summary.
-
-Only after finalizing, atomically publish the control handoff by writing complete JSON to
-`{{HANDOFF_PATH}}.tmp` and renaming it to `{{HANDOFF_PATH}}`:
+For a candidate, leave its exact measured bytes in `kernel.py`:
 
 ```json
-{
-  "status": "candidate_ready | pivot | blocked",
-  "candidate_commit": "required only for candidate_ready",
-  "last_trial_commit": "optional checkpoint for pivot or blocked"
-}
+{"status":"candidate_ready","summary":"What changed and what evidence supports it","selected_experiment_id":"experiment_<returned-id>"}
 ```
 
-Chat text is not a handoff. A missing or invalid handoff causes bounded same-session recovery. Do not
-claim a speedup merely to terminate; a well-supported pivot is a valid outcome.
+The selected Experiment must be from this Episode and cite a passing, standard full-workload
+Evaluate of these bytes. The Supervisor creates the candidate commit, verifies it and decides
+promotion. Do not send `candidate_commit`, run Git, or write a handoff/Journal projection yourself.
+An accepted report is not a promotion decision.
+
+For an exhausted direction, use `{"status":"pivot","summary":"Evidence-backed conclusion"}`.
+For infrastructure/authority blockers, use
+`{"status":"blocked","summary":"What prevented progress","blocker":"Concrete missing capability"}`.
+Fast candidate/pivot reports require the configured trial minimums; blocked is exempt.
+Full pivot/blocked may have no Experiments only when no Direction needs closing.
+
+Use `skills/runtime-records/references/journal.md` for complete fields and repair instructions.
+For PPU, optional `accepted_ppu_diagnostics` must still satisfy the mounted profiler Skill.
+A rejected report leaves the Episode open: correct the fields or prerequisites identified in the
+error and resubmit. An identical accepted report can be replayed to repair publication.
+Stop only after successful handoff; chat text alone is not a handoff.

@@ -9,7 +9,7 @@ python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --versio
 # Equivalent shorthand; correctness-only is also available.
 python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
 # One AB/BA schedule per shape batch, both sides in the same GPU allocation.
-python3 tools/sandbox.py --kind run --baseline-path scratch/base.py --comparison-repeats 2 --no-sync
+python3 tools/sandbox.py --kind run --baseline-path scratch/incumbent.py --comparison-repeats 2 --no-sync
 # Typed NCU/rocprof profile; IDs name opaque cases, not exact private shapes.
 python3 tools/sandbox.py --kind profile --profile-level sol --no-sync
 python3 tools/sandbox.py --kind profile --profile-level deep --kernel-name my_kernel --profile-source --launch-count 1 --no-sync
@@ -20,6 +20,11 @@ python3 tools/sandbox.py --kind check --sanitize memcheck --no-sync
 python3 tools/sandbox.py --kind disassemble --format ptx --no-sync
 python3 tools/sandbox.py --kind env
 ```
+
+For ABBA, optional `--comparison-run-timeout SECONDS` controls each run and must fit the
+configured allocation's complete schedule. The default is up to 120 seconds. Acceptance can
+reuse only an exact matching request, including baseline bytes, path, repeats and run timeout.
+Do not run ABBA in a Fast Episode.
 
 Choose one spelling for evaluator controls:
 

@@ -2,7 +2,7 @@
 
 The Campaign now owns GPU and Wiki execution. Agent sessions keep the familiar `python3 tools/sandbox.py ...` interface, but that script is a standard-library HTTP client. Packaging, endpoint selection, credentials, private evaluator inputs and result projection run in the Supervisor. Operators still launch `orchestrator/optimize.py`; no separate service command is required.
 
-This execution boundary does **not change the optimization workflow**. Setup/Framework Baseline, Fast/Full Episodes, phase markers, plans, profiles, Agent Git commits, Journal and acceptance remain unchanged. [Measurement records and recovery](measurement-records.md) add private Kernel/Measurement IDs, cross-Episode deduplication, infrastructure retry and optional repeated measurement. Runtime Journal/Report and Supervisor-owned promotion remain separate changes.
+The GPU/Wiki service owns execution and credentials. [Measurement records and recovery](measurement-records.md) add private source/results, deduplication and reliability. [Runtime Journal](runtime-journal.md) and [Supervisor-owned handoff](supervisor-promotion.md) bind selected evidence to controller-created candidate commits. Setup, Fast/Full, plan/profile and Phase Marker workflows remain.
 
 ## Lifecycle and authority
 
@@ -133,7 +133,7 @@ Operations receive the running Gateway module instance so CLI execution as `__ma
 
 Native Linux/macOS (`--agent-sandbox none`) remains supported. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user.
 
-With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Legacy Git, Journal/phase/recovery grants remain; this is not yet the final all-authority-in-Supervisor architecture. Explicit operator grants remain trusted exceptions.
+With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Managed optimization Episodes use Git-free drafts; their Git, Journal, handoff and promotion audit are controller-only. Setup still uses its legacy boundary; phase/reviewer helper grants remain. Explicit operator grants remain trusted exceptions.
 
 Standalone operator diagnostics now use the private executable, from the AKA checkout:
 

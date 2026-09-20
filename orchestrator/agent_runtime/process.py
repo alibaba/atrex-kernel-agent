@@ -416,6 +416,8 @@ def run_bounded(
     from ..supervisor_runtime import session_environment
 
     with session_environment(cwd, environment) as environment:
+        if environment.get("ATREX_EPISODE_WORKSPACE") and command[:2] == ["codex", "exec"]:
+            command = [*command[:2], "--skip-git-repo-check", *command[2:]]
         return _run_bounded(command, cwd, timeout, environment,
                             auxiliary_input_files=auxiliary_input_files)
 

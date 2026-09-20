@@ -467,6 +467,23 @@ def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
     )
 
 
+def selected_evaluation(path: Path, campaign_root: Path, source: bytes) -> dict[str, Any]:
+    """Controller-only lookup; revalidate exact source against the sealed report."""
+    current = load_journal(path)
+    digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    if current.get("state") != "candidate_ready" or current.get("candidate_kernel_digest") != digest:
+        raise ValueError("Selected report does not match the acceptance Kernel")
+    selected_id = current["outcome"]["selected_experiment_id"]
+    matches = [item for item in current["experiments"] if item["experiment_id"] == selected_id]
+    if len(matches) != 1:
+        raise ValueError("Selected report has no unique Experiment")
+    for record_id in reversed(matches[0]["gateway_record_ids"]):
+        record = _read_private_gateway_evidence(campaign_root, record_id)
+        if _passing_evaluate(record, digest):
+            return dict(record["result"], gateway_record_id=record_id)
+    raise ValueError("Selected Experiment has no passing standard Evaluate for this Kernel")
+
+
 def _validate_record_ids(campaign_root: Path, raw: object) -> list[str]:
     records = _text_list(raw, "Experiment gateway_record_ids")
     if not records:
@@ -703,6 +720,7 @@ class SupervisorJournalService:
         evidence_root: Path,
         git_workspace: Path | None = None,
         minimum_experiments: int = 0,
+        supervisor_git: bool = False,
     ) -> None:
         self.workspace = workspace
         self.git_workspace = git_workspace or workspace
@@ -710,6 +728,7 @@ class SupervisorJournalService:
         self.evidence_root = evidence_root
         self.path = evidence_root / "journal.json"
         self.minimum_experiments = minimum_experiments
+        self.supervisor_git = supervisor_git
 
     def execute(self, request: Mapping[str, object]) -> dict[str, object]:
         operation = request.get("operation")
@@ -925,6 +944,8 @@ class SupervisorJournalService:
             "accepted_ppu_diagnostics",
             "candidate_commit",
         }
+        if self.supervisor_git:
+            allowed.remove("candidate_commit")
         require_fields(dict(raw), {"status", "summary"}, optional=allowed, label="Episode Report")
         persisted = load_journal(self.path)
         if persisted.get("state") != "in_progress":
@@ -958,7 +979,7 @@ class SupervisorJournalService:
             selected_id=selected_id,
         )
         candidate_commit = raw.get("candidate_commit") or ""
-        if status == "candidate_ready":
+        if status == "candidate_ready" and not self.supervisor_git:
             if (
                 not isinstance(candidate_commit, str)
                 or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", candidate_commit) is None
@@ -1011,6 +1032,13 @@ class SupervisorJournalService:
                 )
             if errors:
                 raise ValueError("invalid accepted_ppu_diagnostics: " + "; ".join(errors))
+        if kernel_source is not None and self.supervisor_git:
+            from long_horizon.git_episode import EpisodeWorktree
+
+            candidate_commit = EpisodeWorktree(
+                current["episode"], current["base_commit"], current["episode_branch"],
+                self.git_workspace,
+            ).commit_candidate(kernel_source)
         current["state"] = status
         current["outcome"] = {
             "summary": summary,
@@ -1032,6 +1060,8 @@ class SupervisorJournalService:
         return {
             "status": "accepted",
             "message": (
+                "Report accepted; Supervisor committed the measured Kernel for verification"
+                if candidate_commit and self.supervisor_git else
                 "Report accepted; Agent commit queued for existing Supervisor verification"
                 if candidate_commit
                 else "Report accepted and recorded"
@@ -1039,4 +1069,4 @@ class SupervisorJournalService:
         }
 
 
-__all__ = ["SupervisorJournalService", "initialize_journal", "journal_lock", "load_journal"]
+__all__ = ["SupervisorJournalService", "initialize_journal", "journal_lock", "load_journal", "selected_evaluation"]

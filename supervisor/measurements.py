@@ -89,7 +89,7 @@ def aggregate(results: list[dict], operation: str) -> dict:
     return value
 
 
-def execute(runtime, capability, staged, args, argv, environment, command) -> dict:
+def execute(runtime, capability, staged, args, argv, environment, command, *, reuse_completed=False) -> dict:
     from supervisor.gateway import measurement_inputs, metadata_speedup_mean
     from orchestrator.supervisor_runtime import ROOT, RequestDispatchTimeout
     from supervisor.projection import project_response
@@ -150,11 +150,14 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
             aggregated_result = None
             if repetitions > 1 and len(samples) == repetitions and all(row.get("exit_code") == 0 for row in responses):
                 aggregated_result = aggregate(samples, operation)
-                if operation == "evaluate" and "metadata.json" in inputs:
-                    latencies = aggregated_result.get("latency_us_by_shape", {})
-                    score, failures = metadata_speedup_mean(json.loads(inputs["metadata.json"]), list(latencies), latencies)
-                    if not failures and score is not None:
-                        aggregated_result.update(performance_score=score, speedup_vs_ref_mean=score)
+                if "metadata.json" in inputs:
+                    sides = ([aggregated_result] if operation == "evaluate" else
+                             [aggregated_result["baseline"], aggregated_result["candidate"]])
+                    for side in sides:
+                        latencies = side.get("latency_us_by_shape", {})
+                        score, failures = metadata_speedup_mean(json.loads(inputs["metadata.json"]), list(latencies), latencies)
+                        if not failures and score is not None:
+                            side.update(performance_score=score, speedup_vs_ref_mean=score)
             # IDs are attached to the same public payload stored and re-read.
             prefix = PREFIXES.get(operation)
             identity = {"gateway_record_id": task.record_id}
@@ -175,6 +178,8 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                              "status": "succeeded" if response["exit_code"] == 0 else "failed"}))
             response = dict(response, stdout="\n".join(lines) + "\n")
             task.finish(response, cacheable=cacheable, pending=pending)
+            if reuse_completed and not cacheable:
+                raise RuntimeError("Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record")
             if operation == "evaluate" and repetitions > 1 and samples:
                 from supervisor.gateway import EPISODE_EVALUATIONS_PATH
                 # The old report compiler must see the same aggregate as the
@@ -194,4 +199,8 @@ def execute(runtime, capability, staged, args, argv, environment, command) -> di
                 runtime.publish_legacy_outputs(capability.workspace, staged, args)
             return response
     except DuplicateTask as error:
+        if reuse_completed and error.record_id:
+            # reserve() has already validated the exact task identity and its
+            # cacheability. This switch is never accepted from HTTP/Agent argv.
+            return dict(store.read(error.record_id)["response"], reused=True)
         return {"exit_code": 2, "stdout": "", "stderr": json.dumps({"error": error.response()}) + "\n"}

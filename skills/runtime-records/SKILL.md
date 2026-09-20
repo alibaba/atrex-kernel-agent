@@ -12,11 +12,9 @@ the Episode's planning, profiling, Fast/Full, Wiki attribution, Phase Marker or 
 Fast-mode experiment/evaluation minimums apply to `candidate_ready`/`pivot`, not `blocked`; all
 statuses still require valid report fields and no in-progress Directions.
 
-Choose one Journal interface before recording experiments. Existing local Journal commands remain
-supported. If using Runtime Journal, replace only local append/finalize and manual handoff with
-the commands here; do not mix the two Journal protocols. Git stays Agent-owned: commit only
-`kernel.py` before reporting a candidate, and supply that Commit ID. The Supervisor still decides
-acceptance independently.
+New Long Horizon Episodes use Runtime Journal. Do not call legacy append/finalize, manage Git,
+or write control handoffs. Leave the selected measured source in `kernel.py`; the Supervisor
+creates the commit and decides acceptance independently. Setup/Baseline keep their existing flow.
 
 1. Inspect prior evidence, propose a research Direction, then start it before exploration.
 2. Record decisive Experiments promptly, linking actual `gateway_record_ids`; separate measured

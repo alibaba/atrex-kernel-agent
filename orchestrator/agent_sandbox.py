@@ -1,7 +1,7 @@
-"""Opt-in Bubblewrap launch boundary, without migrating the legacy Agent workflow.
+"""Opt-in Bubblewrap boundary for managed Episode drafts and legacy roles.
 
 Only system runtime paths, selected installations, this workspace and explicit
-grants enter the namespace. Campaign Git remains a compatibility grant; GPU/Wiki
+grants enter the namespace. Git is granted only to legacy, non-managed roles; GPU/Wiki
 operations use the Supervisor HTTP service rather than Agent-side credentials.
 """
 
@@ -18,6 +18,7 @@ from .agent_home import HOST_HOME_ENV, PREPARED_ENV, open_private_directory, pro
 from .agent_installations import installation_mounts
 from .agent_workspace import WORKSPACE_LAYOUTS, WORKSPACE_ROLE_ENV, AuxiliaryWorkspace
 from .recovery_processes import HANDOFF_ID_ENV
+from .episode_workspace import EPISODE_WORKSPACE_ENV, PUBLIC_FILES
 from .sandbox_launch import SandboxLaunch
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +93,7 @@ def _mount(argv: list[str], source: Path, destination: Path, *, writable=False) 
     argv.extend(("--bind" if writable else "--ro-bind", str(source), str(destination)))
 
 
-def _git_directory(workspace: Path) -> Path | None:
+def git_directory(workspace: Path) -> Path | None:
     result = subprocess.run(
         ["git", "rev-parse", "--git-common-dir"],
         cwd=workspace,
@@ -119,8 +120,9 @@ def _grant_environment_paths(
     *,
     host_home: Path,
     session_home_root: Path,
+    private_paths: tuple[Path, ...] = (),
 ) -> None:
-    # Journal, phase markers and reviewer state remain legacy grants until PR5/6.
+    # Phase markers/reviewer helpers retain explicitly scoped legacy grants.
     for variable, writable, directory in (
         ("ATREX_TELEMETRY_TRACE", True, False),
         ("ATREX_ENVIRONMENT_STATE_FILE", True, False),
@@ -144,6 +146,8 @@ def _grant_environment_paths(
             raise ValueError(f"Refusing broad legacy path grant: {variable}")
         if source.resolve() != source:
             raise ValueError(f"Legacy path grant must not traverse symlinks: {variable}")
+        if any(source.is_relative_to(path) or path.is_relative_to(source) for path in private_paths):
+            raise ValueError(f"Path grant overlaps Supervisor private storage: {variable}")
         # Validate the actual directory grant, not just the requested file.
         # HOME already points into the sandbox; host_home is the operator Home.
         if host_home.is_relative_to(source):
@@ -174,6 +178,10 @@ def wrap_agent_command(
             "Run optimization in a Campaign workspace, not the AKA source checkout or its parent"
         )
     home = Path(environment[PREPARED_ENV]).resolve(strict=True)
+    managed = environment.get(EPISODE_WORKSPACE_ENV) == str(workspace)
+    private_paths = tuple(Path(value) for value in json.loads(
+        environment.get("ATREX_EPISODE_PRIVATE_PATHS", "[]")
+    )) if managed else ()
     host_home = Path(environment[HOST_HOME_ENV]).resolve()
     role = environment.get(WORKSPACE_ROLE_ENV, "optimizer")
     if role != "optimizer" and role not in WORKSPACE_LAYOUTS:
@@ -225,14 +233,21 @@ def wrap_agent_command(
                 if source.exists():
                     _mount(argv, source, workspace / name)
         else:
-            common = _git_directory(workspace)
+            common = None if managed else git_directory(workspace)
             if common:
-                if common == _git_directory(REPOSITORY_ROOT):
+                if common == git_directory(REPOSITORY_ROOT):
                     raise ValueError(
                         "Run optimization in a Campaign workspace, not the AKA source checkout"
                     )
                 if not common.is_relative_to(workspace):
                     _mount(argv, common, common, writable=True)
+            if managed:
+                # This is already a separate persistent draft, not the Git
+                # worktree. Public inputs and canonical memory stay read-only.
+                for name in (*PUBLIC_FILES, "memory"):
+                    source = workspace / name
+                    if source.exists():
+                        _mount(argv, source, source)
             # Keep Supervisor's legacy evaluator copy available for independent
             # acceptance, but mask it from Agent sessions using the HTTP service.
             bench = workspace / "atrex-bench"
@@ -252,8 +267,9 @@ def wrap_agent_command(
             _grant_environment_paths(
                 argv, environment, workspace,
                 host_home=host_home, session_home_root=home.parent,
+                private_paths=private_paths,
             )
-        forbidden = (workspace, home.parent, REPOSITORY_ROOT / ".git")
+        forbidden = (workspace, home.parent, REPOSITORY_ROOT / ".git", *private_paths)
         installations = projected_backends(environment)
         if view is None and not environment.get("ATREX_AKA_RUNTIME_URL"):
             installations += ("agate",)
@@ -279,7 +295,7 @@ def wrap_agent_command(
         for path in read_only_grants(environment):
             if any(
                 root.is_relative_to(path) or path.is_relative_to(root)
-                for root in (workspace, home.parent)
+                for root in (workspace, home.parent, *private_paths)
             ):
                 raise ValueError(f"Read-only grant overlaps Agent workspace/state: {path}")
             if path in {Path("/"), host_home, REPOSITORY_ROOT}:
@@ -290,7 +306,7 @@ def wrap_agent_command(
         values = {
             key: value
             for key, value in environment.items()
-            if key not in {HOST_HOME_ENV, PREPARED_ENV, "PWD", "OLDPWD"}
+            if key not in {HOST_HOME_ENV, PREPARED_ENV, "PWD", "OLDPWD", "ATREX_EPISODE_PRIVATE_PATHS"}
             and (
                 not key.startswith("GIT_")
                 or key
@@ -299,6 +315,7 @@ def wrap_agent_command(
                     "GIT_AUTHOR_EMAIL",
                     "GIT_COMMITTER_NAME",
                     "GIT_COMMITTER_EMAIL",
+                    "GIT_CEILING_DIRECTORIES",
                 }
             )
         }

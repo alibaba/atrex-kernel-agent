@@ -8,7 +8,7 @@ description: Run the evidence loop of one long-horizon GPU kernel optimization e
 ## When to Use
 
 Use this skill when an orchestrator episode prompt hands you one optimization episode in an isolated
-Git worktree and points here for the evidence loop. It does not apply to the V0 baseline session
+Episode workspace and points here for the evidence loop. It does not apply to the V0 baseline session
 (`gpu-kernel-baseline`) or to a workspace without an episode journal.
 
 ## Episode bindings
@@ -23,8 +23,6 @@ values you fill in from the campaign, or a choice among the listed alternatives,
 | `<PLAN_DRAFT>` | evidence draft for the canonical version |
 | `<PLAN_FILE>` | generated plan for the canonical version |
 | `<PLAN_GENERATOR>` | backend-native plan generator invocation |
-| `<JOURNAL_CLI>` | episode journal command prefix |
-| `<JOURNAL_PATH>` | episode journal path, already shell-quoted |
 
 The episode prompt's ownership rules, execution boundary, mode policy, and framework-escalation
 directive outrank this skill. Where they conflict, follow the prompt.
@@ -66,7 +64,7 @@ For a PPU target, do not apply the NVIDIA/AMD default below. Read
 whether new PPU profiler evidence is needed. That route may use source or compiler inspection, the
 probe-free benchmark, or still-valid PPU evidence instead of collecting a new profile.
 
-Reuse a profile only when it matches the current committed kernel. Otherwise profile through the
+Reuse a profile only when it matches the current measured kernel. Otherwise profile through the
 sandbox using the vendor-appropriate tooling. Both wrappers run `python <file>`, so the profiled file
 is the immutable `profile_driver.py` seeded next to `kernel.py` — never `kernel.py` itself, which the
 evaluator only ever imports:
@@ -117,8 +115,8 @@ For PPU, use the routing and capture contracts in the PPU skill linked above.
 Timeline instrumentation is a temporary working snapshot on this episode's single HEAD line, not a
 candidate. Preserve the clean source and each useful instrumented source or reversible patch before
 replacing it. After the evidence answers the question, restore or rewrite a probe-free `kernel.py`
-before correctness/performance validation, commit, journal finalization, and handoff. Never submit a
-profiling snapshot as `candidate_commit`; its latency and failures do not count as promotion attempts
+before correctness/performance validation and `episode-report`. Never submit a
+profiling snapshot as the terminal candidate; its latency and failures do not count as promotion attempts
 or framework-stall events.
 
 Escalate through the typed profile funnel instead of collecting everything at once: `--profile-level
@@ -230,18 +228,14 @@ during evaluation.
 Before trusting a large delta — especially a regression beyond roughly 30% — re-run the same command
 on the same sandbox hardware and compare. GPU selection belongs to the gateway; never set a local
 `CUDA_VISIBLE_DEVICES` to steer it. Repeated development measurements are not promotion authority;
-the supervisor reruns incumbent and candidate in one ABBA allocation.
+the Supervisor requires a policy-matched same-allocation ABBA record, reusing exact existing evidence when available.
 
 ### 7. Record every decisive experiment immediately
 
-Immediately after each decisive experiment, append it to the single episode journal. Do not batch
-these writes at the end of the episode: every append refreshes the non-canonical `memory/live.json`
-progress view in the incumbent workspace.
-
-```bash
-<JOURNAL_CLI> append --path <JOURNAL_PATH> \
-  --experiment-json '{"name":"...","hypothesis":"...","change":"...","evidence":"...","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":""},"decision":"keep_as_best|promote|reject_and_continue|revert|pivot|blocked","wiki_usage_status":"declared","wiki_query_ids":["<emitted-query-id>"],"wiki_usage":[{"query_id":"<emitted-query-id>","wiki_id":"<emitted-canonical-wiki-id>","disposition":"applied|partially_applied|reference_only|rejected","use":"...","evidence":"..."}]}'
-```
+Immediately after each decisive experiment, use `record-experiment` through `tools/sandbox.py`.
+Follow `skills/runtime-records/SKILL.md` for Direction lifecycle, request fields and examples.
+Cite exact Gateway Record IDs, keep measured evidence separate from interpretation, and retain
+the required Wiki attribution. Do not defer all recording to the end of the Episode.
 
 Use `declared` only with non-empty `wiki_usage`. Include `wiki_query_ids` for both `declared` and
 `no_material_use`; omit both arrays for `not_queried`.
@@ -253,7 +247,7 @@ with `wiki_usage_errors`; this diagnostic field never blocks the experiment or h
 Leave the loop as soon as one coherent candidate passes the full development correctness check and
 has credible performance evidence, or as soon as the direction is exhausted or blocked. Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
-PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
+PPU full episode, include `accepted_ppu_diagnostics` using the schema in
 `skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
 probe-free kernel. Each retained row must bind an accepted decision-grade artifact by path, SHA-256,
 schema, and evidence id. This is optional when no reusable PPU profiler evidence exists.

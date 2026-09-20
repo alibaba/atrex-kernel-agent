@@ -2302,6 +2302,10 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
             help="A/B pair count for --baseline-path (default: 2; schedule alternates AB/BA).",
         )
     parser.add_argument(
+            "--comparison-run-timeout", type=int, default=None,
+            help="Seconds per ABBA run; must fit the allocation timeout. Default: up to 120.",
+        )
+    parser.add_argument(
             "--input-path",
             dest="evaluation_input_path",
             default=None,
@@ -4237,6 +4241,8 @@ def _top_level_evaluation_options(args: argparse.Namespace) -> list[str]:
 
 def validate_evaluation_options(args: argparse.Namespace) -> None:
     """Reject ignored top-level evaluator controls before either entry point executes."""
+    if getattr(args, "comparison_run_timeout", None) is not None and not args.baseline_path:
+        raise ValueError("--comparison-run-timeout requires --baseline-path")
     options = _top_level_evaluation_options(args)
     if not options:
         return
@@ -5273,6 +5279,11 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     options["kind"] = kind
     options["command"] = normalized
     options["baseline_path"] = baseline_path
+    if baseline_path:
+        from supervisor.operations import comparison_run_timeout
+        options["comparison_run_timeout"] = comparison_run_timeout(args)
+    else:
+        options.pop("comparison_run_timeout", None)
     if baseline_path and baseline_path not in files:
         raise ValueError("--baseline-path must name an existing regular workspace file")
     if "kernel.py" not in files and operation != "dev":
