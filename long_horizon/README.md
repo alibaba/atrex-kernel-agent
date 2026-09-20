@@ -99,16 +99,23 @@ members), preserve unmentioned structural inputs and retain comparator tolerance
 Unsupported suggestions remain explicitly advisory, not invented executable tests.
 
 Passing the requested probes closes the suggestion without another subjective
-review. A complete failing receipt produces `needs_repair` feedback, including the
+review. A failing workload/seed with receipts for all ranks produces `needs_repair` feedback, including the
 distribution and comparison metrics. V1 gets up to two supplemental repair turns,
 independent of its ordinary bring-up recovery. Episodes receive feedback before
 terminal handoff acceptance and resume the same coding session within the configured
 handoff budget. The updated candidate reruns the same probes before normal admission
 or promotion; no failed candidate is accepted on repair-budget exhaustion.
 
-Incomplete receipts, input-generation failures and unsupported workload selection
-are `needs_validation`, not kernel correctness failures. The planner gets one bounded
-probe-plan repair before reporting a validation blocker. Failed experiments cannot
+Probes evaluate each workload/seed independently, so an evaluator stopping on a
+counterexample cannot be mistaken for missing coverage. A pass requires every
+requested probe; a complete counterexample goes directly to the coding agent.
+Suggestions with no matching available workload remain recorded as unsupported
+advisories and do not block executable cases or promotion. They are never recorded
+as passing tests and are reconsidered when the workload set changes.
+
+Incomplete receipts and input-generation failures are `needs_validation`, not kernel
+correctness failures. The planner gets one bounded probe-plan repair before reporting
+a validation blocker; this does not consume a coding-agent repair. Failed experiments cannot
 be silently dropped or converted to passing evidence. Confirmed service outages use
 the infrastructure recovery policy below. Supplemental correctness probes never enter
 ABBA timing aggregates.

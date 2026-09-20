@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 PREFIX = "__ATREX_NUMERICAL_RESULT__="
 GENERATORS = {"uniform", "log_uniform", "sparse", "alternating", "constant", "ramp", "packed_bytes", "near_constant"}
@@ -71,9 +72,12 @@ def validation_schedule(suite, shapes, rotation="", mode="light"):
     for index, case in enumerate(suite["cases"]):
         eligible = [sid for sid in ordered if matches_constraints(
             shapes[sid].get("input_kwargs", {}), case.get("input_constraints", {}))]
-        if not eligible:
-            raise ValueError(f"no supported workload meets input_constraints for {case['id']}")
         selected = case.get("shape_ids")
+        if not eligible and selected is None:
+            schedule.append({"case_id": case["id"], "shape_ids": [], "seeds": [],
+                             "status": "unsupported",
+                             "diagnosis": "no available workload meets this advisory's input constraints"})
+            continue
         if selected is None:
             selected = [eligible[-1]]
             if len(eligible) > 1:
@@ -250,42 +254,88 @@ def run(request_path):
             if plan["case_id"] not in request.get("case_ids", [c["id"] for c in suite["cases"]]):
                 continue
             case = next(c for c in suite["cases"] if c["id"] == plan["case_id"])
-            receipts = request_path.parent / "receipts.jsonl"
-            receipts.unlink(missing_ok=True)
-            input_error = Path(str(receipts) + ".error")
-            input_error.unlink(missing_ok=True)
-            tail = ("\nimport runpy as __numeric_runpy\n"
-                    f"__numeric_runpy.run_path({str(Path(__file__).resolve())!r})['install_inputs'](globals(), {case!r}, {plan['seeds']!r}, {str(receipts.resolve())!r})\n")
-            input_path.write_bytes(original + tail.encode())
-            for stem in ("input", "test_kernel"):
-                for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
-                    cached.unlink()
-            command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
-                       "--multi-seed", str(len(plan["seeds"]) - 1)]
-            for shape_id in plan["shape_ids"]:
-                command += ["--shape-id", shape_id]
-            process = subprocess.run(command, cwd=root, capture_output=True, text=True,
-                                     timeout=request["per_case_timeout"])
-            result = None
-            for line in process.stdout.splitlines():
-                if line.startswith("[test_kernel] RESULT_JSON="):
-                    result = json.loads(line.split("RESULT_JSON=", 1)[1])
-            observed = [json.loads(line) for line in receipts.read_text().splitlines()] if receipts.exists() else []
-            key = lambda kwargs, seed, rank: (json.dumps(kwargs, sort_keys=True), seed, rank)
-            seen = {key(r["input_kwargs"], r["seed"], r["rank"]) for r in observed}
-            expected = {key(shapes[sid].get("input_kwargs") or {}, seed, rank)
+            if plan.get("status") == "unsupported":
+                rows.append(plan)
+                continue
+            # Evaluate one workload/seed at a time. Evaluators can stop a shape's
+            # seed loop on its first mismatch; that is a counterexample, not a
+            # broken probe plan. Bind each result to its own input receipt.
+            expected = {(json.dumps(shapes[sid].get("input_kwargs") or {}, sort_keys=True), seed, rank)
                         for sid in plan["shape_ids"] for seed in plan["seeds"] for rank in range(suite["world_size"])}
-            passed = process.returncode == 0 and isinstance(result, dict) and result.get("all_pass") is True and expected == seen
-            rows.append({"case_id": case["id"], "passed": passed, "exit_code": process.returncode,
-                         "expected_probes": len(expected), "observed_probes": len(expected & seen),
+            seen = set()
+            failed_probes = 0
+            results = []
+            diagnosis = ""
+            deadline = time.monotonic() + request["per_case_timeout"]
+            for shape_id in plan["shape_ids"]:
+                for seed in plan["seeds"]:
+                    receipts = request_path.parent / "receipts.jsonl"
+                    receipts.unlink(missing_ok=True)
+                    input_error = Path(str(receipts) + ".error")
+                    input_error.unlink(missing_ok=True)
+                    tail = ("\nimport runpy as __numeric_runpy\n"
+                            f"__numeric_runpy.run_path({str(Path(__file__).resolve())!r})['install_inputs'](globals(), {case!r}, {[seed]!r}, {str(receipts.resolve())!r})\n")
+                    input_path.write_bytes(original + tail.encode())
+                    for stem in ("input", "test_kernel"):
+                        for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
+                            cached.unlink()
+                    command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
+                               "--multi-seed", "0", "--seed", str(seed), "--shape-id", shape_id]
+                    try:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, request["per_case_timeout"])
+                        process = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                                                 timeout=remaining)
+                    except subprocess.TimeoutExpired:
+                        diagnosis = "supplemental evaluator exceeded its case timeout"
+                        break
+                    result = None
+                    for line in process.stdout.splitlines():
+                        if line.startswith("[test_kernel] RESULT_JSON="):
+                            result = json.loads(line.split("RESULT_JSON=", 1)[1])
+                    observed = [json.loads(line) for line in receipts.read_text().splitlines()] if receipts.exists() else []
+                    actual = {(json.dumps(r["input_kwargs"], sort_keys=True), r["seed"], r["rank"]) for r in observed}
+                    required = {(json.dumps(shapes[shape_id].get("input_kwargs") or {}, sort_keys=True), seed, rank)
+                                for rank in range(suite["world_size"])}
+                    seen.update(actual & expected)
+                    if input_error.exists():
+                        diagnosis = input_error.read_text()
+                    elif actual != required:
+                        diagnosis = "evaluator did not generate the requested workload, seed and ranks"
+                    elif not isinstance(result, dict):
+                        diagnosis = f"evaluator exited {process.returncode} without a result"
+                    elif result.get("all_pass") is False:
+                        failed_probes += 1
+                    elif result.get("all_pass") is not True or process.returncode != 0:
+                        diagnosis = f"evaluator returned an inconsistent result (exit={process.returncode})"
+                    if isinstance(result, dict):
+                        results.append(result)
+                    if diagnosis or failed_probes:
+                        break
+                if diagnosis or failed_probes:
+                    break
+            passed = not diagnosis and not failed_probes and seen == expected
+            metrics = {}
+            for result in results:
+                values = {**{name: result[name] for name in ("max_abs_err", "max_rel_err") if name in result},
+                          **result.get("numerical_metrics", {})}
+                for name, value in values.items():
+                    if value is None:
+                        metrics[name] = None
+                    elif metrics.get(name, 0) is not None:
+                        metrics[name] = max(metrics.get(name, 0), value)
+            rows.append({"case_id": case["id"], "passed": passed,
+                         "exit_code": 0 if passed else 1,
+                         "expected_probes": len(expected), "observed_probes": len(seen),
+                         "failed_probes": failed_probes,
                          "selection_digest": plan["selection_digest"], "shape_count": len(plan["shape_ids"]),
                          "seeds": plan["seeds"], "world_size": suite["world_size"],
-                         "result": result, "numerical_metrics": (result or {}).get("numerical_metrics", {}),
-                         "input_error": input_error.read_text() if input_error.exists() else "",
-                         "stderr_tail": process.stderr[-1500:] if not passed else ""})
+                         "result": {"all_pass": passed, "numerical_metrics": metrics},
+                         "input_error": diagnosis})
             if not passed:
                 break
-        payload = {"schema_version": 1, "runs": rows, "all_pass": bool(rows) and all(r["passed"] for r in rows)}
+        payload = {"schema_version": 1, "runs": rows, "all_pass": bool(rows) and all(r.get("passed") is True for r in rows)}
     except Exception as exc:
         payload = {"schema_version": 1, "runs": rows, "all_pass": False, "error": f"{type(exc).__name__}: {exc}"}
     finally:

@@ -112,10 +112,20 @@ def _probe_status(batch, plan, suite, shapes):
             or row.get("seeds") != plan["seeds"]
             or row.get("world_size") != suite["world_size"]
             or row.get("expected_probes") != expected
-            or row.get("observed_probes") != expected
+            or type(row.get("observed_probes")) is not int
+            or not 0 <= row["observed_probes"] <= expected
             or not isinstance(row.get("result"), dict)):
         return "needs_validation"
     result = row["result"]
+    if row.get("input_error"):
+        return "needs_validation"
+    # A single fully observed workload/seed can disprove correctness. Passing
+    # still requires every requested workload, seed and rank to finish.
+    if (0 < row.get("failed_probes", 0) <= row["observed_probes"]
+            and result.get("all_pass") is False):
+        return "needs_repair"
+    if row["observed_probes"] != expected:
+        return "needs_validation"
     if row.get("passed") is True and row.get("exit_code") == 0 and result.get("all_pass") is True:
         return "passed"
     if result.get("all_pass") is False:
@@ -136,6 +146,10 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
         shutil.copy2(HARNESS, snapshot)
     results = []
     for index, plan in enumerate(schedule):
+        if plan.get("status") == "unsupported":
+            results.append({"case_id": plan["case_id"], "status": "unsupported",
+                            "diagnosis": plan["diagnosis"]})
+            continue
         request = directory / f"request-{index:04d}.json"
         durable_write_json(request, {
             "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
@@ -171,11 +185,13 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
             "metrics": result.get("numerical_metrics", {}),
             "expected_probes": rows[0].get("expected_probes") if rows else None,
             "observed_probes": rows[0].get("observed_probes") if rows else None,
+            "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
             "exit_code": rows[0].get("exit_code") if rows else None,
             "diagnosis": batch.get("error") or (rows[0].get("input_error", "") if rows else ""),
         })
     status = ("needs_repair" if any(r["status"] == "needs_repair" for r in results)
-              else "needs_validation" if any(r["status"] != "passed" for r in results)
+              else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
+              else "advisory" if any(r["status"] == "unsupported" for r in results)
               else "passed")
     return {"status": status, "probes": results}
 
@@ -254,7 +270,7 @@ def supplemental_feedback(campaign, workspace):
     durable_write_json(feedback_path, record, indent=2, ensure_ascii=False)
     status = record["status"]
     print(f"[numerical-supplement] {status}; evidence={feedback_path}", flush=True)
-    if status == "passed":
+    if status in {"passed", "advisory"}:
         # Keep the closed experiment as a regression probe for subsequent edits
         # and process restarts. Recertify against the new candidate; never reopen
         # the same advisory merely because a reviewer session is fresh.

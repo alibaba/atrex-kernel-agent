@@ -1452,7 +1452,7 @@ class Campaign:
         if not problem:
             result, problem = self._framework_baseline_external_gates(n)
         numerical_repairs = 0
-        while problem and (
+        while problem and not problem.startswith("Supplemental validation is incomplete") and (
             not recovery_used
             or (problem.startswith("Supplemental numerical probes") and numerical_repairs < 2)
         ):
@@ -1490,7 +1490,8 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
+            outcome = "validation blocked" if problem.startswith("Supplemental validation is incomplete") else "rejected"
+            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
         try:
