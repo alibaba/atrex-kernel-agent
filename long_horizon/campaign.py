@@ -21,10 +21,12 @@ from orchestrator.hardware import hardware_vendor
 from . import main_adapter
 from .git_episode import (
     EpisodeWorktree,
+    git_blob,
     git_head,
     git_text,
     promote_candidate,
     record_episode_outcome,
+    warn_kernel_mismatch,
     working_changes,
 )
 from .journal import initialize as initialize_journal
@@ -622,10 +624,20 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
         resumed: bool = False,
         agent_workspace: Path | None = None,
+        verifier: GatewayABBAValidator | None = None,
     ) -> str:
         directives = main_adapter.episode_directives(
             self.base_campaign, version, fast=fast_mode
         )
+        from .recorded_verifier import RecordedABBAValidator
+
+        acceptance_request = ""
+        selected_verifier = verifier or self.verifier
+        if not fast_mode and isinstance(selected_verifier, RecordedABBAValidator):
+            context = self.base_campaign.acceptance_measurement_context(
+                git_blob(worktree.path, worktree.base_commit, "kernel.py"),
+            )
+            acceptance_request = selected_verifier.agent_instructions(**context)
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
             f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
@@ -657,6 +669,7 @@ class LongHorizonCampaign:
                 "EVALUATOR": directives["evaluator"],
                 "HARDWARE": directives["hardware"],
                 "SANDBOX": directives["sandbox"],
+                "ACCEPTANCE_REQUEST": acceptance_request,
                 "AGENT_RUNTIME": directives["agent_runtime"],
                 "PLAN_GENERATOR": directives["plan_generator"],
                 "JOURNAL_COMMAND": journal_command,
@@ -684,27 +697,26 @@ class LongHorizonCampaign:
         )
 
     def _fast_verification_result(
-        self, episode_workspace: Path, *, memory_version: int, episode: int | None = None
+        self, episode_workspace: Path, *, memory_version: int, episode: int | None = None,
+        candidate_commit: str | None = None,
     ) -> VerificationResult:
         """Score the final recorded evaluator result without launching ABBA.
 
-        ``tools/sandbox.py`` fingerprints ``kernel.py`` in every episode result.  The
-        reader below selects a complete passing trial result whose fingerprint matches
-        the final selected candidate, then compares that measurement with canonical
-        incumbent memory.  This deliberately trades statistical rigor for turnaround.
+        Managed Episodes use the selected private measurement bound to the final
+        candidate bytes. Legacy callers select a complete passing, source-matching
+        result from the evaluation log. Both compare against canonical incumbent
+        memory, deliberately trading statistical rigor for turnaround.
         """
         artifact = str(episode_workspace / EPISODE_EVALUATIONS_PATH)
         expected_shape_ids = self._expected_shape_ids()
-        candidate_result = _latest_complete_episode_performance(
-            episode_workspace,
-            expected_shape_ids=expected_shape_ids,
-            required_performance_objective="shape_speedup_arithmetic_mean",
-        )
         if episode is not None:
             try:
-                from supervisor.workspace import read_input
+                if not candidate_commit:
+                    raise ValueError("Managed acceptance requires the sealed candidate commit")
+                source = git_blob(episode_workspace, candidate_commit, "kernel.py")
+                warn_kernel_mismatch(episode_workspace, source)
                 candidate_result = self.base_campaign.selected_episode_evaluation(
-                    episode, read_input(episode_workspace, "kernel.py"),
+                    episode, source,
                 )
                 by_shape = candidate_result.get("latency_us_by_shape", {})
                 if (candidate_result.get("performance_objective") != "shape_speedup_arithmetic_mean"
@@ -716,6 +728,12 @@ class LongHorizonCampaign:
                     candidate_result = None
             except (OSError, ValueError, RuntimeError, KeyError, TypeError):
                 candidate_result = None
+        else:
+            candidate_result = _latest_complete_episode_performance(
+                episode_workspace,
+                expected_shape_ids=expected_shape_ids,
+                required_performance_objective="shape_speedup_arithmetic_mean",
+            )
         if candidate_result is None:
             return VerificationResult(
                 "FAIL",
@@ -819,12 +837,15 @@ class LongHorizonCampaign:
         candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
         )
+        private_journal = None
 
         def load_private_runtime_journal() -> dict[str, Any]:
             # Called only for a claimed Runtime projection. During recovery the
             # Runtime/binding may not exist yet; read persisted state without
             # register_episode, which would otherwise create a missing Journal.
-            return self.base_campaign.read_runtime_episode_journal(worktree.episode)
+            nonlocal private_journal
+            private_journal = self.base_campaign.read_runtime_episode_journal(worktree.episode)
+            return private_journal
 
         diagnosis = validate_terminal(
             journal_path,
@@ -858,7 +879,18 @@ class LongHorizonCampaign:
                 )
         if handoff.status != "candidate_ready":
             return ""
-        violation, _ = worktree.validate_candidate(candidate)
+        if private_journal is not None:
+            from supervisor.journal import sealed_candidate_source
+
+            try:
+                source = sealed_candidate_source(private_journal, worktree.path)
+                if source is None:
+                    return "private report has no sealed candidate"
+                violation, _ = worktree.restore_sealed_candidate(candidate, source)
+            except (OSError, ValueError, RuntimeError) as error:
+                return f"cannot restore sealed candidate: {error}"
+        else:
+            violation, _ = worktree.validate_candidate(candidate)
         if violation:
             return violation
         try:
@@ -1253,6 +1285,12 @@ class LongHorizonCampaign:
             return "", [], None, False
 
         candidate_commit = handoff.candidate_commit
+        diagnosis = self._completion_check(
+            worktree, worktree.path / RUNTIME_DIR / "journal.json", handoff,
+            fast_mode=fast_mode, fast_trials=self._active_fast_trials(active, fast_mode=fast_mode),
+        )
+        if diagnosis:
+            return diagnosis, [], None, False
         violation, paths = worktree.validate_candidate(candidate_commit)
         if (
             not violation
@@ -1286,6 +1324,7 @@ class LongHorizonCampaign:
                     worktree.path,
                     memory_version=memory_version,
                     episode=worktree.episode,
+                    candidate_commit=candidate_commit,
                 )
             else:
                 verification = verifier.verify(
@@ -2072,6 +2111,7 @@ class LongHorizonCampaign:
                 fast_trials=fast_trial_count,
                 resumed=resumed,
                 agent_workspace=agent_workspace,
+                verifier=verifier,
             )
             store.write_brief(episode, prompt)
             telemetry_environment = {

@@ -350,6 +350,11 @@ class SupervisorRuntime:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
 
     @property
+    def journals_root(self) -> Path:
+        """Private Journal collection, sibling to the Campaign's Measurement Store."""
+        return (self.audit_root or self.root) / "journals"
+
+    @property
     def request_timeout_seconds(self) -> float:
         if self.config.request_timeout is not None:
             return self.config.request_timeout
@@ -376,8 +381,7 @@ class SupervisorRuntime:
         """Controller-only location, shared by registration and read-only recovery."""
         if type(episode) is not int or episode < 1:
             raise ValueError("Invalid controller Episode number")
-        root = (self.audit_root or self.root) / "journals"
-        return root / "episodes" / f"e{episode:08d}" / "journal.json"
+        return self.journals_root / "episodes" / f"e{episode:08d}" / "journal.json"
 
     def read_episode_journal(self, episode: int) -> dict:
         """Read existing private state without registering or creating an Episode.
@@ -397,7 +401,6 @@ class SupervisorRuntime:
                 or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base_commit) is None
                 or type(minimum_experiments) is not int or minimum_experiments < 0):
             raise ValueError("Invalid controller Episode identity")
-        root = (self.audit_root or self.root) / "journals"
         path = self.episode_journal_path(episode)
         evidence = path.parent
         expected = dict(episode=episode, base_commit=base_commit, episode_branch=branch,
@@ -438,7 +441,7 @@ class SupervisorRuntime:
                 agent_workspace = view.prepare()
             binding = JournalBinding(SupervisorJournalService(
                 workspace=agent_workspace, git_workspace=workspace,
-                campaign_root=root, evidence_root=evidence,
+                campaign_root=self.journals_root, evidence_root=evidence,
                 minimum_experiments=minimum_experiments, supervisor_git=supervisor_git), view=view)
             self.journals[workspace] = binding
             self.journals[agent_workspace] = binding
@@ -458,7 +461,6 @@ class SupervisorRuntime:
         with self.lock:
             if self.closed:
                 raise RuntimeError("Supervisor Runtime is closed")
-            self.capabilities[token] = capability
             capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
         values.update({URL_ENV: self.url, TOKEN_ENV: token})
@@ -466,11 +468,24 @@ class SupervisorRuntime:
             from .episode_workspace import EPISODE_WORKSPACE_ENV
             values[EPISODE_WORKSPACE_ENV] = str(capability.journal.view.root)
             from .agent_sandbox import git_directory
+            common = git_directory(capability.journal.view.worktree)
+            if common is None:
+                raise RuntimeError(
+                    "Cannot resolve the managed Episode Git common directory; "
+                    "refusing to start an Agent Session without private-path protection. "
+                    "Repair the controller worktree's Git metadata before retrying"
+                )
             values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps([
                 str(capability.journal.view.worktree), str(self.audit_root or self.root),
-                str(git_directory(capability.journal.view.worktree)),
+                str(common),
             ])
             values["GIT_CEILING_DIRECTORIES"] = str(capability.journal.view.root.parent)
+        # Preparation can fail or race with shutdown; grant authority only after
+        # every required private path is known, without holding the lock over Git.
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("Supervisor Runtime is closed")
+            self.capabilities[token] = capability
         try:
             yield values
         finally:
@@ -479,7 +494,9 @@ class SupervisorRuntime:
                 with capability.journal.lock:
                     primary = sys.exception()
                     try:
-                        capability.journal.view.publish()
+                        capability.journal.view.publish(
+                            sealed_source=capability.journal.service.sealed_source(),
+                        )
                     except Exception as error:
                         if primary is not None:
                             primary.add_note(f"Episode draft publication failed: {error}")
@@ -617,11 +634,17 @@ class SupervisorRuntime:
                                 except FileNotFoundError:
                                     continue
                                 publish(staged, name, content)
-                            source = read_input(staged, "kernel.py")
-                            kernel = self.measurements.kernel(source)
-                            publish(capability.journal.view.worktree,
-                                    ".atrex_long_horizon/policy_review_request.json",
-                                    json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
+                            try:
+                                source = read_input(staged, "kernel.py")
+                            except FileNotFoundError:
+                                # Standalone Dev probes need no candidate. Other
+                                # operations enforce their inputs in measurement_inputs.
+                                pass
+                            else:
+                                kernel = self.measurements.kernel(source)
+                                publish(capability.journal.view.worktree,
+                                        ".atrex_long_horizon/policy_review_request.json",
+                                        json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:

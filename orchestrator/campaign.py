@@ -442,11 +442,23 @@ class Campaign:
         self.start_runtime()
         return self._supervisor_runtime.measurements.read_kernel(kernel_id)
 
+    def acceptance_measurement_context(self, incumbent_source: bytes) -> dict:
+        """Public Kernel identity and frozen Runtime policy, without private inputs."""
+        self.start_runtime()
+        runtime = self._supervisor_runtime
+        return {
+            "baseline_kernel_id": runtime.measurements.kernel(incumbent_source)["kernel_id"],
+            "measurement_repetitions": runtime.measurement_repetitions,
+            "allocation_timeout_seconds": runtime.config.timeout,
+        }
+
     def selected_episode_evaluation(self, episode: int, source: bytes) -> dict:
         from supervisor.journal import selected_evaluation
         self.start_runtime()
         path = self._supervisor_runtime.episode_journal_path(episode)
-        return selected_evaluation(path, path.parent.parent.parent, source)
+        return selected_evaluation(
+            path, journals_root=self._supervisor_runtime.journals_root, source=source,
+        )
 
     def register_runtime_episode(
         self,

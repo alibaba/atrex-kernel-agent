@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -90,13 +91,31 @@ class EpisodeWorkspace:
         # Do not install the evaluator or copy .git / control checkpoints.
         if fresh:
             link_runtime(self.root, is_ppu=self.is_ppu)
-        durable_write_json(self.state_path, {"kernel_digest": digest})
+        durable_write_json(self.state_path, dict(state, kernel_digest=digest))
         return self.root
 
-    def publish(self) -> None:
+    def publish(self, *, sealed_source: bytes | None = None) -> None:
         from supervisor.workspace import publish
 
-        content = _read(self.root / "kernel.py")
+        state = json.loads(_read(self.state_path))
+        if sealed_source is None:
+            content = _read(self.root / "kernel.py")
+        else:
+            warning = ""
+            try:
+                if _read(self.root / "kernel.py") != sealed_source:
+                    warning = "post_report_draft_changed"
+            except (OSError, ValueError):
+                warning = "post_report_draft_unreadable"
+            if warning:
+                logging.getLogger(__name__).warning(
+                    "Episode Kernel integrity warning: %s; preserving sealed candidate; "
+                    "Agent draft remains at %s", warning, self.root,
+                )
+                state["integrity_warnings"] = sorted(set(state.get("integrity_warnings", [])) | {warning})
+                # Record the diagnostic even if unrelated publication fails later.
+                durable_write_json(self.state_path, state)
+            content = sealed_source
         publish(self.worktree, "kernel.py", content)
         for name in DIAGNOSTIC_TREES:
             for relative, data in _tree(self.root / name):
@@ -108,4 +127,4 @@ class EpisodeWorkspace:
             pass
         else:
             publish(self.worktree, ".atrex_long_horizon/telemetry.jsonl", telemetry)
-        durable_write_json(self.state_path, {"kernel_digest": hashlib.sha256(content).hexdigest()})
+        durable_write_json(self.state_path, dict(state, kernel_digest=hashlib.sha256(content).hexdigest()))

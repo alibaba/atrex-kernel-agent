@@ -120,12 +120,15 @@ def repair_promotion_audit(
         raise ValueError("--workspace must be the existing Campaign Git workspace")
     store = CampaignStore(workspace)
     active = store.load_active()
-    if not active or active.get("phase") not in {"promoting", "promoted"}:
-        raise ValueError("No interrupted promotion checkpoint to repair")
+    if not active:
+        raise ValueError("No active Episode checkpoint to repair")
     identity = {
         "episode": int(active["episode"]), "version": int(active["memory_version"]),
         "base_commit": active["base_commit"], "branch": active["episode_branch"],
     }
+    # Recovery checks promotion evidence regardless of checkpoint phase, even
+    # after recording the outcome. Authorize repair by the committed identity,
+    # not the last bookkeeping step reached before interruption.
     binding = promotion_binding(workspace, **identity)
     if binding is None or binding["promotion_commit"] != promotion_commit:
         raise ValueError("--promotion-commit must exactly match the checkpoint's committed promotion at HEAD")

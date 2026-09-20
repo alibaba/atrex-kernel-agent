@@ -42,6 +42,8 @@ the supervisor creates it after terminal validation.
 
 {{SANDBOX}}
 
+{{ACCEPTANCE_REQUEST}}
+
 ## Non-negotiable execution boundary
 
 - Never run `python test_kernel.py`, `python kernel.py`, or import GPU/JIT kernel packages directly

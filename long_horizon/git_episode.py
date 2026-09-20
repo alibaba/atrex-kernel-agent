@@ -4,6 +4,7 @@ import subprocess
 import uuid
 import shutil
 import os
+import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -74,6 +75,22 @@ def git_head(workspace: Path) -> str:
 def git_blob(workspace: Path, revision: str, path: str) -> bytes:
     """Read an exact controller-selected committed file."""
     return _git(workspace, "show", f"{revision}:{path}", binary=True).stdout
+
+
+def warn_kernel_mismatch(workspace: Path, sealed_source: bytes) -> bool:
+    """Diagnose a mutable copy without changing the sealed acceptance subject."""
+    from supervisor.workspace import read_input
+
+    try:
+        mismatch = read_input(workspace, "kernel.py") != sealed_source
+    except (OSError, ValueError):
+        mismatch = True
+    if mismatch:
+        logging.getLogger(__name__).warning(
+            "Candidate Kernel integrity warning: %s/kernel.py is unreadable or differs from the sealed commit; "
+            "acceptance uses the sealed commit", workspace,
+        )
+    return mismatch
 
 
 def working_changes(workspace: Path) -> list[str]:
@@ -175,7 +192,7 @@ class EpisodeWorktree:
         planned.materialize(incumbent_workspace)
         return planned
 
-    def validate_candidate(self, candidate_commit: str) -> tuple[str, list[str]]:
+    def validate_candidate(self, candidate_commit: str, *, require_worktree_match: bool = True) -> tuple[str, list[str]]:
         resolved = git_text(
             self.path,
             "rev-parse",
@@ -206,25 +223,31 @@ class EpisodeWorktree:
         violation = protected_violation(dirty)
         if violation:
             return violation, []
-        kernel_matches = _git(
-            self.path,
-            "diff",
-            "--quiet",
-            resolved,
-            "--",
-            "kernel.py",
-            check=False,
-        )
-        if kernel_matches.returncode:
+        if require_worktree_match and _git(
+            self.path, "diff", "--quiet", resolved, "--", "kernel.py", check=False,
+        ).returncode:
             return "worktree kernel.py must match candidate_commit", []
         paths = changed_paths(self.path, self.base_commit, resolved)
         if not paths:
             return "candidate has no changes relative to incumbent", []
         if paths != ["kernel.py"]:
             return "candidate commit may change only kernel.py", paths
-        kernel_text = (self.path / "kernel.py").read_text(encoding="utf-8", errors="replace")
+        kernel_text = git_blob(self.path, resolved, "kernel.py").decode("utf-8", errors="replace")
         if any(marker in kernel_text for marker in TIMELINE_PROBE_MARKERS):
             return "candidate kernel.py still contains timeline profiling probes", paths
+        return "", paths
+
+    def restore_sealed_candidate(self, candidate_commit: str, source: bytes) -> tuple[str, list[str]]:
+        """Refresh the controller copy only from a validated private report/commit."""
+        violation, paths = self.validate_candidate(candidate_commit, require_worktree_match=False)
+        if violation:
+            return violation, paths
+        if git_blob(self.path, candidate_commit, "kernel.py") != source:
+            return "private report source does not match candidate_commit", paths
+        if warn_kernel_mismatch(self.path, source):
+            from supervisor.workspace import publish
+
+            publish(self.path, "kernel.py", source)
         return "", paths
 
     def reset_scratch(self) -> None:
