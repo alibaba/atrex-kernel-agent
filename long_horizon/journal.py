@@ -7,6 +7,7 @@ import math
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -887,6 +888,7 @@ def validate_terminal(
     branch: str,
     state: str,
     candidate_commit: str = "",
+    runtime_journal_loader: Callable[[], dict[str, Any]] | None = None,
 ) -> str:
     try:
         value = load(path)
@@ -898,10 +900,46 @@ def validate_terminal(
         return "episode journal base commit or branch does not match"
     if value.get("state") != state:
         return "episode journal state does not match handoff"
+    verified_runtime_projection = False
+    if value.get("runtime_journal_projection") is True:
+        # This flag is Agent-writable: it requests verification, never grants
+        # an exception. Only the controller can supply the private-state reader.
+        if runtime_journal_loader is None:
+            return "runtime journal projection requires private controller verification"
+        try:
+            private = runtime_journal_loader()
+        except (OSError, ValueError, RuntimeError) as exc:
+            return f"cannot verify private runtime journal: {exc}"
+        if (
+            not isinstance(private, dict)
+            or private.get("schema_version") != 2
+            or private.get("runtime_managed") is not True
+        ):
+            return "private runtime journal is missing or invalid"
+        expected = {
+            "episode": expected_episode,
+            "base_commit": base_commit,
+            "episode_branch": branch,
+            "state": state,
+        }
+        if any(private.get(key) != item for key, item in expected.items()):
+            return "private runtime journal identity or state does not match handoff"
+        if not private.get("finalized_at") or private.get("state") not in TERMINAL_STATUSES:
+            return "private runtime journal is not finalized"
+        if private["finalized_at"] != value.get("finalized_at"):
+            return "episode journal finalization does not match private runtime journal"
+        if private.get("candidate_commit") != value.get("candidate_commit"):
+            return "episode journal candidate_commit does not match private runtime journal"
+        private_experiments = private.get("experiments")
+        if not isinstance(private_experiments, list):
+            return "private runtime journal has invalid experiments"
+        if not value.get("experiments") and private_experiments:
+            return "episode journal omits private runtime experiments"
+        verified_runtime_projection = True
     experiments = value.get("experiments")
     if not isinstance(experiments, list) or (
         not experiments and not (
-            value.get("runtime_journal_projection") is True and state in {"pivot", "blocked"}
+            verified_runtime_projection and state in {"pivot", "blocked"}
         )
     ):
         return "episode journal has no structured experiments"

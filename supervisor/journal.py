@@ -7,6 +7,7 @@ duplicate source identity or require a before/after comparison structure.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -392,8 +393,14 @@ def update_direction(
     return {"status": "recorded", "direction_id": direction_id}
 
 
-def _gateway_record(evidence_root: Path, campaign_root: Path, record_id: str) -> dict[str, Any]:
-    """Read integrity-checked PR4 facts, never Agent-supplied measurement values."""
+def _read_private_gateway_evidence(campaign_root: Path, record_id: str) -> dict[str, Any]:
+    """Read a Journal-internal evidence view from the private Measurement Store.
+
+    This is not an Agent response projection. Raw request/options/inputs stay in
+    the private store; only a derived full-evaluation eligibility flag is carried
+    into report validation. Agent output is assembled separately by the Journal
+    handlers and compatibility publisher.
+    """
     if GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None:
         raise ValueError("Gateway Record ID must be a valid gateway-... ID returned by the Runtime")
     store = MeasurementStore(campaign_root.parent / "measurements")
@@ -407,44 +414,12 @@ def _gateway_record(evidence_root: Path, campaign_root: Path, record_id: str) ->
         raise RuntimeStateError(
             "Gateway Record evidence is unreadable or inconsistent; ask the operator to restore it"
         ) from error
-    # Do not return the private request/options/inputs to the Agent.
     identity = record["kernels"].get("candidate", {})
     response = record["response"]
     result = result_from_response(response, record["operation"])
-    return {
-        "gateway_record_id": record_id,
-        "gateway_kind": "run" if record["operation"] == "evaluate" else record["operation"],
-        **identity,
-        "result": result or {},
-        "execution_status": "completed" if record.get("cacheable") else "unknown",
-        "exit_code": response["exit_code"],
-        "request": record["request"],
-    }
-
-
-def _has_passing_evaluate(
-    evidence_root: Path, campaign_root: Path, record_ids: object, kernel_digest: str
-) -> bool:
-    if not isinstance(record_ids, list):
-        return False
-    for record_id in record_ids:
-        if not isinstance(record_id, str):
-            continue
-        record = _gateway_record(evidence_root, campaign_root, record_id)
-        if _passing_evaluate(record, kernel_digest):
-            return True
-    return False
-
-
-def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
     options = record["request"]["options"]
-    return (
-        record.get("gateway_kind") == "run"
-        and record.get("kernel_artifact_digest") == kernel_digest
-        and record["result"].get("all_pass") is True
-        and not record["result"].get("error")
-        and _completed_record(record)
-        and record.get("exit_code") == 0
+    standard_full_evaluation = (
+        record["operation"] == "evaluate"
         and (options.get("evaluation_mode") or "full") == "full"
         and not options.get("evaluation_input_path")
         and not options.get("evaluation_shapes_path")
@@ -452,12 +427,47 @@ def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
             arg == "--shape-id" or arg.startswith("--shape-id=")
             for arg in options.get("command", [])
         )
+    )
+    return {
+        "gateway_record_id": record_id,
+        "gateway_kind": "run" if record["operation"] == "evaluate" else record["operation"],
+        **identity,
+        "result": result or {},
+        "execution_status": "completed" if record.get("cacheable") else "unknown",
+        "exit_code": response["exit_code"],
+        "standard_full_evaluation": standard_full_evaluation,
+    }
+
+
+def _has_passing_evaluate(
+    campaign_root: Path, record_ids: object, kernel_digest: str
+) -> bool:
+    if not isinstance(record_ids, list):
+        return False
+    for record_id in record_ids:
+        if not isinstance(record_id, str):
+            continue
+        record = _read_private_gateway_evidence(campaign_root, record_id)
+        if _passing_evaluate(record, kernel_digest):
+            return True
+    return False
+
+
+def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
+    return (
+        record.get("gateway_kind") == "run"
+        and record.get("kernel_artifact_digest") == kernel_digest
+        and record["result"].get("all_pass") is True
+        and not record["result"].get("error")
+        and _completed_record(record)
+        and record.get("exit_code") == 0
+        and record["standard_full_evaluation"]
         and record["result"].get("mode") != "correctness_only"
         and bool(record["result"].get("latency_us_by_shape"))
     )
 
 
-def _validate_record_ids(evidence_root: Path, campaign_root: Path, raw: object) -> list[str]:
+def _validate_record_ids(campaign_root: Path, raw: object) -> list[str]:
     records = _text_list(raw, "Experiment gateway_record_ids")
     if not records:
         raise AgentRequestError(
@@ -475,7 +485,7 @@ def _validate_record_ids(evidence_root: Path, campaign_root: Path, raw: object) 
     if len(set(records)) != len(records):
         raise ValueError("Experiment gateway_record_ids must not contain duplicates")
     for record_id in records:
-        record = _gateway_record(evidence_root, campaign_root, record_id)
+        record = _read_private_gateway_evidence(campaign_root, record_id)
         digest = record.get("kernel_artifact_digest")
         kernel_id = record.get("kernel_id")
         if (
@@ -525,11 +535,9 @@ def _closure_support(
             raise ValueError(f"Supporting Experiment {experiment_id} is outside visible history")
         if experiment.get("direction_id") != direction_id:
             raise ValueError("Supporting Experiment must belong to the Direction being closed")
-        records = _validate_record_ids(
-            path.parent, campaign_root, experiment.get("gateway_record_ids")
-        )
+        records = _validate_record_ids(campaign_root, experiment.get("gateway_record_ids"))
         if assessment != "unresolved" and not any(
-            _completed_record(_gateway_record(path.parent, campaign_root, record_id))
+            _completed_record(_read_private_gateway_evidence(campaign_root, record_id))
             for record_id in records
         ):
             raise AgentRequestError(
@@ -548,7 +556,6 @@ def _closure_support(
 def record_experiment(
     path: Path,
     campaign_root: Path,
-    evidence_root: Path,
     request: Mapping[str, object],
 ) -> dict[str, object]:
     value = dict(request)
@@ -573,7 +580,7 @@ def record_experiment(
     action = value.get("action")
     if not isinstance(action, str) or action not in _EXPERIMENT_ACTIONS:
         raise ValueError(f"Experiment action must be one of {sorted(_EXPERIMENT_ACTIONS)}")
-    record_ids = _validate_record_ids(evidence_root, campaign_root, value["gateway_record_ids"])
+    record_ids = _validate_record_ids(campaign_root, value["gateway_record_ids"])
     if action == "baseline" and any(
         item.get("action") == "baseline" for item in current["experiments"]
     ):
@@ -673,10 +680,10 @@ def validate_report_evidence(
         raise ValueError("selected Experiment Direction is outside visible history")
     if directions[direction_id]["status"] not in _CLOSED_STATUSES:
         raise ValueError("selected Experiment Direction must have been started and closed")
-    records = _validate_record_ids(path.parent, campaign_root, selected.get("gateway_record_ids"))
+    records = _validate_record_ids(campaign_root, selected.get("gateway_record_ids"))
     kernel_source = read_input(workspace, "kernel.py")
     kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-    if not _has_passing_evaluate(path.parent, campaign_root, records, kernel_digest):
+    if not _has_passing_evaluate(campaign_root, records, kernel_digest):
         raise ValueError(
             "selected Experiment must cite a passing Evaluate Gateway record whose "
             "Kernel exactly matches current kernel.py; inspect the cited records "
@@ -749,12 +756,7 @@ class SupervisorJournalService:
             body = request.get("request")
             if not isinstance(body, Mapping):
                 raise ValueError("experiment_record requires a request object")
-            return record_experiment(
-                self.path,
-                self.campaign_root,
-                self.evidence_root,
-                body,
-            )
+            return record_experiment(self.path, self.campaign_root, body)
         if operation == "experiments_list":
             experiments = [
                 {
@@ -797,6 +799,27 @@ class SupervisorJournalService:
             )
         except FileNotFoundError:
             return
+        except (OSError, ValueError) as error:
+            if isinstance(error, OSError) and error.errno not in {
+                errno.ELOOP,
+                errno.ENOTDIR,
+                errno.EISDIR,
+                errno.ENAMETOOLONG,
+            }:
+                raise RuntimeStateError(
+                    "Legacy Journal cannot be read because storage access failed",
+                    code="legacy_journal_unavailable",
+                ) from error
+            raise AgentRequestError(
+                "Legacy Journal is invalid; repair it before using Runtime Journal",
+                code="legacy_journal_invalid",
+                next_action=(
+                    "Make .atrex_long_horizon a real workspace directory and journal.json "
+                    "a regular JSON file, with no symlinks in either path. Preserve existing "
+                    "Journal content. No Journal mutation was applied; retry the request "
+                    "after repairing the path."
+                ),
+            ) from error
         if len(raw) > MAX_FILE_BYTES:
             raise ValueError("Legacy Journal exceeds its size limit")
         try:
@@ -815,9 +838,18 @@ class SupervisorJournalService:
             ):
                 raise ValueError("Legacy Journal projection belongs to a different Episode")
         elif legacy.get("experiments") or legacy.get("state", "in_progress") != "in_progress":
-            raise ValueError(
-                "This Episode already uses the legacy Journal. Finish with its existing "
-                "append/finalize workflow; do not mix Journal protocols"
+            raise AgentRequestError(
+                "This Episode already uses the legacy Journal; Runtime Journal mutations "
+                "cannot be used in the same Episode",
+                code="journal_protocol_conflict",
+                repairable=False,
+                next_action=(
+                    "Continue this Episode with the legacy Journal append/finalize commands "
+                    "(<JOURNAL_CLI>) in the Episode prompt and its existing handoff workflow. "
+                    "If already finalized, preserve the Journal and finish only the remaining "
+                    "handoff steps. Do not retry Runtime Journal mutations with different "
+                    "arguments, erase experiments, or reset the Journal to switch protocols."
+                ),
             )
 
     def _publish_report(self, current: dict[str, Any]) -> None:
@@ -851,7 +883,7 @@ class SupervisorJournalService:
             # Legacy reports retain the IDs and analysis. Measurement truth is
             # read from the private store, never parsed from the Agent's prose.
             for record_id in reversed(item["gateway_record_ids"]):
-                record = _gateway_record(self.evidence_root, self.campaign_root, record_id)
+                record = _read_private_gateway_evidence(self.campaign_root, record_id)
                 if item["experiment_id"] == selected and not _passing_evaluate(
                     record, current["candidate_kernel_digest"]
                 ):
@@ -1007,4 +1039,4 @@ class SupervisorJournalService:
         }
 
 
-__all__ = ["SupervisorJournalService", "initialize_journal", "load_journal"]
+__all__ = ["SupervisorJournalService", "initialize_journal", "journal_lock", "load_journal"]

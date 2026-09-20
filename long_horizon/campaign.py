@@ -854,6 +854,13 @@ class LongHorizonCampaign:
         candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
         )
+
+        def load_private_runtime_journal() -> dict[str, Any]:
+            # Called only for a claimed Runtime projection. During recovery the
+            # Runtime/binding may not exist yet; read persisted state without
+            # register_episode, which would otherwise create a missing Journal.
+            return self.base_campaign.read_runtime_episode_journal(worktree.episode)
+
         diagnosis = validate_terminal(
             journal_path,
             expected_episode=worktree.episode,
@@ -861,6 +868,7 @@ class LongHorizonCampaign:
             branch=worktree.branch,
             state=handoff.status,
             candidate_commit=candidate,
+            runtime_journal_loader=load_private_runtime_journal,
         )
         if diagnosis:
             return diagnosis
@@ -2073,8 +2081,7 @@ class LongHorizonCampaign:
                 )
             # Bind from trusted controller state, not the Agent-writable legacy
             # journal. New tools are additive; old append/finalize remains valid.
-            self.base_campaign.start_runtime()
-            self.base_campaign._supervisor_runtime.register_episode(
+            self.base_campaign.register_runtime_episode(
                 worktree.path, episode=episode, memory_version=memory_version,
                 base_commit=base_commit, branch=worktree.branch,
                 minimum_experiments=fast_trial_count if fast_mode else 0,

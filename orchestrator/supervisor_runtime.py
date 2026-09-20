@@ -7,6 +7,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import secrets
 import signal
 import shutil
@@ -362,11 +363,24 @@ class SupervisorRuntime:
         with self.lock:
             self.capabilities.pop(token, None)
 
+    def episode_journal_path(self, episode: int) -> Path:
+        """Controller-only location, shared by registration and read-only recovery."""
+        if type(episode) is not int or episode < 1:
+            raise ValueError("Invalid controller Episode number")
+        root = (self.audit_root or self.root) / "journals"
+        return root / "episodes" / f"e{episode:08d}" / "journal.json"
+
+    def read_episode_journal(self, episode: int) -> dict:
+        """Read existing private state without registering or creating an Episode.
+
+        Recovery can run before the workspace is rebound to a live capability.
+        Terminal validation must still verify identity and finalization.
+        """
+        return load_journal(self.episode_journal_path(episode))
+
     def register_episode(self, workspace: Path, *, episode: int, base_commit: str,
                          branch: str, memory_version: int, minimum_experiments: int = 0):
         """Trusted controller binding, never populated from an Agent request or file."""
-        import re
-
         workspace = workspace.resolve(strict=True)
         if (type(episode) is not int or episode < 1 or type(memory_version) is not int
                 or memory_version < 1 or not isinstance(branch, str) or not branch
@@ -374,8 +388,8 @@ class SupervisorRuntime:
                 or type(minimum_experiments) is not int or minimum_experiments < 0):
             raise ValueError("Invalid controller Episode identity")
         root = (self.audit_root or self.root) / "journals"
-        evidence = root / "episodes" / f"e{episode:08d}"
-        path = evidence / "journal.json"
+        path = self.episode_journal_path(episode)
+        evidence = path.parent
         expected = dict(episode=episode, base_commit=base_commit, episode_branch=branch,
                         memory_version=memory_version)
         with journal_lock(path):
@@ -393,6 +407,15 @@ class SupervisorRuntime:
             if existing is not None:
                 if existing.service.path != path:
                     raise RuntimeError("Workspace already belongs to another Runtime Journal")
+                # Long Horizon restores the in-flight contract from active.fast_trials.
+                # A repeated binding must not silently retain a different report gate.
+                if existing.service.minimum_experiments != minimum_experiments:
+                    raise RuntimeError(
+                        "Runtime Journal minimum_experiments changed for an already-bound "
+                        f"Episode: bound={existing.service.minimum_experiments}, "
+                        f"requested={minimum_experiments}. Resume with the original "
+                        "controller Episode trial contract; no binding was changed"
+                    )
                 return
             self.journals[workspace] = JournalBinding(SupervisorJournalService(
                 workspace=workspace, campaign_root=root, evidence_root=evidence,

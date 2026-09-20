@@ -6,6 +6,10 @@ This example links one exploration to its measured Kernel and terminal report. I
 optimization strategy or permission to run operations forbidden by the phase. Create request files
 under `scratch/`; replace the illustrative IDs below with the values returned in your session.
 
+Request files may contain at most 2,093,056 bytes (2 MiB minus 4 KiB for the envelope).
+The complete encoded HTTP body must also fit within 2 MiB. If either limit is exceeded,
+shorten text or lists and retry; the client sends no request on a size rejection.
+
 ## Propose a Direction
 
 Save as `scratch/direction.json`:
@@ -221,6 +225,11 @@ diagnostic evidence, then block/defer with an unresolved assessment. If no Gatew
 closure remains blocked and normal session recovery handles the failure; never fabricate evidence.
 Use the same report command and acknowledgement as for pivot. For all statuses, malformed reports
 can be corrected and resubmitted; do not mistake a rejected report for a completed Episode.
+
+For a report validation error (`repairable:true`), use `error.message` and `error.next_action`
+to fix the indicated fields or prerequisites, then call `episode-report` again in this Session.
+Field errors also identify missing/unexpected fields and allowed fields. This does not apply to
+`journal_protocol_conflict`: finish that Episode with the legacy commands in its prompt instead.
 
 The other optional report field is `accepted_ppu_diagnostics`; use its schema in the mounted
 `ppu-acu-joint-profile` Skill when applicable. Do not invent additional fields.

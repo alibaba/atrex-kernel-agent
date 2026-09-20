@@ -434,6 +434,32 @@ class Campaign:
             queue_timeout=queue_timeout,
         ))
 
+    def register_runtime_episode(
+        self,
+        workspace: Path,
+        *,
+        episode: int,
+        base_commit: str,
+        branch: str,
+        memory_version: int,
+        minimum_experiments: int = 0,
+    ) -> None:
+        """Start Runtime if needed and bind an Episode from trusted controller state."""
+        self.start_runtime()
+        self._supervisor_runtime.register_episode(
+            workspace,
+            episode=episode,
+            base_commit=base_commit,
+            branch=branch,
+            memory_version=memory_version,
+            minimum_experiments=minimum_experiments,
+        )
+
+    def read_runtime_episode_journal(self, episode: int) -> dict:
+        """Read existing private state without registering or creating an Episode."""
+        self.start_runtime()
+        return self._supervisor_runtime.read_episode_journal(episode)
+
     def close_runtime(self) -> None:
         runtime = getattr(self, "_supervisor_runtime", None)
         if runtime is not None:
