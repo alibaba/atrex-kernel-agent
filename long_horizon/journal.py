@@ -899,7 +899,11 @@ def validate_terminal(
     if value.get("state") != state:
         return "episode journal state does not match handoff"
     experiments = value.get("experiments")
-    if not isinstance(experiments, list) or not experiments:
+    if not isinstance(experiments, list) or (
+        not experiments and not (
+            value.get("runtime_journal_projection") is True and state in {"pivot", "blocked"}
+        )
+    ):
         return "episode journal has no structured experiments"
     outcome = value.get("outcome")
     if not isinstance(outcome, dict) or not str(outcome.get("summary", "")).strip():

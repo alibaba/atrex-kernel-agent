@@ -2071,6 +2071,14 @@ class LongHorizonCampaign:
                     branch=worktree.branch,
                     live_path=store.live_memory_path,
                 )
+            # Bind from trusted controller state, not the Agent-writable legacy
+            # journal. New tools are additive; old append/finalize remains valid.
+            self.base_campaign.start_runtime()
+            self.base_campaign._supervisor_runtime.register_episode(
+                worktree.path, episode=episode, memory_version=memory_version,
+                base_commit=base_commit, branch=worktree.branch,
+                minimum_experiments=fast_trial_count if fast_mode else 0,
+            )
             prompt = self._prompt(
                 episode=episode,
                 version=memory_version,

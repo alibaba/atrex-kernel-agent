@@ -22,13 +22,13 @@ def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
             f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
             "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
             f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-            f"`KernelWiki`, `gpu-measurement`, and `gen-plan`. Invoke a named skill with {syntax}."
+            f"`KernelWiki`, `gpu-measurement`, `runtime-records`, and `gen-plan`. Invoke a named skill with {syntax}."
         )
     runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
     return (
         f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
         f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-        "`gpu-measurement`, and `KernelWiki`."
+        "`gpu-measurement`, `runtime-records`, and `KernelWiki`."
     )
 
 
@@ -136,7 +136,7 @@ def link_runtime(
     kw_src = REPO_ROOT / "skills" / "KernelWiki"
     agents_src = REPO_ROOT / "agents"
     project_skills = REPO_ROOT / "skills"
-    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline", "gpu-measurement"]
+    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline", "gpu-measurement", "runtime-records"]
     if is_ppu:
         runtime_skill_names.append("ppu-acu-joint-profile")
     else:

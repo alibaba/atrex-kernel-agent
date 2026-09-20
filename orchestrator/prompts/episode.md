@@ -24,6 +24,16 @@ final squash promotion. You own only this episode branch and its structured evid
 
 {{RESUME_DIRECTIVE}}
 
+## Journal interface
+
+The local Journal commands below remain the default. Before the first Experiment, you may instead
+choose the Supervisor-owned interface in `skills/runtime-records/SKILL.md`: update/load Directions,
+record/load Experiments using Gateway Record IDs, and submit `episode-report`. In that case, replace
+only local Journal append/finalize and manual handoff publication with those tools; do not mix the
+two interfaces. Keep the required engineering loop, Wiki attribution, Phase Markers and Git rules.
+Commit the candidate yourself and include its full `candidate_commit` in the report. Validation
+errors can be corrected and resubmitted; acceptance still requires independent verification.
+
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
 branch are allowed, but every commit must contain only `kernel.py`. Plans, profiles, discussion
 transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add

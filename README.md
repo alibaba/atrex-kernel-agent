@@ -24,6 +24,8 @@ The repository has one supported entry point, `orchestrator/optimize.py`. The in
 
 The Campaign-owned [Supervisor GPU/Wiki Runtime](docs/supervisor-runtime.md) handles Agent measurement and knowledge requests through a scoped HTTP client, keeping Gateway credentials and evaluator packaging on the coordinator.
 
+[Runtime Journal and Episode Reports](docs/runtime-journal.md) add durable Directions, measurement-linked Experiments and correctable report submission to Long Horizon Episodes, while retaining the existing local Journal and independent verification workflow.
+
 ![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
 
 AKA supports:
