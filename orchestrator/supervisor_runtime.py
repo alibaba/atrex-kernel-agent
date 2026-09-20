@@ -1,4 +1,4 @@
-"""Campaign-owned HTTP GPU/Wiki service; no Journal or promotion authority."""
+"""Campaign-owned GPU/Wiki and Journal service; Git/promotion policy stays unchanged."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import secrets
 import signal
 import shutil
@@ -31,6 +32,8 @@ from supervisor.workspace import (
 )
 from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
 from supervisor.measurements import QUERY_KINDS
+from supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
+from supervisor.errors import AgentRequestError, RuntimeStateError
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -180,6 +183,12 @@ class RuntimeConfig:
 
 
 @dataclass
+class JournalBinding:
+    service: SupervisorJournalService
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+@dataclass
 class Capability:
     workspace: Path
     context: dict[str, str]
@@ -187,6 +196,7 @@ class Capability:
     # Set only while holding this capability's request lock.
     deadline: float | None = field(default=None, repr=False)
     request_id: str = ""
+    journal: JournalBinding | None = None
 
 
 class _Server(ThreadingHTTPServer):
@@ -230,7 +240,7 @@ class _Handler(BaseHTTPRequestHandler):
         if capability is None:
             self.reply(401, failure("Missing or revoked Session capability", repairable=False))
             return
-        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query"}:
+        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query", "/v1/journal/execute"}:
             self.reply(404, failure("Unknown endpoint"))
             return
         try:
@@ -251,6 +261,10 @@ class _Handler(BaseHTTPRequestHandler):
                         return
                 result = owner.execute(capability, self.path, request)
             self.reply(200, result)
+        except AgentRequestError as error:
+            self.reply(400, error.response)
+        except RuntimeStateError as error:
+            self.reply(503, error.response)
         except RequestValidationError as error:
             self.reply(400, failure(str(error)))
         except RequestDispatchTimeout as error:
@@ -294,6 +308,7 @@ class SupervisorRuntime:
         self.owner_id = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.capabilities: dict[str, Capability] = {}
+        self.journals: dict[Path, JournalBinding] = {}
         self.closed = False
         self.slots = threading.BoundedSemaphore(16)
         self.temporary = tempfile.TemporaryDirectory(prefix="aka-supervisor-")
@@ -348,6 +363,64 @@ class SupervisorRuntime:
         with self.lock:
             self.capabilities.pop(token, None)
 
+    def episode_journal_path(self, episode: int) -> Path:
+        """Controller-only location, shared by registration and read-only recovery."""
+        if type(episode) is not int or episode < 1:
+            raise ValueError("Invalid controller Episode number")
+        root = (self.audit_root or self.root) / "journals"
+        return root / "episodes" / f"e{episode:08d}" / "journal.json"
+
+    def read_episode_journal(self, episode: int) -> dict:
+        """Read existing private state without registering or creating an Episode.
+
+        Recovery can run before the workspace is rebound to a live capability.
+        Terminal validation must still verify identity and finalization.
+        """
+        return load_journal(self.episode_journal_path(episode))
+
+    def register_episode(self, workspace: Path, *, episode: int, base_commit: str,
+                         branch: str, memory_version: int, minimum_experiments: int = 0):
+        """Trusted controller binding, never populated from an Agent request or file."""
+        workspace = workspace.resolve(strict=True)
+        if (type(episode) is not int or episode < 1 or type(memory_version) is not int
+                or memory_version < 1 or not isinstance(branch, str) or not branch
+                or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base_commit) is None
+                or type(minimum_experiments) is not int or minimum_experiments < 0):
+            raise ValueError("Invalid controller Episode identity")
+        root = (self.audit_root or self.root) / "journals"
+        path = self.episode_journal_path(episode)
+        evidence = path.parent
+        expected = dict(episode=episode, base_commit=base_commit, episode_branch=branch,
+                        memory_version=memory_version)
+        with journal_lock(path):
+            if path.exists():
+                value = load_journal(path)
+                if any(value.get(key) != item for key, item in expected.items()):
+                    raise RuntimeError("Private Runtime Journal does not match the controller Episode")
+            else:
+                initialize_journal(path, episode=episode, base_commit=base_commit, branch=branch,
+                                   memory_version=memory_version)
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("Supervisor Runtime is closed")
+            existing = self.journals.get(workspace)
+            if existing is not None:
+                if existing.service.path != path:
+                    raise RuntimeError("Workspace already belongs to another Runtime Journal")
+                # Long Horizon restores the in-flight contract from active.fast_trials.
+                # A repeated binding must not silently retain a different report gate.
+                if existing.service.minimum_experiments != minimum_experiments:
+                    raise RuntimeError(
+                        "Runtime Journal minimum_experiments changed for an already-bound "
+                        f"Episode: bound={existing.service.minimum_experiments}, "
+                        f"requested={minimum_experiments}. Resume with the original "
+                        "controller Episode trial contract; no binding was changed"
+                    )
+                return
+            self.journals[workspace] = JournalBinding(SupervisorJournalService(
+                workspace=workspace, campaign_root=root, evidence_root=evidence,
+                minimum_experiments=minimum_experiments))
+
     @contextmanager
     def session(self, workspace: Path, environment: dict[str, str]):
         workspace = workspace.resolve(strict=True)
@@ -363,6 +436,7 @@ class SupervisorRuntime:
             if self.closed:
                 raise RuntimeError("Supervisor Runtime is closed")
             self.capabilities[token] = capability
+            capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
         values.update({URL_ENV: self.url, TOKEN_ENV: token})
         try:
@@ -452,6 +526,8 @@ class SupervisorRuntime:
             self.slots.release()
 
     def execute(self, capability: Capability, route: str, request: dict) -> dict:
+        if route == "/v1/journal/execute":
+            return self.execute_journal(capability, request)
         with _validating_request():
             allowed = {"argv"} if route.endswith("execute") else {"argv", "tool"}
             if set(request) != allowed:
@@ -514,6 +590,32 @@ class SupervisorRuntime:
                                     wiki=kind == "wiki", private_paths=(str(staged), str(self.root),
                                     str(self.config.private_reference_dir or ""), str(ROOT),
                                     self.config.url, str(self.config.atrex_bench_root or "")))
+
+    def execute_journal(self, capability: Capability, request: dict) -> dict:
+        binding = capability.journal
+        if binding is None:
+            raise AgentRequestError("Journal tools require a controller-registered Long Horizon Episode", repairable=False,
+                                    code="journal_unavailable", next_action="Use the current Setup/Baseline workflow; do not supply paths or Episode IDs to create a Journal")
+        self._acquire(binding.lock, capability, capability.deadline)
+        try:
+            if not self._live(capability):
+                raise SessionRevokedError()
+            try:
+                with journal_lock(binding.service.path):
+                    value = binding.service.execute(request)
+            except (AgentRequestError, RuntimeStateError):
+                raise
+            except ValueError as error:
+                raise AgentRequestError(str(error), next_action=(
+                    "Correct the indicated field or lifecycle state, then retry. Read skills/runtime-records/references/journal.md. "
+                    "Use list/load-direction or list/load-experiment for IDs, and record-read for measurement evidence. "
+                    "A rejected episode-report is not a completed Episode; fix it and submit again.")) from error
+            response = {"exit_code": 0, "stdout": json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n", "stderr": ""}
+            self.audit_process(capability, "journal", [str(request.get("operation"))],
+                               subprocess.CompletedProcess([], 0, response["stdout"], ""))
+            return response
+        finally:
+            binding.lock.release()
 
     def audit_process(self, capability, kind, argv, process, record_id=None):
         if self.audit_root:

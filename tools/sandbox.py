@@ -10,21 +10,72 @@ wiki-hardware. Use --kind OPERATION --help for the operation's request options.
 Read saved results with --kind record-read --record-id gateway-...;
 copy source with --kind kernel-read --kernel-id kernel-... --output-path scratch/kernel.py;
 list a Kernel's measurements with --kind kernel-records --kernel-id kernel-....
+Journal writes: update-direction, record-experiment, episode-report --request-file FILE.
+Journal indexes: list-directions, list-experiments --output-path scratch/FILE.
+Journal reads: load-direction, load-experiment --record-id ID.
+Journal tools require a registered Long Horizon Episode; see skills/runtime-records/.
 No direct Agate fallback is performed when the Runtime is unavailable.
 """
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 RUNTIME_URL_ENV = "ATREX_AKA_RUNTIME_URL"
 RUNTIME_TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
+# Wire contract with the Supervisor; keep this client independent of its modules.
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
+REQUEST_KINDS = {"update-direction": "direction_update", "record-experiment": "experiment_record", "episode-report": "episode_report"}
+LIST_KINDS = {"list-directions": "directions_list", "list-experiments": "experiments_list"}
+LOAD_KINDS = {"load-direction": ("direction_load", "direction_id"), "load-experiment": ("experiment_load", "experiment_id")}
+
+
+def journal_request(kind: str, argv: list[str]) -> dict:
+    parser = argparse.ArgumentParser(allow_abbrev=False, description="Runtime Journal; request schemas: skills/runtime-records/references/journal.md")
+    parser.add_argument("--kind", choices=[*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS], required=True)
+    if kind in REQUEST_KINDS:
+        parser.add_argument(
+            "--request-file",
+            required=True,
+            help=(
+                f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
+                "(2 MiB minus 4 KiB envelope reserve)"
+            ),
+        )
+    elif kind in LIST_KINDS:
+        parser.add_argument("--output-path", required=True, help="Workspace-relative scratch/ destination")
+    else:
+        parser.add_argument("--record-id", required=True)
+    args = parser.parse_args(argv)
+    if kind in REQUEST_KINDS:
+        try:
+            with Path(args.request_file).open("rb") as source:
+                raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
+            if len(raw) > MAX_REQUEST_FILE_BYTES:
+                raise ValueError(
+                    f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
+                    "(2 MiB minus 4 KiB reserved for the request envelope). "
+                    "Shorten request text or lists before retrying; no request was sent"
+                )
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError("request file must contain one JSON object")
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        return {"operation": REQUEST_KINDS[kind], "request": value}
+    if kind in LIST_KINDS:
+        return {"operation": LIST_KINDS[kind], "file": args.output_path}
+    operation, field = LOAD_KINDS[kind]
+    return {"operation": operation, field: args.record_id}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -49,8 +100,19 @@ def proxy_command(path: str, payload: dict) -> int:
     except ValueError:
         print("sandbox: Runtime URL must be an HTTP 127.0.0.1 origin with an explicit port.", file=sys.stderr)
         return 75
+    # File size alone cannot bound JSON re-encoding (e.g. Unicode escapes).
+    # Check exactly the bytes sent, including the operation/request envelope.
+    body = json.dumps(payload).encode()
+    if len(body) > MAX_REQUEST_BYTES:
+        print(
+            f"sandbox: encoded HTTP request exceeds {MAX_REQUEST_BYTES} bytes (2 MiB), "
+            "including JSON encoding and the request envelope. Shorten request text or "
+            "lists before retrying; no request was sent.",
+            file=sys.stderr,
+        )
+        return 2
     request = urllib.request.Request(
-        url.rstrip("/") + path, data=json.dumps(payload).encode(),
+        url.rstrip("/") + path, data=body,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
     )
@@ -116,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         kind = args[index + 1] if value == "--kind" and index + 1 < len(args) else (
             value.split("=", 1)[1] if value.startswith("--kind=") else None
         )
+        if kind in {*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS}:
+            return proxy_command("/v1/journal/execute", journal_request(kind, args))
         if kind in WIKI_KINDS:
             count = 2 if value == "--kind" else 1
             return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])

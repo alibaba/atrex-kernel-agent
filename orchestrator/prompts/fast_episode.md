@@ -26,6 +26,15 @@ own only this episode branch, its final `kernel.py`, journal, and terminal hando
 
 {{RESUME_DIRECTIVE}}
 
+## Journal interface
+
+The local Journal commands below remain the default. Before the first Experiment, you may instead
+choose `skills/runtime-records/SKILL.md`: use Supervisor Direction/Experiment tools and
+`episode-report` in place of local append/finalize and manual handoff publication. Do not mix the
+interfaces. All Fast-mode restrictions, trial counts, Wiki attribution, Phase Markers and Git rules
+still apply. Commit the selected candidate yourself and include its full `candidate_commit`.
+Fix rejected reports and resubmit; an accepted report is not a promotion decision.
+
 Never switch branches, push, merge, rebase, or alter refs. Every commit must contain only
 `kernel.py`. Plans, journals, and handoffs are ignored episode evidence and must never be added to
 Git. Never edit evaluator or ground-truth files, including `test_kernel.py`, `profile_driver.py`,
