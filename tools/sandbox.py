@@ -3840,6 +3840,10 @@ def _public_numerical_result_line(line: str) -> str:
             "all_pass", "max_abs_err", "max_rel_err", "evaluator")}
             if isinstance(result, dict) else None)
         if isinstance(result, dict):
+            item["result"]["nonfinite_outputs"] = [
+                role for role in ("reference", "candidate")
+                if role in result.get("nonfinite_outputs", [])
+            ]
             metrics = result.get("numerical_metrics") or {}
             item["result"]["numerical_metrics"] = {
                 key: value for key, value in metrics.items()

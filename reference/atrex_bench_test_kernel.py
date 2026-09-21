@@ -27,6 +27,13 @@ RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+# Exact diagnostics emitted by the pinned official comparator. Only role labels
+# cross the privacy boundary, never output names, tensors or raw exceptions.
+NONFINITE_OUTPUT_ROLES = {
+    "Non-finite output detected: reference_finite=False, candidate_finite=False": ("reference", "candidate"),
+    "Non-finite output detected: reference_finite=False, candidate_finite=True": ("reference",),
+    "Non-finite output detected: reference_finite=True, candidate_finite=False": ("candidate",),
+}
 
 
 def _finite_number(value: object) -> float | None:
@@ -215,6 +222,7 @@ def result_from_eval(
     max_abs = 0.0
     max_rel = 0.0
     numerical_metrics = {}
+    nonfinite_outputs: set[str] = set()
     for shape_id in shape_ids:
         status = correctness_status.get(shape_id)
         status = status if isinstance(status, dict) else {}
@@ -230,10 +238,12 @@ def result_from_eval(
         for case in cases if isinstance(cases, list) else []:
             if not isinstance(case, dict):
                 continue
-            outputs = case.get("outputs")
-            for output in outputs if isinstance(outputs, list) else []:
+            outputs = [output for section in ("outputs", "mutated_inputs", "unexpected_mutations")
+                       for output in (case.get(section) or [])]
+            for output in outputs:
                 if not isinstance(output, dict):
                     continue
+                nonfinite_outputs.update(NONFINITE_OUTPUT_ROLES.get(output.get("error"), ()))
                 for metric in ("relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff", "max_elementwise_rel_diff"):
                     if metric in output:
                         value = _finite_number(output[metric])
@@ -249,6 +259,13 @@ def result_from_eval(
                     max_abs = max(max_abs, abs_diff)
                 if rel_diff is not None:
                     max_rel = max(max_rel, rel_diff)
+
+    if nonfinite_outputs:
+        failures.append("non-finite output: " + ", ".join(sorted(nonfinite_outputs)))
+        # The comparator returns zero placeholders before computing any norm.
+        # Those placeholders must not masquerade as measured zero error.
+        numerical_metrics = {name: None for name in numerical_metrics}
+        max_abs = max_rel = None
 
     latency_by_shape: dict[str, float] = {}
     if require_performance:
@@ -298,6 +315,7 @@ def result_from_eval(
     return {
         "all_pass": not failures,
         "numerical_metrics": numerical_metrics,
+        "nonfinite_outputs": sorted(nonfinite_outputs),
         "failures": failures,
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,

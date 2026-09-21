@@ -18,6 +18,9 @@ Do not equate a dtype's representable range with a proven production value bound
 State range assumptions explicitly. Respect documented bounds, coupled invariants,
 packed representations, structural indices, lengths and output buffers. Compare
 against the actual reference, not a hypothetical higher-precision implementation.
+Derive packed constants from their component fields and verify the resulting
+bit pattern against the reference decoder. Use inputs on which the reference
+produces finite outputs; a non-finite reference cannot certify the candidate.
 Supplemental floating-point outputs are compared by the evaluator using relative
 L2 <= 1e-3 per output tensor (FP4 uses its benchmark threshold of 0.2), with
 finite-value and structural checks retained.
@@ -56,8 +59,12 @@ Use driver.py's declarative schema only:
   to reject the candidate; the suggestion stays in the evidence for future coverage.
 
 If review_request.json includes previous_validation, repair the failed probe plan
-using its input-generation/coverage diagnostic while preserving the original risk.
-Keep every existing case ID unchanged when repairing its fields or constraints.
+using its input-generation, coverage or reference-output diagnostic while preserving
+the original risk. A nonfinite_outputs list containing "reference" means that the
+probe has no valid finite oracle, even if "candidate" is also present. Repair the
+input distribution or packed encoding; do not request a kernel repair or relax the
+comparison threshold. Keep every existing case ID unchanged when repairing its
+fields or constraints. The supervisor must rerun the repaired plan before it passes.
 Do not ask the optimization agent to fix the numerical harness. Do not relabel a
 failed or incomplete experiment as passed. If the risk cannot be expressed with
 the supported ABI and workload constraints, explain that limitation in summary.

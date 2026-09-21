@@ -268,6 +268,7 @@ def run(request_path):
             failed_probes = 0
             results = []
             diagnosis = ""
+            nonfinite_outputs = set()
             deadline = time.monotonic() + request["per_case_timeout"]
             for shape_id in plan["shape_ids"]:
                 for seed in plan["seeds"]:
@@ -308,12 +309,15 @@ def run(request_path):
                         diagnosis = "evaluator did not generate the requested workload, seed and ranks"
                     elif not isinstance(result, dict):
                         diagnosis = f"evaluator exited {process.returncode} without a result"
+                    elif "reference" in result.get("nonfinite_outputs", []):
+                        diagnosis = "reference output is non-finite under the requested probe inputs"
                     elif result.get("all_pass") is False:
                         failed_probes += 1
                     elif result.get("all_pass") is not True or process.returncode != 0:
                         diagnosis = f"evaluator returned an inconsistent result (exit={process.returncode})"
                     if isinstance(result, dict):
                         results.append(result)
+                        nonfinite_outputs.update(result.get("nonfinite_outputs", []))
                     if diagnosis or failed_probes:
                         break
                 if diagnosis or failed_probes:
@@ -334,7 +338,8 @@ def run(request_path):
                          "failed_probes": failed_probes,
                          "selection_digest": plan["selection_digest"], "shape_count": len(plan["shape_ids"]),
                          "seeds": plan["seeds"], "world_size": suite["world_size"],
-                         "result": {"all_pass": passed, "numerical_metrics": metrics},
+                         "result": {"all_pass": passed, "numerical_metrics": metrics,
+                                    "nonfinite_outputs": sorted(nonfinite_outputs)},
                          "input_error": diagnosis})
             if not passed:
                 break

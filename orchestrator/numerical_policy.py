@@ -148,7 +148,7 @@ def _probe_status(batch, plan, suite, shapes):
             or not isinstance(row.get("result"), dict)):
         return "needs_validation"
     result = row["result"]
-    if row.get("input_error"):
+    if row.get("input_error") or "reference" in result.get("nonfinite_outputs", []):
         return "needs_validation"
     # A single fully observed workload/seed can disprove correctness. Passing
     # still requires every requested workload, seed and rank to finish.
@@ -215,13 +215,24 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
         results.append({
             "case_id": plan["case_id"], "status": status,
             "metrics": result.get("numerical_metrics", {}),
+            "nonfinite_outputs": result.get("nonfinite_outputs", []),
             "expected_probes": rows[0].get("expected_probes") if rows else None,
             "observed_probes": rows[0].get("observed_probes") if rows else None,
             "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
             "exit_code": rows[0].get("exit_code") if rows else None,
-            "diagnosis": batch.get("error") or (rows[0].get("input_error", "") if rows else ""),
+            "diagnosis": (
+                "reference output is non-finite under the requested probe inputs; "
+                "repair the input distribution or packed encoding, preserving the original risk case"
+                if "reference" in result.get("nonfinite_outputs", []) else
+                "candidate output is non-finite while the reference output is finite"
+                if "candidate" in result.get("nonfinite_outputs", []) else
+                batch.get("error") or (rows[0].get("input_error", "") if rows else "")
+            ),
         })
-    status = ("needs_repair" if any(r["status"] == "needs_repair" for r in results)
+    # Repair invalid reference inputs before asking the coding agent to act on
+    # any other failing case. All retained cases are measured again afterwards.
+    status = ("needs_validation" if any("reference" in r.get("nonfinite_outputs", []) for r in results)
+              else "needs_repair" if any(r["status"] == "needs_repair" for r in results)
               else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
               else "advisory" if any(r["status"] == "unsupported" for r in results)
               else "passed")
@@ -291,8 +302,8 @@ def supplemental_feedback(campaign, workspace):
                 record["status"] = evaluation["status"]
                 if evaluation["status"] != "needs_validation" or attempt == 1:
                     break
-                # Input ABI/scheduling failures belong to the probe planner, not
-                # the optimization agent. Keep the original risk in the request.
+                # Input ABI, scheduling and reference-output failures belong to
+                # the probe planner. Keep the original risk in the request.
                 replacement = _request_review(campaign, workspace, files, digest,
                                               {"review": review, "evaluation": evaluation})
                 if replacement["action"] == "complete":

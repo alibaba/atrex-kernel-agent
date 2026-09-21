@@ -107,7 +107,15 @@ equivalent to the ordinary allclose tolerances, so passing ordinary validation
 alone does not establish supplemental correctness. The FP4 exception preserves
 the benchmark's quantization error budget. This replaces elementwise allclose for these regenerated distributions; absolute
 and elementwise relative errors remain diagnostic. Non-finite outputs, structural
-mismatches and forbidden input mutations still fail through the evaluator. The
+mismatches and forbidden input mutations still fail through the evaluator.
+Supplemental receipts retain only the role labels `reference` / `candidate` for
+non-finite outputs; raw output names, tensors and exceptions remain private. A
+non-finite reference makes the probe invalid and returns its diagnostic to the
+planner to repair the input distribution or packed encoding and rerun all retained
+cases. This does not spend a kernel repair turn. If planning cannot produce a valid
+probe within its retry budget, validation stays blocked. Only candidate-only
+non-finite output with a finite reference is a measured kernel failure. Undefined
+comparison metrics are recorded as null, including the evaluator's zero placeholders. The
 supervisor records the comparison policy in feedback; reviewers and coding agents
 cannot change it. Ordinary workload validation retains its original comparator.
 Unsupported suggestions remain explicitly advisory, not invented executable tests.
