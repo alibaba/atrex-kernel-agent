@@ -38,7 +38,7 @@ class RecordedABBAValidator(GatewayABBAValidator):
             baseline_kernel_id, "--output-path", self.BASELINE_PATH,
         ])
         measure = shlex.join(["python3", "tools/sandbox.py", *self.request_argv()])
-        return f"""## This Episode's Full acceptance request
+        return f"""## This Episode's acceptance request
 
 ABBA is optional during exploration. To make a comparison eligible for acceptance reuse,
 leave the candidate in `kernel.py` and run these exact commands:

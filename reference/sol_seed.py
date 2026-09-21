@@ -36,7 +36,7 @@ Produces (under `kernel_opt_<name>/`):
 
 Usage:
     python reference/sol_seed.py --op-dir <sol-op-dir> --name <name> \
-        [--framework pytorch] [--platform B200] [--gpu-wiki <path>] [--no-bench]
+        [--framework pytorch] [--platform B200] [--no-bench]
 """
 
 from __future__ import annotations
@@ -120,28 +120,27 @@ def _solution_json(defn: dict, name: str, framework: str, platform: str) -> dict
     }
 
 
-def _readme(name: str, defn: dict, framework: str, platform: str, gpu_wiki: str, n_workloads: int) -> str:
+def _readme(name: str, defn: dict, framework: str, platform: str, n_workloads: int) -> str:
     return (
         f"# kernel_opt_{name}\n\n"
-        f"Profile-driven optimization of SOL-ExecBench op **{defn['name']}**.\n\n"
+        f"Evidence-backed optimization of SOL-ExecBench op **{defn['name']}**.\n\n"
         f"{defn.get('description', '').strip()}\n\n"
         "## Goal\n\n"
-        "**Minimize the GEOMEAN of per-workload kernel latency** "
-        "(`performance.latency_us` in `memory/v<N>.json`), while keeping ALL workloads "
-        "correct under their own SOL tolerances. A version that passes `test_kernel.py` "
-        "is directly submittable to SOL-ExecBench.\n\n"
+        "**Maximize performance_score: arithmetic mean of per-workload speedups** "
+        "relative to the SOL reference, while keeping ALL workloads correct under their "
+        "own SOL tolerances. The Supervisor owns evaluation and final packaging.\n\n"
         "## Config\n\n"
         f"- Target platform: `{platform}`\n"
         f"- Target framework: `{framework}` (V0 starts as PyTorch; migrate the body of `run()` in `kernel.py`)\n"
-        f"- gpu_wiki_path: `{gpu_wiki}`\n"
         f"- Workloads (shape set): {n_workloads} in `workload.jsonl` (ground truth — do NOT edit)\n\n"
         "## Ground truth (immutable)\n\n"
         "- `definition.json`, `reference.py`, `workload.jsonl` — copied verbatim from the op dir.\n"
-        "- `test_kernel.py` — the SOL evaluator harness (immutable methodology).\n\n"
+        "- The Supervisor supplies the official SOL evaluator; never replace it.\n\n"
         "## Workflow\n\n"
         "- Edit `kernel.py` only (DPS `run()`; args = definition.inputs then definition.outputs).\n"
-        "- When migrating framework, also update `solution.json` `spec.languages` / `dependencies`.\n"
-        "- Validate + bench every iteration with `python test_kernel.py --version v<N>`.\n"
+        "- Update `solution.json` only when the current initialization session permits it.\n"
+        "- Measure using `python3 tools/sandbox.py --kind run --mode full --no-sync`.\n"
+        "- Use the Direction/Experiment Journal and `episode-report` during optimization.\n"
     )
 
 
@@ -171,7 +170,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", default="", help="Explicit workspace path (default: ./kernel_opt_<name>).")
     ap.add_argument("--framework", default="pytorch", help="Target framework the loop should migrate to.")
     ap.add_argument("--platform", default="LOCAL", help="Target hardware token, e.g. B200 (default: LOCAL).")
-    ap.add_argument("--gpu-wiki", default="", help="Absolute path to gpu-wiki (recorded in README).")
     ap.add_argument("--no-bench", action="store_true", help="Skip the V0 test_kernel.py bench (no memory/v0.json).")
     ap.add_argument("--skip-bench-if-v0-exists", action="store_true",
                     help="If memory/v0.json already exists (e.g. produced by a synthetic seed), "
@@ -226,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("existing V0 is not the SOL reference wrapper")
             print(f"[sol_seed] reusing V0 source {source_commit}: {ws}")
             return 0
-    for sub in ("memory", "plans", "profiles"):
+    for sub in ("memory", "scratch"):
         (ws / sub).mkdir(parents=True, exist_ok=True)
 
     # 1) ground truth, verbatim
@@ -254,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     if claude.exists():
         (ws / "CLAUDE.md").write_text(claude.read_text(encoding="utf-8"), encoding="utf-8")
     n_wl = sum(1 for line in (op / "workload.jsonl").read_text().splitlines() if line.strip())
-    (ws / "README.md").write_text(_readme(args.name, defn, args.framework, args.platform, args.gpu_wiki, n_wl), encoding="utf-8")
+    (ws / "README.md").write_text(_readme(args.name, defn, args.framework, args.platform, n_wl), encoding="utf-8")
     (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
 
     # 5) V0 baseline metrics (real evaluator)

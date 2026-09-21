@@ -13,7 +13,6 @@ from .session_tail import read_regular_bytes
 
 WORKSPACE_ROLE_ENV = "ATREX_AGENT_WORKSPACE_ROLE"
 WORKSPACE_LAYOUTS = {
-    "plan-review-probe": (("availability_probe.md", "availability_proposal.md"), ()),
     "production-review": (("review_request.json", "candidate"), ("dependency_review.json",)),
     "problem-generation": (
         ("reference.py", "input.py", "shapes.json", "metadata.json"),

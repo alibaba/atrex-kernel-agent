@@ -1,6 +1,6 @@
 # Journal and worked Episode example
 
-Use Runtime Journal in a controller-managed Episode; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums apply to `candidate_ready` and `pivot`, not `blocked`; a blocked report still needs a nonempty blocker and must satisfy every other report/lifecycle check.
+Use Runtime Journal in a controller-managed Episode; do not mix legacy local append/finalize commands with these tools. Plans and conclusions belong in Directions and Experiments, not mandatory separate files. Every report must satisfy the lifecycle and evidence checks; `blocked` also requires a nonempty blocker. Framework Baseline follows its own finish procedure.
 
 This example links one exploration to its measured Kernel and terminal report. It is not a mandatory
 optimization strategy or permission to run operations forbidden by the phase. Create request files
@@ -206,7 +206,7 @@ If exploration found no candidate to advance, use:
 {"status":"pivot","summary":"The explored change did not improve the incumbent; try a different direction"}
 ```
 
-Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. In Full mode, Journals may be empty if no Direction needs closing. Fast-mode pivot reports still require the configured experiment/evaluation minimums.
+Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. Journals may be empty if no Direction needs closing; do not invent experiments to satisfy a count.
 Save to the same report path and call `episode-report` as above; the response is
 `{"status":"accepted","message":"Report accepted and recorded"}`.
 
@@ -218,7 +218,7 @@ If infrastructure or missing authority prevents progress:
 {"status":"blocked","summary":"Cannot obtain the required measurement","blocker":"The Runtime reports that the GPU service is unavailable"}
 ```
 
-Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. Fast-mode minimum counts do not apply to blocked reports. A blocked report can be submitted
+Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. A blocked report can be submitted
 without an Experiment only if no Direction needs closing. Otherwise record actual Kernel-bound
 diagnostic evidence, then block/defer with an unresolved assessment. If no Gateway Record exists,
 closure remains blocked and normal session recovery handles the failure; never fabricate evidence.

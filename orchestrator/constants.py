@@ -25,8 +25,6 @@ DEFAULT_CONVERT_AFTER = (
     3  # mandatory Triton->Gluon escalation after three consecutive stalls
 )
 DEFAULT_HANDOFF_RESUMES = 2
-DEFAULT_FAST_EPISODES = 2
-DEFAULT_FAST_TRIALS = 5
 DEFAULT_VERIFY_REPEATS = 2
 DEFAULT_VERIFY_RUN_TIMEOUT = 120
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"

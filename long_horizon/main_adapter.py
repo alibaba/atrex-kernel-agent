@@ -35,7 +35,6 @@ from orchestrator.optimization_policy import install_workspace_policy
 from orchestrator.session_io import _sandbox_command
 from orchestrator.workspace_runtime import (
     _agent_runtime_directive,
-    _plan_generator_directive,
     link_runtime,
 )
 from orchestrator.workspace_state import (
@@ -91,23 +90,16 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
 
 
-def episode_directives(
-    campaign: Campaign, version: int, *, fast: bool = False
-) -> dict[str, str]:
-    agent_cli = getattr(campaign, "agent_cli", "claude")
+def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
+    """Public operator guidance for the single optimization workflow."""
     return {
         "hardware": hardware_directive(campaign.platform, campaign.arch),
-        "sandbox": (
-            campaign._fast_sandbox_directive()
-            if fast
-            else campaign._sandbox_directive()
-        ),
+        "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(
-            agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
+            campaign.agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
         ),
-        "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 
 

@@ -420,7 +420,7 @@ class SupervisorRuntime:
             if existing is not None:
                 if existing.service.path != path:
                     raise RuntimeError("Workspace already belongs to another Runtime Journal")
-                # Long Horizon restores the in-flight contract from active.fast_trials.
+                # Explicit historical minimum-count policies are immutable after binding.
                 # A repeated binding must not silently retain a different report gate.
                 if existing.service.minimum_experiments != minimum_experiments:
                     raise RuntimeError(
@@ -690,7 +690,7 @@ class SupervisorRuntime:
         binding = capability.journal
         if binding is None:
             raise AgentRequestError("Journal tools require a controller-registered Long Horizon Episode", repairable=False,
-                                    code="journal_unavailable", next_action="Use the current Setup/Baseline workflow; do not supply paths or Episode IDs to create a Journal")
+                                    code="journal_unavailable", next_action="Use this session's Baseline finish procedure; do not supply paths or Episode IDs to create a Journal")
         self._acquire(binding.lock, capability, capability.deadline)
         try:
             if not self._live(capability):

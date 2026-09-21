@@ -1,88 +1,23 @@
-"""Workspace runtime wiring: reference/gpu-wiki links, agent skills, session directives."""
+"""Install the small Agent-facing tool/knowledge view, not the Supervisor source tree."""
 
 from __future__ import annotations
 
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
+from .agent_skill_manifest import SKILL_MANIFEST
 from .constants import REPO_ROOT, STALL_STATE_FILE
 
 
 def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
-    ppu_skill = "`ppu-acu-joint-profile`, " if is_ppu else ""
-    if agent_cli in {"codex", "pi"}:
-        syntax = (
-            "Codex's `$skill-name` syntax"
-            if agent_cli == "codex"
-            else "Pi's `/skill:name` syntax"
-        )
-        return (
-            f"- `.agents/skills/` — repository-local {agent_cli} skills, including "
-            "`gpu-kernel-baseline`, `gpu-kernel-episode-loop`, "
-            f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-            f"`KernelWiki`, `gpu-measurement`, `runtime-records`, and `gen-plan`. Invoke a named skill with {syntax}."
-        )
-    runtime_root = ".qoder" if agent_cli == "qodercli" else ".claude"
+    root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
+    extra = ", PPU profiling" if is_ppu else ""
     return (
-        f"- `{runtime_root}/skills/` — repository-local runtime skills, including `gen-plan`, "
-        f"`autonomous-gpu-kernel-timeline`, {ppu_skill}`ncu-report-skill`, "
-        "`gpu-measurement`, `runtime-records`, and `KernelWiki`."
+        f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
+        f"`runtime-records`, `KernelWiki`, and optional timeline diagnostics{extra}. "
+        "Read the relevant Skill for request schemas/examples."
     )
-
-
-def _baseline_driver_directive(agent_cli: str) -> str:
-    if agent_cli == "codex":
-        return (
-            "Use the `$gpu-kernel-baseline` skill and complete its baseline workflow in this "
-            "session. If Codex collaboration/sub-agent tools are available, delegate that bounded "
-            "implementation task and wait for it; otherwise execute the skill directly yourself"
-        )
-    if agent_cli == "pi":
-        return (
-            "Use the `/skill:gpu-kernel-baseline` skill and complete its workflow directly in "
-            "this Pi session. Pi has no built-in subagent requirement here; do not launch a "
-            "nested coding-agent process"
-        )
-    if agent_cli == "qodercli":
-        return (
-            "Complete the baseline workflow directly in this Qoder session. Do not launch an "
-            "Agent/subagent. Treat the current working directory as the only writable "
-            "workspace and use relative paths for every campaign file"
-        )
-    return (
-        "Launch the `gpu-kernel-baseline` subagent (by name). You may spawn it in the "
-        "background, but **you MUST wait for it to complete before you exit**"
-    )
-
-
-def _plan_generator_directive(agent_cli: str, version: int) -> str:
-    draft = f"plans/v{version}_draft.md"
-    plan = f"plans/v{version}_plan.md"
-    if agent_cli == "codex":
-        return (
-            f"Invoke the `$gen-plan` skill with `{draft}` as input and `{plan}` as "
-            "output. Use direct/no-discussion mode for this single-action optimization plan. "
-            "The skill is repository-local under `.agents/skills/`; freeze its candidate proposal "
-            "and Codex review in this current session before reading the independent Qoder review, "
-            "then synthesize."
-        )
-    if agent_cli == "pi":
-        return (
-            f"Invoke `/skill:gen-plan` in this Pi session with `{draft}` as input and "
-            f"`{plan}` as output. Use direct/no-discussion mode and wait for the plan file before "
-            "continuing."
-        )
-    if agent_cli == "qodercli":
-        return (
-            f"Read `skills/gen-plan/SKILL.md` and execute it directly with `{draft}` as input and "
-            f"`{plan}` as output in direct/no-discussion mode. Do not launch a planning subagent; "
-            "freeze the skill's candidate proposal and Qoder review in this current session before "
-            "reading the independent Codex review, then synthesize and wait for the plan file before "
-            "continuing."
-        )
-    return f"```text\n/gen-plan --input {draft} --output {plan} --direct\n```"
 
 
 def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> None:
@@ -108,130 +43,58 @@ def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> Non
     )
 
 
-def link_runtime(
-    workspace: Path, atrex_bench_root: Optional[Path] = None, *, is_ppu: bool = False
-) -> None:
-    """Link repository runtime assets into a campaign workspace.
+def _remove_legacy_link(path: Path) -> None:
+    """Unlink only known repository assets, never user directories or external targets."""
+    if path.is_symlink():
+        target = path.resolve()
+        if not target.is_relative_to(REPO_ROOT):
+            raise ValueError(f"Unrecognized runtime asset link: {path}")
+        path.unlink()
 
-    The gpu-kernel-* skills reference ``tools/``, ``reference/``, ``skills/``,
-    ``reference-projects/``, and ``gpu-wiki/`` by relative path. Sessions run with
-    ``cwd=workspace``, so symlink them in using absolute targets. Atrex-Bench evaluator code is
-    copied from its checkout without linking the checkout's private ``data/`` tree.
 
-    Also installs the same skills and agent definitions into ``.claude/`` and ``.qoder/``, and
-    repository-local Codex/Pi skills into ``.agents/skills/``.
+def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_ppu: bool = False) -> None:
+    from .agent_home import open_private_directory
+    from supervisor.workspace import publish
 
-    Every backend receives the repository-native ``gen-plan`` skill through its project-local
-    discovery root; plan generation does not require an external plugin or global installation.
-    """
-    for sub in ("tools", "reference", "skills", "reference-projects", "gpu-wiki"):
-        src, dst = REPO_ROOT / sub, workspace / sub
-        if src.exists() and not dst.exists():
-            os.symlink(src, dst)
+    # Upgrade only controller-created links. Source assets are copied with the same
+    # bounded, no-follow publisher used by Episode input projection.
+    for name in ("tools", "skills", "reference", "reference-projects", "gpu-wiki"):
+        _remove_legacy_link(workspace / name)
+    publish(workspace, "tools/sandbox.py", (REPO_ROOT / "tools/sandbox.py").read_bytes())
+    names = ["gpu-measurement", "runtime-records", "KernelWiki", "autonomous-gpu-kernel-timeline"]
+    if is_ppu:
+        names.append("ppu-acu-joint-profile")
+    for name in names:
+        manifest = SKILL_MANIFEST[name]
+        for filename in manifest.files:
+            source = REPO_ROOT / manifest.root / filename
+            publish(workspace, f"skills/{name}/{filename}", source.read_bytes())
+    for backend in (".claude", ".qoder", ".agents"):
+        _remove_legacy_link(workspace / backend / "agents")
+        root = workspace / backend / "skills"
+        with open_private_directory(root):
+            pass
+        for path in root.iterdir():
+            if path.is_symlink() and path.resolve() == (workspace / "skills" / path.name).resolve():
+                continue
+            _remove_legacy_link(path)
+        for name in names:
+            path = root / name
+            target = workspace / "skills" / name
+            if path.is_symlink() and path.resolve() == target.resolve():
+                continue
+            if path.exists() or path.is_symlink():
+                raise ValueError(f"Skill discovery path is not a managed link: {path}")
+            os.symlink(target, path)
     if atrex_bench_root is not None:
         _install_atrex_bench_runtime(workspace, atrex_bench_root)
-    # Claude and Qoder use parallel project-local discovery roots. Keep their contents identical
-    # so selecting a different --agent-cli does not change the available optimization knowledge.
-    ncu_src = REPO_ROOT / "3rdparty" / "ncu-report-skill"
-    kw_src = REPO_ROOT / "skills" / "KernelWiki"
-    agents_src = REPO_ROOT / "agents"
-    project_skills = REPO_ROOT / "skills"
-    runtime_skill_names = ["gen-plan", "autonomous-gpu-kernel-timeline", "gpu-measurement", "runtime-records"]
-    if is_ppu:
-        runtime_skill_names.append("ppu-acu-joint-profile")
-    else:
-        for root in (".claude", ".qoder", ".agents"):
-            stale = workspace / root / "skills" / "ppu-acu-joint-profile"
-            if stale.is_symlink():
-                stale.unlink()
-    for runtime_dir_name in (".claude", ".qoder"):
-        runtime_dir = workspace / runtime_dir_name
-        runtime_skills_dir = runtime_dir / "skills"
-        runtime_agents_dir = runtime_dir / "agents"
-        runtime_skills_dir.mkdir(parents=True, exist_ok=True)
-        for src, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
-            dst = runtime_skills_dir / name
-            if name == "KernelWiki" and dst.is_symlink():
-                dst.unlink()
-            if src.exists() and not dst.exists():
-                os.symlink(src, dst)
-        for name in runtime_skill_names:
-            source, destination = project_skills / name, runtime_skills_dir / name
-            if (source / "SKILL.md").is_file() and not destination.exists():
-                os.symlink(source, destination)
-        # Claude/Qoder setup prompts can launch the baseline agent by name.
-        if agents_src.exists() and not runtime_agents_dir.exists():
-            os.symlink(agents_src, runtime_agents_dir)
-
-    # Codex and Pi discover repository-scoped skills from .agents/skills. Keep these local to
-    # the campaign so selecting either runtime neither requires nor mutates user-global state.
-    agent_skills_dir = workspace / ".agents" / "skills"
-    agent_skills_dir.mkdir(parents=True, exist_ok=True)
-    # Remove runtime copies created by releases that hydrated the external plan plugin. These
-    # paths are orchestrator-owned and ignored by campaign Git; leaving them in a resumed
-    # workspace would expose duplicate or broken plan skills after the migration.
-    for legacy_name in (
-        "humanize",
-        "humanize-gen-plan",
-        "humanize-refine-plan",
-        "humanize-rlcr",
-    ):
-        legacy_path = agent_skills_dir / legacy_name
-        if legacy_path.is_symlink() or legacy_path.is_file():
-            legacy_path.unlink()
-        elif legacy_path.is_dir():
-            shutil.rmtree(legacy_path)
-    if project_skills.is_dir():
-        for source in project_skills.iterdir():
-            if source.name == "KernelWiki":
-                continue  # The explicit link migration below handles stale/broken links.
-            if source.name == "ppu-acu-joint-profile" and not is_ppu:
-                continue
-            if not (source / "SKILL.md").is_file():
-                continue
-            destination = agent_skills_dir / source.name
-            if not destination.exists():
-                os.symlink(source, destination)
-    for source, name in ((ncu_src, "ncu-report-skill"), (kw_src, "KernelWiki")):
-        destination = agent_skills_dir / name
-        if name == "KernelWiki" and destination.is_symlink():
-            destination.unlink()
-        if source.exists() and not destination.exists():
-            os.symlink(source, destination)
     gi = workspace / ".gitignore"
-    existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
-    existing_lines = set(existing.splitlines())
-    add = ""
-    runtime_ignores = [
-        "/tools",
-        "/reference",
-        "/skills",
-        "/reference-projects",
-        "/gpu-wiki",
-    ]
-    missing_runtime_ignores = [
-        entry for entry in runtime_ignores if entry not in existing_lines
-    ]
-    if missing_runtime_ignores:
-        if (
-            "# orchestrator runtime symlinks (not part of the workspace)"
-            not in existing_lines
-        ):
-            add += "\n# orchestrator runtime symlinks (not part of the workspace)\n"
-        add += "".join(f"{entry}\n" for entry in missing_runtime_ignores)
-    if "/.claude" not in existing:
-        add += "/.claude\n"
-    if "/.qoder" not in existing:
-        add += "/.qoder\n"
-    if "/.agents" not in existing:
-        add += "/.agents\n"
-    if atrex_bench_root is not None and "/atrex-bench" not in existing:
-        add += "/atrex-bench\n"
-    if "/" + STALL_STATE_FILE not in existing:
-        add += (
-            "\n# orchestrator live stall counter (rebuilt on restart; never committed)\n"
-            "/" + STALL_STATE_FILE + "\n"
-        )
-    if add:
-        with gi.open("a", encoding="utf-8") as fh:
-            fh.write(add)
+    from .session_tail import read_regular_bytes
+    try:
+        existing = read_regular_bytes(gi, limit=1024 * 1024).decode()
+    except FileNotFoundError:
+        existing = ""
+    ignores = ("/tools", "/skills", "/reference", "/reference-projects", "/gpu-wiki", "/.claude", "/.qoder", "/.agents", "/atrex-bench", "/" + STALL_STATE_FILE)
+    missing = [name for name in ignores if name not in existing.splitlines()]
+    if missing:
+        publish(workspace, ".gitignore", (existing.rstrip() + "\n" + "\n".join(missing) + "\n").encode())

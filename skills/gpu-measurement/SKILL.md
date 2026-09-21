@@ -10,10 +10,9 @@ hardware, credentials and timeout, snapshots the current workspace, and supplies
 the evaluator and private inputs. Do not set endpoint/credential flags or run GPU
 code locally. Every remote job starts fresh; no remote filesystem is retained.
 
-This skill changes transport, not the Episode workflow: follow the current
-Setup/Framework Baseline/Fast/Full instructions, including their measurement,
-Journal, plan, profile and Git requirements. An Agent measurement or comparison
-does not grant promotion authority.
+Follow the current session's measurement scope and finish procedure. Framework
+Baseline permits only its prescribed smoke; optimization Episodes may use the
+operations below. Measurements and comparisons do not grant promotion authority.
 
 Read [requests.md](references/requests.md) for request examples. Use
 `--kind OPERATION --help` for full CLI parameters. Evaluate keeps

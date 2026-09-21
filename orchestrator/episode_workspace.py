@@ -16,9 +16,9 @@ EPISODE_WORKSPACE_ENV = "ATREX_EPISODE_WORKSPACE"
 PUBLIC_FILES = (
     "README.md", "CLAUDE.md", "agent_problem.json", "reference.py", "input.py",
     "definition.json", "workload.jsonl", "solution.json", "shapes.json", "metadata.json", "roofline.json",
-    "valid.py", "test_kernel.py", "profile_driver.py", "config.json", ".orchestrator_mode.json",
+    "valid.py",
 )
-DIAGNOSTIC_TREES = ("scratch", "plans", "profiles", ".humanize")
+DIAGNOSTIC_TREES = ("scratch",)
 MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
 
@@ -71,6 +71,12 @@ class EpisodeWorkspace:
         if fresh or digest != state.get("kernel_digest"):
             publish(self.root, "kernel.py", source)
         for name in PUBLIC_FILES:
+            if name == "CLAUDE.md":
+                # Instructions follow the running controller, not an old V0's
+                # retired Setup/Fast workflow. Do not rewrite the committed V0.
+                content = _read(Path(__file__).resolve().parents[1] / "reference/CLAUDE.md")
+                publish(self.root, name, content)
+                continue
             try:
                 content = _read(self.worktree / name)
             except FileNotFoundError:
@@ -81,7 +87,7 @@ class EpisodeWorkspace:
         for path in (self.worktree / "memory").glob("v*.json"):
             if path.stem[1:].isascii() and path.stem[1:].isdigit():
                 publish(self.root, f"memory/{path.name}", _read(path))
-        for name in (*DIAGNOSTIC_TREES, ".atrex_long_horizon"):
+        for name in DIAGNOSTIC_TREES:
             with open_private_directory(self.root / name):
                 pass
             if fresh and name in DIAGNOSTIC_TREES:
@@ -120,11 +126,4 @@ class EpisodeWorkspace:
         for name in DIAGNOSTIC_TREES:
             for relative, data in _tree(self.root / name):
                 publish(self.worktree, f"{name}/{relative}", data)
-        # Phase markers remain part of the old workflow, not a handoff authority.
-        try:
-            telemetry = _read(self.root / ".atrex_long_horizon/telemetry.jsonl")
-        except FileNotFoundError:
-            pass
-        else:
-            publish(self.worktree, ".atrex_long_horizon/telemetry.jsonl", telemetry)
         durable_write_json(self.state_path, dict(state, kernel_digest=hashlib.sha256(content).hexdigest()))

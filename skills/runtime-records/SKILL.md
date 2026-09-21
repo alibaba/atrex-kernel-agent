@@ -7,14 +7,12 @@ allowed-tools: "Bash Read"
 # Runtime records
 
 Use `python3 tools/sandbox.py` inside a controller-registered Long Horizon Episode.
-Setup and Framework Baseline keep their existing finish procedures. This Skill does not replace
-the Episode's planning, profiling, Fast/Full, Wiki attribution, Phase Marker or verification policy.
-Fast-mode experiment/evaluation minimums apply to `candidate_ready`/`pivot`, not `blocked`; all
-statuses still require valid report fields and no in-progress Directions.
+Framework Baseline has its own smoke-and-exit procedure, not an Episode report.
+All Episode outcomes require valid report fields and no in-progress Directions.
 
 New Long Horizon Episodes use Runtime Journal. Do not call legacy append/finalize, manage Git,
 or write control handoffs. Leave the selected measured source in `kernel.py`; the Supervisor
-creates the commit and decides acceptance independently. Setup/Baseline keep their existing flow.
+creates the commit and decides acceptance independently.
 
 1. Inspect prior evidence, propose a research Direction, then start it before exploration.
 2. Record decisive Experiments promptly, linking actual `gateway_record_ids`; separate measured

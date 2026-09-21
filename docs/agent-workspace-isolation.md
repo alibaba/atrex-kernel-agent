@@ -2,7 +2,7 @@
 
 AKA can launch coding-agent sessions inside a Linux Bubblewrap namespace. This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. It is opt-in: `--agent-sandbox none` remains the default on Linux and macOS.
 
-The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) handles remote requests; [Supervisor-owned handoff](supervisor-promotion.md) keeps optimization Episode Git/control state outside a persistent Agent draft. Setup and auxiliary workflows retain their scoped legacy behavior.
+The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) handles remote requests; [Supervisor-owned handoff](supervisor-promotion.md) keeps optimization Episode Git/control state outside a persistent Agent draft. Framework Baseline and auxiliary workflows retain their scoped behavior.
 
 ## Launch lifecycle
 
@@ -58,13 +58,13 @@ To roll back the launch boundary, stop the campaign normally and launch with `--
 The namespace starts from an empty root, not a read-only copy of the host root. It contains:
 
 - Read-only system runtime directories and selected OS configuration/certificate files, minimal `/dev`, a private PID namespace and `/proc`, and private `/tmp` and `/run`.
-- The current Optimizer workspace, writable at its original path, plus read-only repository tools, skills and reference assets needed by the existing symlink-based workspace.
+- The current Optimizer workspace at its original path, with mutable draft/scratch and read-only public inputs, canonical memory, installed HTTP client and manifest-listed Skills. Runtime-authorized sessions do not mount the whole repository tool/reference/Supervisor trees; the shell guard is mounted separately.
 - A writable, per-Session Provider Home under `<workspace-parent>/.atrex-agent-homes/<key>/`. Different workspaces/Sessions receive separate copies; same-Session resume keeps its Home. Homes are outside the candidate Git tree.
 - Minimal executable files, recognized npm packages/dependencies and Python installation libraries needed by the CLI. Runtime-managed sessions do not add an Agate installation mount. Discovery never restores an entire first-level directory under the operator Home. Installation aliases pointing into Provider history/auth state or the private Session storage are rejected.
 
-Only selected login/settings files are seeded for the active backend and enabled external plan reviewers. Claude/Qoder/Codex/Pi transcript trees, caches and arbitrary global plugins are not copied. Qoder's `.auth/user` and `machine_id` are included; its entire `.qoder` or `.qodersec` tree is not mounted. Destination directory traversal does not follow Agent-created symlinks. Existing Session-local settings are preserved on resume, and changes never write back to the operator Home.
+Only selected login/settings files are seeded for the active backend. Claude/Qoder/Codex/Pi transcript trees, caches and arbitrary global plugins are not copied. Qoder's `.auth/user` and `machine_id` are included; its entire `.qoder` or `.qodersec` tree is not mounted. Destination directory traversal does not follow Agent-created symlinks. Existing Session-local settings are preserved on resume, and changes never write back to the operator Home.
 
-These are copies, not live credential synchronization: refreshed host login state does not overwrite an existing Session Home. State files are private to the owning OS user and can contain credentials and raw conversations. Retain them for resume, and remove them only after that Session is stopped and no longer needed. PR1 capture remains outside the workspace by default and uses the same isolated Home; do not explicitly relocate capture into an Agent-writable path if it must remain private.
+These are copies, not live credential synchronization: refreshed host login state does not overwrite an existing Session Home. State files are private to the owning OS user and can contain credentials and raw conversations. Retain them for resume, and remove them only after that Session is stopped and no longer needed. Session capture remains outside the workspace by default and uses the same isolated Home; do not explicitly relocate capture into an Agent-writable path if it must remain private.
 
 Environment inheritance otherwise follows the existing CLI contract. Model credentials intentionally supplied to the Agent remain usable by it. Gateway credentials are removed before launch; the Agent receives a workspace-scoped HTTP capability instead. New Homes do not copy Agate configuration, and old copies are masked for resumed Runtime-managed sessions. Environment values are passed through an anonymous `bwrap --args FD`, not `--setenv KEY secret` in the process command line. This is not protection against a privileged host operator or another process with equivalent OS credentials.
 
@@ -80,13 +80,10 @@ Temporary-view cleanup is attempted whether publication succeeds, fails or is sk
 | Production policy review | `review_request.json`, `candidate/` | `dependency_review.json` |
 | Baseline exit review | `crash_record.json`, `candidate/` | `resume.json` |
 | Baseline correctness review | `context/` | `correctness_review.md` |
-| Plan-reviewer availability probe | `availability_probe.md`, `availability_proposal.md` | None; existing stdout protocol |
-
-Availability probes use the Campaign workspace as `cwd` in both native and Bubblewrap modes. Their draft/proposal remain Supervisor-created temporary files, passed as absolute paths; relative packet paths are rejected before launch. Bubblewrap snapshots them under the two declared input names in its read-only view and passes those virtual paths to the helper. No probe files are written to the real Campaign, and neither the temporary source directory nor other Campaign files are mounted. Changing `cwd` does not grant access to undeclared relative-path configuration files.
 
 The allowlist contains at most 4,096 files / 16 MiB; each returned file is limited to 8 MiB. These roles receive no campaign Git, Gateway/private-reference, Wiki-history or recovery-state mounts. Public problem generation is the explicit trusted preprocessing exception that reads exact shapes to create the public contract; optimization sessions do not inherit its input view.
 
-Provider-created child Agents and plan helpers launched from within an Optimizer inherit that Optimizer's namespace, not a separate auxiliary allowlist. Optional persistent Codex/Qoder plan consultations have their own campaign-scoped Homes and state under `.atrex_long_horizon/reviewer-state/`, avoiding both global Provider history and the full Long Horizon archive. Entering this opt-in mode starts a separate persistent reviewer context rather than importing a global native thread.
+Provider-created child Agents inherit their Optimizer namespace, not a separate auxiliary allowlist. No persistent cross-Episode plan-review session is launched.
 
 ## Legacy grants and scope limits
 
@@ -95,13 +92,13 @@ Managed optimization Episodes use a persistent Git-free draft; the Supervisor ow
 | Role or behavior | Access | Authority |
 | --- | --- | --- |
 | Managed optimization Episode | Draft source and engineering artifacts; no real worktree, Git, private Journal or handoff | Supervisor seals measured source after `episode-report` |
-| Legacy Setup and non-managed integrations | Existing campaign Git grants; only user name/email copied from global Git configuration | Retain their existing workflow, outside the optimization-Episode contract |
+| Framework Baseline and non-managed integrations | Existing campaign Git grants; only user name/email copied from global Git configuration | Retain their existing workflow, outside the optimization-Episode contract |
 | Agent calls `tools/sandbox.py` | HTTP client and per-invocation capability; no evaluator/private-input/Gateway-credential grant | Supervisor GPU/Wiki Runtime |
-| Phase/recovery and reviewer helpers | Explicitly scoped telemetry and helper-state directories for append/atomic replace | Managed Episodes cannot grant access to the private worktree/store |
+| Explicitly configured recovery/diagnostic helpers | Explicitly scoped telemetry and helper-state directories for append/atomic replace | Managed Episodes cannot grant access to the private worktree/store |
 
 Writable file grants include the containing directory to support atomic replacement and lock files. Validation checks that actual directory before creating or mounting it: it must not be the operator Home or an ancestor, traverse symlinks, or overlap the `.atrex-agent-homes` root in either direction. The current Session Home is mounted only through the dedicated Home setup, never through these legacy environment grants. Use a dedicated log/state subdirectory rather than placing a granted file directly under the operator Home.
 
-For managed optimization Episodes, Bubblewrap enforces the private worktree/Git/Journal boundary described in [Supervisor handoff and promotion](supervisor-promotion.md). Legacy Setup and non-managed integrations do not have that contract. Native mode separates working directories cooperatively but does not isolate processes sharing the operator's UID. Arbitrary GPU probe code remains untrusted; bounded Runtime projections are not a semantic data-loss-prevention guarantee for everything a probe could print.
+For managed optimization Episodes, Bubblewrap enforces the private worktree/Git/Journal boundary described in [Supervisor handoff and promotion](supervisor-promotion.md). Framework Baseline and non-managed integrations do not have that contract. Native mode separates working directories cooperatively but does not isolate processes sharing the operator's UID. Arbitrary GPU probe code remains untrusted; bounded Runtime projections are not a semantic data-loss-prevention guarantee for everything a probe could print.
 
 The Agent shares the host network for model and loopback Runtime access; Gateway/Wiki/SSH operations run on the Supervisor. Filesystem isolation adds no network allowlist or cgroup resource quota. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
 
