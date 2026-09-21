@@ -2740,13 +2740,20 @@ class Campaign:
                 + "; ".join(violations)
             )
         if not validation_problem:
-            validation_problem = self._supplemental_numerical_feedback()
+            validation_problem = self._supplemental_numerical_feedback(
+                standard_correctness_passed=True
+            )
         return result, validation_problem
 
-    def _supplemental_numerical_feedback(self, workspace: Path | None = None) -> str:
+    def _supplemental_numerical_feedback(
+        self, workspace: Path | None = None, *, standard_correctness_passed: bool = False
+    ) -> str:
         from .numerical_policy import supplemental_feedback
 
-        return supplemental_feedback(self, workspace or self.workspace)
+        return supplemental_feedback(
+            self, workspace or self.workspace,
+            standard_correctness_passed=standard_correctness_passed,
+        )
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
         """Validate V1 once: base-seed performance plus five extra correctness cases."""

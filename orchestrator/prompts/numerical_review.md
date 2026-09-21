@@ -34,6 +34,11 @@ constructors and input_constraints; do not hardcode this example for other kerne
 The supervisor executes the requested tests. A passing experiment closes the
 suggestion. A measured failure is returned to the optimization agent for repair,
 then the same probes run again. There is no second subjective numerical veto.
+If your session times out without a usable plan, the supervisor may skip this
+candidate's additional numerical testing when its standard correctness gate has
+passed and no measured supplemental failure remains. This is recorded as a
+planner-timeout skip, never as a passing experiment. Performance and promotion
+gates still apply.
 
 Use driver.py's declarative schema only:
 - suite: schema_version=1, world_size matching the trusted operator, two seeds

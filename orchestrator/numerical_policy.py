@@ -1,8 +1,8 @@
 """Turn numerical review suggestions into probes and coding-agent feedback.
 
 A reviewer requests bounded experiments, not an admission verdict. Only measured
-failures ask the coding agent to repair the candidate. Incomplete experiments stay
-pending validation and never become correctness failures or successful receipts.
+failures ask the coding agent to repair the candidate. Planner timeouts may skip
+additional testing after standard correctness passes; they are never probe passes.
 """
 from __future__ import annotations
 
@@ -20,13 +20,17 @@ from reference.atrex_bench_test_kernel import _fp4_correctness_max_rel_l2
 from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from .durable_state import durable_write_json
 from .infrastructure_retry import (
-    check_review_service, check_transport, retry_infrastructure, retry_review,
+    check_review_service, check_transport, retry_infrastructure,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "long_horizon" / "remote_numerical.py"
 PROMPT = Path(__file__).with_name("prompts") / "numerical_review.md"
 HARNESS = ROOT / "reference" / "atrex_bench_test_kernel.py"
+
+
+class NumericalPlanningTimeout(RuntimeError):
+    """The numerical planner timed out without a usable plan."""
 
 
 def _digest(files):
@@ -77,11 +81,8 @@ def _validate_review(value, digest):
 def _request_review(campaign, workspace, files, digest, previous=None):
     from .session_io import run_session
 
-    attempt = 0
     def review_once():
-        nonlocal attempt
-        timeout = campaign.production_review_timeout * (1 if attempt == 0 else 2)
-        attempt += 1
+        timeout = campaign.production_review_timeout
         with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
             root = Path(temporary)
             for name, source in files.items():
@@ -114,6 +115,10 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 _validate_review(value, digest)
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 record["validation_error"] = str(exc)
+                if result.timed_out:
+                    raise NumericalPlanningTimeout(
+                        "numerical supplemental-test planner timed out without a usable plan"
+                    ) from exc
                 check_review_service(result)
                 raise
             else:
@@ -126,7 +131,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
 
     context = hashlib.sha256(json.dumps(previous, sort_keys=True).encode()).hexdigest()
     stage = f"numerical-advice:{digest}:{campaign.agent_cli}:{campaign.production_review_timeout}:{context}"
-    return retry_review(workspace, stage, review_once)
+    return retry_infrastructure(workspace, stage, review_once)
 
 
 def _probe_status(batch, plan, suite, shapes):
@@ -239,7 +244,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
     return {"status": status, "probes": results}
 
 
-def supplemental_feedback(campaign, workspace):
+def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
@@ -248,7 +253,7 @@ def supplemental_feedback(campaign, workspace):
     digest = _digest(files)
     validation_digest = _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"})
     cache = getattr(campaign, "_supplemental_results", {})
-    key = (str(workspace.resolve()), validation_digest)
+    key = (str(workspace.resolve()), validation_digest, standard_correctness_passed)
     if key in cache:
         return cache[key]
 
@@ -318,6 +323,29 @@ def supplemental_feedback(campaign, workspace):
                 durable_write_json(plan_path, review, indent=2)
         if _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"}) != validation_digest:
             raise ValueError("candidate or contract changed during supplemental validation")
+    except NumericalPlanningTimeout as exc:
+        from long_horizon.campaign import _latest_complete_episode_performance
+
+        # Episode receipts bind the full standard workload result to the current
+        # kernel/manifest. Baselines supply their just-completed standard gate.
+        standard_passed = standard_correctness_passed or (
+            _latest_complete_episode_performance(
+                workspace, expected_shape_ids=set(json.loads(shapes.read_text()))
+            ) is not None
+        )
+        measured_failure = any(
+            evaluation.get("status") == "needs_repair"
+            or any(probe.get("status") == "needs_repair"
+                   for probe in evaluation.get("probes", []))
+            for evaluation in record.get("evaluations", [])
+        )
+        unchanged = _digest({**files, "shapes.json": shapes,
+                             "evaluator.py": workspace / "test_kernel.py"}) == validation_digest
+        record.update(
+            status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure
+                    else "needs_validation"),
+            diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
+        )
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         record.update(status="needs_validation", diagnosis=str(exc))
 
@@ -326,10 +354,9 @@ def supplemental_feedback(campaign, workspace):
     durable_write_json(feedback_path, record, indent=2, ensure_ascii=False)
     status = record["status"]
     print(f"[numerical-supplement] {status}; evidence={feedback_path}", flush=True)
-    if status in {"passed", "advisory"}:
-        # Keep the closed experiment as a regression probe for subsequent edits
-        # and process restarts. Recertify against the new candidate; never reopen
-        # the same advisory merely because a reviewer session is fresh.
+    if status in {"passed", "advisory", "skipped_planner_timeout"}:
+        # A timeout skips only this candidate's expansion; it is not a probe PASS.
+        # Retained probe plans still run against subsequent candidate edits.
         feedback = ""
     elif status == "needs_repair":
         feedback = (
