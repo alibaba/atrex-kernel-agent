@@ -429,7 +429,14 @@ def dependency_guard(
             signal_process_groups(process_groups, signal.SIGKILL)
             return
         for pid, argv in descendant_process_commands(proc.pid):
-            reason = dependency_process_violation(argv, cwd=Path(f"/proc/{pid}/cwd").resolve())
+            try:
+                cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
+            except (FileNotFoundError, ProcessLookupError):
+                # A child may exit between reading cmdline and resolving cwd.
+                continue
+            except PermissionError:
+                cwd = None
+            reason = dependency_process_violation(argv, cwd=cwd)
             if reason is None:
                 continue
             rendered = " ".join(argv)

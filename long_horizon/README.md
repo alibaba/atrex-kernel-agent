@@ -12,7 +12,9 @@ incumbent and candidate in an exact same-allocation ABBA schedule. A strict corr
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
-An episode candidate commit contains only `kernel.py`. Plans, profiles, planner discussions,
+An episode candidate commit changes `kernel.py` and may update its `solution.json` manifest. Both
+files must match the reviewed commit and are promoted together, so framework conversions retain
+their matching language, dependency, and source-role declarations. Plans, profiles, planner discussions,
 journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
 worktree is removed.
 

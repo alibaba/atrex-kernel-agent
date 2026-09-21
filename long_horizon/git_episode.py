@@ -40,6 +40,7 @@ PROTECTED_PREFIXES = (
     ".atrex_",
 )
 EPISODE_EVIDENCE_PREFIXES = ("plans/", "profiles/", ".humanize/")
+CANDIDATE_PATHS = frozenset({"kernel.py", "solution.json"})
 TIMELINE_PROBE_MARKERS = (
     "cute.experimental.iket.",
     "atrex_timeline.cuh",
@@ -199,22 +200,13 @@ class EpisodeWorktree:
         violation = protected_violation(dirty)
         if violation:
             return violation, []
-        kernel_matches = _git(
-            self.path,
-            "diff",
-            "--quiet",
-            resolved,
-            "--",
-            "kernel.py",
-            check=False,
-        )
-        if kernel_matches.returncode:
-            return "worktree kernel.py must match candidate_commit", []
+        if CANDIDATE_PATHS.intersection(dirty):
+            return "worktree kernel.py and solution.json must match candidate_commit", []
         paths = changed_paths(self.path, self.base_commit, resolved)
         if not paths:
             return "candidate has no changes relative to incumbent", []
-        if paths != ["kernel.py"]:
-            return "candidate commit may change only kernel.py", paths
+        if "kernel.py" not in paths or not set(paths).issubset(CANDIDATE_PATHS):
+            return "candidate commit must change kernel.py and may also update solution.json", paths
         kernel_text = (self.path / "kernel.py").read_text(encoding="utf-8", errors="replace")
         if any(marker in kernel_text for marker in TIMELINE_PROBE_MARKERS):
             return "candidate kernel.py still contains timeline profiling probes", paths
@@ -281,6 +273,9 @@ def promote_candidate(
 ) -> str:
     if git_head(incumbent_workspace) != base_commit:
         raise RuntimeError("incumbent advanced during episode; refusing promotion")
+    candidate_paths = changed_paths(incumbent_workspace, base_commit, candidate_commit)
+    if "kernel.py" not in candidate_paths or not set(candidate_paths).issubset(CANDIDATE_PATHS):
+        raise RuntimeError("promotion requires kernel.py with only an optional solution.json update")
     try:
         subprocess.run(
             ["git", "merge", "--squash", "--no-commit", candidate_commit],
@@ -321,7 +316,7 @@ def promote_candidate(
                 "-m",
                 f"episode {episode}: promote verified long-horizon candidate",
                 "--",
-                "kernel.py",
+                *candidate_paths,
                 f"memory/long_horizon_e{episode:04d}.json",
                 f"memory/v{memory_version}.json",
             ],
