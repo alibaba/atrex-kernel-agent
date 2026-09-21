@@ -2,7 +2,7 @@
 
 GPU work can finish even when the Agent connection, local publication or Supervisor process fails. Without a durable association between the exact inputs and the returned result, retrying can spend another GPU allocation, while reusing a cancelled or incomplete response can turn an infrastructure failure into permanent Candidate rejection.
 
-The Campaign Runtime retains measurement facts outside Agent workspaces and recognizes identical tasks across Sessions and Episodes. Measurement records capture execution evidence; Episode scheduling, Agent Git operations, Journal/report generation and acceptance decisions are separate responsibilities.
+The Campaign Runtime retains measurement facts outside Agent workspaces and recognizes identical tasks across Sessions and Episodes. Measurement records capture execution evidence; Episode scheduling, Supervisor Git operations, Journal/report generation and acceptance decisions are separate responsibilities. [Trusted acceptance](supervisor-promotion.md) may reuse a completed exact task, while Agent duplicates still receive an error and Record ID.
 
 ## Lifecycle
 

@@ -3,12 +3,9 @@
 This package implements the native optimization engine used by
 `orchestrator/optimize.py`. It is not a separate command-line entry point.
 
-Each canonical optimization version is explored in an isolated Git branch and worktree. A coding
-agent may run multiple related profile/research/edit/validate cycles, preserve private checkpoint
-commits, and finally publish one structured handoff: `candidate_ready`, `pivot`, or `blocked`.
+The Supervisor maintains each version in an isolated Git worktree; the coding Agent receives a separate persistent Git-free draft. It retains the existing engineering loop and submits `candidate_ready`, `pivot`, or `blocked` through Runtime `episode-report`. The Supervisor commits the exact measured candidate. See [handoff and promotion](../docs/supervisor-promotion.md).
 
-The supervisor validates the journal and candidate commit, checks production policy, and evaluates
-incumbent and candidate in an exact same-allocation ABBA schedule. A strict correctness-passing
+The supervisor validates the journal and candidate commit, checks production policy, and requires a policy-matched recorded same-allocation ABBA in Full mode, reusing exact existing evidence. Fast mode uses the selected private Evaluate record. A strict correctness-passing
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
@@ -20,7 +17,7 @@ Runtime state lives under `.atrex_long_horizon/` in generated campaign workspace
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
 `--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
 
-Each active episode also exposes ignored `memory/live.json`. It is initialized immediately and
+The controller maintains ignored `memory/live.json` for its legacy consumers, not as an Agent-writable handoff. It is initialized immediately and
 atomically refreshed after every journal append, but it never participates in version selection or
 promotion; `memory/vN.json` remains the canonical supervisor-owned record.
 
@@ -52,8 +49,7 @@ non-duplicated invocation total while phase attribution degrades fail-closed.
 `.atrex_long_horizon/state.json` and `active_episode.json` are restart state, while each
 `episodes/eNNNN/` directory archives the prompt, journal-derived attempt, worktree snapshot,
 verification payload, and telemetry available for that episode. These files are intentionally
-excluded from campaign commits. Accepted evidence is also written to committed
-`memory/long_horizon_eNNNN.json` and the canonical `memory/v<N>.json`.
+excluded from campaign commits. Promotion evidence is private and digest-bound to its Git promotion; canonical `memory/v<N>.json` remains committed.
 
 At normal completion, Python failure, `SIGINT`, `SIGTERM`, or `SIGHUP`, the orchestrator writes an ignored
 `trace-retention-manifest.json`. It declares only the candidate sources,

@@ -393,9 +393,11 @@ def update_direction(
     return {"status": "recorded", "direction_id": direction_id}
 
 
-def _read_private_gateway_evidence(campaign_root: Path, record_id: str) -> dict[str, Any]:
+def _read_private_gateway_evidence(journals_root: Path, record_id: str) -> dict[str, Any]:
     """Read a Journal-internal evidence view from the private Measurement Store.
 
+    ``journals_root`` is the Runtime-owned ``<scope>/journals`` collection;
+    its sibling ``<scope>/measurements`` stores the referenced Gateway Records.
     This is not an Agent response projection. Raw request/options/inputs stay in
     the private store; only a derived full-evaluation eligibility flag is carried
     into report validation. Agent output is assembled separately by the Journal
@@ -403,7 +405,7 @@ def _read_private_gateway_evidence(campaign_root: Path, record_id: str) -> dict[
     """
     if GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None:
         raise ValueError("Gateway Record ID must be a valid gateway-... ID returned by the Runtime")
-    store = MeasurementStore(campaign_root.parent / "measurements")
+    store = MeasurementStore(journals_root.parent / "measurements")
     try:
         record = store.read(record_id)
     except FileNotFoundError as error:
@@ -465,6 +467,43 @@ def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
         and record["result"].get("mode") != "correctness_only"
         and bool(record["result"].get("latency_us_by_shape"))
     )
+
+
+def selected_evaluation(path: Path, journals_root: Path, source: bytes) -> dict[str, Any]:
+    """Controller-only lookup; revalidate exact source against the sealed report.
+
+    Pass ``SupervisorRuntime.journals_root`` explicitly, rather than inferring
+    the collection root from the Episode journal file's directory depth.
+    """
+    current = load_journal(path)
+    digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    if current.get("state") != "candidate_ready" or current.get("candidate_kernel_digest") != digest:
+        raise ValueError("Selected report does not match the acceptance Kernel")
+    selected_id = current["outcome"]["selected_experiment_id"]
+    matches = [item for item in current["experiments"] if item["experiment_id"] == selected_id]
+    if len(matches) != 1:
+        raise ValueError("Selected report has no unique Experiment")
+    for record_id in reversed(matches[0]["gateway_record_ids"]):
+        record = _read_private_gateway_evidence(journals_root, record_id)
+        if _passing_evaluate(record, digest):
+            return dict(record["result"], gateway_record_id=record_id)
+    raise ValueError("Selected Experiment has no passing standard Evaluate for this Kernel")
+
+
+def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path) -> bytes | None:
+    """Read committed source only when it matches a finalized private report."""
+    if journal.get("state") != "candidate_ready":
+        return None
+    commit = journal.get("candidate_commit")
+    if (not journal.get("finalized_at") or not isinstance(commit, str)
+            or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", commit) is None):
+        raise RuntimeError("Private candidate report has no valid sealed commit")
+    from long_horizon.git_episode import git_blob
+
+    source = git_blob(git_workspace, commit, "kernel.py")
+    if journal.get("candidate_kernel_digest") != "sha256:" + hashlib.sha256(source).hexdigest():
+        raise RuntimeError("Sealed candidate commit does not match the private report digest")
+    return source
 
 
 def _validate_record_ids(campaign_root: Path, raw: object) -> list[str]:
@@ -703,6 +742,7 @@ class SupervisorJournalService:
         evidence_root: Path,
         git_workspace: Path | None = None,
         minimum_experiments: int = 0,
+        supervisor_git: bool = False,
     ) -> None:
         self.workspace = workspace
         self.git_workspace = git_workspace or workspace
@@ -710,6 +750,12 @@ class SupervisorJournalService:
         self.evidence_root = evidence_root
         self.path = evidence_root / "journal.json"
         self.minimum_experiments = minimum_experiments
+        self.supervisor_git = supervisor_git
+
+    def sealed_source(self) -> bytes | None:
+        if not self.supervisor_git:
+            return None
+        return sealed_candidate_source(load_journal(self.path), self.git_workspace)
 
     def execute(self, request: Mapping[str, object]) -> dict[str, object]:
         operation = request.get("operation")
@@ -925,6 +971,8 @@ class SupervisorJournalService:
             "accepted_ppu_diagnostics",
             "candidate_commit",
         }
+        if self.supervisor_git:
+            allowed.remove("candidate_commit")
         require_fields(dict(raw), {"status", "summary"}, optional=allowed, label="Episode Report")
         persisted = load_journal(self.path)
         if persisted.get("state") != "in_progress":
@@ -958,7 +1006,7 @@ class SupervisorJournalService:
             selected_id=selected_id,
         )
         candidate_commit = raw.get("candidate_commit") or ""
-        if status == "candidate_ready":
+        if status == "candidate_ready" and not self.supervisor_git:
             if (
                 not isinstance(candidate_commit, str)
                 or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", candidate_commit) is None
@@ -1011,6 +1059,13 @@ class SupervisorJournalService:
                 )
             if errors:
                 raise ValueError("invalid accepted_ppu_diagnostics: " + "; ".join(errors))
+        if kernel_source is not None and self.supervisor_git:
+            from long_horizon.git_episode import EpisodeWorktree
+
+            candidate_commit = EpisodeWorktree(
+                current["episode"], current["base_commit"], current["episode_branch"],
+                self.git_workspace,
+            ).commit_candidate(kernel_source)
         current["state"] = status
         current["outcome"] = {
             "summary": summary,
@@ -1032,6 +1087,8 @@ class SupervisorJournalService:
         return {
             "status": "accepted",
             "message": (
+                "Report accepted; Supervisor committed the measured Kernel for verification"
+                if candidate_commit and self.supervisor_git else
                 "Report accepted; Agent commit queued for existing Supervisor verification"
                 if candidate_commit
                 else "Report accepted and recorded"
@@ -1039,4 +1096,4 @@ class SupervisorJournalService:
         }
 
 
-__all__ = ["SupervisorJournalService", "initialize_journal", "journal_lock", "load_journal"]
+__all__ = ["SupervisorJournalService", "initialize_journal", "journal_lock", "load_journal", "selected_evaluation", "sealed_candidate_source"]

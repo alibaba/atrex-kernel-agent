@@ -1,6 +1,6 @@
 # Journal and worked Episode example
 
-Choose Runtime Journal before the first Experiment; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums apply to `candidate_ready` and `pivot`, not `blocked`; a blocked report still needs a nonempty blocker and must satisfy every other report/lifecycle check.
+Use Runtime Journal in a controller-managed Episode; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums apply to `candidate_ready` and `pivot`, not `blocked`; a blocked report still needs a nonempty blocker and must satisfy every other report/lifecycle check.
 
 This example links one exploration to its measured Kernel and terminal report. It is not a mandatory
 optimization strategy or permission to run operations forbidden by the phase. Create request files
@@ -171,14 +171,13 @@ proposed/deferred Directions may remain for later exploration.
 
 ## Candidate report
 
-Leave the selected measurement's exact source in `kernel.py`. Keep the existing Git contract: commit only `kernel.py`, and obtain the full Commit ID with `git rev-parse HEAD`. The Runtime does not create Commits. Save as `scratch/episode-report.json`:
+Leave the selected measurement's exact source in `kernel.py`. The Supervisor seals the measured source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
 
 ```json
 {
   "status": "candidate_ready",
   "summary": "The fused implementation passes evaluation and is ready for independent verification",
-  "selected_experiment_id": "experiment_22222222222222222222222222222222",
-  "candidate_commit": "0123456789abcdef0123456789abcdef01234567"
+  "selected_experiment_id": "experiment_22222222222222222222222222222222"
 }
 ```
 
@@ -189,14 +188,14 @@ python3 tools/sandbox.py --kind episode-report --request-file scratch/episode-re
 Response:
 
 ```json
-{"status":"accepted","message":"Report accepted; Agent commit queued for existing Supervisor verification"}
+{"status":"accepted","message":"Report accepted; Supervisor committed the measured Kernel for verification"}
 ```
 
 The selected Experiment must belong to this Episode, use `baseline`, `keep_after`, or `adopt`, and
 cite a passing Evaluate record for byte-identical current `kernel.py`. Profile/Dev/Check/Disassemble
 or ABBA alone cannot satisfy this report binding. Fulfil the phase's full validation requirements;
 custom-input or correctness-only diagnostics are not substitutes for standard performance evidence.
-Submit the existing `candidate_commit` only for candidate_ready. Do not write canonical `memory/vN.json`. `accepted` confirms handoff, not that
+Do not submit `candidate_commit` in a managed Episode. Do not write canonical `memory/vN.json`. `accepted` confirms handoff, not that
 the candidate has won the Supervisor's independent gates. Stop after successful handoff.
 
 ## Pivot report

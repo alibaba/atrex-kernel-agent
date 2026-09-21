@@ -101,6 +101,16 @@ def validate_comparison(args) -> None:
     if (args.command or args.evaluation_input_path or args.evaluation_shapes_path
             or args.shape_id or args.multi_seed is not None):
         raise ValueError("ABBA uses the canonical full contract; command/input/shape/seed overrides are unsupported")
+    comparison_run_timeout(args)
+
+
+def comparison_run_timeout(args) -> int:
+    available = (args.timeout - 30) // (2 * args.comparison_repeats)
+    requested = getattr(args, "comparison_run_timeout", None)
+    seconds = min(120, available) if requested is None else requested
+    if seconds <= 0 or seconds > available:
+        raise ValueError("--comparison-run-timeout must be positive and fit the full ABBA allocation schedule")
+    return seconds
 
 
 def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
@@ -115,9 +125,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         workspace, args.baseline_path, field="baseline-path", max_bytes=16 * 1024 * 1024,
     )
     schedule = verification_schedule(args.comparison_repeats)
-    per_run = min(120, (args.timeout - 30) // len(schedule))
-    if per_run <= 0:
-        raise ValueError("ABBA schedule does not fit the configured timeout")
+    per_run = comparison_run_timeout(args)
     root = gateway.private_reference_dir(workspace) or workspace
     sol = (workspace / "workload.jsonl").is_file()
     if sol:

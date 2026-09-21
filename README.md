@@ -24,7 +24,7 @@ The repository has one supported entry point, `orchestrator/optimize.py`. The in
 
 The Campaign-owned [Supervisor GPU/Wiki Runtime](docs/supervisor-runtime.md) handles Agent measurement and knowledge requests through a scoped HTTP client, keeping Gateway credentials and evaluator packaging on the coordinator.
 
-[Runtime Journal and Episode Reports](docs/runtime-journal.md) add durable Directions, measurement-linked Experiments and correctable report submission to Long Horizon Episodes, while retaining the existing local Journal and independent verification workflow.
+[Runtime Journal and Episode Reports](docs/runtime-journal.md) provide durable Directions, measurement-linked Experiments and correctable report submission. [Supervisor-owned handoff and promotion](docs/supervisor-promotion.md) bind exact measured source to private Git commits and acceptance evidence; optimization Agents work in persistent Git-free drafts.
 
 ![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
 
@@ -65,6 +65,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [Agent Workspace Isolation](docs/agent-workspace-isolation.md) | Opt-in coordinator Bubblewrap boundary, scoped Provider Homes, and legacy compatibility grants |
+| [Supervisor Handoff and Promotion](docs/supervisor-promotion.md) | Git-free Episode drafts, exact-source commits, recorded verification, and private audit recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.

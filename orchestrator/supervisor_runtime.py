@@ -1,4 +1,4 @@
-"""Campaign-owned GPU/Wiki and Journal service; Git/promotion policy stays unchanged."""
+"""Campaign-owned GPU/Wiki, Journal and sealed Episode handoff service."""
 from __future__ import annotations
 
 import json
@@ -34,6 +34,7 @@ from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
 from supervisor.measurements import QUERY_KINDS
 from supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
 from supervisor.errors import AgentRequestError, RuntimeStateError
+from .episode_workspace import EpisodeWorkspace
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -43,6 +44,14 @@ DISPATCH_RETRY_SECONDS = 5
 ROOT = Path(__file__).resolve().parents[1]
 _RUNTIMES: dict[str, "SupervisorRuntime"] = {}
 _RUNTIME_LOCK = threading.RLock()
+
+
+def supervisor_campaign_root(workspace: Path) -> Path:
+    workspace = workspace.resolve()
+    scope = hashlib.sha256(str(workspace).encode()).hexdigest()[:16]
+    return workspace.parent / ".atrex-supervisor-runtime" / scope
+
+
 AUTHORITY = frozenset({
     "--workspace", "--hardware", "--url", "--gateway-profile", "--ssh", "--ssh-init",
     "--ssh-gpu", "--ssh-runtime-bind", "--health-command", "--runtime-health-command",
@@ -186,6 +195,7 @@ class RuntimeConfig:
 class JournalBinding:
     service: SupervisorJournalService
     lock: threading.Lock = field(default_factory=threading.Lock)
+    view: EpisodeWorkspace | None = None
 
 
 @dataclass
@@ -316,8 +326,7 @@ class SupervisorRuntime:
         self.audit_root = None
         if config.workspace:
             workspace = config.workspace.resolve()
-            scope = hashlib.sha256(str(workspace).encode()).hexdigest()[:16]
-            self.audit_root = workspace.parent / ".atrex-supervisor-runtime" / scope
+            self.audit_root = supervisor_campaign_root(workspace)
             from .agent_home import open_private_directory
             with open_private_directory(self.audit_root):
                 pass
@@ -339,6 +348,11 @@ class SupervisorRuntime:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    @property
+    def journals_root(self) -> Path:
+        """Private Journal collection, sibling to the Campaign's Measurement Store."""
+        return (self.audit_root or self.root) / "journals"
 
     @property
     def request_timeout_seconds(self) -> float:
@@ -367,8 +381,7 @@ class SupervisorRuntime:
         """Controller-only location, shared by registration and read-only recovery."""
         if type(episode) is not int or episode < 1:
             raise ValueError("Invalid controller Episode number")
-        root = (self.audit_root or self.root) / "journals"
-        return root / "episodes" / f"e{episode:08d}" / "journal.json"
+        return self.journals_root / "episodes" / f"e{episode:08d}" / "journal.json"
 
     def read_episode_journal(self, episode: int) -> dict:
         """Read existing private state without registering or creating an Episode.
@@ -379,7 +392,8 @@ class SupervisorRuntime:
         return load_journal(self.episode_journal_path(episode))
 
     def register_episode(self, workspace: Path, *, episode: int, base_commit: str,
-                         branch: str, memory_version: int, minimum_experiments: int = 0):
+                         branch: str, memory_version: int, minimum_experiments: int = 0,
+                         supervisor_git: bool = False):
         """Trusted controller binding, never populated from an Agent request or file."""
         workspace = workspace.resolve(strict=True)
         if (type(episode) is not int or episode < 1 or type(memory_version) is not int
@@ -387,7 +401,6 @@ class SupervisorRuntime:
                 or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base_commit) is None
                 or type(minimum_experiments) is not int or minimum_experiments < 0):
             raise ValueError("Invalid controller Episode identity")
-        root = (self.audit_root or self.root) / "journals"
         path = self.episode_journal_path(episode)
         evidence = path.parent
         expected = dict(episode=episode, base_commit=base_commit, episode_branch=branch,
@@ -416,10 +429,23 @@ class SupervisorRuntime:
                         f"requested={minimum_experiments}. Resume with the original "
                         "controller Episode trial contract; no binding was changed"
                     )
-                return
-            self.journals[workspace] = JournalBinding(SupervisorJournalService(
-                workspace=workspace, campaign_root=root, evidence_root=evidence,
-                minimum_experiments=minimum_experiments))
+                if existing.service.supervisor_git != supervisor_git:
+                    raise RuntimeError("Cannot change Git ownership during an Episode")
+                return existing.view.prepare() if existing.view else workspace
+            view = None
+            agent_workspace = workspace
+            if supervisor_git:
+                from .hardware import hardware_vendor
+                view = EpisodeWorkspace(workspace, evidence / "agent",
+                                        is_ppu=hardware_vendor(self.config.hardware) == "ppu")
+                agent_workspace = view.prepare()
+            binding = JournalBinding(SupervisorJournalService(
+                workspace=agent_workspace, git_workspace=workspace,
+                campaign_root=self.journals_root, evidence_root=evidence,
+                minimum_experiments=minimum_experiments, supervisor_git=supervisor_git), view=view)
+            self.journals[workspace] = binding
+            self.journals[agent_workspace] = binding
+            return agent_workspace
 
     @contextmanager
     def session(self, workspace: Path, environment: dict[str, str]):
@@ -435,14 +461,47 @@ class SupervisorRuntime:
         with self.lock:
             if self.closed:
                 raise RuntimeError("Supervisor Runtime is closed")
-            self.capabilities[token] = capability
             capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
         values.update({URL_ENV: self.url, TOKEN_ENV: token})
+        if capability.journal and capability.journal.view:
+            from .episode_workspace import EPISODE_WORKSPACE_ENV
+            values[EPISODE_WORKSPACE_ENV] = str(capability.journal.view.root)
+            from .agent_sandbox import git_directory
+            common = git_directory(capability.journal.view.worktree)
+            if common is None:
+                raise RuntimeError(
+                    "Cannot resolve the managed Episode Git common directory; "
+                    "refusing to start an Agent Session without private-path protection. "
+                    "Repair the controller worktree's Git metadata before retrying"
+                )
+            values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps([
+                str(capability.journal.view.worktree), str(self.audit_root or self.root),
+                str(common),
+            ])
+            values["GIT_CEILING_DIRECTORIES"] = str(capability.journal.view.root.parent)
+        # Preparation can fail or race with shutdown; grant authority only after
+        # every required private path is known, without holding the lock over Git.
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("Supervisor Runtime is closed")
+            self.capabilities[token] = capability
         try:
             yield values
         finally:
             self.revoke(token)
+            if capability.journal and capability.journal.view:
+                with capability.journal.lock:
+                    primary = sys.exception()
+                    try:
+                        capability.journal.view.publish(
+                            sealed_source=capability.journal.service.sealed_source(),
+                        )
+                    except Exception as error:
+                        if primary is not None:
+                            primary.add_note(f"Episode draft publication failed: {error}")
+                        else:
+                            raise
 
     def _live(self, capability):
         with self.lock:
@@ -525,7 +584,21 @@ class SupervisorRuntime:
         finally:
             self.slots.release()
 
-    def execute(self, capability: Capability, route: str, request: dict) -> dict:
+    def execute_trusted(self, workspace: Path, argv: list[str]) -> dict:
+        """Controller-only execution/reuse; no Session, draft publication or HTTP switch."""
+        capability = Capability(workspace.resolve(strict=True), {})
+        token = secrets.token_urlsafe(32)
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("Supervisor Runtime is closed")
+            self.capabilities[token] = capability
+        try:
+            with self.request_lock(capability, time.monotonic() + self.request_timeout_seconds, "acceptance"):
+                return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True)
+        finally:
+            self.revoke(token)
+
+    def execute(self, capability: Capability, route: str, request: dict, *, reuse_completed=False) -> dict:
         if route == "/v1/journal/execute":
             return self.execute_journal(capability, request)
         with _validating_request():
@@ -551,6 +624,27 @@ class SupervisorRuntime:
                         return query(self.measurements, parsed, capability.workspace)
                     if parsed is not None and parsed.kind != "env":
                         snapshot(capability.workspace, staged)
+                        if capability.journal and capability.journal.view:
+                            from .episode_workspace import PUBLIC_FILES
+                            from supervisor.workspace import read_input, publish
+                            # An Agent draft is never the authority for evaluator inputs.
+                            for name in PUBLIC_FILES:
+                                try:
+                                    content = read_input(capability.journal.view.worktree, name)
+                                except FileNotFoundError:
+                                    continue
+                                publish(staged, name, content)
+                            try:
+                                source = read_input(staged, "kernel.py")
+                            except FileNotFoundError:
+                                # Standalone Dev probes need no candidate. Other
+                                # operations enforce their inputs in measurement_inputs.
+                                pass
+                            else:
+                                kernel = self.measurements.kernel(source)
+                                publish(capability.journal.view.worktree,
+                                        ".atrex_long_horizon/policy_review_request.json",
+                                        json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:
@@ -576,7 +670,8 @@ class SupervisorRuntime:
                 # Parse the Supervisor's authority flags too, so the exact target,
                 # execution timeout and transport enter the task identity.
                 effective = parse_gateway(command[2:])
-                return execute(self, capability, staged, effective, argv, environment, command)
+                return execute(self, capability, staged, effective, argv, environment, command,
+                               reuse_completed=reuse_completed)
             # From this point execution may have submitted a job. Failures must
             # never be classified as repairable argument errors by the handler.
             process = self.run_executor(command, staged, environment, capability)
@@ -712,7 +807,9 @@ class SupervisorRuntime:
             data = read_regular_bytes(log, limit=MAX_FILE_BYTES + 1)
             if len(data) > MAX_FILE_BYTES:
                 raise ValueError("Evaluation log exceeds the size limit")
-            publish(workspace, EPISODE_EVALUATIONS_PATH,
+            binding = self.journals.get(workspace)
+            destination = binding.service.git_workspace if binding and binding.view else workspace
+            publish(destination, EPISODE_EVALUATIONS_PATH,
                     data, append=True)
 
 

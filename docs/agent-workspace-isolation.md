@@ -2,7 +2,7 @@
 
 AKA can launch coding-agent sessions inside a Linux Bubblewrap namespace. This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. It is opt-in: `--agent-sandbox none` remains the default on Linux and macOS.
 
-This launch boundary was introduced in the second step of the simplified AKA split. The subsequent [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) moves GPU/Wiki requests out of Agent sessions. Setup, Framework Baseline, Fast/Full Episodes, phase markers, Journal, Git ownership and candidate validation remain in place.
+The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) handles remote requests; [Supervisor-owned handoff](supervisor-promotion.md) keeps optimization Episode Git/control state outside a persistent Agent draft. Setup and auxiliary workflows retain their scoped legacy behavior.
 
 ## Launch lifecycle
 
@@ -18,12 +18,12 @@ flowchart TD
     WRAP --> FD["sandbox_launch<br/>Environment via anonymous --args FD"]
     FD --> SPAWN["recovery_processes.spawn_owned_session"]
     NATIVE --> SPAWN
-    SPAWN --> CAPTURE["PR1 Session capture<br/>Pipes + native transcripts + usage"]
+    SPAWN --> CAPTURE["Session capture<br/>Pipes + native transcripts + usage"]
     CAPTURE --> EXIT["Finalize capture<br/>Publish auxiliary output only on success<br/>Always clean up temporary view"]
     WRAP -->|Unsupported host or invalid grant| FAIL["Fail before starting Agent<br/>No silent unsandboxed fallback"]
 ```
 
-The command and workspace retain their original absolute paths inside the namespace. Existing prompts, tools, Git worktree links and native-session discovery therefore do not need path rewriting. `HOME`, Provider config roots and XDG directories point to the isolated Home before ledger observers and capture are initialized. Recovery-owned launches pass the anonymous argument FD through their ownership wrapper; the parent closes it after spawning.
+The command and workspace retain their original absolute paths inside the namespace. Linked tools and native-session discovery retain their paths. Managed optimization Sessions run in a separate Git-free draft, not the controller's Git worktree. `HOME`, Provider config roots and XDG directories point to the isolated Home before ledger observers and capture are initialized. Recovery-owned launches pass the anonymous argument FD through their ownership wrapper; the parent closes it after spawning.
 
 Campaign reviewer-state environment paths keep their lexical absolute form only in `bwrap` mode, so mount validation can detect symlinks. Native `none` mode retains the existing `Path.resolve()` behavior, including symlink resolution and `..` normalization. Wiki-profile paths are now Supervisor-only and no longer create Agent mounts.
 
@@ -90,19 +90,20 @@ Provider-created child Agents and plan helpers launched from within an Optimizer
 
 ## Legacy grants and scope limits
 
-The remaining compatibility grants do not change optimization or acceptance:
+Managed optimization Episodes use a persistent Git-free draft; the Supervisor owns candidate commits and acceptance. Some older roles and explicitly scoped helpers retain compatibility grants:
 
-| Existing behavior retained | Explicit compatibility grant | Later ownership migration |
+| Role or behavior | Access | Authority |
 | --- | --- | --- |
-| Agent commits the candidate | Current campaign Git common directory, writable; only user name/email copied from global Git configuration | Supervisor-owned Git/promotion, PR6 |
-| Agent calls `tools/sandbox.py` | HTTP client and per-invocation capability; no evaluator/private-input/Gateway-credential grant | Implemented by the Supervisor GPU/Wiki Runtime |
-| Agent writes phase/recovery evidence and Journal live mirror | Scoped telemetry, recovery-state, reviewer-state and live-memory directories as needed for append/atomic replace | Runtime records/Journal, PR4–5 |
+| Managed optimization Episode | Draft source and engineering artifacts; no real worktree, Git, private Journal or handoff | Supervisor seals measured source after `episode-report` |
+| Legacy Setup and non-managed integrations | Existing campaign Git grants; only user name/email copied from global Git configuration | Retain their existing workflow, outside the optimization-Episode contract |
+| Agent calls `tools/sandbox.py` | HTTP client and per-invocation capability; no evaluator/private-input/Gateway-credential grant | Supervisor GPU/Wiki Runtime |
+| Phase/recovery and reviewer helpers | Explicitly scoped telemetry and helper-state directories for append/atomic replace | Managed Episodes cannot grant access to the private worktree/store |
 
 Writable file grants include the containing directory to support atomic replacement and lock files. Validation checks that actual directory before creating or mounting it: it must not be the operator Home or an ancestor, traverse symlinks, or overlap the `.atrex-agent-homes` root in either direction. The current Session Home is mounted only through the dedicated Home setup, never through these legacy environment grants. Use a dedicated log/state subdirectory rather than placing a granted file directly under the operator Home.
 
-These grants are deliberately narrower than host access but **are not a complete authority boundary against a malicious Agent**. Git and legacy control/evidence paths remain Agent-accessible. The private evaluator/reference paths now stay outside the Agent namespace, while Runtime results use bounded projections. Arbitrary GPU probe code is still untrusted; this is not a semantic data-loss-prevention guarantee for everything a probe could print. Immutable Supervisor ledgers and hidden Git belong to later changes.
+For managed optimization Episodes, Bubblewrap enforces the private worktree/Git/Journal boundary described in [Supervisor handoff and promotion](supervisor-promotion.md). Legacy Setup and non-managed integrations do not have that contract. Native mode separates working directories cooperatively but does not isolate processes sharing the operator's UID. Arbitrary GPU probe code remains untrusted; bounded Runtime projections are not a semantic data-loss-prevention guarantee for everything a probe could print.
 
-The Agent shares the host network for model and loopback Runtime access; Gateway/Wiki/SSH operations now run on the Supervisor. There is no new network allowlist, cgroup resource quota, measurement retry policy, Journal protocol, or promotion rule. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
+The Agent shares the host network for model and loopback Runtime access; Gateway/Wiki/SSH operations run on the Supervisor. Filesystem isolation adds no network allowlist or cgroup resource quota. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
 
 ## Scratch lifecycle
 

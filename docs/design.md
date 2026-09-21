@@ -75,7 +75,7 @@ points.
 
 ### Authority boundaries
 
-An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wraps coordinator-side sessions with Bubblewrap; the default native path remains available. The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) owns packaging, credentials and private evaluator inputs and authorizes requests against each Session's workspace. Legacy campaign Git and Agent-written metadata retain explicit compatibility grants until their separate migrations. This is not yet a fully private Supervisor control plane.
+An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wraps coordinator-side sessions with Bubblewrap; the default native path remains available. The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) owns packaging, credentials and private evaluator inputs and authorizes requests against each Session's workspace. [Managed optimization Episodes](supervisor-promotion.md) now use Git-free drafts; their real Git worktree, Journal and promotion audit are controller-only. Setup retains its legacy flow.
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ An optional [Agent workspace isolation](agent-workspace-isolation.md) layer wrap
 | GPU execution | `tools/sandbox.py` HTTP client → Supervisor Runtime → `supervisor/gateway.py` | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | `gpu-wiki/`, then optional `reference-projects/` | Evidence references recorded by the episode |
 
-The optimization protocol requires the Agent to edit its candidate worktree, not the incumbent or evaluator inputs. The supervisor validates, measures, records, and promotes exact committed sources; the Agent does not decide promotion. This is not yet a claim of complete filesystem enforcement: the optional launch boundary retains the legacy Git and metadata grants documented in the isolation guide.
+The optimization protocol requires the Agent to edit its candidate draft, not the Supervisor worktree, incumbent or evaluator inputs. The supervisor validates, measures, records, and promotes exact committed sources; the Agent does not decide promotion. Bubblewrap enforces the managed Episode filesystem boundary; native mode is cooperative and retains the operator UID's authority.
 
 ## Supported Entry Point
 
@@ -175,7 +175,7 @@ inside each campaign workspace. It also prepares backend-specific project-local 
 
 ### Sandbox execution
 
-Agent correctness, benchmark, and profiling work crosses the `tools/sandbox.py` HTTP client. The Campaign Runtime snapshots authorized files; its private `supervisor/gateway.py` builds the remote input allowlist, supplies evaluator inputs, submits work and projects results. Agent output publication is limited to declared `profiles/` or `scratch/` paths. The trusted independent verifier calls the same private executor directly. Campaign memory, plans, edits, episode state and Git history stay on the coordinator.
+Agent correctness, benchmark, and profiling work crosses the `tools/sandbox.py` HTTP client. The Campaign Runtime snapshots authorized files; its private `supervisor/gateway.py` builds the remote input allowlist, supplies evaluator inputs, submits work and projects results. Agent output publication is limited to declared `profiles/` or `scratch/` paths. Trusted Full acceptance uses the Runtime Measurement Store and same-allocation ABBA, with exact-identity reuse. Campaign memory, plans, edits, episode state and Git history stay on the coordinator.
 
 The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
 profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
@@ -366,8 +366,8 @@ an isolated branch and Git worktree from the incumbent for each episode. The Age
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
 
-A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
-satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
+A candidate report selects measured `kernel.py` bytes; the Supervisor commits them in its private
+worktree and checks protected paths and production policy. The Agent uses a Git-free draft.
 Fast candidates must have one complete passing evaluator record whose `kernel.py` hash matches the
 final candidate and whose latency strictly improves on canonical incumbent memory. Full candidates
 must pass the exact same-allocation ABBA schedule. Accepted candidates are squash-promoted with
@@ -468,7 +468,6 @@ kernel_opt_<name>_<framework>_<platform>[_production]/
 ├── test_kernel.py
 ├── README.md
 ├── memory/v<N>.json
-├── memory/long_horizon_e<NNNN>.json  # Evidence for promoted episodes
 ├── plans/
 ├── profiles/
 ├── framework_baseline.json

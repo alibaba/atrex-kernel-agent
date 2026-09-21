@@ -434,6 +434,32 @@ class Campaign:
             queue_timeout=queue_timeout,
         ))
 
+    def measure_for_acceptance(self, workspace: Path, argv: list[str]) -> dict:
+        self.start_runtime()
+        return self._supervisor_runtime.execute_trusted(workspace, argv)
+
+    def recorded_kernel(self, kernel_id: str) -> bytes:
+        self.start_runtime()
+        return self._supervisor_runtime.measurements.read_kernel(kernel_id)
+
+    def acceptance_measurement_context(self, incumbent_source: bytes) -> dict:
+        """Public Kernel identity and frozen Runtime policy, without private inputs."""
+        self.start_runtime()
+        runtime = self._supervisor_runtime
+        return {
+            "baseline_kernel_id": runtime.measurements.kernel(incumbent_source)["kernel_id"],
+            "measurement_repetitions": runtime.measurement_repetitions,
+            "allocation_timeout_seconds": runtime.config.timeout,
+        }
+
+    def selected_episode_evaluation(self, episode: int, source: bytes) -> dict:
+        from supervisor.journal import selected_evaluation
+        self.start_runtime()
+        path = self._supervisor_runtime.episode_journal_path(episode)
+        return selected_evaluation(
+            path, journals_root=self._supervisor_runtime.journals_root, source=source,
+        )
+
     def register_runtime_episode(
         self,
         workspace: Path,
@@ -443,16 +469,18 @@ class Campaign:
         branch: str,
         memory_version: int,
         minimum_experiments: int = 0,
-    ) -> None:
+        supervisor_git: bool = True,
+    ) -> Path:
         """Start Runtime if needed and bind an Episode from trusted controller state."""
         self.start_runtime()
-        self._supervisor_runtime.register_episode(
+        return self._supervisor_runtime.register_episode(
             workspace,
             episode=episode,
             base_commit=base_commit,
             branch=branch,
             memory_version=memory_version,
             minimum_experiments=minimum_experiments,
+            supervisor_git=supervisor_git,
         )
 
     def read_runtime_episode_journal(self, episode: int) -> dict:
@@ -3075,11 +3103,12 @@ class Campaign:
         from long_horizon.campaign import LongHorizonCampaign
         from long_horizon.session import LongSessionRunner
         from long_horizon.store import CampaignStore
-        from long_horizon.verifier import GatewayABBAValidator
+        from long_horizon.recorded_verifier import RecordedABBAValidator
 
         CampaignStore.ensure_excluded(self.workspace)
 
-        verifier = GatewayABBAValidator(
+        verifier = RecordedABBAValidator(
+            execute=self.measure_for_acceptance,
             hardware=self.sandbox_hardware,
             profile=self.sandbox_profile,
             url=self.sandbox_url,
