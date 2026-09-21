@@ -208,8 +208,8 @@ class Campaign:
     v1_ask_qoder: bool = False
     fast_episode_ask_codex: bool = False
     fast_episode_ask_qoder: bool = False
-    full_episode_ask_codex: bool = True
-    full_episode_ask_qoder: bool = True
+    full_episode_ask_codex: bool = False
+    full_episode_ask_qoder: bool = False
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index

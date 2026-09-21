@@ -27,7 +27,8 @@ that org. `reference-projects/README.md` indexes every project by vendor, DSL, a
 The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
 configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
 repository evidence. V1, fast episodes, and full episodes each have independent Codex and Qoder
-switches. V1 and fast reviewers default off; full reviewers default on. A Codex- or Qoder-owned
+switches, all disabled by default. Enable the desired stage with its `--*-ask-codex` or
+`--*-ask-qoder` flag. A Codex- or Qoder-owned
 episode performs an enabled matching review in the current session to avoid recursion. The campaign
 probes a reviewer only when
 it is first enabled for an episode mode, caches that decision under `.atrex_long_horizon/`, reuses it
@@ -386,9 +387,9 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --fast-episode-ask-qoder / --no-fast-episode-ask-qoder
                                                     Configure fast ask-qoder (default: off)
 --full-episode-ask-codex / --no-full-episode-ask-codex
-                                                    Configure full ask-codex (default: on)
+                                                    Configure full ask-codex (default: off)
 --full-episode-ask-qoder / --no-full-episode-ask-qoder
-                                                    Configure full ask-qoder (default: on)
+                                                    Configure full ask-qoder (default: off)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never

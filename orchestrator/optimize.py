@@ -549,15 +549,14 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         ("fast-episode", "fast episodes"),
         ("full-episode", "full episodes"),
     ):
-        default_enabled = stage == "full-episode"
         for reviewer in ("codex", "qoder"):
             ap.add_argument(
                 f"--{stage}-ask-{reviewer}",
                 action=argparse.BooleanOptionalAction,
-                default=default_enabled,
+                default=False,
                 help=(
                     f"Configure ask-{reviewer} for {stage_label} "
-                    f"(default: {'on' if default_enabled else 'off'})."
+                    "(default: off)."
                 ),
             )
     ap.add_argument(
