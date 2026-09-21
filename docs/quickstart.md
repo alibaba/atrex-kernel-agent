@@ -411,7 +411,7 @@ These commands require an active Runtime-authorized Agent session; operator endp
 on the orchestrator command, not these calls:
 
 ```bash
-python3 tools/sandbox.py --kind run --mode full --no-sync
+python3 tools/sandbox.py --kind run --no-sync
 python3 tools/sandbox.py --kind profile --profile-level sol --no-sync
 python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
 python3 tools/sandbox.py --kind wiki-query "Operator, target architecture, DSL and concrete question" --brief

@@ -806,7 +806,8 @@ class Campaign:
                 "## Evaluation contract: SOL-ExecBench\n\n"
                 "The Supervisor runs the official evaluator over workload.jsonl. "
                 "Maximize performance_score, the arithmetic mean of workload speedups relative to "
-                "the SOL reference. Use --kind run --mode full --no-sync; never replace the evaluator."
+                "the SOL reference. Use --kind run --no-sync; never replace the evaluator. "
+                "Atrex-Bench typed --mode controls do not apply to SOL-ExecBench."
             )
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")
 

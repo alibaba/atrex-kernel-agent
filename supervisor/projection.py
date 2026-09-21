@@ -461,6 +461,13 @@ def evaluation(result: dict) -> dict:
     value = {key: item for key, item in result.items()
              if key in keys and (item is None or isinstance(item, (str, int, float, bool)))
              and (not isinstance(item, float) or math.isfinite(item))}
+    # SOL-ExecBench names full-workload coverage ``passed``/``total``. Normalize
+    # those public scalar counts to the same contract as typed Atrex-Bench
+    # without exposing the evaluator's richer internal payload.
+    for source, target in (("passed", "correctness_passed"), ("total", "correctness_total")):
+        item = result.get(source)
+        if type(item) is int and item >= 0:
+            value[target] = item
     shapes = result.get("latency_us_by_shape")
     if isinstance(shapes, dict):
         value["latency_us_by_shape"] = {

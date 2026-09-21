@@ -80,7 +80,7 @@ Edit `kernel.py`, then run the evaluator prescribed by the current phase. For an
 evaluation where no additional options are required:
 
 ```bash
-python3 tools/sandbox.py --kind run --mode full --no-sync
+python3 tools/sandbox.py --kind run --no-sync
 ```
 
 The response contains `gateway_record_id` and `kernel_id`; see [result formats](records.md).

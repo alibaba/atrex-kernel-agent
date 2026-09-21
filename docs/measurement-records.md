@@ -116,6 +116,11 @@ Before sealing a report, the Supervisor may reuse a successful full or correctne
 record when all correctness inputs/policies match; only timing iterations and performance repetitions
 may differ. This does not relax Agent-request deduplication or ABBA acceptance identity.
 
+SOL-ExecBench does not use this six-case equivalence. Its acceptance request is the standard full
+`workload.jsonl` evaluation with no typed mode and no additional seeds. Reuse therefore requires the
+exact saved request identity, including the trusted harness, workload contract and optional
+`config.json`.
+
 The default is **one** measurement. Operators may set `ATREX_AKA_MEASUREMENT_REPETITIONS=3` before starting the Campaign. Only `1` and `3` are accepted; the Agent cannot set this policy through request environment flags.
 
 Three repeats apply to full Evaluate and whole ABBA comparisons. The Runtime takes each Shape's median over the three completed measurements, then recomputes geometric/arithmetic means. ABBA aggregates candidate and baseline separately and recomputes their speedup. Correctness-only Evaluate, Profile, Dev, Check and Disassemble remain single-operation requests. A rejected or incomplete repetition cannot become a successful median. Legacy evaluation logs receive the aggregate used in the Agent response, not just the final physical repetition.

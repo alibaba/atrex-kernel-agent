@@ -5278,6 +5278,8 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     if command in ([], ["--"]):
         command = (["python3", "profile_driver.py"] if args.kind == "profile" else
                    ["python3", "test_kernel.py", "--no-memory"])
+        if args.version is not None:
+            command += ["--version", str(args.version)]
         if args.multi_seed is not None:
             command += ["--multi-seed", str(args.multi_seed)]
         if args.timed_runs is not None:
@@ -5305,7 +5307,7 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     private = _private_evaluator_inputs(workspace, environment=environment)
     selected.update(private)
     for name in ("reference.py", "input.py", "shapes.json", "metadata.json", "roofline.json",
-                 "definition.json", "workload.jsonl", "solution.json"):
+                 "definition.json", "workload.jsonl", "solution.json", "config.json"):
         if (workspace / name).is_file():
             selected.add(name)
     files = {}

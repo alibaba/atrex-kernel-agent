@@ -139,7 +139,7 @@ def _readme(name: str, defn: dict, framework: str, platform: str, n_workloads: i
         "## Workflow\n\n"
         "- Edit `kernel.py` only (DPS `run()`; args = definition.inputs then definition.outputs).\n"
         "- Update `solution.json` only when the current initialization session permits it.\n"
-        "- Measure using `python3 tools/sandbox.py --kind run --mode full --no-sync`.\n"
+        "- Measure using `python3 tools/sandbox.py --kind run --no-sync`.\n"
         "- Use the Direction/Experiment Journal and `episode-report` during optimization.\n"
     )
 

@@ -14,9 +14,12 @@ Follow the current session's measurement scope and finish procedure. Framework
 Baseline permits only its prescribed smoke; optimization Episodes may use the
 operations below. Measurements and comparisons do not grant promotion authority.
 
+Follow the injected evaluator contract. SOL-ExecBench uses `--kind run --no-sync`
+for the official full workload; do not add typed `--mode` or top-level seed controls.
+
 Read [requests.md](references/requests.md) for request examples. Use
 `--kind OPERATION --help` for full CLI parameters. Evaluate keeps
-`[test_kernel] RESULT_JSON=`; Profile returns `[sandbox] PROFILE_JSON=`.
+`[test_kernel] RESULT_JSON=`; Typed Profile returns `[sandbox] PROFILE_JSON=`.
 Numbers in those results are measured facts; interpretation is your responsibility.
 
 Measurements return a `gateway_record_id` and `kernel_id`. Identical tasks across

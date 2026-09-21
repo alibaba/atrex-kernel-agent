@@ -74,6 +74,61 @@ class SessionRevokedError(RuntimeError):
     """Authorization was lost before executor creation."""
 
 
+SOL_ACCEPTANCE_INPUTS = frozenset({
+    "reference.py",
+    "definition.json",
+    "workload.jsonl",
+    "solution.json",
+    "test_kernel.py",
+})
+
+
+def candidate_acceptance_argv(*, atrex_bench: bool) -> list[str]:
+    """Return the evaluator-specific, Supervisor-owned acceptance request.
+
+    Native Atrex-Bench has a typed six-case correctness mode. SOL-ExecBench
+    instead owns correctness through its full workload evaluator; typed controls
+    cannot represent that contract and would prevent the required Dev fallback.
+    """
+    if atrex_bench:
+        return [
+            "--kind", "run", "--mode", "correctness_only",
+            "--multi-seed", "5", "--no-sync",
+        ]
+    return ["--kind", "run", "--no-sync"]
+
+
+def authoritative_candidate_record(record: dict, source: bytes, *, atrex_bench: bool) -> bool:
+    """Validate evaluator identity without trusting the projected result alone."""
+    request = record.get("request")
+    if not isinstance(request, dict):
+        return False
+    inputs = request.get("inputs")
+    options = request.get("options")
+    if not isinstance(inputs, dict) or not isinstance(options, dict):
+        return False
+    common = (
+        record.get("cacheable") is True
+        and record.get("operation") == "evaluate"
+        and inputs.get("kernel.py") == hashlib.sha256(source).hexdigest()
+    )
+    if not common:
+        return False
+    if atrex_bench:
+        policy = options.get("evaluation_policy")
+        return (
+            isinstance(policy, dict)
+            and policy.get("mode") in {"full", "correctness_only"}
+            and policy.get("num_correctness_cases") == 6
+        )
+    return (
+        SOL_ACCEPTANCE_INPUTS <= inputs.keys()
+        and options.get("command") == ["python3", "test_kernel.py"]
+        and not options.get("evaluation_input_path")
+        and not options.get("evaluation_shapes_path")
+    )
+
+
 @contextmanager
 def _validating_request():
     # Only request decoding/preparation belongs here, never execution, output
@@ -696,17 +751,24 @@ class SupervisorRuntime:
                                     self.config.url, str(self.config.atrex_bench_root or "")))
 
     def _validate_candidate_correctness(self, capability: Capability, source: bytes) -> dict:
-        """Reuse or execute the mandatory full-contract six-case correctness gate.
+        """Reuse or execute the evaluator-specific mandatory correctness gate.
 
-        Prefer a completed full or correctness-only evaluation with matching
-        six-case inputs/policy. Otherwise measure without timing. Run under the
-        caller's Session/deadline, never a capability surviving its revocation.
+        Atrex-Bench uses its typed six-case gate. SOL-ExecBench executes the
+        official evaluator over all workload.jsonl records with their own
+        tolerances. Run under the caller's Session/deadline, never a capability
+        surviving its revocation.
         """
         from supervisor.measurements import result_from_response
 
-        response = self.execute(capability, "/v1/gateway/execute", {"argv": [
-            "--kind", "run", "--mode", "correctness_only", "--multi-seed", "5", "--no-sync",
-        ]}, reuse_completed=True, reuse_correctness=True, candidate_source=source)
+        atrex_bench = self.config.atrex_bench_root is not None
+        response = self.execute(
+            capability,
+            "/v1/gateway/execute",
+            {"argv": candidate_acceptance_argv(atrex_bench=atrex_bench)},
+            reuse_completed=True,
+            reuse_correctness=atrex_bench,
+            candidate_source=source,
+        )
         if not self._live(capability):
             raise SessionRevokedError("Session revoked before report acceptance")
         try:
@@ -716,44 +778,64 @@ class SupervisorRuntime:
                 if line.startswith("[sandbox] RECORD_JSON=")), {})
             record_id = identity["gateway_record_id"]
             record = self.measurements.read(record_id)
-            authoritative = (
-                record.get("cacheable") is True
-                and record.get("operation") == "evaluate"
-                and record["request"]["inputs"].get("kernel.py") == hashlib.sha256(source).hexdigest()
-                and record["request"]["options"].get("evaluation_policy", {}).get("mode") in {"full", "correctness_only"}
-                and record["request"]["options"].get("evaluation_policy", {}).get("num_correctness_cases") == 6
+            authoritative = authoritative_candidate_record(
+                record, source, atrex_bench=atrex_bench,
             )
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise RuntimeStateError(
-                "Supervisor multi-seed correctness evidence is unavailable; report was not accepted",
+                "Supervisor candidate correctness evidence is unavailable; report was not accepted",
                 code="candidate_validation_unavailable",
             ) from error
         if not authoritative:
             raise RuntimeStateError(
-                "Supervisor multi-seed correctness did not produce authoritative evidence; report was not accepted",
+                "Supervisor candidate correctness did not produce authoritative evidence; report was not accepted",
                 code="candidate_validation_unavailable",
             )
         # Some confirmed candidate failures (e.g. compile errors) have no Eval
         # payload, only a cacheable terminal Record. Unknown/infra outcomes are
         # never cacheable and cannot reach this repairable rejection path.
         if (result is None and response["exit_code"] != 0) or (result and result.get("all_pass") is False):
+            gate_name = (
+                "multi-seed correctness (base case plus five additional seeds)"
+                if atrex_bench else
+                "SOL-ExecBench full-workload correctness"
+            )
             raise AgentRequestError(
-                "The candidate failed Supervisor multi-seed correctness (base case plus five additional seeds). "
+                f"The candidate failed Supervisor {gate_name}. "
                 "The report was not accepted and no candidate commit was created.",
                 code="candidate_correctness_failed", gateway_record_id=record_id,
                 next_action=(
                     f"Inspect python3 tools/sandbox.py --kind record-read --record-id {record_id}. "
                     "Repair kernel.py, record a passing full Evaluate and its Experiment, then resubmit "
-                    "episode-report with the matching selected_experiment_id. The Supervisor runs the "
-                    "multi-seed check automatically; do not repeat the failed GPU request unchanged. "
+                    "episode-report with the matching selected_experiment_id. The Supervisor runs its "
+                    "acceptance check automatically; do not repeat the failed GPU request unchanged. "
                     "If abandoning the candidate, submit an evidence-backed pivot instead."
                 ),
             )
-        if (not result or result.get("all_pass") is not True
-                or response["exit_code"] != 0 or result.get("error")):
-            raise RuntimeStateError("Supervisor multi-seed result is inconsistent; report was not accepted")
-        return {"gateway_record_id": record_id, "additional_seeds": 5, "correctness_cases": 6,
-                "reused": response.get("reused") is True}
+        result_complete = (
+            result
+            and result.get("all_pass") is True
+            and response["exit_code"] == 0
+            and not result.get("error")
+        )
+        if not atrex_bench:
+            total = result.get("correctness_total") if result else None
+            result_complete = (
+                result_complete
+                and type(total) is int
+                and total > 0
+                and result.get("correctness_passed") == total
+            )
+        if not result_complete:
+            raise RuntimeStateError(
+                "Supervisor candidate correctness result is inconsistent; report was not accepted"
+            )
+        evidence = {"gateway_record_id": record_id, "reused": response.get("reused") is True}
+        if atrex_bench:
+            evidence.update(additional_seeds=5, correctness_cases=6, evaluator="atrex_bench")
+        else:
+            evidence.update(additional_seeds=0, workloads=total, evaluator="sol_execbench")
+        return evidence
 
     def execute_journal(self, capability: Capability, request: dict) -> dict:
         binding = capability.journal
