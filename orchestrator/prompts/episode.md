@@ -61,7 +61,9 @@ Use this as a working guide when useful, not as additional mandatory stages:
 
 Choose an evidence-backed state:
 
-1. `candidate_ready`: the selected Experiment cites a passing Evaluate for the exact candidate.
+1. `candidate_ready`: the selected Experiment cites a passing full Evaluate for the exact candidate.
+   The Supervisor automatically runs or reuses multi-seed correctness before accepting the report;
+   a failed check leaves the Episode open for repair and resubmission.
 2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 

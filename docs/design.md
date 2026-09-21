@@ -55,8 +55,10 @@ flowchart LR
   precise sources, retry infrastructure failures, bound public results, persist records and Journal.
 - Evaluator/worker: correctness and performance facts. Profile duration or diagnostic Dev results
   do not replace the complete official Evaluate needed to submit a candidate.
-- Supervisor: bind report → selected Experiment → passing Evaluate → exact Kernel; commit the
-  candidate; require independent policy approval in production and passing recorded ABBA; promote
+- Supervisor: bind report → selected Experiment → passing Evaluate → exact Kernel; reuse matching
+  base-plus-five-seed correctness (the Atrex-Bench Evaluate default), or run the missing untimed check,
+  before accepting and committing the candidate;
+  require independent policy approval in production and passing recorded ABBA; promote
   only a strict improvement. Ordinary Evaluate is not an ABBA comparison.
 
 Agent-run ABBA is optional. Its exact acceptance command is injected from the verifier's effective
@@ -93,6 +95,11 @@ also installed and PPU diagnostics are selected on PPU. Only manifest-listed fil
 The old Setup/Episode-loop/gen-plan skills and external NCU skill's redundant workflow are not mounted.
 Typed Profile and Supervisor profiler support remain available.
 
+Framework Baseline's optional Codex/Qoder reviewers inspect only the bounded public operator
+contract, including its semantic `reference.py`. V1 has no implementation-reference catalog,
+shortlist or `reference/` packet. Missing framework/toolchain knowledge can be resolved through
+at most one Wiki query. Guidance cached with the retired reference-selection schema is regenerated.
+
 ## Persistence and recovery
 
 - Private Measurement Store: global Kernel/Record IDs, exact source, request identity, raw and public
@@ -119,12 +126,35 @@ measurement retry, and Campaign resume remain separate mechanisms.
 Upgrade at a completed Episode boundary after stopping the old Supervisor. Completed numbered
 memory and private records remain readable. An unfinished historical Fast Episode is explicitly
 rejected: finish it with the previous release before upgrading; do not silently change its gate.
+SOL runtime relinking does not add `/atrex-bench` to an existing committed `.gitignore`;
+that entry is added only when an Atrex-Bench runtime is configured. Episode-boundary
+dirty-worktree checks remain strict, with no automatic ignore-file commit or exemption.
 For rollback, stop the new Supervisor and restore the prior executable revision together with an
 operator backup of Campaign Git/control/private state. Do not mix active processes from two versions.
 
+Runtime relinking migrates reserved Skill names under `skills/`, `.claude/skills/`,
+`.qoder/skills/` and `.agents/skills/`. The retired names are exactly `humanize`,
+`humanize-gen-plan`, `humanize-refine-plan`, `humanize-rlcr`, `gen-plan`, `gpu-kernel-baseline`,
+`gpu-kernel-episode-loop` and `ncu-report-skill`; PPU-only assets are also removed from discovery
+when PPU is not selected. Existing real directories/files or noncanonical links at an active
+backend Skill name are migrated before installing its current workspace link. Unknown names
+are untouched; there is no `humanize*` wildcard cleanup.
+
+Migration atomically moves entries (including symlinks themselves, never their targets) into
+`<workspace-parent>/.atrex-supervisor-runtime/<workspace-scope>/skill-migrations/<id>/`, preserving
+their original workspace-relative paths and logging each backup location. Backups are outside
+the Agent workspace and Skill discovery; nothing is recursively deleted. Repeated relinking
+preserves current links without creating more backups. A blocked rename or symlinked discovery
+root fails closed: stop the Supervisor, repair the path/permissions or move the conflicting
+entry to an operator backup, then retry. For rollback, use the full pre-upgrade workspace backup;
+the logged migration copies can recover local Skill edits but are not a full Campaign snapshot.
+
 Removed CLI: `--fast-episodes`, `--fast-trials`, Fast/Full plan-review switches and
 `--long-reviewer-session`. `--setup-timeout` is replaced by `--problem-generation-timeout` for public
-contract authoring only. Baseline, production-policy and ABBA controls retain their own meanings.
+contract authoring only. Its default and per-attempt hard cap are 1800 seconds; the effective
+timeout remains `min(configured_timeout, 1800)`. Validation failure permits one repair attempt
+(at most two authoring sessions), not an unbounded retry loop. Existing valid public contracts
+skip authoring. Baseline, production-policy and ABBA controls retain their own meanings.
 
 The simplification removes redundant prompt instructions and workflow bookkeeping; it does not
 assert a measured token saving or kernel speedup. Fewer mandatory probes can change search behavior;

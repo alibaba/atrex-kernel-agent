@@ -90,7 +90,7 @@ class EpisodeWorkspace:
         for name in DIAGNOSTIC_TREES:
             with open_private_directory(self.root / name):
                 pass
-            if fresh and name in DIAGNOSTIC_TREES:
+            if fresh:
                 for relative, content in _tree(self.worktree / name):
                     publish(self.root, f"{name}/{relative}", content)
         # These are controller-created asset links, never copied from Agent files.

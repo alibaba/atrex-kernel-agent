@@ -171,7 +171,7 @@ proposed/deferred Directions may remain for later exploration.
 
 ## Candidate report
 
-Leave the selected measurement's exact source in `kernel.py`. The Supervisor seals the measured source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
+Leave the selected measurement's exact source in `kernel.py`. The Supervisor reuses matching six-case correctness evidence, or performs the missing check, before sealing that source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
 
 ```json
 {
@@ -193,8 +193,16 @@ Response:
 
 The selected Experiment must belong to this Episode, use `baseline`, `keep_after`, or `adopt`, and
 cite a passing Evaluate record for byte-identical current `kernel.py`. Profile/Dev/Check/Disassemble
-or ABBA alone cannot satisfy this report binding. Fulfil the phase's full validation requirements;
-custom-input or correctness-only diagnostics are not substitutes for standard performance evidence.
+or ABBA alone cannot satisfy this report binding; custom-input or correctness-only diagnostics are
+not substitutes for standard performance evidence. Before accepting `candidate_ready`, the Supervisor
+reuses a matching successful full or correctness-only Evaluate with the base case plus five additional
+seeds. Ordinary Atrex-Bench Evaluate already checks these six cases. If evidence is missing or does
+not match the complete contract, the Supervisor performs a correctness-only check without timing.
+You need not submit or cite an extra check yourself. `candidate_correctness_failed` returns a Record
+ID and repair instructions: fix the Kernel, update its full Evaluate/Experiment evidence and resubmit.
+No report is finalized or Supervisor candidate commit created on failure. Infrastructure/unknown
+outcomes are blockers, not evidence that the Kernel is incorrect. Pivot/blocked reports do not trigger
+this check; replaying an accepted report republishes handoff without rerunning it.
 Do not submit `candidate_commit` in a managed Episode. Do not write canonical `memory/vN.json`. `accepted` confirms handoff, not that
 the candidate has won the Supervisor's independent gates. Stop after successful handoff.
 

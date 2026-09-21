@@ -34,9 +34,8 @@ override the operator contract.
 
 ## Step B — Resolve missing implementation details
 
-Read only the exact Supervisor-selected implementation references, if they are mounted and
-readable. Do not follow their imports/links recursively or search private paths. If essential
-framework/toolchain information is still missing, make at most one query:
+If essential framework/toolchain information is missing from the public contract and supplied
+guidance, make at most one query:
 
 ```bash
 python3 tools/sandbox.py --kind wiki-query "<your description>" --brief
@@ -44,8 +43,8 @@ python3 tools/sandbox.py --kind wiki-query "<your description>" --brief
 
 Include product `{{PLATFORM}}`, runtime architecture `{{ARCH}}`, operator, `{{FRAMEWORK}}`,
 public shapes/dtypes, and the missing implementation fact. Inspect the first applicable returned
-record and stop research once you can implement and launch the operator. Static references
-are design evidence, not external implementations to execute or delegate computation to.
+record and stop research once you can implement and launch the operator. Use the returned
+knowledge to write your own implementation, not to delegate computation to an external operator.
 
 ## Step C — Implement and smoke-test
 

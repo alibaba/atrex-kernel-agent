@@ -1,7 +1,13 @@
 ## GPU measurements
 
-- Use `python3 tools/sandbox.py --kind run --mode full --no-sync` for standard correctness and
-  performance. Follow any explicit seed/coverage requirements in this session. Runtime handles
-  batching, repetitions, aggregation, and infrastructure retries.
+- Measure candidate correctness and performance:
+  ```bash
+  python3 tools/sandbox.py --kind run --mode full --no-sync
+  ```
+  Reuse exact matching saved results when available. On `candidate_ready`, the Supervisor
+  automatically checks the frozen candidate with the base case plus five additional correctness
+  seeds, reusing matching evidence and without repeating performance timing. You do not need to
+  request this check manually. If it fails, inspect the returned Record, repair the candidate and
+  its evidence, then resubmit. Runtime handles batching, repetitions, aggregation and retries.
 - Use Profile or custom Dev probes only when they answer an unresolved optimization question.
   Reuse saved Gateway records instead of repeating an identical completed measurement.

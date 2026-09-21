@@ -53,9 +53,6 @@ MEMORY_EXPERIMENT_FIELDS = (
 )
 MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
 EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
-FAST_POLICY_REVIEW_REQUEST_PATH = Path(
-    ".atrex_long_horizon/policy_review_request.json"
-)
 EPISODE_REASONING_EFFORT = "max"
 
 

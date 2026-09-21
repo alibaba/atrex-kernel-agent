@@ -48,6 +48,16 @@ The capability, not an Agent-supplied path, selects the workspace. Legacy full-n
 
 ## GPU operations
 
+The Supervisor installs its canonical `profile_driver.py` into each private GPU request snapshot before recording inputs and building the worker bundle. Compatibility Profile routes can execute it through Dev/SSH without exposing the driver in the managed Agent workspace. An Agent-supplied file with that name cannot replace it.
+
+Profile uses the Typed route by default for both public and hidden Shapes. Use `--kind profile --profile-shape-id ID`, not the Evaluate-only `--shape-id`. The Supervisor selects exactly one private case: the explicit ID, otherwise legacy `PROFILE_SHAPE_ID`, otherwise the first sorted Shape. Direct HTTP sends this restricted reference contract; the Agate CLI receives an equivalent private single-Shape reference directory rather than reopening the full contract. Unknown IDs fail before GPU submission, without exposing Shape parameters.
+
+Hidden-Shape Typed Profile responses expose opaque Shape IDs and bounded Kernel metrics, not raw requests, Shape contracts, metadata, profiler artifacts or free-form hidden-case diagnostics. `--sync scratch/profile` publishes only a projected `gateway_profile.json`. Raw job responses and artifact references remain in the Supervisor's private measurement store. Non-hidden Profile retains raw artifact synchronization. Profile task identity includes the single-Shape routing contract, so older Dev-route records are not reused as Typed measurements.
+
+The visible Kernel list is capped at 32 entries. `kernel_count`, `total_duration_us`, `dominant_kernel` and duration shares still describe the full Kernel list returned by the profiler; `kernels_omitted` reports excluded entries. Repeated projection preserves these aggregates, so the immediate response, saved Record and synchronized summary agree.
+
+Dev/SSH remains a compatibility path for custom commands/wrappers, auxiliary inputs, driver-specific `PROFILE_*` controls, and unsupported source contracts or Gateway interfaces. Hidden Shapes alone do not trigger fallback. A recognized hidden-Shape driver receives the selected private case only in its remote bundle. Other Typed-only options fail instead of being silently ignored by a fallback.
+
 Read the mounted `gpu-measurement` Skill for Agent-facing examples. Existing evaluator commands retain their syntax and result markers:
 
 ```bash
@@ -63,7 +73,7 @@ python3 tools/sandbox.py --kind env
 
 | Operation | Behavior and Agent result |
 | --- | --- |
-| Evaluate (`run`) | Existing evaluator semantics; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
+| Evaluate (`run`) | Atrex-Bench defaults to six correctness cases; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
 | ABBA (`run --baseline-path`) | Reuses the existing same-allocation AB/BA runner; compact `[sandbox] ABBA_JSON=` with baseline/candidate per-Shape metrics and speedup; does not select or promote a Kernel |
 | Profile | Typed NCU/rocprof result, hottest Kernel/resource/SOL facts and requested counters via `[sandbox] PROFILE_JSON=`; legacy Profile commands and declared file synchronization remain supported |
 | Dev | Bounded stdout/stderr and command exit status for an explicitly declared GPU probe, not necessarily an evaluation |

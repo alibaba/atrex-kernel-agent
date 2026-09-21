@@ -108,6 +108,14 @@ Each complete ABBA batch is persisted before the next batch starts. The checkpoi
 
 ## Optional repeated measurement
 
+Atrex-Bench full and correctness-only Evaluate default to six correctness cases per Shape (base
+plus five additional seeds). Extra cases add correctness work, not performance timing runs.
+Explicit Shape smoke defaults to one case; `--multi-seed N` overrides the count. Resolved seed/mode
+policy enters task identity, so old implicit-single-seed records are not reused under the new default.
+Before sealing a report, the Supervisor may reuse a successful full or correctness-only six-case
+record when all correctness inputs/policies match; only timing iterations and performance repetitions
+may differ. This does not relax Agent-request deduplication or ABBA acceptance identity.
+
 The default is **one** measurement. Operators may set `ATREX_AKA_MEASUREMENT_REPETITIONS=3` before starting the Campaign. Only `1` and `3` are accepted; the Agent cannot set this policy through request environment flags.
 
 Three repeats apply to full Evaluate and whole ABBA comparisons. The Runtime takes each Shape's median over the three completed measurements, then recomputes geometric/arithmetic means. ABBA aggregates candidate and baseline separately and recomputes their speedup. Correctness-only Evaluate, Profile, Dev, Check and Disassemble remain single-operation requests. A rejected or incomplete repetition cannot become a successful median. Legacy evaluation logs receive the aggregate used in the Agent response, not just the final physical repetition.

@@ -46,6 +46,7 @@ try:
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
+        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from .environment_recovery import (
@@ -94,6 +95,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
+        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from orchestrator.environment_recovery import (  # type: ignore[no-redef]
@@ -549,7 +551,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Peak-utilization %% short-circuit (default stop condition).",
     )
     ap.add_argument(
-        "--problem-generation-timeout", type=int, default=7200, help="Public operator contract authoring timeout (s)."
+        "--problem-generation-timeout", type=int, default=MAX_PROBLEM_GENERATION_TIMEOUT_S,
+        help=f"Public contract authoring timeout per attempt (s; default and hard cap: {MAX_PROBLEM_GENERATION_TIMEOUT_S}).",
     )
     ap.add_argument(
         "--handoff-resumes",

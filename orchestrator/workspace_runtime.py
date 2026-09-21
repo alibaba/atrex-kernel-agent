@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
+import stat
+import uuid
 from pathlib import Path
 
 from .agent_skill_manifest import SKILL_MANIFEST
 from .constants import REPO_ROOT, STALL_STATE_FILE
+
+RETIRED_SKILL_NAMES = frozenset({
+    "humanize", "humanize-gen-plan", "humanize-refine-plan", "humanize-rlcr",
+    "gen-plan", "gpu-kernel-baseline", "gpu-kernel-episode-loop", "ncu-report-skill",
+})
 
 
 def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
@@ -52,6 +60,33 @@ def _remove_legacy_link(path: Path) -> None:
         path.unlink()
 
 
+def _archive_skill_entry(workspace: Path, path: Path) -> None:
+    """Move a reserved Skill entry out of discovery without reading/deleting its contents."""
+    from .agent_home import open_private_directory
+    from .supervisor_runtime import supervisor_campaign_root
+
+    relative = path.relative_to(workspace)
+    with open_private_directory(path.parent) as parent:
+        try:
+            mode = os.stat(path.name, dir_fd=parent, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            return
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            raise ValueError(f"Invalid Skill entry {path}; stop the Supervisor and move this special file out of discovery")
+        backup = supervisor_campaign_root(workspace) / "skill-migrations" / uuid.uuid4().hex / relative
+        try:
+            with open_private_directory(backup.parent) as destination:
+                # Rename the entry itself, including a dangling/external symlink;
+                # never follow it or recursively copy/remove an Agent-owned tree.
+                os.rename(path.name, backup.name, src_dir_fd=parent, dst_dir_fd=destination)
+        except OSError as error:
+            raise RuntimeError(
+                f"Cannot migrate Skill {path} to {backup}; original entry was not removed. "
+                "Stop the Supervisor, repair directory permissions or move this entry to an operator backup, then retry"
+            ) from error
+    logging.getLogger(__name__).warning("Archived legacy/conflicting Skill %s to %s", path, backup)
+
+
 def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_ppu: bool = False) -> None:
     from .agent_home import open_private_directory
     from supervisor.workspace import publish
@@ -64,6 +99,9 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     names = ["gpu-measurement", "runtime-records", "KernelWiki", "autonomous-gpu-kernel-timeline"]
     if is_ppu:
         names.append("ppu-acu-joint-profile")
+    inactive = RETIRED_SKILL_NAMES | (set(SKILL_MANIFEST) - set(names))
+    for name in sorted(inactive):
+        _archive_skill_entry(workspace, workspace / "skills" / name)
     for name in names:
         manifest = SKILL_MANIFEST[name]
         for filename in manifest.files:
@@ -72,20 +110,21 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     for backend in (".claude", ".qoder", ".agents"):
         _remove_legacy_link(workspace / backend / "agents")
         root = workspace / backend / "skills"
-        with open_private_directory(root):
-            pass
-        for path in root.iterdir():
-            if path.is_symlink() and path.resolve() == (workspace / "skills" / path.name).resolve():
-                continue
-            _remove_legacy_link(path)
-        for name in names:
-            path = root / name
-            target = workspace / "skills" / name
-            if path.is_symlink() and path.resolve() == target.resolve():
-                continue
-            if path.exists() or path.is_symlink():
-                raise ValueError(f"Skill discovery path is not a managed link: {path}")
-            os.symlink(target, path)
+        with open_private_directory(root) as directory:
+            for name in sorted(inactive):
+                _archive_skill_entry(workspace, root / name)
+            # Only reserved runtime names are migrated. Preserve unrelated user
+            # directories and links, including names beginning with "humanize".
+            for name in names:
+                target = workspace / "skills" / name
+                try:
+                    existing = os.readlink(name, dir_fd=directory)
+                except OSError:
+                    existing = None
+                if existing is not None and Path(os.path.abspath(root / existing)) == target.absolute():
+                    continue
+                _archive_skill_entry(workspace, root / name)
+                os.symlink(target, name, dir_fd=directory)
     if atrex_bench_root is not None:
         _install_atrex_bench_runtime(workspace, atrex_bench_root)
     gi = workspace / ".gitignore"
@@ -94,7 +133,11 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
         existing = read_regular_bytes(gi, limit=1024 * 1024).decode()
     except FileNotFoundError:
         existing = ""
-    ignores = ("/tools", "/skills", "/reference", "/reference-projects", "/gpu-wiki", "/.claude", "/.qoder", "/.agents", "/atrex-bench", "/" + STALL_STATE_FILE)
+    ignores = ("/tools", "/skills", "/reference", "/reference-projects", "/gpu-wiki", "/.claude", "/.qoder", "/.agents", "/" + STALL_STATE_FILE)
+    # Preserve the committed ignore file of resumed SOL workspaces, which never
+    # installed Atrex-Bench. Episode-boundary dirty checks must remain strict.
+    if atrex_bench_root is not None:
+        ignores += ("/atrex-bench",)
     missing = [name for name in ignores if name not in existing.splitlines()]
     if missing:
         publish(workspace, ".gitignore", (existing.rstrip() + "\n" + "\n".join(missing) + "\n").encode())

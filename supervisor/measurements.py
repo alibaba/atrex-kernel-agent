@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import statistics
 import subprocess
@@ -89,7 +90,94 @@ def aggregate(results: list[dict], operation: str) -> dict:
     return value
 
 
-def execute(runtime, capability, staged, args, argv, environment, command, *, reuse_completed=False) -> dict:
+def correctness_identity(request: dict) -> dict | None:
+    """A narrow equivalence: full/untimed six-case evaluation of the same inputs.
+
+    Only mode, performance repetitions and timing iterations may differ. All
+    evaluator bytes, input/source hashes, tolerances, dependencies, target and
+    environment remain bound. Old records lack the resolved seed policy and
+    cannot prove this contract. This is not an Agent duplicate/reuse policy.
+    """
+    if request.get("operation") != "evaluate":
+        return None
+    options = dict(request.get("options", {}))
+    policy = options.get("evaluation_policy")
+    if (not isinstance(policy, dict) or policy.get("schema_version") != 1
+            or policy.get("num_correctness_cases") != 6
+            or policy.get("mode") not in {"full", "correctness_only"}
+            or options.get("evaluation_input_path") or options.get("evaluation_shapes_path")):
+        return None
+    command = options.get("command", [])
+    # Canonical entry point only; arbitrary launcher semantics are not evidence
+    # for the Supervisor's standard evaluation. Reject all explicit subsets.
+    if command[:2] != ["python3", "test_kernel.py"]:
+        return None
+    normalized = command[:2]
+    index = 2
+    while index < len(command):
+        flag = command[index].split("=", 1)[0]
+        if flag == "--shape-id":
+            return None
+        if flag in {"--multi-seed", "--timed-runs"}:
+            index += 1 if "=" in command[index] else 2
+            continue
+        normalized.append(command[index])
+        index += 1
+    options["command"] = normalized
+    options.pop("evaluation_mode", None)
+    options["evaluation_policy"] = {key: value for key, value in policy.items() if key != "mode"}
+    supervisor_policy = dict(request.get("supervisor_policy", {}))
+    supervisor_policy.pop("repetitions", None)
+    return dict(request, options=options, supervisor_policy=supervisor_policy)
+
+
+def reuse_correctness_result(store, request: dict, kernel_id: str) -> dict | None:
+    expected = correctness_identity(request)
+    if expected is None:
+        return None
+    rows = sorted(store.kernel_records(kernel_id), key=lambda row: row["created_at"], reverse=True)
+    for row in rows:
+        if row["operation"] != "evaluate":
+            continue
+        try:
+            record = store.read(row["gateway_record_id"])
+            if record.get("cacheable") is not True or correctness_identity(record["request"]) != expected:
+                continue
+            response = record["response"]
+            result = result_from_response(response, "evaluate")
+            if (response.get("exit_code") == 0 and not response.get("truncated")
+                    and result and result.get("all_pass") is True and not result.get("error")
+                    and _typed_six_case_evidence(store, row["gateway_record_id"])):
+                return dict(response, reused=True)
+        except (ValueError, KeyError, TypeError, FileNotFoundError):
+            # Corrupt/old evidence is not a correctness pass. Other IO failures
+            # propagate: a storage outage must not silently cause new GPU work.
+            logging.getLogger(__name__).warning("Skipping invalid correctness evidence %s", row["gateway_record_id"])
+    return None
+
+
+def _typed_six_case_evidence(store, record_id: str) -> bool:
+    """Do not elevate a Dev script's result marker into a typed correctness gate."""
+    found = False
+    for path in (store.root / "records" / record_id).glob("repetition-*/jobs/*/state.json"):
+        state = read_json(path)
+        identity = state.get("identity", {})
+        if not isinstance(identity, dict):
+            return False
+        payload = identity.get("payload") if identity.get("kind") == "eval" else (
+            identity.get("request") if identity.get("kind") == "run" else None
+        )
+        if (state.get("phase") != "terminal" or not isinstance(payload, dict)
+                or not isinstance(payload.get("options"), dict)
+                or payload.get("options", {}).get("num_correctness_cases") != 6
+                or payload.get("mode") not in {"full", "correctness_only"}):
+            return False
+        found = True
+    return found
+
+
+def execute(runtime, capability, staged, args, argv, environment, command, *,
+            reuse_completed=False, reuse_correctness=False) -> dict:
     from supervisor.gateway import measurement_inputs, metadata_speedup_mean
     from orchestrator.supervisor_runtime import ROOT, RequestDispatchTimeout
     from supervisor.projection import project_response
@@ -105,12 +193,17 @@ def execute(runtime, capability, staged, args, argv, environment, command, *, re
     baseline_path = request["options"]["baseline_path"]
     if baseline_path:
         kernels["baseline"] = store.kernel(inputs[baseline_path])
+    if reuse_correctness and reuse_completed and "candidate" in kernels:
+        response = reuse_correctness_result(store, request, kernels["candidate"]["kernel_id"])
+        if response is not None:
+            return response
     try:
         with store.reserve(request, kernels) as task:
             for name, source in inputs.items():
                 private_write_bytes(task.directory / "inputs" / name, source)
             repetitions = runtime.measurement_repetitions if operation in {"evaluate", "same_allocation_abba"} else 1
-            if args.evaluation_mode == "correctness_only":
+            if (args.evaluation_mode == "correctness_only"
+                    or request["options"].get("evaluation_policy", {}).get("mode") == "correctness_only"):
                 repetitions = 1
             samples, responses, cacheable, pending = [], [], True, False
             for repetition in range(repetitions):

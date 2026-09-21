@@ -34,6 +34,7 @@ from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
 from supervisor.measurements import QUERY_KINDS
 from supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
 from supervisor.errors import AgentRequestError, RuntimeStateError
+from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER
 from .episode_workspace import EpisodeWorkspace
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
@@ -598,7 +599,8 @@ class SupervisorRuntime:
         finally:
             self.revoke(token)
 
-    def execute(self, capability: Capability, route: str, request: dict, *, reuse_completed=False) -> dict:
+    def execute(self, capability: Capability, route: str, request: dict, *,
+                reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None) -> dict:
         if route == "/v1/journal/execute":
             return self.execute_journal(capability, request)
         with _validating_request():
@@ -624,9 +626,12 @@ class SupervisorRuntime:
                         return query(self.measurements, parsed, capability.workspace)
                     if parsed is not None and parsed.kind != "env":
                         snapshot(capability.workspace, staged)
+                        if candidate_source is not None:
+                            # Controller-only override: acceptance measures the
+                            # report's frozen source, not subsequent draft edits.
+                            publish(staged, "kernel.py", candidate_source)
                         if capability.journal and capability.journal.view:
                             from .episode_workspace import PUBLIC_FILES
-                            from supervisor.workspace import read_input, publish
                             # An Agent draft is never the authority for evaluator inputs.
                             for name in PUBLIC_FILES:
                                 try:
@@ -648,8 +653,12 @@ class SupervisorRuntime:
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:
-                        from .constants import ATREX_BENCH_HARNESS
                         shutil.copy2(ATREX_BENCH_HARNESS, staged / "test_kernel.py")
+                    if parsed is not None and parsed.kind != "env":
+                        # Compatibility Profile routes execute this entry
+                        # through Dev/SSH. Keep it private, overwrite any Agent copy,
+                        # and stage it before measurement identity/bundle capture.
+                        shutil.copy2(PROFILE_DRIVER, staged / "profile_driver.py")
                     # Querying candidate files never grants access to other workspaces.
                     # The trusted evaluator checkout is shared, not copied per Session.
                     if self.config.atrex_bench_root:
@@ -671,7 +680,7 @@ class SupervisorRuntime:
                 # execution timeout and transport enter the task identity.
                 effective = parse_gateway(command[2:])
                 return execute(self, capability, staged, effective, argv, environment, command,
-                               reuse_completed=reuse_completed)
+                               reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
             # From this point execution may have submitted a job. Failures must
             # never be classified as repairable argument errors by the handler.
             process = self.run_executor(command, staged, environment, capability)
@@ -686,6 +695,66 @@ class SupervisorRuntime:
                                     str(self.config.private_reference_dir or ""), str(ROOT),
                                     self.config.url, str(self.config.atrex_bench_root or "")))
 
+    def _validate_candidate_correctness(self, capability: Capability, source: bytes) -> dict:
+        """Reuse or execute the mandatory full-contract six-case correctness gate.
+
+        Prefer a completed full or correctness-only evaluation with matching
+        six-case inputs/policy. Otherwise measure without timing. Run under the
+        caller's Session/deadline, never a capability surviving its revocation.
+        """
+        from supervisor.measurements import result_from_response
+
+        response = self.execute(capability, "/v1/gateway/execute", {"argv": [
+            "--kind", "run", "--mode", "correctness_only", "--multi-seed", "5", "--no-sync",
+        ]}, reuse_completed=True, reuse_correctness=True, candidate_source=source)
+        if not self._live(capability):
+            raise SessionRevokedError("Session revoked before report acceptance")
+        try:
+            result = result_from_response(response, "evaluate")
+            identity = result or next((json.loads(line.split("=", 1)[1])
+                for line in reversed(response["stdout"].splitlines())
+                if line.startswith("[sandbox] RECORD_JSON=")), {})
+            record_id = identity["gateway_record_id"]
+            record = self.measurements.read(record_id)
+            authoritative = (
+                record.get("cacheable") is True
+                and record.get("operation") == "evaluate"
+                and record["request"]["inputs"].get("kernel.py") == hashlib.sha256(source).hexdigest()
+                and record["request"]["options"].get("evaluation_policy", {}).get("mode") in {"full", "correctness_only"}
+                and record["request"]["options"].get("evaluation_policy", {}).get("num_correctness_cases") == 6
+            )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise RuntimeStateError(
+                "Supervisor multi-seed correctness evidence is unavailable; report was not accepted",
+                code="candidate_validation_unavailable",
+            ) from error
+        if not authoritative:
+            raise RuntimeStateError(
+                "Supervisor multi-seed correctness did not produce authoritative evidence; report was not accepted",
+                code="candidate_validation_unavailable",
+            )
+        # Some confirmed candidate failures (e.g. compile errors) have no Eval
+        # payload, only a cacheable terminal Record. Unknown/infra outcomes are
+        # never cacheable and cannot reach this repairable rejection path.
+        if (result is None and response["exit_code"] != 0) or (result and result.get("all_pass") is False):
+            raise AgentRequestError(
+                "The candidate failed Supervisor multi-seed correctness (base case plus five additional seeds). "
+                "The report was not accepted and no candidate commit was created.",
+                code="candidate_correctness_failed", gateway_record_id=record_id,
+                next_action=(
+                    f"Inspect python3 tools/sandbox.py --kind record-read --record-id {record_id}. "
+                    "Repair kernel.py, record a passing full Evaluate and its Experiment, then resubmit "
+                    "episode-report with the matching selected_experiment_id. The Supervisor runs the "
+                    "multi-seed check automatically; do not repeat the failed GPU request unchanged. "
+                    "If abandoning the candidate, submit an evidence-backed pivot instead."
+                ),
+            )
+        if (not result or result.get("all_pass") is not True
+                or response["exit_code"] != 0 or result.get("error")):
+            raise RuntimeStateError("Supervisor multi-seed result is inconsistent; report was not accepted")
+        return {"gateway_record_id": record_id, "additional_seeds": 5, "correctness_cases": 6,
+                "reused": response.get("reused") is True}
+
     def execute_journal(self, capability: Capability, request: dict) -> dict:
         binding = capability.journal
         if binding is None:
@@ -697,7 +766,9 @@ class SupervisorRuntime:
                 raise SessionRevokedError()
             try:
                 with journal_lock(binding.service.path):
-                    value = binding.service.execute(request)
+                    value = binding.service.execute(request, validate_candidate=(
+                        lambda source: self._validate_candidate_correctness(capability, source)
+                    ))
             except (AgentRequestError, RuntimeStateError):
                 raise
             except ValueError as error:

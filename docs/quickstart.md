@@ -345,10 +345,10 @@ leaderboard campaign.
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
 session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
 supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
-contract and immutable reference, concurrently when both are enabled. Reviewers nominate only from a
-bounded local path catalog; the supervisor reconciles their choices and injects at most two exact reference
-paths alongside the available reviews. V1 reads only that shortlist without recursively browsing siblings.
-The reviews are cached for restart and never receive private shapes or write access to the candidate. The
+contract and immutable operator reference, concurrently when both are enabled. Only correctness guidance
+is injected; there is no implementation-reference catalog or shortlist. V1 may make at most one Wiki query
+for missing framework/toolchain knowledge. Reviews are cached for restart and never receive private shapes
+or write access to the candidate; caches from the retired reference-selection schema are regenerated. The
 coding Agent implements and smoke-tests only, without full evaluation, memory writing, or commits. The
 supervisor then runs policy review in parallel with one combined full-workload evaluator that measures the
 base seed and checks five additional seeds, writes memory, and pins V1. Use
@@ -376,7 +376,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---problem-generation-timeout S   Public contract authoring timeout (default: 7200)
+--problem-generation-timeout S   Public contract authoring timeout per attempt (default/cap: 1800s)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
 --sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
@@ -437,3 +437,15 @@ Remove Fast/Full plan-review and long-reviewer CLI flags; use `--problem-generat
 instead of `--setup-timeout` only if customizing public-contract authoring. No Setup Agent or
 per-mode optimization switch remains. Keep a backup of the Campaign and its private Supervisor
 store before migration; see [upgrade and rollback](design.md#upgrade-and-rollback).
+
+Relinking retires known old plan/Setup Skills and replaces conflicting current Skill discovery
+entries with canonical links. Original directories/files/links are preserved outside the workspace
+under the logged `skill-migrations` backup path; unrelated custom Skills remain untouched. If
+migration fails on permissions or a symlinked discovery root, stop the Supervisor and repair or
+back up that path before retrying. Do not delete user-edited Skill directories to force a resume.
+
+Public-contract authoring retains a 30-minute cap per attempt: the effective timeout is
+`min(--problem-generation-timeout, 1800)` seconds. A smaller positive value shortens the budget;
+a larger value does not extend it. One repair attempt is allowed after validation failure, so
+the two Agent sessions together have at most 60 minutes of timeout budget, excluding staging
+and validation overhead. An existing valid contract skips authoring entirely.

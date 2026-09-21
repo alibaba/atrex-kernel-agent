@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -35,6 +34,7 @@ from .constants import (
     FRAMEWORK_BASELINE_TIMEOUT_S,
     FRAMEWORK_BASELINE_VERSION,
     IMMUTABLE_BASELINE_PATHS,
+    MAX_PROBLEM_GENERATION_TIMEOUT_S,
     PROFILE_DRIVER,
     PROMPTS_DIR,
     REPO_ROOT,
@@ -113,7 +113,7 @@ _WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
 _WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
 
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 4
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
     ".atrex_long_horizon/framework_baseline/correctness_guidance.json"
 )
@@ -131,21 +131,8 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
     "EDGE_CASES:",
     "CUDA_IMPLEMENTATION_RISKS:",
     "PRE_SMOKE_CHECKS:",
-    "TARGETED_REFERENCES:",
     "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
 )
-_FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT = 80
-_FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT = 6
-_FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES = 1000
-_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT = 2
-_FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
-    ".cu",
-    ".cuh",
-    ".h",
-    ".hpp",
-    ".md",
-    ".py",
-}
 
 
 def _runtime_timeout_from_environment(name: str, default: float | None = None) -> float | None:
@@ -177,7 +164,7 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    problem_generation_timeout: int = 7200  # public contract authoring, not a Setup Agent
+    problem_generation_timeout: int = MAX_PROBLEM_GENERATION_TIMEOUT_S  # per authoring attempt
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
@@ -295,9 +282,10 @@ class Campaign:
                 f"{AGENT_PROBLEM_FILENAME}"
             )
 
+        timeout = min(self.problem_generation_timeout, MAX_PROBLEM_GENERATION_TIMEOUT_S)
         print(
             "[orchestrator] generalized problem: production received detailed shapes only; "
-            "starting AKA problem-authoring session",
+            f"starting AKA problem-authoring session (timeout: {timeout}s per attempt, at most 2 attempts)",
             flush=True,
         )
         validation_error = ""
@@ -323,7 +311,7 @@ class Campaign:
                 result = run_session(
                     staging,
                     prompt,
-                    timeout=self.problem_generation_timeout,
+                    timeout=timeout,
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
                     extra_environment=self.agent_boundary_environment("problem-generation"),
@@ -808,7 +796,9 @@ class Campaign:
                 "the arithmetic mean of per-Shape speedups relative to metadata production latency. "
                 "Use --kind run --mode full --no-sync for the complete workload. "
                 "Correctness-only, custom-input or subset results do not satisfy an Episode report. "
-                "For diagnostic Profile, select an opaque --shape-id from a saved result. "
+                "For diagnostic Profile, use --kind profile --profile-shape-id ID --no-sync "
+                "with an opaque Shape ID from a saved result. The same option selects the "
+                "privately supplied case in Typed Profile or a compatible Dev fallback. "
                 "Never substitute a custom timing/correctness harness for official evaluation."
             )
         if is_sol_op(Path(self.kernel_demo).resolve().parent):
@@ -1589,200 +1579,6 @@ class Campaign:
                 context.append(path)
         return context
 
-    def _framework_baseline_reference_keywords(self) -> set[str]:
-        """Derive bounded path-ranking terms from the public operator contract."""
-        keywords = {
-            token
-            for token in re.findall(
-                r"[a-z0-9]+", f"{self.name} {self.framework} {self.arch}".lower()
-            )
-            if len(token) >= 3
-        }
-        public_text = ""
-        for relative in ("agent_problem.json", "reference.py", "input.py"):
-            path = self.workspace / relative
-            if not path.is_file():
-                continue
-            try:
-                public_text += "\n" + path.read_text(
-                    encoding="utf-8", errors="replace"
-                ).lower()
-            except OSError:
-                continue
-        for term in (
-            "attention",
-            "backward",
-            "bwd",
-            "causal",
-            "decode",
-            "gqa",
-            "mask",
-            "mla",
-            "nvrtc",
-            "paged",
-            "prefill",
-            "ragged",
-            "softmax",
-            "varlen",
-        ):
-            if term in public_text:
-                keywords.add(term)
-        if self.arch.lower().startswith("sm_12"):
-            keywords.update({"blackwell", "sm120"})
-        if hardware_vendor(self.platform, self.arch) == "ppu":
-            keywords.update({"ppu", "sail", "hggc", "actlize", "m890"})
-        return keywords
-
-    def _framework_baseline_reference_catalog(self) -> list[str]:
-        """Rank a small exact-path catalog; reviewers may select only from this list."""
-        roots = (REPO_ROOT / "gpu-wiki", REPO_ROOT / "reference-projects")
-        candidates: list[str] = []
-        if shutil.which("rg"):
-            completed = subprocess.run(
-                ["rg", "--files", *(str(root) for root in roots if root.is_dir())],
-                cwd=str(REPO_ROOT),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode in {0, 1}:
-                candidates = [line.strip() for line in completed.stdout.splitlines()]
-        if not candidates:
-            for root in roots:
-                if not root.is_dir():
-                    continue
-                for path in root.rglob("*"):
-                    if path.is_file():
-                        candidates.append(path.relative_to(REPO_ROOT).as_posix())
-
-        keywords = self._framework_baseline_reference_keywords()
-        targets_ppu = hardware_vendor(self.platform, self.arch) == "ppu"
-        wants_backward = bool(keywords & {"backward", "bwd"})
-        ranked: list[tuple[int, str]] = []
-        for raw_path in candidates:
-            path = Path(raw_path)
-            try:
-                absolute = path if path.is_absolute() else REPO_ROOT / path
-                relative = absolute.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
-            except (OSError, ValueError):
-                continue
-            source = REPO_ROOT / relative
-            suffix = source.suffix.lower()
-            if (
-                suffix not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
-                or not source.is_file()
-            ):
-                continue
-            if suffix != ".md":
-                try:
-                    if source.stat().st_size < _FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES:
-                        continue
-                except OSError:
-                    continue
-            lowered = relative.lower().replace("-", "_")
-            score = sum(10 for keyword in keywords if keyword in lowered)
-            if score == 0:
-                continue
-            if relative.startswith("reference-projects/") and suffix != ".md":
-                score += 4
-            if relative.startswith("gpu-wiki/"):
-                score += 2
-            if "/sources/prs/" in lowered:
-                score -= 5
-            if not wants_backward and any(
-                term in lowered for term in ("_bwd", "bwd_", "backward")
-            ):
-                score -= 15
-            if any(term in lowered for term in ("paged", "varlen", "gqa", "sm120")):
-                score += 3
-            if any(term in lowered for term in ("_for_sail", "actlize", "hggc", "ppu")):
-                if not targets_ppu:
-                    continue
-                score += 3
-            ranked.append((score, relative))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        per_project: dict[str, int] = {}
-        catalog: list[str] = []
-        for _score, relative in ranked:
-            if len(catalog) >= _FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT:
-                break
-            project = "/".join(relative.split("/")[:2])
-            if per_project.get(project, 0) >= _FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT:
-                continue
-            per_project[project] = per_project.get(project, 0) + 1
-            catalog.append(relative)
-        return catalog
-
-    def _framework_baseline_reference_catalog_text(self) -> str:
-        catalog = self._framework_baseline_reference_catalog()
-        lines = [
-            "# Bounded implementation reference catalog",
-            "",
-            "Select at most two exact paths from this list. A path is navigational evidence only; "
-            "do not claim facts about file contents you have not read.",
-            "",
-        ]
-        lines.extend(f"- `{path}`" for path in catalog)
-        return "\n".join(lines) + "\n"
-
-    def _framework_baseline_review_references(
-        self, guidance: str
-    ) -> list[dict[str, str]]:
-        catalog = set(self._framework_baseline_reference_catalog())
-        references: list[dict[str, str]] = []
-        in_section = False
-        for line in guidance.splitlines():
-            stripped = line.strip()
-            if stripped == "TARGETED_REFERENCES:":
-                in_section = True
-                continue
-            if in_section and stripped.endswith(":") and not stripped.startswith("-"):
-                break
-            if not in_section:
-                continue
-            match = re.fullmatch(
-                r"- path: ([^|]+?)\s*\|\s*purpose: (.+)", stripped
-            )
-            if match is None:
-                continue
-            path = match.group(1).strip().strip("`")
-            purpose = " ".join(match.group(2).split())[:500]
-            if path not in catalog or any(item["path"] == path for item in references):
-                continue
-            references.append({"path": path, "purpose": purpose})
-            if len(references) >= _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT:
-                break
-        return references
-
-    def _framework_baseline_selected_references(
-        self, reviews: dict[str, object]
-    ) -> list[dict[str, object]]:
-        """Choose at most two reviewer-nominated paths, preferring consensus then rank."""
-        catalog = self._framework_baseline_reference_catalog()
-        rank = {path: index for index, path in enumerate(catalog)}
-        nominations: dict[str, dict[str, object]] = {}
-        for reviewer in self._framework_baseline_correctness_reviewers():
-            record = reviews.get(reviewer)
-            if not isinstance(record, dict):
-                continue
-            references = record.get("references")
-            if not isinstance(references, list):
-                continue
-            for item in references:
-                if not isinstance(item, dict) or item.get("path") not in rank:
-                    continue
-                path = str(item["path"])
-                current = nominations.setdefault(
-                    path,
-                    {"path": path, "purpose": str(item.get("purpose", "")), "votes": 0},
-                )
-                current["votes"] = int(current["votes"]) + 1
-        ordered = sorted(
-            nominations.values(),
-            key=lambda item: (-int(item["votes"]), rank[str(item["path"])]),
-        )
-        return ordered[:_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT]
-
     def _framework_baseline_correctness_context_digest(self) -> str:
         digest = hashlib.sha256()
         digest.update(
@@ -1803,8 +1599,6 @@ class Campaign:
             digest.update(relative.encode())
             digest.update(len(contents).to_bytes(8, "big"))
             digest.update(contents)
-        digest.update(b"\0reference-catalog\0")
-        digest.update(self._framework_baseline_reference_catalog_text().encode())
         return digest.hexdigest()
 
     def _load_framework_baseline_correctness_guidance(
@@ -1838,22 +1632,6 @@ class Campaign:
             for reviewer in enabled_reviewers
         ):
             return None
-        selected_references = value.get("selected_references")
-        catalog = set(self._framework_baseline_reference_catalog())
-        if (
-            not isinstance(selected_references, list)
-            or len(selected_references)
-            > _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT
-            or any(
-                not isinstance(item, dict)
-                or not isinstance(item.get("path"), str)
-                or item["path"] not in catalog
-                or not isinstance(item.get("purpose"), str)
-                or not isinstance(item.get("votes"), int)
-                for item in selected_references
-            )
-        ):
-            return None
         return value
 
     def _run_framework_baseline_correctness_reviewer(
@@ -1877,15 +1655,6 @@ class Campaign:
                     source_hashes[relative.as_posix()] = hashlib.sha256(
                         destination.read_bytes()
                     ).hexdigest()
-                catalog_path = context_root / "reference_catalog.md"
-                catalog_path.parent.mkdir(parents=True, exist_ok=True)
-                catalog_path.write_text(
-                    self._framework_baseline_reference_catalog_text(),
-                    encoding="utf-8",
-                )
-                source_hashes["reference_catalog.md"] = hashlib.sha256(
-                    catalog_path.read_bytes()
-                ).hexdigest()
 
                 prompt = _render(
                     PROMPTS_DIR / "framework_baseline_correctness_review.md",
@@ -1968,9 +1737,6 @@ class Campaign:
                     {
                         "status": "ok",
                         "guidance": guidance[:16000],
-                        "references": self._framework_baseline_review_references(
-                            guidance
-                        ),
                         "session_id": result.session_id,
                     },
                     result,
@@ -2039,9 +1805,6 @@ class Campaign:
             "context_digest": self._framework_baseline_correctness_context_digest(),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "reviews": reviews,
-            "selected_references": self._framework_baseline_selected_references(
-                reviews
-            ),
         }
         path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2063,24 +1826,6 @@ class Campaign:
                 file=sys.stderr,
                 flush=True,
             )
-
-    @staticmethod
-    def _framework_baseline_guidance_without_reference_nominations(
-        guidance: str,
-    ) -> str:
-        """Hide raw nominations so V1 sees only the supervisor's final shortlist."""
-        lines: list[str] = []
-        skipping = False
-        for line in guidance.splitlines():
-            stripped = line.strip()
-            if stripped == "TARGETED_REFERENCES:":
-                skipping = True
-                continue
-            if skipping and stripped in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS:
-                skipping = False
-            if not skipping:
-                lines.append(line)
-        return "\n".join(lines).strip()
 
     def _framework_baseline_correctness_guidance_text(self) -> str:
         reviewers = self._framework_baseline_correctness_reviewers()
@@ -2117,11 +1862,7 @@ class Campaign:
             record = record if isinstance(record, dict) else {}
             sections.append(f"\n### {label}\n")
             if record.get("status") == "ok":
-                guidance = (
-                    self._framework_baseline_guidance_without_reference_nominations(
-                        str(record.get("guidance", ""))
-                    )
-                )
+                guidance = str(record.get("guidance", ""))
                 sections.append(guidance + "\n")
             else:
                 sections.append(
@@ -2129,26 +1870,6 @@ class Campaign:
                     + str(record.get("reason", "no valid response"))
                     + "\n"
                 )
-        sections.append("\n### Supervisor-selected implementation references\n")
-        selected_references = value.get("selected_references")
-        if isinstance(selected_references, list) and selected_references:
-            for item in selected_references:
-                assert isinstance(item, dict)
-                sections.append(
-                    f"- `{item['path']}` — {item['purpose']} "
-                    f"(nominated by {item['votes']}/{len(reviewers)} configured reviewers)\n"
-                )
-            sections.append(
-                "Read only these exact files as static design evidence. Do not open sibling "
-                "files, follow imports or links recursively, execute/import the reference, "
-                "delegate computation to it, or copy a prebuilt implementation. Raw reviewer "
-                "nominations were reconciled and are not additional authorization.\n"
-            )
-        else:
-            sections.append(
-                "- None selected. Do not broaden research unless the bounded fallback in Step B "
-                "is needed for framework/toolchain syntax.\n"
-            )
         sections.append(
             "\nBefore implementation, write a concise internal checklist that resolves any "
             "disagreement and covers output initialization/padding, paged addressing, causal "
