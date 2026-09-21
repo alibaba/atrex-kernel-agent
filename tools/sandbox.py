@@ -2792,7 +2792,7 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
 def _report_infrastructure_failure(job: dict) -> bool:
     """Preserve the failure category without revealing private evaluator details."""
     error = job.get("error")
-    if (isinstance(error, dict) and error.get("class") == "infra"
+    if (isinstance(error, dict) and error.get("error_class", error.get("class")) == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
         print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
