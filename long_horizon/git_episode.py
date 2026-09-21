@@ -207,6 +207,8 @@ class EpisodeWorktree:
             return "candidate has no changes relative to incumbent", []
         if "kernel.py" not in paths or not set(paths).issubset(CANDIDATE_PATHS):
             return "candidate commit must change kernel.py and may also update solution.json", paths
+        if _manifest_deleted(self.path, self.base_commit, resolved):
+            return "candidate must preserve the incumbent solution.json manifest", paths
         kernel_text = (self.path / "kernel.py").read_text(encoding="utf-8", errors="replace")
         if any(marker in kernel_text for marker in TIMELINE_PROBE_MARKERS):
             return "candidate kernel.py still contains timeline profiling probes", paths
@@ -261,6 +263,13 @@ class EpisodeWorktree:
         )
 
 
+def _manifest_deleted(workspace: Path, base_commit: str, candidate_commit: str) -> bool:
+    return "solution.json" in git_text(
+        workspace, "diff", "--no-renames", "--diff-filter=D", "--name-only",
+        base_commit, candidate_commit, "--", "solution.json",
+    ).splitlines()
+
+
 def promote_candidate(
     incumbent_workspace: Path,
     *,
@@ -276,6 +285,8 @@ def promote_candidate(
     candidate_paths = changed_paths(incumbent_workspace, base_commit, candidate_commit)
     if "kernel.py" not in candidate_paths or not set(candidate_paths).issubset(CANDIDATE_PATHS):
         raise RuntimeError("promotion requires kernel.py with only an optional solution.json update")
+    if _manifest_deleted(incumbent_workspace, base_commit, candidate_commit):
+        raise RuntimeError("candidate must preserve the incumbent solution.json manifest")
     try:
         subprocess.run(
             ["git", "merge", "--squash", "--no-commit", candidate_commit],

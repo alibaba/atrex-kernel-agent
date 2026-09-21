@@ -37,6 +37,7 @@ from .environment_recovery import (
 )
 from .hardware import hardware_vendor
 from .recovery_processes import spawn_owned_session
+from .sandbox_config import queue_wait_grace
 from .workspace_state import speedup_vs_reference
 
 
@@ -522,12 +523,8 @@ def _sandbox_command(
         effective_timeout = wall_timeout
     else:
         uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
-        queue_wait_grace = 0 if uses_ssh else int(
-            environment.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", "14400")
-        )
-        if queue_wait_grace < 0:
-            raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
-        effective_timeout = timeout + queue_wait_grace + 240
+        grace = 0 if uses_ssh else queue_wait_grace(environment)
+        effective_timeout = timeout + grace + 240
     raise_if_environment_blocked()
     process = spawn_owned_session(
         cmd,

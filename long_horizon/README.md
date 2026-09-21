@@ -99,8 +99,13 @@ input constraints select the relevant dispatch regime without disclosing hidden
 workloads. Generators address actual tensor ABI leaves (including `lhs.0` for tuple
 members) and preserve unmentioned structural inputs. Supplemental floating-point
 outputs use the evaluator's relative L2 comparator with a fixed threshold of
-`1e-3` per output tensor: `||candidate - reference||2 / max(||reference||2, 1e-12)`.
-This replaces elementwise allclose for these regenerated distributions; absolute
+`1e-3` per output tensor (FP4 retains its benchmark threshold of `0.2`):
+`||candidate - reference||2 / max(||reference||2, 1e-12)`.
+The non-FP4 bound is an explicit supplemental accuracy policy: at most 0.1%
+normalized aggregate error on regenerated distributions. It is not mathematically
+equivalent to the ordinary allclose tolerances, so passing ordinary validation
+alone does not establish supplemental correctness. The FP4 exception preserves
+the benchmark's quantization error budget. This replaces elementwise allclose for these regenerated distributions; absolute
 and elementwise relative errors remain diagnostic. Non-finite outputs, structural
 mismatches and forbidden input mutations still fail through the evaluator. The
 supervisor records the comparison policy in feedback; reviewers and coding agents
@@ -222,3 +227,10 @@ archives active work, `_recover_completed_handoff` rechecks terminal handoffs, a
 before the next admission budget check, so a completed handoff can be finalized
 before a budget stops further exploration. The [diagram source](../assets/episode-mode-state-machine.dot)
 is kept alongside the rendered SVG.
+
+Supplemental plans persist in the supervisor private-reference directory, or in
+`~/.local/state/atrex-kernel-agent/numerical_advice` when no private reference is
+configured. This state must stay outside coding-agent workspaces and writable
+mounts. Restart loads accept only structurally valid probe plans; workspace
+feedback is an audit copy, never an admission decision. As with the private
+reference corpus, deployments must protect supervisor state from agent writes.

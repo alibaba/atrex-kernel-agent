@@ -16,6 +16,8 @@ import uuid
 
 from long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
 from long_horizon.store import VERIFY_DIR
+from reference.atrex_bench_test_kernel import _fp4_correctness_max_rel_l2
+from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from .durable_state import durable_write_json
 from .infrastructure_retry import (
     check_review_service, check_transport, retry_infrastructure, retry_review,
@@ -41,7 +43,7 @@ def _sources(campaign, workspace):
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
-    for name in ("input.py", "reference.py", "agent_problem.json", "README.md"):
+    for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
         path = private / name if (private / name).is_file() else workspace / name
         if path.is_file():
             files["trusted/" + name] = path
@@ -183,6 +185,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
         durable_write_json(request, {
             "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
             "mode": "thorough", "per_case_timeout": 540,
+            "max_rel_l2": _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2,
         })
 
         def execute():
@@ -246,16 +249,28 @@ def supplemental_feedback(campaign, workspace):
     plan_key = (str(workspace.resolve()), _digest({name: path for name, path in files.items()
                                                 if not name.startswith("candidate/")}))
     review = plans.get(plan_key)
+    # Persist outside agent worktrees, just like the private reference corpus.
+    # Workspace feedback copies are never accepted as supervisor state.
     plan_root = (Path(campaign.private_reference_dir) / ".atrex_numerical_advice"
-                 if campaign.private_reference_dir
-                 else Path(campaign.workspace) / ".atrex_long_horizon" / "numerical_advice")
+                 if campaign.private_reference_dir else
+                 Path.home() / ".local" / "state" / "atrex-kernel-agent" / "numerical_advice")
     plan_path = plan_root / (hashlib.sha256(repr(plan_key).encode()).hexdigest() + ".json")
-    if review is None and plan_path.is_file():
-        review = json.loads(plan_path.read_text())
-        validate_suite(review["suite"])
     record = {"schema_version": 1, "evidence_digest": validation_digest,
-              "comparison": {"metric": "relative_l2", "max_rel_l2": MAX_REL_L2}}
+              "comparison": {"metric": "relative_l2", "max_rel_l2":
+                  _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2}}
     try:
+        if plan_root.resolve().is_relative_to(workspace.resolve()):
+            raise ValueError("supplemental plans require supervisor state outside the agent workspace")
+        if review is None and plan_path.is_file():
+            review = json.loads(plan_path.read_text())
+            if not isinstance(review, dict) or review.get("action") != "probe":
+                raise ValueError("persisted supplemental plans must require probes")
+            # Candidate edits are expected on repair, so preserve the original
+            # evidence digest while revalidating the complete review structure.
+            original_digest = review.get("evidence_digest")
+            if not isinstance(original_digest, str) or len(original_digest) != 64:
+                raise ValueError("persisted supplemental plan has no evidence digest")
+            _validate_review(review, original_digest)
         if review is None:
             review = _request_review(campaign, workspace, files, digest)
         record["review"] = review
@@ -307,7 +322,7 @@ def supplemental_feedback(campaign, workspace):
         feedback = ""
     elif status == "needs_repair":
         feedback = (
-            f"Supplemental numerical probes found a measured failure. Read {feedback_path.relative_to(workspace)} "
+            f"{SUPPLEMENTAL_REPAIR_PREFIX} found a measured failure. Read {feedback_path.relative_to(workspace)} "
             "for the requested distributions and results; repair the candidate using the immutable reference, "
             "then rerun the usual evaluator and hand off the updated candidate. Do not edit the probes, "
             "evaluator or tolerances. The supervisor reruns the same requested probes after repair; "
@@ -315,7 +330,7 @@ def supplemental_feedback(campaign, workspace):
         )
     else:
         feedback = (
-            f"Supplemental validation is incomplete; this is not a measured correctness failure. "
+            f"{SUPPLEMENTAL_PENDING_PREFIX}; this is not a measured correctness failure. "
             f"See {feedback_path.relative_to(workspace)}. Preserve the candidate and report the validation "
             "blocker if it cannot be resolved within the public contract; do not modify the trusted harness."
         )

@@ -282,7 +282,7 @@ def run(request_path):
                         for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
                             cached.unlink()
                     command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
-                               "--correctness-max-rel-l2", str(MAX_REL_L2),
+                               "--correctness-max-rel-l2", str(request.get("max_rel_l2", MAX_REL_L2)),
                                "--multi-seed", "0", "--seed", str(seed), "--shape-id", shape_id]
                     try:
                         remaining = deadline - time.monotonic()
@@ -324,7 +324,7 @@ def run(request_path):
                 values = {**{name: result[name] for name in ("max_abs_err", "max_rel_err") if name in result},
                           **result.get("numerical_metrics", {})}
                 for name, value in values.items():
-                    if value is None:
+                    if value is None or not math.isfinite(value):
                         metrics[name] = None
                     elif metrics.get(name, 0) is not None:
                         metrics[name] = max(metrics.get(name, 0), value)

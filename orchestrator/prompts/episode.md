@@ -28,7 +28,7 @@ final squash promotion. You own only this episode branch and its structured evid
 {{RESUME_DIRECTIVE}}
 
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
-branch are allowed, but commits may contain `kernel.py` and its `solution.json` manifest. Keep the manifest's languages,
+branch are allowed, but commits may contain only `kernel.py` and its `solution.json` manifest. Keep the manifest's languages,
 dependencies, entry point, and role descriptions consistent with the implementation, including
 framework conversions. Plans, profiles, discussion
 transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add

@@ -19,7 +19,8 @@ State range assumptions explicitly. Respect documented bounds, coupled invariant
 packed representations, structural indices, lengths and output buffers. Compare
 against the actual reference, not a hypothetical higher-precision implementation.
 Supplemental floating-point outputs are compared by the evaluator using relative
-L2 <= 1e-3 per output tensor, with finite-value and structural checks retained.
+L2 <= 1e-3 per output tensor (FP4 uses its benchmark threshold of 0.2), with
+finite-value and structural checks retained.
 Elementwise absolute/relative errors are diagnostics, not supplemental rejection
 criteria. This supervisor-owned threshold is fixed; do not propose tolerances.
 

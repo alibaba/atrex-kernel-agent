@@ -20,6 +20,8 @@ from typing import Optional
 
 from . import agent_runtime as _agent_runtime
 from .constants import (
+    SUPPLEMENTAL_PENDING_PREFIX,
+    SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
@@ -1452,14 +1454,14 @@ class Campaign:
         if not problem:
             result, problem = self._framework_baseline_external_gates(n)
         numerical_repairs = 0
-        while problem and not problem.startswith("Supplemental validation is incomplete") and (
+        while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
             not recovery_used
-            or (problem.startswith("Supplemental numerical probes") and numerical_repairs < 2)
+            or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
         ):
             # The implementation Agent intentionally runs only a bounded smoke subset.
             # Ordinary failures retain one repair turn. Supplemental counterexamples
             # get their own bounded repair budget even if bring-up already used it.
-            if problem.startswith("Supplemental numerical probes"):
+            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
                 numerical_repairs += 1
             self._recover_framework_baseline(
                 problem, v0_blob, baseline_commit, pre_head
@@ -1490,7 +1492,7 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            outcome = "validation blocked" if problem.startswith("Supplemental validation is incomplete") else "rejected"
+            outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
             raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
@@ -2872,7 +2874,7 @@ class Campaign:
         memory["masked"] = False
         memory["git_commit_hash"] = None
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        validation_incomplete = problem.startswith("Supplemental validation is incomplete")
+        validation_incomplete = problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
         memory["correctness"] = {"status": "UNKNOWN" if validation_incomplete else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,

@@ -432,8 +432,10 @@ def dependency_guard(
             try:
                 cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
             except (FileNotFoundError, ProcessLookupError):
-                # A child may exit between reading cmdline and resolving cwd.
-                continue
+                # A live child may have deleted its cwd; still check its argv.
+                if not Path(f"/proc/{pid}").exists():
+                    continue
+                cwd = None
             except PermissionError:
                 cwd = None
             reason = dependency_process_violation(argv, cwd=cwd)
