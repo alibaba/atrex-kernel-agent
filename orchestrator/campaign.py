@@ -2080,8 +2080,13 @@ class Campaign:
 
     def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
         """Return the only ordinary evaluator command the V1 implementation Agent should run."""
-        command = ["python3", "tools/sandbox.py", "--kind", "run", "--mode", "full",
-                   "--no-sync", "--version", f"v{n}"]
+        command = ["python3", "tools/sandbox.py", "--kind", "run", "--no-sync"]
+        if self.atrex_bench_root:
+            command += ["--mode", "full", "--version", f"v{n}"]
+        else:
+            # SOL needs the Dev compatibility route. Top-level --version, like
+            # --mode, requires Typed evaluation; pass the label to its harness.
+            command += ["--", "python3", "test_kernel.py", "--version", f"v{n}", "--no-memory"]
         shape_ids = (
             self._framework_baseline_smoke_shape_ids()
             if self.atrex_bench_root

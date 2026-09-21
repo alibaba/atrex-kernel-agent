@@ -34,7 +34,7 @@ from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
 from supervisor.measurements import QUERY_KINDS
 from supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
 from supervisor.errors import AgentRequestError, RuntimeStateError
-from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER
+from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_HARNESS
 from .episode_workspace import EpisodeWorkspace
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
@@ -98,6 +98,36 @@ def candidate_acceptance_argv(*, atrex_bench: bool) -> list[str]:
     return ["--kind", "run", "--no-sync"]
 
 
+def sol_evaluation_config(workspace: Path) -> bytes | None:
+    """Read optional SOL policy from V0, never from mutable files or the index."""
+    from .workspace_state import v0_baseline_commit
+
+    try:
+        revision = v0_baseline_commit(workspace)
+        if not revision:
+            raise RuntimeStateError("SOL evaluation requires a committed V0 configuration anchor")
+        listing = subprocess.run(
+            ["git", "ls-tree", "-z", "-l", revision, "--", "config.json"],
+            cwd=workspace, capture_output=True, check=True, timeout=30,
+        ).stdout
+        if not listing:
+            return None
+        entry = re.fullmatch(rb"100(?:644|755) blob ([0-9a-f]{40}(?:[0-9a-f]{24})?) +([0-9]+)\tconfig\.json\x00", listing)
+        if entry is None or int(entry[2]) > MAX_FILE_BYTES:
+            raise RuntimeStateError("SOL V0 config.json must be a bounded regular Git blob")
+        content = subprocess.run(
+            ["git", "cat-file", "blob", entry[1].decode("ascii")],
+            cwd=workspace, capture_output=True, check=True, timeout=30,
+        ).stdout
+        if len(content) != int(entry[2]) or not isinstance(json.loads(content), dict):
+            raise RuntimeStateError("SOL V0 config.json must contain a valid JSON object")
+        return content
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise RuntimeStateError(
+            "Cannot read the committed SOL evaluation configuration; no job was submitted"
+        ) from error
+
+
 def authoritative_candidate_record(record: dict, source: bytes, *, atrex_bench: bool) -> bool:
     """Validate evaluator identity without trusting the projected result alone."""
     request = record.get("request")
@@ -123,6 +153,9 @@ def authoritative_candidate_record(record: dict, source: bytes, *, atrex_bench: 
         )
     return (
         SOL_ACCEPTANCE_INPUTS <= inputs.keys()
+        and inputs.get("test_kernel.py") == hashlib.sha256(
+            read_input(SOL_HARNESS.parent, SOL_HARNESS.name)
+        ).hexdigest()
         and options.get("command") == ["python3", "test_kernel.py"]
         and not options.get("evaluation_input_path")
         and not options.get("evaluation_shapes_path")
@@ -709,6 +742,18 @@ class SupervisorRuntime:
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:
                         shutil.copy2(ATREX_BENCH_HARNESS, staged / "test_kernel.py")
+                    else:
+                        shutil.copy2(SOL_HARNESS, staged / "test_kernel.py")
+                        if parsed is not None and parsed.kind != "env" and (staged / "workload.jsonl").is_file():
+                            controller_workspace = (capability.journal.service.git_workspace
+                                if capability.journal else self.config.workspace or capability.workspace)
+                            config = sol_evaluation_config(controller_workspace)
+                            if config is None:
+                                # An untracked Agent config must not introduce a
+                                # policy absent from the pinned baseline.
+                                (staged / "config.json").unlink(missing_ok=True)
+                            else:
+                                publish(staged, "config.json", config)
                     if parsed is not None and parsed.kind != "env":
                         # Compatibility Profile routes execute this entry
                         # through Dev/SSH. Keep it private, overwrite any Agent copy,

@@ -343,13 +343,17 @@ package a non-compliant final candidate. Production runs use a separate
 leaderboard campaign.
 
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
-session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
-supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
+session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids.
+SOL V1 instead uses `--kind run --no-sync -- python3 test_kernel.py --version v1 --no-memory`:
+the version belongs to the harness, not the top-level typed shorthand, and no typed `--mode`,
+Shape selector or timing override is added. SOL has no safe subset selector, so this prescribed
+smoke already evaluates its full workload through the Dev compatibility route.
+The supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
 contract and immutable operator reference, concurrently when both are enabled. Only correctness guidance
 is injected; there is no implementation-reference catalog or shortlist. V1 may make at most one Wiki query
 for missing framework/toolchain knowledge. Reviews are cached for restart and never receive private shapes
 or write access to the candidate; caches from the retired reference-selection schema are regenerated. The
-coding Agent implements and smoke-tests only, without full evaluation, memory writing, or commits. The
+coding Agent implements and smoke-tests only, without a separate full evaluation, memory writing, or commits. The
 supervisor then runs policy review in parallel with one combined full-workload evaluator that measures the
 base seed and checks five additional seeds, writes memory, and pins V1. Use
 `--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed

@@ -14,6 +14,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
+SOL_HARNESS = REPO_ROOT / "reference" / "test_kernel.py"
 PROFILE_DRIVER = REPO_ROOT / "reference" / "profile_driver.py"
 SANDBOX_TOOL = REPO_ROOT / "supervisor" / "gateway.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
@@ -42,6 +43,7 @@ MAX_PROBLEM_GENERATION_TIMEOUT_S = 1_800
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 IMMUTABLE_BASELINE_PATHS = (
     "test_kernel.py",
+    "config.json",
     "reference.py",
     "input.py",
     "agent_problem.json",

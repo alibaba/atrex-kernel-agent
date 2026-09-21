@@ -5353,10 +5353,15 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     }}
     options["kind"] = kind
     options["command"] = normalized
-    if operation == "evaluate" and for_command and "workload.jsonl" not in files:
-        # Version labels are absent from task identity, but their legacy mode
-        # semantics and implicit seed defaults must remain part of the contract.
-        options["evaluation_policy"] = evaluation_policy(command, args.evaluation_mode)
+    if operation == "evaluate" and for_command:
+        if "workload.jsonl" in files:
+            # Older saved projections discarded SOL workload coverage. Version
+            # the shared Agent/acceptance identity so they cannot wedge reuse.
+            options["evaluation_contract"] = "sol_execbench_coverage_v1"
+        else:
+            # Version labels are absent from task identity, but their legacy mode
+            # semantics and implicit seed defaults must remain part of the contract.
+            options["evaluation_policy"] = evaluation_policy(command, args.evaluation_mode)
     if kind == "profile":
         # Old hidden-Shape requests ran a different driver/return contract via
         # Dev. Do not mistake their cached records for the new Typed measurement.
