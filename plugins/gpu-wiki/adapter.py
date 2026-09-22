@@ -14,7 +14,7 @@ def main() -> None:
     request = json.load(sys.stdin)
     plugin_root = Path(__file__).resolve().parent
     manifest = json.loads((plugin_root / "plugin.json").read_text())
-    root = (plugin_root / manifest["resources"]["gpu-wiki"]).resolve()
+    root = (plugin_root / manifest["resources"]["gpu-wiki"]["path"]).resolve()
     internal = (
         plugin_root / manifest["resources"]["internal-gpu-wiki"]["path"]
     ).resolve()

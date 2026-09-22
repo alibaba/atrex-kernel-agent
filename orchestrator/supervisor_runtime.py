@@ -956,6 +956,9 @@ class SupervisorRuntime:
             request_path.write_text(json.dumps(invocation))
             environment = dict(self.environment)
             environment.update(capability.context)
+            # Preserve catalog-wide environment semantics without rehashing every
+            # plugin/resource in the child. These are cached operator declarations.
+            environment.update(self.plugins.environment(staged))
             if self.config.wiki_profile_root:
                 environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
             environment["ATREX_WIKI_TASK_ID"] = self.config.task_id

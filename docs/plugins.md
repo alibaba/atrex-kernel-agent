@@ -28,8 +28,14 @@ Session capability, serialization, queue deadline, revocation and subprocess cle
 its standalone resource-link installer: `orchestrator/plugins.py` copies bounded, no-follow Skill
 files and exposes only workspace-relative Skill paths. Built-in Skills cannot be replaced.
 Custom instructions are injected for `episode` and `framework_baseline`; there are no Setup or
-Fast phases. Built-in Wiki guidance remains in the existing episode fragments, without a duplicate
-plugin workflow.
+Fast phases. Built-in Wiki guidance comes from the Episode/conversion and Framework Baseline
+prompts plus the mounted `skills/KernelWiki/SKILL.md`. AKA's `orchestrator.plugins.PluginRegistry`
+intentionally skips the `gpu-wiki` manifest instruction templates, avoiding a duplicate workflow.
+`plugins/gpu-wiki/instructions.md` and `framework_baseline.md` remain available to standalone
+consumers through `plugin_runtime.PluginRegistry.instructions()`; AKA neither injects them nor
+writes `.atrex_plugins/instructions.md` into the Agent workspace. Plugin discovery/call guidance
+is still injected when plugins are installed, and `gpu-wiki.query` remains available through
+the HTTP client. An empty catalog adds no plugin instructions to the Prompt.
 
 ## Agent usage
 
@@ -97,7 +103,14 @@ A private `<Supervisor scope>/plugins/.atrex_plugins/lock.json` pins versions, s
 instructions, resources and Skills. Existing campaigns acquire this lock on their first startup
 with plugins. Restart checks reject changed dependencies; restore the pinned version or create
 a new Campaign. Agent edits to a workspace `.atrex_plugins` directory cannot change the lock.
-Generic subprocesses recheck the catalog fingerprint before dispatch.
+Generic subprocesses load and rehash only the selected plugin, checking its identity, commands,
+source and declared resources/Skills against the Supervisor's private startup snapshot before
+dispatch. Unrelated plugins and Wiki stores are not rescanned. Selected-plugin data is still
+rehashed on every call; a cached fingerprint is not treated as proof that mutable files remain
+unchanged. Declare any file dependency as a resource so it participates in that check.
+Catalog-wide environment declarations are rendered from the Supervisor's cached manifests;
+the scoped Wiki task ID and audit path still take precedence. Full catalog validation remains
+part of Supervisor startup and restart.
 
 Input errors are repairable 400 responses. Confirmed pre-dispatch queue expiry retains the safe
 429/backoff response. Post-dispatch failure or malformed output is an unknown-outcome 503; private

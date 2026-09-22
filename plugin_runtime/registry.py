@@ -77,7 +77,7 @@ class Plugin:
 
 
 class PluginRegistry:
-    def __init__(self, plugin_dir: Path | str):
+    def __init__(self, plugin_dir: Path | str, *, plugin_root: Path | None = None):
         self.plugin_dir = Path(plugin_dir).resolve()
         if not self.plugin_dir.is_dir():
             raise PluginError(
@@ -85,7 +85,15 @@ class PluginRegistry:
             )
         self.plugins: list[Plugin] = []
         seen = set()
-        manifests = sorted(self.plugin_dir.glob("*/plugin.json"))
+        if plugin_root is None:
+            manifests = sorted(self.plugin_dir.glob("*/plugin.json"))
+        else:
+            # A Supervisor-pinned root avoids scanning/hashing unrelated plugins.
+            # Keep its lexical path, as full discovery does for symlinked roots.
+            selected = Path(plugin_root).absolute()
+            if selected.parent != self.plugin_dir:
+                raise PluginError("invalid_config", "selected plugin must be a direct child of plugin_dir")
+            manifests = [selected / "plugin.json"]
         for manifest in manifests:
             try:
                 plugin = self._load(manifest.parent)

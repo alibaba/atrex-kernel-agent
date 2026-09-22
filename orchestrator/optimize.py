@@ -43,6 +43,7 @@ try:
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
@@ -92,6 +93,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
@@ -626,8 +628,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "directory. Default: current working directory.",
     )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
-    ap.add_argument("--production-review-timeout", type=int, default=600,
-                    help="Independent production reviewer timeout in seconds (default: 600)")
+    ap.add_argument("--production-review-timeout", type=int, default=DEPENDENCY_REVIEW_TIMEOUT_S,
+                    help="Independent production reviewer timeout in seconds (default: %(default)s)")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
     from orchestrator.agent_sandbox import sandbox_executable

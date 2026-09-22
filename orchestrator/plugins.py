@@ -13,8 +13,8 @@ PLUGIN_DIR = REPO_ROOT / "plugins"
 
 
 class PluginRegistry(Registry):
-    def __init__(self):
-        super().__init__(PLUGIN_DIR)
+    def __init__(self, *, plugin_root: Path | None = None):
+        super().__init__(PLUGIN_DIR, plugin_root=plugin_root)
 
     def validate_call(self, name: str, value: object) -> dict:
         for plugin in self.plugins:
@@ -32,13 +32,17 @@ class PluginRegistry(Registry):
 
     def instructions(self, phase: str, **values: str) -> str:
         from plugin_runtime.registry import local_file
+        if not self.plugins:
+            return ""
         parts = [
             "Discover enabled plugin tools with `python3 tools/plugin.py list`; "
             "call `python3 tools/plugin.py call <plugin.tool> --input scratch/request.json`. "
             "Tools run through the Supervisor; plugin code and resources are not workspace files."
         ]
         for plugin in self.plugins:
-            # The current Wiki/Journal fragments already carry this contract.
+            # AKA's Episode/conversion/Framework Baseline prompts and mounted
+            # KernelWiki Skill own Wiki guidance. The manifest templates are for
+            # standalone plugin_runtime consumers, not a second AKA workflow.
             if plugin.id == "gpu-wiki":
                 continue
             for key in dict.fromkeys(("common", phase)):

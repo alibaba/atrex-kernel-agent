@@ -21,7 +21,6 @@
     "framework_baseline": "framework_baseline.md"
   },
   "environment": {
-    "ATREX_WIKI_PROFILE_ROOT": "{workspace}/.gpu_wiki_profile",
-    "ATREX_WIKI_TASK_ID": "{campaign_name}"
+    "ATREX_WIKI_PROFILE_ROOT": "{workspace}/.gpu_wiki_profile"
   }
 }
