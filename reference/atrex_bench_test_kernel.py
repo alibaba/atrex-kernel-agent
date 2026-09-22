@@ -214,6 +214,7 @@ def result_from_eval(
 
     max_abs = 0.0
     max_rel = 0.0
+    numerical_metrics = {}
     for shape_id in shape_ids:
         status = correctness_status.get(shape_id)
         status = status if isinstance(status, dict) else {}
@@ -233,6 +234,13 @@ def result_from_eval(
             for output in outputs if isinstance(outputs, list) else []:
                 if not isinstance(output, dict):
                     continue
+                for metric in ("relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff", "max_elementwise_rel_diff"):
+                    if metric in output:
+                        value = _finite_number(output[metric])
+                        if value is None:
+                            numerical_metrics[metric] = None
+                        elif numerical_metrics.get(metric, 0.0) is not None:
+                            numerical_metrics[metric] = max(numerical_metrics.get(metric, 0.0), value)
                 abs_diff = _finite_number(output.get("max_elementwise_abs_diff"))
                 rel_diff = _finite_number(output.get("max_elementwise_rel_diff"))
                 if abs_diff is not None:
@@ -287,6 +295,7 @@ def result_from_eval(
 
     return {
         "all_pass": not failures,
+        "numerical_metrics": numerical_metrics,
         "failures": failures,
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,
@@ -321,6 +330,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", default="v0")
     parser.add_argument("--no-memory", action="store_true")
+    parser.add_argument("--correctness-only", action="store_true", help="Validate without timing")
     parser.add_argument(
         "--multi-seed",
         type=int,
@@ -348,7 +358,9 @@ def main(argv: list[str] | None = None) -> int:
         args.multi_seed = 0 if args.shape_ids else 5
     if args.multi_seed < 0:
         raise SystemExit("--multi-seed must be non-negative")
-    correctness_only = explicit_multi_seed and args.multi_seed > 0 and args.version not in {"v0", "v1"}
+    correctness_only = args.correctness_only or (
+        explicit_multi_seed and args.multi_seed > 0 and args.version not in {"v0", "v1"}
+    )
 
     workspace = Path(__file__).resolve().parent
     runtime_root = workspace / ATREX_BENCH_DIR

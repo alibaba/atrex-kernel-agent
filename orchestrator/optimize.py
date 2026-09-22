@@ -600,7 +600,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "--max-stall",
         type=int,
         default=0,
-        help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).",
+        help="Stop after N non-promotions (0 = disabled). After 50 completed Episodes, "
+        "more than 3 stalls enable goal strategy, which takes precedence over this stop.",
     )
     ap.add_argument(
         "--convert-after",
@@ -625,6 +626,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "directory. Default: current working directory.",
     )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
+    ap.add_argument("--production-review-timeout", type=int, default=600,
+                    help="Independent production reviewer timeout in seconds (default: 600)")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
     from orchestrator.agent_sandbox import sandbox_executable
@@ -879,6 +882,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
         handoff_resumes=args.handoff_resumes,
+        production_review_timeout=args.production_review_timeout,
         verify_repeats=args.verify_repeats,
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,

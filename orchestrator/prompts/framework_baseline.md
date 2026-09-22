@@ -18,6 +18,8 @@ run ABBA, or add a separate benchmark.
 - Additional constraints: {{NOTES}}
 {{AGENT_RUNTIME}}
 
+{{PLUGINS}}
+
 {{HARDWARE}}
 {{SANDBOX}}
 {{EVALUATOR}}

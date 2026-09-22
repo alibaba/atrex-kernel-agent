@@ -13,7 +13,11 @@ benchmark is not, by itself, a reason to stop.
 - Additional constraints: {{NOTES}}
 {{AGENT_RUNTIME}}
 
+{{PLUGINS}}
+
 {{RESUME_DIRECTIVE}}
+
+{{GOAL_DIRECTIVE}}
 
 Use `scratch/` for temporary requests, diagnostics, and saved source copies.
 

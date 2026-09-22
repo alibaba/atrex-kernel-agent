@@ -371,8 +371,9 @@ def format_summary(metrics, findings):
         if f[0] in PATTERNS:
             symptoms_for_wiki.add(PATTERNS[f[0]][2])
     for s in sorted(symptoms_for_wiki):
-        lines.append(f"gpu-wiki: grep -ri '{s}' gpu-wiki/docs/ "
-                     f"(or follow the gpu-wiki/README.md index for this symptom)")
+        lines.append(
+            f"knowledge: symptom '{s}'; consult enabled tools via .atrex_plugins/instructions.md"
+        )
 
     return "\n".join(lines) + "\n"
 

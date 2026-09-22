@@ -85,14 +85,19 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     link_runtime(
         workspace,
         native,
+        plugin_registry=campaign.plugin_registry,
         is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
     )
-    install_workspace_policy(workspace, campaign.optimization_mode, campaign.framework)
+    install_workspace_policy(
+        workspace, campaign.optimization_mode, campaign.framework,
+        update_tracked_files=False,
+    )
 
 
 def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
     """Public operator guidance for the single optimization workflow."""
     return {
+        "plugins": campaign.plugin_directive("episode"),
         "hardware": hardware_directive(campaign.platform, campaign.arch),
         "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),

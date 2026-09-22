@@ -339,7 +339,7 @@ class _Handler(BaseHTTPRequestHandler):
         if capability is None:
             self.reply(401, failure("Missing or revoked Session capability", repairable=False))
             return
-        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query", "/v1/journal/execute"}:
+        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query", "/v1/journal/execute", "/v1/plugins/execute"}:
             self.reply(404, failure("Unknown endpoint"))
             return
         try:
@@ -396,6 +396,8 @@ class _Handler(BaseHTTPRequestHandler):
 class SupervisorRuntime:
     def __init__(self, config: RuntimeConfig):
         self.config = config
+        from .plugins import PluginRegistry
+        self.plugins = PluginRegistry()
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
         self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
         repetitions = self.environment.get("ATREX_AKA_MEASUREMENT_REPETITIONS", "1")
@@ -420,6 +422,10 @@ class SupervisorRuntime:
             with open_private_directory(self.audit_root):
                 pass
         self.measurements = MeasurementStore((self.audit_root or self.root) / "measurements")
+        # The lock is private and survives restarts; never read an Agent-supplied lock.
+        plugin_lock = (self.audit_root or self.root) / "plugins"
+        self.plugins.check_lock(plugin_lock)
+        publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(self.plugins.snapshot()).encode())
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -689,6 +695,8 @@ class SupervisorRuntime:
 
     def execute(self, capability: Capability, route: str, request: dict, *,
                 reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None) -> dict:
+        if route == "/v1/plugins/execute":
+            return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
             return self.execute_journal(capability, request)
         with _validating_request():
@@ -920,6 +928,52 @@ class SupervisorRuntime:
                 "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
             }, ensure_ascii=False).encode())
 
+    def execute_plugin(self, capability: Capability, request: dict) -> dict:
+        from plugin_runtime.schema import validate_schema
+        with _validating_request():
+            if request == {"action": "list"}:
+                return {"exit_code": 0, "stdout": json.dumps(self.plugins.public_catalog()) + "\n", "stderr": ""}
+            if set(request) != {"action", "tool", "input"} or request["action"] != "call":
+                raise ValueError("Use action=list, or action=call with tool and input")
+            if not isinstance(request["tool"], str):
+                raise ValueError("tool must be a catalog name")
+            tool = self.plugins.validate_call(request["tool"], request["input"])
+        if request["tool"] == "gpu-wiki.query":
+            # Reuse the existing scoped, bounded Wiki executor and private audit.
+            value = request["input"]
+            argv = [value["request"]]
+            for name in ("max_records", "max_bytes", "exclude"):
+                if name in value:
+                    argv += ["--" + name.replace("_", "-"), str(value[name])]
+            return self.execute(capability, "/v1/wiki/query", {"tool": "query_nl", "argv": argv})
+        with tempfile.TemporaryDirectory(dir=self.root, prefix="plugin-") as temporary:
+            staged = Path(temporary)
+            with _validating_request():
+                snapshot(capability.workspace, staged)
+            # Do not honor paths, environment or executable declarations from the Agent.
+            invocation = dict(request, snapshot=self.plugins.snapshot())
+            request_path = staged / ".plugin-request.json"
+            request_path.write_text(json.dumps(invocation))
+            environment = dict(self.environment)
+            environment.update(capability.context)
+            if self.config.wiki_profile_root:
+                environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
+            environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
+            process = self.run_executor(
+                [sys.executable, str(ROOT / "supervisor/plugin_executor.py"), str(request_path)],
+                staged, environment, capability,
+            )
+            self.audit_process(capability, "plugin", [request["tool"]], process)
+            if process.returncode:
+                # Plugin errors can contain private resources or evaluator paths.
+                raise RuntimeError("Plugin execution failed; inspect private request diagnostics")
+            result = json.loads(process.stdout)
+            validate_schema(tool["output_schema"], result, "output")
+            rendered = json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n"
+            if len(rendered.encode()) > 256 * 1024:
+                raise RuntimeError("Plugin response exceeds the public result limit")
+            return {"exit_code": 0, "stdout": rendered, "stderr": ""}
+
     def _wiki_command(self, capability, tool, argv, staged, environment):
         if not isinstance(tool, str) or tool not in WIKI_STORES:
             raise ValueError("Unsupported Wiki tool")
@@ -941,9 +995,19 @@ class SupervisorRuntime:
                 else:
                     argv[index + 1] = str(target)
         if tool in {"query_nl", "query_wiki"}:
-            # Strip user context limits, then enforce a bounded result.
+            # Honor narrower context requests without permitting an unbounded result.
+            requested_limits = []
+            for index, item in enumerate(argv):
+                if item == "--max-bytes":
+                    if index + 1 >= len(argv):
+                        raise ValueError("--max-bytes requires a positive byte limit")
+                    requested_limits.append(int(argv[index + 1]))
+                elif item.startswith("--max-bytes="):
+                    requested_limits.append(int(item.split("=", 1)[1]))
+            if any(value <= 0 for value in requested_limits):
+                raise ValueError("--max-bytes must be positive")
             argv = filter_options(argv, frozenset({"--max-bytes"}), frozenset())
-            argv += ["--brief", "--max-bytes", str(128 * 1024)]
+            argv += ["--brief", "--max-bytes", str(min([128 * 1024, *requested_limits]))]
         if self.config.wiki_profile_root:
             environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
         environment["ATREX_WIKI_TASK_ID"] = self.config.task_id

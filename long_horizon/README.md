@@ -63,3 +63,87 @@ may use this manifest as producer evidence, but remains responsible for path
 validation, secret scanning, archive limits, transport, and retry.
 `SIGKILL` cannot be handled by Python; a completion hook must treat a missing
 manifest after forcible termination as an interrupted/incomplete run.
+
+### Correctness validation
+
+The random-input acceptance policy addresses reported optimization runs in which
+the independent distribution-stress gate and numerical reviewer were too strict
+for the operators under optimization to pass, blocking further progress. Required
+multi-seed checks and correctness-passing ABBA verification remain the acceptance
+criteria, with the evaluator's existing comparison metrics and tolerances.
+
+Correctness uses the immutable evaluator's ordinary random input generator over the
+full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
+`allclose` (`atol=1e-2`, `rtol=0.05` by default). NVFP4 operators use relative L2 error
+at most `0.2`, selected from the operator's FP4 dtype metadata or name and passed to
+the official evaluator as `--correctness-max-rel-l2 0.2`. This replaces elementwise
+allclose for floating-point outputs; output shape/dtype and finite-value checks still
+apply. The transport adapter and typed sandbox requests use the same selection.
+
+Full-contract Atrex-Bench Evaluate defaults to the base random case plus five additional
+correctness cases; targeted smoke requests retain their single-case default. The Supervisor
+enforces six-case correctness before accepting `candidate_ready`, and promotion also requires
+correctness-passing incumbent/candidate ABBA evaluation. `--multi-seed N` requests N additional
+random cases; `--correctness-only` skips timing. Inputs come directly from the operator's
+`input.py` without distribution rewriting or suite authoring. SOL uses its official full-workload
+contract rather than the Atrex-Bench seed policy.
+
+Production admission and promotion retain independent dependency/framework review.
+Numerical acceptance comes from the evaluator's random-input results. Resume checks
+production policy, then continues normal optimization and candidate verification.
+
+## Reviewer recovery and GPU reliability
+
+The independent production reviewer has an operator-configurable `--production-review-timeout`
+(default 600 seconds). One execution timeout permits one fresh isolated review with restored
+evidence. A second timeout blocks that evidence/configuration; restarting does not reset the count.
+Explicit top-level service errors (overloaded, rate-limited, unavailable) wait 30 minutes and retry
+without consuming another coding Episode. Successful review clears the consecutive timeout count.
+Other exits, invalid verdicts and policy violations fail without an infrastructure retry.
+
+Retry state is private under `<Supervisor scope>/review_timeouts/` and `infrastructure/`, keyed
+by candidate evidence, backend and timeout. Agent workspace files cannot reset these budgets.
+
+GPU execution continues to use the existing Measurement Record/job state machine, rather than
+an extra outer resubmission loop. It polls accepted job IDs, retries confirmed infrastructure
+outcomes, checkpoints ABBA batches, and refuses blind resubmission when the outcome is unknown.
+See [Measurement records](../docs/measurement-records.md).
+`ATREX_AGATE_EXECUTABLE`, when set, must resolve to an executable; an invalid override fails
+instead of silently choosing another Gateway wrapper.
+
+## Goal scheduling
+
+After at least 50 completed Episodes and more than 3 consecutive non-promotions, the next Episode
+uses `mode="goal"`. Otherwise it uses `mode="episode"`. This is a broader search strategy within
+the same workflow, not a return to Fast/Full modes or a separate planning/reviewer pipeline.
+
+Goal guidance asks the Agent to reassess the roadmap, explore materially different Directions
+sequentially within Runtime limits, and retain the best measured candidate for the final report.
+Correctness, Journal, production policy and ABBA promotion gates remain identical. Claude/Codex
+allow at least 20 same-session handoff repair continuations; other backends retain their normal
+single invocation. A persisted mode wins after restart; an older record without mode remains an
+ordinary Episode and is not widened in flight. Historical unfinished Fast Episodes are still
+rejected by the existing upgrade guard.
+
+Goal admission takes precedence over `--max-stall`, but never over Episode, version or token
+budgets. Before 50 completed Episodes, the usual stall stop applies. With `--max-stall <= 3`,
+a Campaign can stop before the goal trigger; zero disables the stall stop. Promotion resets stalls.
+
+```mermaid
+flowchart TD
+    R["Recover active Episode"] --> B{"Budget available?"}
+    B -->|No| X["Stop"]
+    B -->|Yes| M{"Active mode already persisted?"}
+    M -->|Yes| K["Keep mode"]
+    M -->|No| G{"Completed >= 50 and stalls > 3?"}
+    G -->|Yes| T["Goal strategy"]
+    G -->|No| N["Ordinary Episode"]
+    K --> E["Same Journal / report / correctness / ABBA gates"]
+    T --> E
+    N --> E
+    E --> O["Record outcome; reset stalls on promotion"]
+    O --> R
+```
+
+Scheduling lives in `LongHorizonCampaign._episode_mode`; `run` persists the mode before starting
+the Agent. The terminal and interrupted recovery paths preserve it in canonical memory and logs.

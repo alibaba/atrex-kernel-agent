@@ -67,6 +67,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Agent Workspace Isolation](docs/agent-workspace-isolation.md) | Opt-in coordinator Bubblewrap boundary, scoped Provider Homes, and legacy compatibility grants |
 | [Supervisor Handoff and Promotion](docs/supervisor-promotion.md) | Git-free Episode drafts, exact-source commits, recorded verification, and private audit recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
+| [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
 
 Run `python3 orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 

@@ -105,6 +105,7 @@ INPUT_SKIP_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     ".atrex_environment",
+    ".atrex_plugins",
     # Memory is optimizer state owned and updated by the local agent.  The pod
     # receives only code/harness inputs and returns test output/profile files.
     "memory",
@@ -130,6 +131,7 @@ INPUT_SKIP_PATHS = {
     # are deliberately local-only.  Omitting these also leaves useful headroom
     # below the gateway worker's per-argument limit.
     "tools/sandbox.py",
+    "tools/plugin.py",
     "tools/local_gateway.py",
     "tools/memory_manager.py",
     # The durable host-side monitor is never invoked inside a GPU worker.  It
@@ -416,7 +418,13 @@ def _safe_relative(value: str) -> str:
 
 
 def find_agate() -> str | None:
-    """Find agate beside the active Python before consulting the shell PATH."""
+    """Honor an explicit operator executable; never silently bypass it."""
+    configured = os.environ.get("ATREX_AGATE_EXECUTABLE", "").strip()
+    if configured:
+        executable = shutil.which(os.path.expanduser(configured))
+        if executable is None:
+            raise FileNotFoundError(f"ATREX_AGATE_EXECUTABLE is not executable: {configured}")
+        return executable
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
@@ -1177,7 +1185,7 @@ def evaluation_policy(command: list[str], mode: str | None = None) -> dict[str, 
     legacy_check = (seed_value is not None and additional > 0
                     and str(_option_value(command, "--version", "v0")) not in {"v0", "v1"})
     return {"schema_version": 1, "num_correctness_cases": 1 + additional,
-            "mode": mode or ("correctness_only" if legacy_check else "full")}
+            "mode": mode or ("correctness_only" if legacy_check or "--correctness-only" in _command_parts(command) else "full")}
 
 
 def read_json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:

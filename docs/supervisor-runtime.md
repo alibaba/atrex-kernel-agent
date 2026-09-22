@@ -41,6 +41,7 @@ The service listens on `127.0.0.1` with a random port. Its authenticated endpoin
 | --- | --- |
 | `POST /v1/gateway/execute` | `{"argv": ["--kind", "run", "--no-sync"]}` |
 | `POST /v1/wiki/query` | `{"tool": "query_hardware", "argv": ["--list", "products"]}` |
+| `POST /v1/plugins/execute` | `{"action":"list"}` or `{"action":"call","tool":"gpu-wiki.query","input":{"request":"..."}}` |
 
 `GET /healthz` is an unauthenticated liveness check without Campaign data. Responses preserve the CLI boundary: `{"exit_code": 0, "stdout": "...", "stderr": "..."}`. The client prints those streams and returns the exit code; Agents do not need to write HTTP requests or handle bearer tokens themselves.
 
