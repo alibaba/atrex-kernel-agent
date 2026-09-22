@@ -3841,7 +3841,7 @@ def _public_numerical_result_line(line: str) -> str:
             if isinstance(result, dict) else None)
         if isinstance(result, dict):
             item["result"]["nonfinite_outputs"] = [
-                role for role in ("reference", "candidate")
+                role for role in ("reference", "candidate", "unknown")
                 if role in result.get("nonfinite_outputs", [])
             ]
             metrics = result.get("numerical_metrics") or {}

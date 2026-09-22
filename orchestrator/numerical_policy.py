@@ -153,7 +153,7 @@ def _probe_status(batch, plan, suite, shapes):
             or not isinstance(row.get("result"), dict)):
         return "needs_validation"
     result = row["result"]
-    if row.get("input_error") or "reference" in result.get("nonfinite_outputs", []):
+    if row.get("input_error") or {"reference", "unknown"}.intersection(result.get("nonfinite_outputs", [])):
         return "needs_validation"
     # A single fully observed workload/seed can disprove correctness. Passing
     # still requires every requested workload, seed and rank to finish.
@@ -226,6 +226,8 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
             "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
             "exit_code": rows[0].get("exit_code") if rows else None,
             "diagnosis": (
+                "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
+                if "unknown" in result.get("nonfinite_outputs", []) else
                 "reference output is non-finite under the requested probe inputs; "
                 "repair the input distribution or packed encoding, preserving the original risk case"
                 if "reference" in result.get("nonfinite_outputs", []) else
@@ -236,7 +238,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
         })
     # Repair invalid reference inputs before asking the coding agent to act on
     # any other failing case. All retained cases are measured again afterwards.
-    status = ("needs_validation" if any("reference" in r.get("nonfinite_outputs", []) for r in results)
+    status = ("needs_validation" if any({"reference", "unknown"}.intersection(r.get("nonfinite_outputs", [])) for r in results)
               else "needs_repair" if any(r["status"] == "needs_repair" for r in results)
               else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
               else "advisory" if any(r["status"] == "unsupported" for r in results)
@@ -326,26 +328,32 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
     except NumericalPlanningTimeout as exc:
         from long_horizon.campaign import _latest_complete_episode_performance
 
-        # Episode receipts bind the full standard workload result to the current
-        # kernel/manifest. Baselines supply their just-completed standard gate.
-        standard_passed = standard_correctness_passed or (
-            _latest_complete_episode_performance(
-                workspace, expected_shape_ids=set(json.loads(shapes.read_text()))
-            ) is not None
-        )
-        measured_failure = any(
-            evaluation.get("status") == "needs_repair"
-            or any(probe.get("status") == "needs_repair"
-                   for probe in evaluation.get("probes", []))
-            for evaluation in record.get("evaluations", [])
-        )
-        unchanged = _digest({**files, "shapes.json": shapes,
-                             "evaluator.py": workspace / "test_kernel.py"}) == validation_digest
-        record.update(
-            status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure
-                    else "needs_validation"),
-            diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
-        )
+        try:
+            # Episode receipts bind the full standard workload result to the current
+            # kernel/manifest. Baselines supply their just-completed standard gate.
+            standard_passed = standard_correctness_passed or (
+                _latest_complete_episode_performance(
+                    workspace, expected_shape_ids=set(json.loads(shapes.read_text()))
+                ) is not None
+            )
+            measured_failure = any(
+                evaluation.get("status") == "needs_repair"
+                or any(probe.get("status") == "needs_repair"
+                       for probe in evaluation.get("probes", []))
+                for evaluation in record.get("evaluations", [])
+            )
+            unchanged = _digest({**files, "shapes.json": shapes,
+                                 "evaluator.py": workspace / "test_kernel.py"}) == validation_digest
+            record.update(
+                status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure
+                        else "needs_validation"),
+                diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
+            )
+        except (OSError, ValueError, TypeError, KeyError) as evidence_error:
+            record.update(
+                status="needs_validation",
+                diagnosis=f"{exc}; timeout skip evidence unavailable: {evidence_error}",
+            )
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         record.update(status="needs_validation", diagnosis=str(exc))
 

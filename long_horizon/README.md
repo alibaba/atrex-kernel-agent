@@ -109,11 +109,12 @@ the benchmark's quantization error budget. This replaces elementwise allclose fo
 and elementwise relative errors remain diagnostic. Non-finite outputs, structural
 mismatches and forbidden input mutations still fail through the evaluator.
 Supplemental receipts retain only the role labels `reference` / `candidate` for
-non-finite outputs; raw output names, tensors and exceptions remain private. A
-non-finite reference makes the probe invalid and returns its diagnostic to the
+non-finite outputs, or `unknown` when the runtime diagnostic cannot establish the
+roles. Unknown roles require planner validation rather than kernel repair. Raw
+output names, tensors and exceptions remain private. A non-finite reference makes the probe invalid and returns its diagnostic to the
 planner to repair the input distribution or packed encoding and rerun all retained
-cases. This does not spend a kernel repair turn. If planning cannot produce a valid
-probe within its retry budget, validation stays blocked. Only candidate-only
+cases. This does not spend a kernel repair turn. Unresolved invalid plans remain
+validation blockers, subject to the planner-timeout policy below. Only candidate-only
 non-finite output with a finite reference is a measured kernel failure. Undefined
 comparison metrics are recorded as null, including the evaluator's zero placeholders. The
 supervisor records the comparison policy in feedback; reviewers and coding agents
@@ -144,17 +145,26 @@ be silently dropped or converted to passing evidence. Confirmed service outages 
 the infrastructure recovery policy below. Supplemental correctness probes never enter
 ABBA timing aggregates.
 
-Numerical planning retries a timed-out session once with twice the configured
-production-review timeout. A complete, valid plan already written at timeout is
-usable only after its evidence digest and unchanged source files are verified.
-Missing or invalid plans remain validation blockers. Planning attempts and any
-written responses are recorded as `numerical_planning-*.json` beside the feedback.
+Each numerical planning attempt uses `--production-review-timeout` (default: 600
+seconds), without a doubled-timeout retry. A complete, valid plan already written
+at timeout is usable only after its evidence digest and unchanged source files are
+verified. When a timed-out attempt has no usable plan, supplemental expansion is
+recorded as `skipped_planner_timeout` only if the current candidate passed standard
+correctness, all candidate/contract evidence is readable and unchanged, and no
+measured supplemental candidate failure exists. The candidate continues through
+ordinary admission gates; this skip is not a supplemental test pass. Invalid
+reference diagnostics remain in the audit record, and retained plans run again
+for subsequent candidate edits. Missing standard evidence, unreadable or changed
+files, measured candidate failures, and non-timeout planning errors remain
+`needs_validation`. Planning attempts and any written responses are recorded as
+`numerical_planning-*.json` beside the feedback.
 
 Read `verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json` for
 agent feedback and `supplemental-*/numerical_result.json` for audit records. Pending
 probe plans persist under `.atrex_numerical_advice/` in the private reference directory
-or `.atrex_long_horizon/numerical_advice/` in the canonical workspace; coding-agent edits to feedback files do
-not change the in-memory plan. Restarts rerun the probes against the current candidate.
+or `~/.local/state/atrex-kernel-agent/numerical_advice/`, outside the agent
+workspace. Coding-agent edits to feedback files cannot replace the retained plan.
+Restarts rerun the probes against the current candidate.
 In-process cache keys include candidate, contract, evaluator and workload contents.
 
 ## Infrastructure recovery during validation

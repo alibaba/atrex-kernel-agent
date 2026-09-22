@@ -309,6 +309,8 @@ def run(request_path):
                         diagnosis = "evaluator did not generate the requested workload, seed and ranks"
                     elif not isinstance(result, dict):
                         diagnosis = f"evaluator exited {process.returncode} without a result"
+                    elif "unknown" in result.get("nonfinite_outputs", []):
+                        diagnosis = "non-finite output diagnostic has unknown roles"
                     elif "reference" in result.get("nonfinite_outputs", []):
                         diagnosis = "reference output is non-finite under the requested probe inputs"
                     elif result.get("all_pass") is False:

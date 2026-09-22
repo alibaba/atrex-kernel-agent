@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -27,13 +28,22 @@ RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
-# Exact diagnostics emitted by the pinned official comparator. Only role labels
-# cross the privacy boundary, never output names, tensors or raw exceptions.
-NONFINITE_OUTPUT_ROLES = {
-    "Non-finite output detected: reference_finite=False, candidate_finite=False": ("reference", "candidate"),
-    "Non-finite output detected: reference_finite=False, candidate_finite=True": ("reference",),
-    "Non-finite output detected: reference_finite=True, candidate_finite=False": ("candidate",),
-}
+
+
+def _nonfinite_output_roles(error: object) -> tuple[str, ...]:
+    """Parse runtime diagnostics without exposing private output details."""
+    if not isinstance(error, str) or not error.strip().startswith("Non-finite output detected:"):
+        return ()
+    flags = {
+        role: re.findall(rf"\b{role}_finite\s*=\s*(True|False)\b", error)
+        for role in ("reference", "candidate")
+    }
+    if any(len(values) != 1 for values in flags.values()):
+        return ("unknown",)
+    roles = tuple(role for role, values in flags.items() if values == ["False"])
+    # A non-finite diagnostic with missing/contradictory roles is an invalid
+    # probe, never evidence that the optimization agent must repair its kernel.
+    return roles or ("unknown",)
 
 
 def _finite_number(value: object) -> float | None:
@@ -243,7 +253,7 @@ def result_from_eval(
             for output in outputs:
                 if not isinstance(output, dict):
                     continue
-                nonfinite_outputs.update(NONFINITE_OUTPUT_ROLES.get(output.get("error"), ()))
+                nonfinite_outputs.update(_nonfinite_output_roles(output.get("error")))
                 for metric in ("relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff", "max_elementwise_rel_diff"):
                     if metric in output:
                         value = _finite_number(output[metric])
