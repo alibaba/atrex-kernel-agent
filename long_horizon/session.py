@@ -286,7 +286,7 @@ class LongSessionRunner:
                 else (
                     0
                     if is_codex
-                    else main_adapter.tokens_from_stream(stdout)
+                    else main_adapter.tokens_from_stream(stdout, backend=self.agent_cli)
                 )
             )
             invocations.append(

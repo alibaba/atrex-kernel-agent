@@ -121,7 +121,8 @@ def _agent_clock_lock(value: object) -> dict[str, Any] | None:
     }
     return projected or None
 
-def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
+def profile_result(result: dict[str, Any], *, generalized: bool = False) -> dict[str, Any]:
+    """Bound Profile metrics without losing aggregates on repeated projection."""
     kernels_value = result.get("kernels")
     kernels = (
         [item for item in kernels_value if isinstance(item, dict)]
@@ -132,6 +133,22 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         duration for kernel in kernels if (duration := _profile_duration_us(kernel)) is not None
     ]
     total_duration_us = sum(durations)
+    kernel_count = len(kernels)
+    recorded_count = result.get("kernel_count")
+    recorded_omitted = result.get("kernels_omitted")
+    truncated = (
+        type(recorded_count) is int
+        and type(recorded_omitted) is int
+        and recorded_omitted > 0
+        and recorded_count == len(kernels) + recorded_omitted
+    )
+    if truncated:
+        # Gateway output may already have been projected for hidden Shapes.
+        # Its retained Kernel list is not the population these aggregates describe.
+        kernel_count = recorded_count
+        recorded_duration = _finite_number(result.get("total_duration_us"))
+        if recorded_duration is not None and recorded_duration >= total_duration_us:
+            total_duration_us = recorded_duration
     projected_kernels = [
         _agent_profile_kernel(kernel, total_duration_us=total_duration_us)
         for kernel in kernels[:MAX_AGENT_PROFILE_KERNELS]
@@ -150,22 +167,31 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         projected["exit_code"] = exit_code
     clock_lock = _agent_clock_lock(result.get("clock_lock"))
     if clock_lock:
-        projected["clock_lock"] = clock_lock
+        if generalized:
+            clock_lock.pop("reason", None)
+        if clock_lock:
+            projected["clock_lock"] = clock_lock
     summary = result.get("summary")
-    if isinstance(summary, str) and summary:
+    if isinstance(summary, str) and summary and not generalized:
         projected["summary"] = bounded_text(summary, 2000)
     error = result.get("error")
     if error:
-        projected["error"] = bounded_text(error, 1000)
+        projected["error"] = (
+            "Hidden-case diagnostics withheld; ask the operator to inspect the failure."
+            if generalized else bounded_text(error, 1000)
+        )
 
-    projected["kernel_count"] = len(kernels)
+    projected["kernel_count"] = kernel_count
     if total_duration_us > 0.0:
         projected["total_duration_us"] = total_duration_us
         dominant = max(
             kernels,
             key=lambda kernel: _profile_duration_us(kernel) or 0.0,
+            default={},
         )
         dominant_name = dominant.get("name", dominant.get("kernel_name"))
+        if truncated and isinstance(result.get("dominant_kernel"), str) and result["dominant_kernel"]:
+            dominant_name = result["dominant_kernel"]
         if isinstance(dominant_name, str) and dominant_name:
             projected["dominant_kernel"] = bounded_text(dominant_name, 512)
 
@@ -187,8 +213,8 @@ def _agent_profile_result(result: dict[str, Any]) -> dict[str, Any]:
         projected["weighted_sol_pct"] = weighted_sol / weighted_duration
         projected["dominant_bound"] = "compute" if weighted_compute > weighted_memory else "memory"
     projected["kernels"] = projected_kernels
-    if len(kernels) > len(projected_kernels):
-        projected["kernels_omitted"] = len(kernels) - len(projected_kernels)
+    if kernel_count > len(projected_kernels):
+        projected["kernels_omitted"] = kernel_count - len(projected_kernels)
     return projected
 
 def _agent_diagnostic_item(value: object) -> object | None:
@@ -435,6 +461,13 @@ def evaluation(result: dict) -> dict:
     value = {key: item for key, item in result.items()
              if key in keys and (item is None or isinstance(item, (str, int, float, bool)))
              and (not isinstance(item, float) or math.isfinite(item))}
+    # SOL-ExecBench names full-workload coverage ``passed``/``total``. Normalize
+    # those public scalar counts to the same contract as typed Atrex-Bench
+    # without exposing the evaluator's richer internal payload.
+    for source, target in (("passed", "correctness_passed"), ("total", "correctness_total")):
+        item = result.get(source)
+        if type(item) is int and item >= 0:
+            value[target] = item
     shapes = result.get("latency_us_by_shape")
     if isinstance(shapes, dict):
         value["latency_us_by_shape"] = {
@@ -468,7 +501,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     raw["error"] = "Hidden-case diagnostics withheld; ask the operator to inspect the failure."
                 formatter = {
                     "[test_kernel] RESULT_JSON=": evaluation,
-                    "[sandbox] PROFILE_JSON=": _agent_profile_result,
+                    "[sandbox] PROFILE_JSON=": lambda value: profile_result(value, generalized=generalized),
                     "[sandbox] CHECK_JSON=": _agent_check_result,
                     "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
                     # compare() already emits abba()'s public metric projection.

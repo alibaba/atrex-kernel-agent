@@ -220,9 +220,9 @@ def wrap_agent_command(
         argv.extend(("--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/run"))
         _mount(argv, view.root if view else workspace, workspace, writable=True)
         _mount(argv, home, home, writable=True)
-        assets = PUBLIC_ASSETS if view is None else ("tools/session_shell_guard.sh",)
-        if role == "plan-review-probe":
-            assets += ("skills/gen-plan/scripts",)
+        # HTTP sessions carry their reviewed tool/Skill copies in the workspace.
+        # Do not re-expose the repository's retired workflows or evaluator code.
+        assets = PUBLIC_ASSETS if view is None and not environment.get("ATREX_AKA_RUNTIME_URL") else ("tools/session_shell_guard.sh",)
         for name in assets:
             source = REPOSITORY_ROOT / name
             if source.exists():
@@ -248,6 +248,10 @@ def wrap_agent_command(
                     source = workspace / name
                     if source.exists():
                         _mount(argv, source, source)
+            for name in ("tools", "skills"):
+                source = workspace / name
+                if source.exists():
+                    _mount(argv, source, source)
             # Keep Supervisor's legacy evaluator copy available for independent
             # acceptance, but mask it from Agent sessions using the HTTP service.
             bench = workspace / "atrex-bench"

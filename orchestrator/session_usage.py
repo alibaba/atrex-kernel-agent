@@ -1,7 +1,7 @@
 """Provider counters, not tokenizer estimates; native/stream copies are one bill.
 
-Claude reconciliation follows the main Runtime's claude_ledger implementation.
-An unreconciled total is explicitly partial, never main + possibly inclusive total.
+Claude totals follow result.usage; modelUsage and child diagnostics have a
+different scope and must not replace or augment that total.
 """
 
 from __future__ import annotations
@@ -212,13 +212,16 @@ class UsageAccumulator:
                 continue
             if not is_native and event.get("type") in {"result", "turn.completed"}:
                 self.credit_event = line
-                self.terminal = (
-                    _codex_usage(event.get("usage"))
-                    if self.backend == "codex"
-                    else self._usable_usage(token_usage_from_model_usage(event.get("modelUsage")))
-                )
-                if self.terminal.total_tokens is None:
-                    self.terminal = self._usable_usage(token_usage_from_mapping(event.get("usage")))
+                if self.backend == "claude":
+                    self.terminal = token_usage_from_mapping(event.get("usage"))
+                else:
+                    self.terminal = (
+                        _codex_usage(event.get("usage"))
+                        if self.backend == "codex"
+                        else self._usable_usage(token_usage_from_model_usage(event.get("modelUsage")))
+                    )
+                    if self.terminal.total_tokens is None:
+                        self.terminal = self._usable_usage(token_usage_from_mapping(event.get("usage")))
                 continue
             if is_native and isinstance(body, dict) and body.get("type") == "token_count":
                 info = body.get("info") or {}
@@ -306,6 +309,18 @@ class UsageAccumulator:
         if self.backend == "pi":
             total, exact, warnings = pi_total, pi_exact, pi_warnings
             basis = "pi_settled_stream" if exact else "pi_source_counter_bounds"
+        elif self.backend == "claude":
+            # result.usage is the chosen accounting contract, not modelUsage
+            # (which also includes internal queries such as session titles).
+            # Keep child/native counters as diagnostics without adding them.
+            total = self.terminal
+            basis = "provider_result_usage"
+            exact = finished and not self.missing and total.measurement == "exact"
+            if total.total_tokens is None:
+                total = main
+                exact = False
+                basis = "main_response_fallback"
+                warnings.append("claude_result_usage_unavailable")
         elif self.backend == "codex" and self.codex_totals:
             # Native counters are cumulative per rollout; subtract the start snapshot.
             # Root's stdout total may be session-cumulative or turn-only. Do not add it again.
@@ -363,6 +378,8 @@ class UsageAccumulator:
             "subagent_coverage": (
                 "pi_stream; native-only evidence conservatively merged without shared response IDs"
                 if self.backend == "pi"
+                else "native child counters are diagnostic only; not added to result.usage"
+                if self.backend == "claude"
                 else "native_transcripts_and_stream; unexported calls cannot be counted"
             ),
         }

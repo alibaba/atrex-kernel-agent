@@ -92,7 +92,7 @@ from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
 )
-from supervisor.projection import bounded_text  # noqa: E402
+from supervisor.projection import bounded_text, profile_result  # noqa: E402
 from supervisor.gateway_jobs import (  # noqa: E402
     SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
 )
@@ -1158,6 +1158,28 @@ def _option_values(parts: list[str], name: str) -> list[str]:
     return values
 
 
+def evaluation_policy(command: list[str], mode: str | None = None) -> dict[str, Any]:
+    """Resolve Atrex-Bench correctness policy before execution and task hashing.
+
+    Implicit full-contract evaluation checks six cases without turning a v2+
+    performance request into the legacy explicit-multi-seed correctness mode.
+    Targeted smoke keeps one case unless the caller asks for more.
+    """
+    seed_values = _option_values(command, "--multi-seed")
+    if len(seed_values) > 1:
+        raise ValueError("Specify --multi-seed only once so the measured seed policy is unambiguous")
+    seed_value = seed_values[0] if seed_values else None
+    additional = int(seed_value) if seed_value is not None else (
+        0 if _option_values(command, "--shape-id") else 5
+    )
+    if additional < 0:
+        raise ValueError("--multi-seed must be non-negative")
+    legacy_check = (seed_value is not None and additional > 0
+                    and str(_option_value(command, "--version", "v0")) not in {"v0", "v1"})
+    return {"schema_version": 1, "num_correctness_cases": 1 + additional,
+            "mode": mode or ("correctness_only" if legacy_check else "full")}
+
+
 def read_json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
@@ -1305,23 +1327,39 @@ def shape_id_sort_key(shape_id: str) -> tuple[int, object]:
     return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
 
+def _profile_shape_entry(shapes: object, shape_id: str, *, option: str = "--profile-shape-id") -> dict:
+    entry = shapes.get(shape_id) if isinstance(shapes, dict) else None
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"{option} {shape_id!r} is not an evaluator-owned Shape id; "
+            "use an opaque ID from a saved evaluation"
+        )
+    return entry
+
+
+def _selected_profile_shape(
+    shapes: dict, profile_shape_id: str | None, environment: Mapping[str, str],
+) -> tuple[str, dict]:
+    if not shapes:
+        raise ValueError("Profile requires a non-empty evaluator Shape contract")
+    shape_id = profile_shape_id if profile_shape_id is not None else (
+        environment.get("PROFILE_SHAPE_ID") or sorted(shapes, key=shape_id_sort_key)[0]
+    )
+    return shape_id, _profile_shape_entry(shapes, shape_id,
+        option="--profile-shape-id" if profile_shape_id is not None else "PROFILE_SHAPE_ID")
+
+
 def _private_profile_case(
-    workspace: Path, env_items: Iterable[str]
+    workspace: Path, env_items: Iterable[str], *, profile_shape_id: str | None = None,
 ) -> tuple[str, bytes] | None:
     """Materialize exactly one private real shape for an ephemeral remote profile."""
     private_dir = private_reference_dir(workspace)
     if private_dir is None:
         return None
     shapes = read_json_object(private_dir / "shapes.json", required=True)
-    if not shapes:
-        raise ValueError("private shapes.json must contain a non-empty object")
-    environment = _parse_env_items(env_items)
-    shape_id = environment.get("PROFILE_SHAPE_ID") or sorted(
-        (str(value) for value in shapes), key=shape_id_sort_key
-    )[0]
-    entry = shapes.get(shape_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"PROFILE_SHAPE_ID={shape_id!r} is not a real evaluator shape id")
+    shape_id, entry = _selected_profile_shape(
+        shapes, profile_shape_id, _parse_env_items(env_items),
+    )
     payload = {
         "schema_version": 1,
         "shape_id": shape_id,
@@ -1352,8 +1390,11 @@ def _typed_workspace_limitation(
         and _test_kernel_script_index(command, typed_launcher=True) is None
     ):
         return "evaluator launcher semantics require the dev route"
-    if kind == "profile" and _is_generalized_workspace(workspace):
-        return "generalized tasks inject one private real shape through the dev profile route"
+    if kind == "profile":
+        parts, opaque = _parsed_command_parts(command)
+        driver = _python_script_index(parts, "profile_driver.py", typed_launcher=True)
+        if opaque or driver is None or driver != len(parts) - 1:
+            return "custom Profile commands/wrappers require the dev route"
     if (workspace / "workload.jsonl").is_file():
         return (
             "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
@@ -1460,10 +1501,10 @@ def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[
     """Move PROFILE_* controls into the uploaded command for a dev fallback.
 
     The gateway intentionally accepts only a small environment-variable allowlist,
-    which does not include the profiler driver's local PROFILE_* controls.  A
-    generalized profile already falls back to an uploaded dev command so it can
-    consume one privately injected real shape.  Prefix those non-secret controls
-    on that command instead of asking the gateway API to inject them.
+    which does not include the profiler driver's local PROFILE_* controls.
+    Profile compatibility commands can consume a privately injected real shape.
+    Prefix these non-secret controls on that command instead of asking the
+    gateway API to inject them.
     """
     command_environment: list[str] = []
     gateway_environment: list[str] = []
@@ -1503,7 +1544,7 @@ def build_typed_request(
     evaluation_shapes_path: str | None = None,
     evaluation_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Build a public typed request without importing the agate package."""
+    """Build a Gateway typed request without importing the agate package."""
     dependency_specs = list(requirements)
     if len(dependency_specs) > 128:
         raise ValueError("at most 128 --requirement values are allowed")
@@ -1627,7 +1668,8 @@ def build_typed_request(
         requested_shape_ids = list(dict.fromkeys(requested_shape_ids))
         shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
     try:
-        multi_seed = int(_option_value(command, "--multi-seed", 0))
+        policy = evaluation_policy(command, evaluation_mode) if kind == "run" else None
+        multi_seed = policy["num_correctness_cases"] - 1 if policy else 0
         bench_iters = int(_option_value(command, "--timed-runs", 20))
         atol = float(_option_value(command, "--atol", 1e-2))
         rtol = float(_option_value(command, "--rtol", 0.05))
@@ -1688,10 +1730,7 @@ def build_typed_request(
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
-        version = str(_option_value(command, "--version", "v0"))
-        request["mode"] = evaluation_mode or (
-            "correctness_only" if multi_seed > 0 and version not in {"v0", "v1"} else "full"
-        )
+        request["mode"] = policy["mode"]
     else:
         if profiler:
             request["profiler"] = profiler
@@ -1709,25 +1748,21 @@ def build_typed_request(
             request["launch_skip"] = launch_skip
         if launch_count is not None:
             request["launch_count"] = launch_count
-        if profile_shape_id is not None:
-            if profile_shape_id not in shapes:
-                raise ValueError(
-                    f"--profile-shape-id {profile_shape_id!r} is not an evaluator-owned Shape id"
+        selected_id, entry = _selected_profile_shape(shapes, profile_shape_id, request["env_vars"])
+        request["env_vars"].pop("PROFILE_SHAPE_ID", None)
+        request["shape_id"] = selected_id
+        request["reference"]["shapes"] = {selected_id: entry}
+        for field in ("metadata", "roofline"):
+            document = request["reference"].get(field)
+            if isinstance(document, dict) and isinstance(document.get("shapes"), dict):
+                document = dict(document)
+                document["shapes"] = (
+                    {selected_id: document["shapes"][selected_id]}
+                    if selected_id in document["shapes"] else {}
                 )
-            request["shape_id"] = profile_shape_id
-            request["reference"]["shapes"] = {profile_shape_id: shapes[profile_shape_id]}
-            for field in ("metadata", "roofline"):
-                document = request["reference"].get(field)
-                if isinstance(document, dict) and isinstance(document.get("shapes"), dict):
-                    document = dict(document)
-                    document["shapes"] = (
-                        {profile_shape_id: document["shapes"][profile_shape_id]}
-                        if profile_shape_id in document["shapes"]
-                        else {}
-                    )
-                    if field == "metadata" and "num_shapes" in document:
-                        document["num_shapes"] = 1
-                    request["reference"][field] = document
+                if field == "metadata" and "num_shapes" in document:
+                    document["num_shapes"] = 1
+                request["reference"][field] = document
         if top_kernels is not None:
             request["top_kernels"] = top_kernels
         if dependency_specs:
@@ -2275,7 +2310,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
                         help="Evaluation version label, e.g. v3 (--kind run, no explicit command).")
     parser.add_argument(
             "--multi-seed", type=int, default=None,
-            help="Additional correctness seeds for --kind run without an explicit command.",
+            help="Additional correctness seeds (Atrex-Bench default: 5, targeted Shape smoke: 0); shorthand --kind run only.",
         )
     parser.add_argument(
             "--shape-id", action="append", default=[],
@@ -2347,7 +2382,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
             "--profile-shape-id",
             default=None,
             metavar="ID",
-            help="Opaque evaluator Shape id to use for this profile (default: first Shape).",
+            help="Opaque evaluator Shape id for Typed or hidden-Shape Dev Profile (default: first Shape).",
         )
     parser.add_argument(
             "--arch",
@@ -3516,8 +3551,8 @@ def build_typed_agate_command(
             "--set",
             f"correctness_max_rel_l2={json.dumps(correctness_max_rel_l2)}",
         ]
-    for item in args.env:
-        command += ["--env-var", item]
+    for key, value in request["env_vars"].items():
+        command += ["--env-var", f"{key}={value}"]
     if kind == "profile":
         _append_typed_dependency_options(command, request, request_sidecar_dir)
         command += ["--level", args.profile_level]
@@ -4209,19 +4244,28 @@ def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
 
 
 def _record_profile_job(
-    job: dict[str, Any], workspace: Path, sync_paths: list[str]
+    job: dict[str, Any], workspace: Path, sync_paths: list[str], *, generalized: bool = False,
 ) -> None:
-    """Persist the typed profile response where the local optimization session expects it."""
+    """Publish Profile outputs without exporting private inputs or raw reports."""
+    visible = (
+        {"job_id": job.get("job_id"), "status": job.get("status"),
+         "result": profile_result(job["result"], generalized=True)}
+        if generalized else job
+    )
     for relative in sync_paths:
         path = PurePosixPath(relative)
-        if not path.parts or path.parts[0] != "profiles":
+        if not path.parts or path.parts[0] not in {"profiles", "scratch"}:
             continue
         output_dir = workspace / path.as_posix()
         output_dir.mkdir(parents=True, exist_ok=True)
         target = output_dir / "gateway_profile.json"
         target.write_text(
-            json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            json.dumps(visible, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
+        if generalized:
+            # Full job/evidence remain in the Supervisor's private measurement
+            # store. Raw NCU reports can contain exact Shape parameters.
+            continue
         for artifact in (job.get("result") or {}).get("artifacts") or []:
             if not isinstance(artifact, dict):
                 continue
@@ -4241,6 +4285,11 @@ def _top_level_evaluation_options(args: argparse.Namespace) -> list[str]:
 
 def validate_evaluation_options(args: argparse.Namespace) -> None:
     """Reject ignored top-level evaluator controls before either entry point executes."""
+    if args.profile_shape_id is not None:
+        if args.kind != "profile":
+            raise ValueError("--profile-shape-id requires --kind profile; use --shape-id for --kind run")
+        if not args.profile_shape_id.strip():
+            raise ValueError("--profile-shape-id must be a non-empty opaque ID from a saved evaluation")
     if getattr(args, "comparison_run_timeout", None) is not None and not args.baseline_path:
         raise ValueError("--comparison-run-timeout requires --baseline-path")
     options = _top_level_evaluation_options(args)
@@ -4248,7 +4297,8 @@ def validate_evaluation_options(args: argparse.Namespace) -> None:
         return
     names = ", ".join(options)
     if args.kind != "run":
-        raise ValueError(f"Top-level {names} require --kind run; remove them for --kind {args.kind}")
+        hint = " For Profile Shape selection use --profile-shape-id ID." if args.kind == "profile" and args.shape_id else ""
+        raise ValueError(f"Top-level {names} require --kind run; remove them for --kind {args.kind}.{hint}")
     if args.command not in ([], ["--"]):
         raise ValueError(
             f"Top-level {names} cannot be combined with an explicit command. "
@@ -4259,11 +4309,12 @@ def validate_evaluation_options(args: argparse.Namespace) -> None:
         )
 
 
-def _requires_typed_request(args: argparse.Namespace) -> bool:
+def _requires_typed_request(args: argparse.Namespace, *, private_profile_shape: bool = False) -> bool:
     """New explicit typed controls cannot be silently discarded by Dev fallback."""
     return any((_top_level_evaluation_options(args),
                 args.evaluation_input_path, args.evaluation_shapes_path, args.evaluation_mode,
-                args.kernel_name, args.profile_source, args.profile_shape_id,
+                args.kernel_name, args.profile_source,
+                args.profile_shape_id is not None and not private_profile_shape,
                 args.launch_skip is not None, args.launch_count is not None,
                 args.requirement, args.deps_mode))
 
@@ -4278,6 +4329,9 @@ def _run_typed_gateway(
 ) -> int | None:
     """Run agate run/profile, returning None only for a documented dev fallback."""
     generalized = _is_generalized_workspace(workspace)
+    compatible_fallback = not _requires_typed_request(
+        args, private_profile_shape=(kind == "profile" and generalized and _is_profile_command(command_parts)),
+    )
     try:
         request = build_typed_request(
             workspace,
@@ -4368,10 +4422,10 @@ def _run_typed_gateway(
                 if agate_executable is None:
                     raise FileNotFoundError("agate")
                 reference_dir = None
-                if kind == "run":
+                if kind in {"run", "profile"}:
                     # Even a single targeted batch needs its filtered reference
                     # directory. Otherwise the agate CLI would reload the original
-                    # full shapes.json and defeat --shape-id smoke selection.
+                    # full shapes.json and defeat Evaluate/Profile selection.
                     reference_dir = batch_root / f"batch-{batch_index:04d}"
                     _shape_batch_reference(batch_request["reference"], reference_dir)
                 agate = build_typed_agate_command(
@@ -4411,7 +4465,7 @@ def _run_typed_gateway(
             else:
                 processes = [run_batch(batch_items[0])]
     except GatewayHTTPError as exc:
-        if _typed_fallback_allowed(exc) and not _requires_typed_request(args):
+        if _typed_fallback_allowed(exc) and compatible_fallback:
             print(
                 f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
                 file=sys.stderr,
@@ -4432,7 +4486,7 @@ def _run_typed_gateway(
     jobs: list[dict[str, Any]] = []
     for proc in processes:
         detail = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode and _typed_fallback_allowed(detail) and not _requires_typed_request(args):
+        if proc.returncode and _typed_fallback_allowed(detail) and compatible_fallback:
             print(
                 f"[sandbox] gateway {kind} interface rejected this request; using dev",
                 file=sys.stderr,
@@ -4505,8 +4559,10 @@ def _run_typed_gateway(
         )
         return 0 if result["all_pass"] else 1
 
-    _record_profile_job(jobs[0], workspace, sync_paths)
-    print(PROFILE_RESULT_PREFIX + json.dumps(jobs[0]["result"], ensure_ascii=False))
+    profile_job = dict(jobs[0], result=dict(jobs[0]["result"], shape_id=request["shape_id"]))
+    _record_profile_job(profile_job, workspace, sync_paths, generalized=generalized)
+    result = profile_result(profile_job["result"], generalized=True) if generalized else profile_job["result"]
+    print(PROFILE_RESULT_PREFIX + json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -4686,9 +4742,9 @@ def _main(argv: list[str] | None = None) -> int:
         elif (
             gateway_kind == "profile"
             and args.profile_level == "deep"
-            and not args.kernel_regex
+            and not (args.kernel_regex or args.kernel_name)
         ):
-            raise SystemExit("sandbox: --profile-level deep requires --kernel-regex")
+            raise SystemExit("sandbox: --profile-level deep requires --kernel-regex or --kernel-name")
         elif args.keep_pod:
             typed_limitation = "--keep-pod is only supported by dev"
         elif args.input:
@@ -4697,6 +4753,10 @@ def _main(argv: list[str] | None = None) -> int:
             typed_limitation = (
                 "--include-raw-profile requires the custom dev profiler wrapper"
             )
+        elif gateway_kind == "profile" and any(
+            key in _parse_env_items(args.env) for key in PROFILE_ENVIRONMENT_KEYS if key != "PROFILE_SHAPE_ID"
+        ):
+            typed_limitation = "custom PROFILE_* driver controls require the dev route"
         else:
             try:
                 typed_limitation = _typed_workspace_limitation(
@@ -4716,7 +4776,13 @@ def _main(argv: list[str] | None = None) -> int:
             if typed_result is not None:
                 return typed_result
             typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
-        if _requires_typed_request(args):
+        # A recognized hidden-Shape driver consumes the single private case
+        # selected below. Only this selector is representable on that Dev route;
+        # unsupported Typed controls must still fail rather than be ignored.
+        private_profile_shape = (
+            gateway_kind == "profile" and profile_command and _is_generalized_workspace(workspace)
+        )
+        if _requires_typed_request(args, private_profile_shape=private_profile_shape):
             raise SystemExit(
                 f"sandbox: explicit typed {gateway_kind} options cannot be honored "
                 f"({typed_limitation}); no Dev fallback was submitted. "
@@ -4773,7 +4839,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
         injected_payloads: dict[str, bytes] = {}
         if profile_command and _is_generalized_workspace(workspace):
-            profile_case = _private_profile_case(workspace, args.env)
+            profile_case = _private_profile_case(workspace, args.env, profile_shape_id=args.profile_shape_id)
             if profile_case is not None:
                 filename, payload = profile_case
                 injected_payloads[filename] = payload
@@ -4799,7 +4865,7 @@ def _main(argv: list[str] | None = None) -> int:
     bundle_bytes = len(bundle.encode("ascii"))
     runtime_bundle_bytes = len(runtime_bundle.encode("ascii")) if runtime_bundle else 0
     gateway_environment = list(args.env)
-    if profile_command and _is_generalized_workspace(workspace):
+    if profile_command:
         command_environment, gateway_environment = _profile_command_environment(
             args.env
         )
@@ -5212,6 +5278,8 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     if command in ([], ["--"]):
         command = (["python3", "profile_driver.py"] if args.kind == "profile" else
                    ["python3", "test_kernel.py", "--no-memory"])
+        if args.version is not None:
+            command += ["--version", str(args.version)]
         if args.multi_seed is not None:
             command += ["--multi-seed", str(args.multi_seed)]
         if args.timed_runs is not None:
@@ -5239,7 +5307,7 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     private = _private_evaluator_inputs(workspace, environment=environment)
     selected.update(private)
     for name in ("reference.py", "input.py", "shapes.json", "metadata.json", "roofline.json",
-                 "definition.json", "workload.jsonl", "solution.json"):
+                 "definition.json", "workload.jsonl", "solution.json", "config.json"):
         if (workspace / name).is_file():
             selected.add(name)
     files = {}
@@ -5251,6 +5319,13 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
         if len(data) > 16 * 1024 * 1024 or sum(map(len, files.values())) + len(data) > 64 * 1024 * 1024:
             raise ValueError("Measurement inputs exceed the snapshot limit")
         files[name] = data
+    if kind == "profile" and (args.profile_shape_id is not None or "shapes.json" in files):
+        # Validate before reserving/executing: this safe argument error must not
+        # be masked as a hidden-case executor failure or cached as a measurement.
+        profile_environment = dict(environment)
+        profile_environment.update(_parse_env_items(args.env))
+        _selected_profile_shape(json.loads(files.get("shapes.json", b"{}")),
+                                args.profile_shape_id, profile_environment)
     # Hash evaluator code rather than its mutable checkout path. Bundles already
     # select the minimal evaluator tree and enforce their own size limits.
     evaluator_bundle = _make_atrex_bench_runtime_bundle(workspace, evaluator_only=True, environment=environment) if evaluator else None
@@ -5278,6 +5353,19 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     }}
     options["kind"] = kind
     options["command"] = normalized
+    if operation == "evaluate" and for_command:
+        if "workload.jsonl" in files:
+            # Older saved projections discarded SOL workload coverage. Version
+            # the shared Agent/acceptance identity so they cannot wedge reuse.
+            options["evaluation_contract"] = "sol_execbench_coverage_v1"
+        else:
+            # Version labels are absent from task identity, but their legacy mode
+            # semantics and implicit seed defaults must remain part of the contract.
+            options["evaluation_policy"] = evaluation_policy(command, args.evaluation_mode)
+    if kind == "profile":
+        # Old hidden-Shape requests ran a different driver/return contract via
+        # Dev. Do not mistake their cached records for the new Typed measurement.
+        options["profile_contract"] = "single_shape_typed_v1"
     options["baseline_path"] = baseline_path
     if baseline_path:
         from supervisor.operations import comparison_run_timeout

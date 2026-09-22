@@ -2,7 +2,7 @@
 
 The Campaign now owns GPU and Wiki execution. Agent sessions keep the familiar `python3 tools/sandbox.py ...` interface, but that script is a standard-library HTTP client. Packaging, endpoint selection, credentials, private evaluator inputs and result projection run in the Supervisor. Operators still launch `orchestrator/optimize.py`; no separate service command is required.
 
-The GPU/Wiki service owns execution and credentials. [Measurement records and recovery](measurement-records.md) add private source/results, deduplication and reliability. [Runtime Journal](runtime-journal.md) and [Supervisor-owned handoff](supervisor-promotion.md) bind selected evidence to controller-created candidate commits. Setup, Fast/Full, plan/profile and Phase Marker workflows remain.
+The GPU/Wiki service owns execution and credentials. [Measurement records and recovery](measurement-records.md) add private source/results, deduplication and reliability. [Runtime Journal](runtime-journal.md) and [Supervisor-owned handoff](supervisor-promotion.md) bind selected evidence to controller-created candidate commits. Optimization Episodes use a single Direction/Experiment/report workflow; see [design](design.md).
 
 ## Lifecycle and authority
 
@@ -48,6 +48,16 @@ The capability, not an Agent-supplied path, selects the workspace. Legacy full-n
 
 ## GPU operations
 
+The Supervisor installs its canonical `profile_driver.py` into each private GPU request snapshot before recording inputs and building the worker bundle. Compatibility Profile routes can execute it through Dev/SSH without exposing the driver in the managed Agent workspace. An Agent-supplied file with that name cannot replace it.
+
+Profile uses the Typed route by default for both public and hidden Shapes. Use `--kind profile --profile-shape-id ID`, not the Evaluate-only `--shape-id`. The Supervisor selects exactly one private case: the explicit ID, otherwise legacy `PROFILE_SHAPE_ID`, otherwise the first sorted Shape. Direct HTTP sends this restricted reference contract; the Agate CLI receives an equivalent private single-Shape reference directory rather than reopening the full contract. Unknown IDs fail before GPU submission, without exposing Shape parameters.
+
+Hidden-Shape Typed Profile responses expose opaque Shape IDs and bounded Kernel metrics, not raw requests, Shape contracts, metadata, profiler artifacts or free-form hidden-case diagnostics. `--sync scratch/profile` publishes only a projected `gateway_profile.json`. Raw job responses and artifact references remain in the Supervisor's private measurement store. Non-hidden Profile retains raw artifact synchronization. Profile task identity includes the single-Shape routing contract, so older Dev-route records are not reused as Typed measurements.
+
+The visible Kernel list is capped at 32 entries. `kernel_count`, `total_duration_us`, `dominant_kernel` and duration shares still describe the full Kernel list returned by the profiler; `kernels_omitted` reports excluded entries. Repeated projection preserves these aggregates, so the immediate response, saved Record and synchronized summary agree.
+
+Dev/SSH remains a compatibility path for custom commands/wrappers, auxiliary inputs, driver-specific `PROFILE_*` controls, and unsupported source contracts or Gateway interfaces. Hidden Shapes alone do not trigger fallback. A recognized hidden-Shape driver receives the selected private case only in its remote bundle. Other Typed-only options fail instead of being silently ignored by a fallback.
+
 Read the mounted `gpu-measurement` Skill for Agent-facing examples. Existing evaluator commands retain their syntax and result markers:
 
 ```bash
@@ -63,7 +73,7 @@ python3 tools/sandbox.py --kind env
 
 | Operation | Behavior and Agent result |
 | --- | --- |
-| Evaluate (`run`) | Existing evaluator semantics; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
+| Evaluate (`run`) | Atrex-Bench defaults to six correctness cases; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
 | ABBA (`run --baseline-path`) | Reuses the existing same-allocation AB/BA runner; compact `[sandbox] ABBA_JSON=` with baseline/candidate per-Shape metrics and speedup; does not select or promote a Kernel |
 | Profile | Typed NCU/rocprof result, hottest Kernel/resource/SOL facts and requested counters via `[sandbox] PROFILE_JSON=`; legacy Profile commands and declared file synchronization remain supported |
 | Dev | Bounded stdout/stderr and command exit status for an explicitly declared GPU probe, not necessarily an evaluation |
@@ -94,6 +104,16 @@ Retrieval, bridge execution and query telemetry run on the Supervisor. Agents ca
 ## Files, diagnostics and limits
 
 GPU execution uses a regular-file snapshot, not the mutable Agent directory. Provider homes, Git, control state, benchmark checkout and linked assets are excluded; trusted evaluator code/private inputs are supplied separately. Arbitrary Dev commands retain the existing explicit `--input` packaging rules. Only a successful executor exit can publish requested files below `profiles/` or `scratch/`. Failed jobs retain their private diagnostics and legacy evaluator log, but do not copy partial outputs into the Agent workspace. Source, Git and control files cannot be replaced by remote output publication.
+
+Before recording request identity or dispatching a job, the Supervisor replaces `test_kernel.py`
+with the repository's evaluator: `reference/atrex_bench_test_kernel.py` for Atrex-Bench or
+`reference/test_kernel.py` for SOL. SOL snapshots also take `config.json` from the controller
+worktree's V0 commit, not the Agent draft, mutable worktree, index or later commits. If V0 had no
+config, an Agent-added copy is omitted. Missing Git provenance, invalid JSON, non-regular blobs
+or oversized configs fail before dispatch. Worktree files are not rewritten by this staging step.
+SOL acceptance additionally checks the recorded harness digest against the repository copy.
+These guarantees assume trusted Supervisor code and Git storage; native mode is not isolation
+from an adversarial process with the same host UID.
 
 All requested sync paths share one 64 MiB byte budget and a 4,096-entry traversal bound; overlapping selections do not charge the same file twice. Each no-follow read is limited to the smaller of 16 MiB and the remaining byte budget, plus one byte for overflow detection. Operator diagnostics distinguish the per-file limit from the cumulative limit and identify the file and remaining sync budget. If both limits bind equally, the diagnostic reports the cumulative limit. Validated payloads are spooled privately, and all size/path checks finish before any requested Agent file is published. Validation failure leaves these outputs untouched. Publication is atomic per file, not a multi-file transaction: an I/O failure during final publication can still leave some files updated and returns an unknown-outcome error. The evaluator log is appended separately even for failed correctness results.
 
@@ -133,7 +153,7 @@ Operations receive the running Gateway module instance so CLI execution as `__ma
 
 Native Linux/macOS (`--agent-sandbox none`) remains supported. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user.
 
-With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Managed optimization Episodes use Git-free drafts; their Git, Journal, handoff and promotion audit are controller-only. Setup still uses its legacy boundary; phase/reviewer helper grants remain. Explicit operator grants remain trusted exceptions.
+With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Managed optimization Episodes use Git-free drafts; their Git, Journal, handoff and promotion audit are controller-only. Framework Baseline retains its separate initialization boundary; explicitly configured helper grants remain. Explicit operator grants remain trusted exceptions.
 
 Standalone operator diagnostics now use the private executable, from the AKA checkout:
 

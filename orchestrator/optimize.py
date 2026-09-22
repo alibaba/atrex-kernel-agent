@@ -1,51 +1,10 @@
 #!/usr/bin/env python3
-"""Long-horizon episode orchestrator for atrex-kernel-agent.
+"""Run a kernel optimization Campaign with Supervisor-owned measurement and acceptance.
 
-Owns the OUTER optimization loop so termination no longer depends on the model's
-in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
-
-Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
-By default the first two post-baseline episodes use five fast plan/implement/evaluator
-trials per episode;
-later episodes use the full profile/research/repair loop. The supervisor squash-promotes only a
-strict, correctness-passing improvement, using canonical-memory comparison in fast mode and a
-same-allocation ABBA schedule in full mode.
-
-Termination policy
-------------------
-- Outer loop (this file):  HARD budget break = max versions/episodes OR token budget,
-  plus a mechanical target short-circuit (peak utilization >= --target-util on a
-  committed, correctness-PASS version). No convergence judge.
-- Inner loop (one episode): a persistent engineering direction with structured journal and
-  bounded handoff recovery, isolated from the incumbent branch.
-
-Episode reasoning stays in the self-contained prompt under ``prompts/``;
-this file only does mechanism: spawn, time-bound, token-account, read state, decide stop.
-
-SOL and Atrex-Bench operators run the same loop over their complete workload set.
-
-Usage
------
-    # single operator with an explicit framework:
-    python orchestrator/optimize.py \
-        --op-dir /path/to/operator \
-        --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
-        --agent-cli qodercli \
-        --max-iters 20 --token-budget 8000000 --target-util 90
-
-    # omit --framework to launch one independent campaign per supported framework:
-    #   NVIDIA -> Triton, CuteDSL, Cuda, TileLang
-    #   AMD    -> Triton, FlyDSL, TileLang
-    #   PPU    -> Triton, Cuda, TileLang
-    #   other  -> Triton, TileLang
-    python orchestrator/optimize.py \
-        --op-dir /path/to/op --platform H20 --workspace /path/to/runs
-
-    # production: exact framework, independently reviewed external dependencies:
-    python orchestrator/optimize.py \
-        --op-dir /path/to/op --platform H20 --framework Triton \
-        --optimization-mode production
-
+V0 is measured deterministically; an optional Framework Baseline supplies the first
+self-contained DSL implementation. Each subsequent Episode explores Directions and
+submits a Runtime Journal report. The Supervisor seals candidates, verifies them
+with recorded ABBA comparisons, and promotes only accepted improvements.
 """
 
 from __future__ import annotations
@@ -80,8 +39,6 @@ try:
     from .constants import (
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
-        DEFAULT_FAST_EPISODES,
-        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
@@ -89,6 +46,7 @@ try:
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
+        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from .environment_recovery import (
@@ -130,8 +88,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.constants import (  # type: ignore[no-redef]
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
-        DEFAULT_FAST_EPISODES,
-        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
@@ -139,6 +95,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
+        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from orchestrator.environment_recovery import (  # type: ignore[no-redef]
@@ -541,19 +498,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Coding CLI used for optimization episodes: claude, qodercli, codex, or pi "
         "(default: claude).",
     )
-    ap.add_argument(
-        "--long-reviewer-session",
-        choices=("codex", "qoder", "claude"),
-        default="",
-        metavar="REVIEWER",
-        help="Reuse one reviewer session across episodes (implemented for codex and qoder).",
-    )
     for stage, stage_label in (
         ("v1", "V1 framework-baseline"),
-        ("fast-episode", "fast episodes"),
-        ("full-episode", "full episodes"),
     ):
-        default_enabled = stage == "full-episode"
+        default_enabled = False
         for reviewer in ("codex", "qoder"):
             ap.add_argument(
                 f"--{stage}-ask-{reviewer}",
@@ -591,24 +539,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Hard cap on canonical optimization versions/episodes.",
     )
     ap.add_argument(
-        "--fast-episodes",
-        type=int,
-        default=DEFAULT_FAST_EPISODES,
-        help=(
-            "Use the lightweight fast path for the first N optimization episodes after "
-            "baseline (default: 2; 0 disables)."
-        ),
-    )
-    ap.add_argument(
-        "--fast-trials",
-        type=int,
-        default=DEFAULT_FAST_TRIALS,
-        help=(
-            "Number of reviewed plan->implement->evaluator trials in each fast episode "
-            "(default: 5)."
-        ),
-    )
-    ap.add_argument(
         "--token-budget",
         type=int,
         default=0,
@@ -621,7 +551,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Peak-utilization %% short-circuit (default stop condition).",
     )
     ap.add_argument(
-        "--setup-timeout", type=int, default=7200, help="Baseline session timeout (s)."
+        "--problem-generation-timeout", type=int, default=MAX_PROBLEM_GENERATION_TIMEOUT_S,
+        help=f"Public contract authoring timeout per attempt (s; default and hard cap: {MAX_PROBLEM_GENERATION_TIMEOUT_S}).",
     )
     ap.add_argument(
         "--handoff-resumes",
@@ -717,12 +648,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             "--sandbox-timeout must be in the gateway-supported range "
             f"1..{MAX_SANDBOX_TIMEOUT}"
         )
+    if args.problem_generation_timeout <= 0:
+        ap.error("--problem-generation-timeout must be positive")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
-    if args.fast_episodes < 0:
-        ap.error("--fast-episodes must be non-negative")
-    if args.fast_trials <= 0:
-        ap.error("--fast-trials must be positive")
     if args.handoff_resumes < 0:
         ap.error("--handoff-resumes must be non-negative")
     if args.verify_repeats <= 0:
@@ -898,10 +827,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "reviewers="
         f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
         f"qoder={'on' if args.v1_ask_qoder else 'off'}],"
-        f"fast[codex={'on' if args.fast_episode_ask_codex else 'off'},"
-        f"qoder={'on' if args.fast_episode_ask_qoder else 'off'}],"
-        f"full[codex={'on' if args.full_episode_ask_codex else 'off'},"
-        f"qoder={'on' if args.full_episode_ask_qoder else 'off'}] "
         "runtime_arch="
         f"{arch or 'UNKNOWN (detect failed)'} "
         f"(device name / vendor-smi may be desensitized; trusting the runtime API)",
@@ -947,11 +872,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         work_dir=args.workspace,
         workspace_suffix=workspace_suffix,
         max_iters=args.max_iters,
-        fast_episodes=args.fast_episodes,
-        fast_trials=args.fast_trials,
         token_budget=args.token_budget,
         target_util=args.target_util,
-        setup_timeout=args.setup_timeout,
+        problem_generation_timeout=args.problem_generation_timeout,
         max_stall=args.max_stall,
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
@@ -959,13 +882,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         verify_repeats=args.verify_repeats,
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,
-        long_reviewer_session=args.long_reviewer_session,
         v1_ask_codex=args.v1_ask_codex,
         v1_ask_qoder=args.v1_ask_qoder,
-        fast_episode_ask_codex=args.fast_episode_ask_codex,
-        fast_episode_ask_qoder=args.fast_episode_ask_qoder,
-        full_episode_ask_codex=args.full_episode_ask_codex,
-        full_episode_ask_qoder=args.full_episode_ask_qoder,
         convert_after=args.convert_after,
     )
     trace_status = "failed"

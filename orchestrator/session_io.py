@@ -432,7 +432,7 @@ def sandbox_directive(
     url: str = "",
     ssh: str = "",
 ) -> str:
-    """Mandatory safety boundary plus full-mode workflow for full episodes."""
+    """Execution boundary and GPU measurement guidance for optimization Episodes."""
     endpoint = _sandbox_endpoint(profile, url, ssh)
     safety = _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
@@ -443,22 +443,10 @@ def sandbox_directive(
     return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
 
 
-def fast_sandbox_directive(
-    hardware: str,
-    profile: str = "",
-    url: str = "",
-    ssh: str = "",
-) -> str:
-    """Mandatory safety boundary for fast episodes.
-
-    The fast episode prompt already describes the fast-specific execution
-    contract (single evaluator, no multi-seed, no profile, supervisor-owned
-    memory), so only the invariant safety boundary is injected here.
-    """
-    endpoint = _sandbox_endpoint(profile, url, ssh)
-    return _render(
-        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", ssh: str = "") -> str:
+    """Execution boundary without optimization guidance, for baseline sessions."""
+    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware,
+                   ENDPOINT=_sandbox_endpoint(profile, url, ssh))
 
 
 def _sandbox_command(

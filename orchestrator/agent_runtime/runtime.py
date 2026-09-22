@@ -41,10 +41,11 @@ SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
-def terminal_usage_from_stream(stdout: str) -> TokenUsage:
+def terminal_usage_from_stream(stdout: str, *, backend: str = "") -> TokenUsage:
     """Parse the existing cross-backend terminal contract without event attribution."""
     terminal = TokenUsage.unavailable()
     deltas: list[TokenUsage] = []
+    claude_responses: dict[str, TokenUsage] = {}
     for line in stdout.splitlines():
         line = line.strip()
         if not line or not line.startswith("{"):
@@ -57,9 +58,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
             continue
         if event.get("type") in {"result", "turn.completed"}:
             parsed = token_usage_from_mapping(event.get("usage"))
-            if parsed.total_tokens is None:
+            if parsed.total_tokens is None and backend != "claude":
                 parsed = token_usage_from_model_usage(event.get("modelUsage"))
-            if parsed.total_tokens is not None:
+            if parsed.total_tokens is not None or backend == "claude":
                 terminal = parsed
             continue
         if event.get("type") == "system":
@@ -67,14 +68,21 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
             continue
         usage = event.get("usage")
         message = event.get("message")
+        if backend == "claude" and (
+            event.get("type") != "assistant" or event.get("parent_tool_use_id")
+        ):
+            continue
         if usage is None and isinstance(message, Mapping):
             usage = message.get("usage")
         parsed = token_usage_from_mapping(usage)
         if parsed.total_tokens is not None:
-            deltas.append(parsed)
+            if backend == "claude" and isinstance(message, Mapping) and message.get("id"):
+                claude_responses[message["id"]] = parsed
+            else:
+                deltas.append(parsed)
     if terminal.total_tokens is not None:
         return terminal
-    fallback = sum_token_usages(deltas)
+    fallback = sum_token_usages([*deltas, *claude_responses.values()])
     return (
         replace(fallback, measurement="partial")
         if fallback.total_tokens is not None
@@ -82,9 +90,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
     )
 
 
-def token_usage_from_stream(stdout: str) -> int:
+def token_usage_from_stream(stdout: str, *, backend: str = "") -> int:
     """Preserve the terminal-token compatibility contract for legacy callers."""
-    return terminal_usage_from_stream(stdout).total_tokens or 0
+    return terminal_usage_from_stream(stdout, backend=backend).total_tokens or 0
 
 
 def build_session_environment(runtime_id: str) -> dict[str, str]:
@@ -247,7 +255,7 @@ class CliAgentRuntime:
             # Observation parsing must not turn a completed Agent run into a failure,
             # and the existing terminal token budget must remain available.
             events = ()
-            terminal_usage = terminal_usage_from_stream(stdout)
+            terminal_usage = terminal_usage_from_stream(stdout, backend=self.id)
             observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
         capabilities = replace(
             self._adapter.capabilities,

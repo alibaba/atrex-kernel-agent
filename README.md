@@ -63,12 +63,12 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | Document | Contents |
 | --- | --- |
 | [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
-| [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
+| [Architecture Design](docs/design.md) | Unified Episode workflow, authority boundaries, verification, recovery and upgrade |
 | [Agent Workspace Isolation](docs/agent-workspace-isolation.md) | Opt-in coordinator Bubblewrap boundary, scoped Provider Homes, and legacy compatibility grants |
 | [Supervisor Handoff and Promotion](docs/supervisor-promotion.md) | Git-free Episode drafts, exact-source commits, recorded verification, and private audit recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 
-Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
+Run `python3 orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 
 For a GPU server reachable through OpenSSH, use a dedicated low-privilege account and pass
 `--sandbox-ssh user@gpu-host --sandbox-ssh-gpu 0` with an explicit `--framework`. AKA keeps Agent,

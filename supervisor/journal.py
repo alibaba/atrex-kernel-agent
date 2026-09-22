@@ -14,7 +14,7 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,6 +80,25 @@ _EXPERIMENT_ACTIONS = {
     "abandon_direction",
     "adopt",
 }
+
+
+
+def _episode_evaluation_count(episode_workspace: Path) -> int:
+    """Compatibility for explicitly registered historical minimum-count policies."""
+    path = episode_workspace / Path(".atrex_long_horizon/evaluations.jsonl")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return 0
+    count = 0
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            count += 1
+    return count
 
 
 def _now() -> str:
@@ -757,7 +776,10 @@ class SupervisorJournalService:
             return None
         return sealed_candidate_source(load_journal(self.path), self.git_workspace)
 
-    def execute(self, request: Mapping[str, object]) -> dict[str, object]:
+    def execute(
+        self, request: Mapping[str, object], *,
+        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
+    ) -> dict[str, object]:
         operation = request.get("operation")
         if not isinstance(operation, str):
             raise ValueError("Journal operation must be text")
@@ -833,7 +855,7 @@ class SupervisorJournalService:
             body = request.get("request")
             if not isinstance(body, Mapping):
                 raise ValueError("episode_report requires a request object")
-            return self._submit_report(body)
+            return self._submit_report(body, validate_candidate=validate_candidate)
         raise ValueError(f"unsupported Journal operation: {operation}")
 
     def _check_legacy_journal(self) -> None:
@@ -962,7 +984,10 @@ class SupervisorJournalService:
             (json.dumps(handoff) + "\n").encode(),
         )
 
-    def _submit_report(self, raw: Mapping[str, object]) -> dict[str, object]:
+    def _submit_report(
+        self, raw: Mapping[str, object], *,
+        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
+    ) -> dict[str, object]:
         allowed = {
             "status",
             "summary",
@@ -1028,8 +1053,6 @@ class SupervisorJournalService:
         elif candidate_commit:
             raise ValueError(f"{status} cannot include candidate_commit")
         if status != "blocked" and self.minimum_experiments:
-            from long_horizon.campaign import _episode_evaluation_count
-
             if (
                 len(current["experiments"]) < self.minimum_experiments
                 or _episode_evaluation_count(self.git_workspace) < self.minimum_experiments
@@ -1059,6 +1082,14 @@ class SupervisorJournalService:
                 )
             if errors:
                 raise ValueError("invalid accepted_ppu_diagnostics: " + "; ".join(errors))
+        if kernel_source is not None:
+            if validate_candidate is None:
+                raise RuntimeStateError("Supervisor candidate validation is unavailable; report was not accepted")
+            # All report/evidence checks precede GPU work. The callback measures
+            # these frozen bytes; only a pass may finalize or commit the report.
+            current["acceptance_checks"] = {
+                "multi_seed_correctness": validate_candidate(kernel_source),
+            }
         if kernel_source is not None and self.supervisor_git:
             from long_horizon.git_episode import EpisodeWorktree
 

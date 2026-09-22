@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -18,14 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import agent_runtime as _agent_runtime
 from .constants import (
     AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_CONVERT_AFTER,
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
     DEFAULT_HANDOFF_RESUMES,
     DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
@@ -38,6 +34,7 @@ from .constants import (
     FRAMEWORK_BASELINE_TIMEOUT_S,
     FRAMEWORK_BASELINE_VERSION,
     IMMUTABLE_BASELINE_PATHS,
+    MAX_PROBLEM_GENERATION_TIMEOUT_S,
     PROFILE_DRIVER,
     PROMPTS_DIR,
     REPO_ROOT,
@@ -82,11 +79,6 @@ from .optimization_policy import (
     production_kernel_violations,
     production_structure_violations,
 )
-from .plan_reviewers import (
-    REVIEWER_ENVIRONMENT,
-    discover_plan_reviewers,
-    plan_reviewer_environment,
-)
 from .session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -96,13 +88,11 @@ from .session_io import (
     _sandbox_command,
     _test_result_from_stdout,
     _validate_production_review,
-    fast_sandbox_directive,
     run_session,
     sandbox_directive,
 )
 from .workspace_runtime import (
     _agent_runtime_directive,
-    _baseline_driver_directive,
     link_runtime,
 )
 from .workspace_state import (
@@ -118,16 +108,12 @@ from .workspace_state import (
     write_stall,
 )
 
-_LONG_REVIEWER_SESSION_ENV = {
-    "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
-    "qoder": "ATREX_QODER_REVIEW_SESSION_FILE",
-}
 
 _WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
 _WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
 
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
+_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 4
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
     ".atrex_long_horizon/framework_baseline/correctness_guidance.json"
 )
@@ -145,21 +131,8 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
     "EDGE_CASES:",
     "CUDA_IMPLEMENTATION_RISKS:",
     "PRE_SMOKE_CHECKS:",
-    "TARGETED_REFERENCES:",
     "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
 )
-_FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT = 80
-_FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT = 6
-_FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES = 1000
-_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT = 2
-_FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
-    ".cu",
-    ".cuh",
-    ".h",
-    ".hpp",
-    ".md",
-    ".py",
-}
 
 
 def _runtime_timeout_from_environment(name: str, default: float | None = None) -> float | None:
@@ -191,10 +164,8 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    setup_timeout: int = 7200  # 120 min for the baseline session
+    problem_generation_timeout: int = MAX_PROBLEM_GENERATION_TIMEOUT_S  # per authoring attempt
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
-    fast_episodes: int = DEFAULT_FAST_EPISODES  # first N post-baseline episodes
-    fast_trials: int = DEFAULT_FAST_TRIALS  # trials per fast episode
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
     )
@@ -220,13 +191,8 @@ class Campaign:
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
-    long_reviewer_session: str = ""
     v1_ask_codex: bool = False
     v1_ask_qoder: bool = False
-    fast_episode_ask_codex: bool = False
-    fast_episode_ask_qoder: bool = False
-    full_episode_ask_codex: bool = True
-    full_episode_ask_qoder: bool = True
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
@@ -238,9 +204,6 @@ class Campaign:
     _generated_agent_problem_digest: str = field(
         default="", init=False, repr=False, compare=False
     )
-    _plan_reviewer_environment: dict[str, str] = field(
-        default_factory=dict, init=False, repr=False, compare=False
-    )
 
     def __post_init__(self) -> None:
         if sum(
@@ -250,13 +213,8 @@ class Campaign:
             raise ValueError(
                 "sandbox_ssh, sandbox_url, and sandbox_profile are mutually exclusive"
             )
-        if self.long_reviewer_session and self.long_reviewer_session not in (
-            _LONG_REVIEWER_SESSION_ENV
-        ):
-            raise NotImplementedError(
-                f"long reviewer sessions are not implemented for "
-                f"{self.long_reviewer_session}"
-            )
+        if self.problem_generation_timeout <= 0:
+            raise ValueError("problem_generation_timeout must be positive")
 
     @property
     def campaign_name(self) -> str:
@@ -324,9 +282,10 @@ class Campaign:
                 f"{AGENT_PROBLEM_FILENAME}"
             )
 
+        timeout = min(self.problem_generation_timeout, MAX_PROBLEM_GENERATION_TIMEOUT_S)
         print(
             "[orchestrator] generalized problem: production received detailed shapes only; "
-            "starting AKA problem-authoring session",
+            f"starting AKA problem-authoring session (timeout: {timeout}s per attempt, at most 2 attempts)",
             flush=True,
         )
         validation_error = ""
@@ -352,7 +311,7 @@ class Campaign:
                 result = run_session(
                     staging,
                     prompt,
-                    timeout=min(self.setup_timeout, 1_800),
+                    timeout=timeout,
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
                     extra_environment=self.agent_boundary_environment("problem-generation"),
@@ -384,14 +343,6 @@ class Campaign:
                 )
                 return
 
-    def _episode_plan_reviewers(self, episode_mode: str) -> tuple[str, ...]:
-        if episode_mode not in ("fast", "full"):
-            raise ValueError(f"unsupported episode mode: {episode_mode}")
-        return tuple(
-            reviewer
-            for reviewer in ("codex", "qoder")
-            if getattr(self, f"{episode_mode}_episode_ask_{reviewer}")
-        )
 
     def _framework_baseline_correctness_reviewers(self) -> tuple[str, ...]:
         return tuple(
@@ -494,36 +445,13 @@ class Campaign:
             runtime.close()
             self._supervisor_runtime = None
 
-    def agent_environment(self, *, episode_mode: str = "") -> dict[str, str]:
+    def agent_environment(self) -> dict[str, str]:
         private_dir = self.private_reference_dir
-        environment = dict(self._plan_reviewer_environment)
+        environment = {}
         environment.update(self.agent_boundary_environment())
         self.start_runtime()
         from .supervisor_runtime import OWNER_ENV
         environment[OWNER_ENV] = self._supervisor_runtime.owner_id
-        if episode_mode:
-            enabled_reviewers = set(self._episode_plan_reviewers(episode_mode))
-            for reviewer, (enabled_name, reason_name) in REVIEWER_ENVIRONMENT.items():
-                if reviewer in enabled_reviewers:
-                    continue
-                environment[enabled_name] = "0"
-                environment[reason_name] = (
-                    f"disabled by --no-{episode_mode}-episode-ask-{reviewer}"
-                )
-        if self.long_reviewer_session:
-            env_name = _LONG_REVIEWER_SESSION_ENV[self.long_reviewer_session]
-            state_file = (
-                self.workspace
-                / f".atrex_long_horizon/{self.long_reviewer_session}_reviewer_session.json"
-            )
-            if self.agent_sandbox == "bwrap":
-                # Only the reviewer's own directory enters the Agent namespace,
-                # not the entire Long Horizon archive/control directory.
-                state_file = state_file.parent / "reviewer-state" / state_file.name
-                state_file = state_file.absolute()
-            else:
-                state_file = state_file.resolve()
-            environment[env_name] = str(state_file)
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         if self.sandbox_ssh:
@@ -553,34 +481,6 @@ class Campaign:
         environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
 
-    def ensure_plan_reviewer_availability(self, *, episode_mode: str) -> None:
-        """Probe the reviewers enabled for this episode mode at most once each."""
-        reviewers = self._episode_plan_reviewers(episode_mode)
-        if not reviewers:
-            return
-        if all(
-            REVIEWER_ENVIRONMENT[reviewer][0] in self._plan_reviewer_environment
-            for reviewer in reviewers
-        ):
-            return
-        value, reused = discover_plan_reviewers(
-            self.workspace,
-            agent_cli=self.agent_cli,
-            reviewers=reviewers,
-            boundary_environment=self.agent_boundary_environment("plan-review-probe"),
-        )
-        self._plan_reviewer_environment = plan_reviewer_environment(value)
-        statuses = []
-        for name in reviewers:
-            record = value["reviewers"][name]
-            status = "available" if record["available"] else "disabled"
-            statuses.append(f"{name}={status} ({record['reason']})")
-        source = "cached" if reused else "startup probe"
-        print(
-            f"[orchestrator] {episode_mode} episode plan reviewers ({source}): "
-            + "; ".join(statuses),
-            flush=True,
-        )
 
     def _generalized_memory_coverage_problem(self, memory: dict | None) -> str:
         """Require successful canonical memory to cover every private shape by opaque id."""
@@ -884,54 +784,32 @@ class Campaign:
         )
 
     def _evaluator_directive(self) -> str:
-        if self.atrex_bench_root:
-            if self.private_reference_dir is not None:
-                return (
-                    "## Evaluation route: Atrex-Bench generalized private-case native\n\n"
-                    "Treat workspace `agent_problem.json` as the authoritative public optimization "
-                    "contract. Exact `shapes.json`, `metadata.json`, and `roofline.json` cases are "
-                    "evaluator-only and intentionally absent from the workspace; never search for, "
-                    "reconstruct, or read the private reference directory. The immutable "
-                    "`test_kernel.py` adapter and sandbox inject those cases only into the remote "
-                    "official evaluator. Optimize for the complete declared `shape_domain`, using "
-                    "aggregate `distribution_profile` shares only for prioritization. Correctness "
-                    "must pass every hidden case. The optimization score is the arithmetic mean "
-                    "of each opaque shape's measured speedup against its authoritative Atrex-Bench "
-                    "metadata production latency; maximize `performance_score`. After "
-                    "evaluation, use the real "
-                    "`latency_us_by_shape` map keyed by opaque ids without attempting to infer their "
-                    "private inputs. For profiling, choose a real opaque id from canonical "
-                    "`memory/vN.json.performance.latency_us_by_shape` with PROFILE_SHAPE_ID; the "
-                    "sandbox injects only that real case into the remote profile job. Do not edit "
-                    "or replace the adapter or implement a custom correctness/timing harness."
-                )
-            return (
-                "## Evaluation route: Atrex-Bench native\n\n"
-                "This workspace's `test_kernel.py` is an orchestrator-installed immutable adapter. "
-                "It invokes the canonical `atrex-bench/scripts/run_eval.py` against `kernel.py` and "
-                "the workspace `reference.py`/`input.py`/`shapes.json`/`metadata.json`, then emits "
-                "the optimizer's `RESULT_JSON` transport line from the official `eval_result.json`. "
-                "The optimization score is `performance_score`: for each shape, divide "
-                "metadata `production_performance.performance_us` by measured latency, then take "
-                "the arithmetic mean across shapes. Maximize this score. "
-                "Do not edit or replace this adapter and do not implement a custom correctness or "
-                "timing harness. `--multi-seed N` maps to N additional Atrex-Bench correctness "
-                "cases while performance remains one official run per shape."
-            )
-        op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
-            return (
-                "## Evaluation route: SOL-ExecBench\n\n"
-                "Keep using the immutable SOL `test_kernel.py`, which invokes `sol-execbench` over "
-                "the complete `workload.jsonl`. Each workload's SOL reference is its performance "
-                "baseline; maximize `performance_score`, the arithmetic mean of per-workload "
-                "speedups. Do not substitute the Atrex-Bench native evaluator."
-            )
-        return (
-            "## Evaluation route: derived legacy boundary\n\n"
-            "This derived boundary is not a complete Atrex-Bench operator directory. Preserve its "
-            "committed full-shape `test_kernel.py` methodology and do not replace it after V0."
+        public = (
+            "Use agent_problem.json for the public domain. Exact shapes and metadata remain private; "
+            "result Shape IDs are opaque and must not be reverse-engineered. "
+            if self.private_reference_dir else "The visible operator contract defines the supported inputs. "
         )
+        if self.atrex_bench_root:
+            return (
+                "## Evaluation contract: Atrex-Bench\n\n" + public +
+                "The Supervisor supplies the official evaluator. Maximize performance_score: "
+                "the arithmetic mean of per-Shape speedups relative to metadata production latency. "
+                "Use --kind run --mode full --no-sync for the complete workload. "
+                "Correctness-only, custom-input or subset results do not satisfy an Episode report. "
+                "For diagnostic Profile, use --kind profile --profile-shape-id ID --no-sync "
+                "with an opaque Shape ID from a saved result. The same option selects the "
+                "privately supplied case in Typed Profile or a compatible Dev fallback. "
+                "Never substitute a custom timing/correctness harness for official evaluation."
+            )
+        if is_sol_op(Path(self.kernel_demo).resolve().parent):
+            return (
+                "## Evaluation contract: SOL-ExecBench\n\n"
+                "The Supervisor runs the official evaluator over workload.jsonl. "
+                "Maximize performance_score, the arithmetic mean of workload speedups relative to "
+                "the SOL reference. Use --kind run --no-sync; never replace the evaluator. "
+                "Atrex-Bench typed --mode controls do not apply to SOL-ExecBench."
+            )
+        raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")
 
     def _install_native_evaluator(self) -> None:
         """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
@@ -972,13 +850,6 @@ class Campaign:
             self.sandbox_ssh,
         )
 
-    def _fast_sandbox_directive(self) -> str:
-        return fast_sandbox_directive(
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_ssh,
-        )
 
     def _mode_directive(self) -> str:
         return optimization_mode_directive(self.optimization_mode, self.framework)
@@ -991,6 +862,9 @@ class Campaign:
         if is_sol_op(op_dir):
             self._setup_baseline_sol(op_dir)
             return
+        if not self.atrex_bench_root:
+            raise ValueError("Deterministic V0 requires a native Atrex-Bench or SOL operator; "
+                             "provide the canonical evaluator checkout instead of a custom setup script")
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
         # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
@@ -1023,128 +897,8 @@ class Campaign:
         # A native Atrex-Bench V0 is already materialized as the verbatim reference
         # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
         # Agent session adds no implementation value here.  Commit the sources, run the
-        # one required remote measurement, and record the result mechanically.  The
-        # derived legacy boundary below retains the Agent fallback because its harness
-        # and input layout are not canonical enough to synthesize safely.
-        if self.atrex_bench_root:
-            self._setup_baseline_native(op_dir, generalized=generalized)
-            return
-        prompt = _render(
-            PROMPTS_DIR / "setup.md",
-            WORKSPACE=str(self.workspace),
-            PLATFORM=self.platform,
-            FRAMEWORK=self.framework,
-            KERNEL_DEMO="reference.py",
-            NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(
-                self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-            ),
-            BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
-            HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._sandbox_directive(),
-            EVALUATOR=self._evaluator_directive(),
-            MODE_POLICY=self._mode_directive(),
-        )
-        res = run_session(
-            self.workspace,
-            prompt,
-            timeout=self.setup_timeout,
-            agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_ssh=self.sandbox_ssh,
-            sandbox_ssh_init=self.sandbox_ssh_init,
-            sandbox_health_command=self.sandbox_health_command,
-            sandbox_timeout=self.sandbox_timeout,
-            reasoning_effort="high",
-            extra_environment=self.agent_environment(),
-        )
-        self._assert_generalized_inputs_are_private()
-        self._account(res, "setup")
-        if res.exit_status != 0 and res.tokens == 0:
-            raise RuntimeError(
-                f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
-                "this is likely an API key / authentication issue. "
-                f"{_agent_runtime.auth_hint(self.agent_cli)}."
-            )
-        baseline_memory = read_memory(self.workspace, 0)
-        baseline_problem = "missing memory/v0.json" if baseline_memory is None else ""
-        if baseline_memory is not None and not git_head(self.workspace):
-            baseline_problem = "memory/v0.json exists but the workspace has no Git HEAD"
-        if not baseline_problem:
-            baseline_problem = self._generalized_memory_coverage_problem(
-                baseline_memory
-            )
-        if not baseline_problem:
-            baseline_problem = self._generalized_contract_commit_problem()
-        if baseline_problem:
-            print(
-                f"[orchestrator] WARNING: incomplete setup ({baseline_problem}); "
-                "starting one clean recovery session",
-                file=sys.stderr,
-                flush=True,
-            )
-            recovery_prompt = (
-                self._mode_directive()
-                + "\n\n# Recover incomplete V0 setup\n\n"
-                + f"Workspace: `{self.workspace}`\n\n"
-                + "A previous non-interactive setup session stopped before producing the required "
-                f"baseline ({baseline_problem}). Continue from the files already present and finish V0 "
-                "autonomously. "
-                "Do not ask the user for confirmation or permission. Inspect the current workspace, "
-                "implement `kernel.py`, preserve the evaluator route described below, run the complete "
-                "workspace workload exactly once with the base seed through the mandatory sandbox "
-                "with `--no-memory`; do not run `--multi-seed` for V0. Parse its "
-                "`[test_kernel] RESULT_JSON=...`, write local `memory/v0.json` and `baseline_report.md`, "
-                "then Git commit `V0: baseline kernel`. Do not enter optimization iterations.\n\n"
-                + self._evaluator_directive()
-                + "\n\n"
-                + self._sandbox_directive()
-            )
-            recovery = run_session(
-                self.workspace,
-                recovery_prompt,
-                timeout=self.setup_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_ssh=self.sandbox_ssh,
-                sandbox_ssh_init=self.sandbox_ssh_init,
-                sandbox_health_command=self.sandbox_health_command,
-                sandbox_timeout=self.sandbox_timeout,
-                reasoning_effort="high",
-                extra_environment=self.agent_environment(),
-            )
-            self._assert_generalized_inputs_are_private()
-            self._account(recovery, "setup recovery")
-            if recovery.exit_status != 0 and recovery.tokens == 0:
-                raise RuntimeError(
-                    f"setup recovery failed immediately (exit={recovery.exit_status}, tokens=0) — "
-                    f"{_agent_runtime.auth_hint(self.agent_cli)}."
-                )
-            recovered_memory = read_memory(self.workspace, 0)
-            recovery_problem = (
-                "missing memory/v0.json" if recovered_memory is None else ""
-            )
-            if recovered_memory is not None and not git_head(self.workspace):
-                recovery_problem = (
-                    "memory/v0.json exists but the workspace still has no Git HEAD"
-                )
-            if not recovery_problem:
-                recovery_problem = self._generalized_memory_coverage_problem(
-                    recovered_memory
-                )
-            if not recovery_problem:
-                recovery_problem = self._generalized_contract_commit_problem()
-            if recovery_problem:
-                detail = recovery.stderr_tail or recovery.stdout_tail
-                raise RuntimeError(
-                    f"setup recovery left an incomplete baseline ({recovery_problem})"
-                    + (f": {detail}" if detail else "")
-                )
+        # required remote measurement, and record the result mechanically.
+        self._setup_baseline_native(op_dir, generalized=generalized)
 
     def _native_v0_readme(self, *, generalized: bool) -> str:
         contract = (
@@ -1157,7 +911,7 @@ class Campaign:
         notes = self.notes.strip() or "none"
         return (
             f"# kernel_opt_{self.campaign_name}\n\n"
-            "Profile-driven optimization of one native Atrex-Bench operator.\n\n"
+            "Evidence-backed optimization of one native Atrex-Bench operator.\n\n"
             "## Goal\n\n"
             "Maximize the arithmetic mean of per-shape speedups against Atrex-Bench metadata "
             "production performance while every evaluator case remains "
@@ -1172,15 +926,15 @@ class Campaign:
             f"- Additional notes: {notes}\n\n"
             "## Contract and evaluator\n\n"
             f"- {contract}\n"
-            "- `test_kernel.py` is the immutable supervisor-installed adapter to the official "
-            "`atrex-bench/scripts/run_eval.py`.\n"
+            "- Use `python3 tools/sandbox.py --kind run --mode full --no-sync`; the Supervisor "
+            "supplies the official evaluator and private inputs.\n"
             "- V0 uses exactly one full-workload base-seed evaluator run. It does not profile, "
             "run multi-seed correctness, or perform ABBA.\n"
-            "- Ground-truth operator files and `profile_driver.py` are immutable after V0.\n\n"
+            "- Ground-truth operator files and canonical memory are immutable to the Agent.\n\n"
             "## Hardware evidence policy\n\n"
             "V0 records identity only and does not speculate about peak specifications. Before an "
-            "optimization plan uses a hardware limit, source it from the workspace `gpu-wiki/` "
-            "and cite the exact path. The runtime architecture API is authoritative when a device "
+            "optimization plan uses a hardware limit, source it through `--kind wiki-query` "
+            "and cite the returned record. The runtime architecture API is authoritative when a device "
             "name or vendor SMI is desensitized.\n\n"
             "## Stop conditions\n\n"
             "The supervisor stops at the configured iteration/token/stall limits, when the target "
@@ -1240,8 +994,7 @@ class Campaign:
         """Measure V0 while prefetching the source-only V1 correctness review.
 
         The review packet deliberately excludes V0 measurement artifacts, so its
-        digest is stable before and after the evaluator writes memory/v0.json and
-        baseline_report.md. Review failure remains non-fatal here: the ordinary V1
+        digest is stable before and after the evaluator writes canonical memory/v0.json. Review failure remains non-fatal here: the ordinary V1
         entry point validates the cache and retries synchronously when necessary.
         """
         if not self._framework_baseline_correctness_reviewers():
@@ -1268,46 +1021,6 @@ class Campaign:
                         flush=True,
                     )
 
-    def _write_v0_baseline_report(self, result: dict, source_commit: str) -> Path:
-        def metric(name: str) -> str:
-            value = result.get(name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                return "unknown"
-            return f"{float(value):.6g}"
-
-        by_shape = result.get("latency_us_by_shape")
-        by_shape = by_shape if isinstance(by_shape, dict) else {}
-        evaluator = str(result.get("evaluator") or "workspace test_kernel.py")
-        eval_id = result.get("eval_id")
-        shape_note = (
-            "Shape ids are opaque; exact production inputs remain evaluator-private."
-            if (self.workspace / AGENT_PROBLEM_FILENAME).is_file()
-            else "The complete public workload was evaluated."
-        )
-        report = (
-            "# V0 baseline report\n\n"
-            "This report was generated mechanically by the campaign supervisor.\n\n"
-            "## Provenance\n\n"
-            f"- Source commit: `{source_commit}`\n"
-            "- Implementation: verbatim `reference.py` copied to `kernel.py`\n"
-            f"- Evaluator: `{evaluator}`\n"
-            "- Route: remote sandbox, one base-seed full-workload run\n"
-            f"- Evaluator id: `{eval_id if eval_id is not None else 'unknown'}`\n\n"
-            "## Result\n\n"
-            "- Correctness: `PASS`\n"
-            f"- Measured shapes: `{len(by_shape)}`\n"
-            f"- Geomean latency: `{metric('latency_us_geomean')} us`\n"
-            f"- Arithmetic mean latency: `{metric('latency_us_arith_mean')} us`\n"
-            f"- Mean speedup vs metadata: `{metric('speedup_vs_ref_mean')}x`\n"
-            f"- Performance score: `{metric('performance_score')}`\n"
-            f"- Maximum absolute error: `{metric('max_abs_err')}`\n"
-            f"- Maximum relative error: `{metric('max_rel_err')}`\n\n"
-            f"{shape_note} Per-shape values are stored once in `memory/v0.json`; they are "
-            "not duplicated here.\n"
-        )
-        path = self.workspace / "baseline_report.md"
-        path.write_text(report, encoding="utf-8")
-        return path
 
     def _finalize_v0_measurement(
         self,
@@ -1333,9 +1046,8 @@ class Campaign:
         coverage_problem = self._generalized_memory_coverage_problem(memory)
         if coverage_problem:
             raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
-        self._write_v0_baseline_report(result, source_commit)
 
-        staged = ["memory/v0.json", "baseline_report.md"]
+        staged = ["memory/v0.json"]
         staged.extend(
             path for path in extra_paths if (self.workspace / path).is_file()
         )
@@ -1868,200 +1580,6 @@ class Campaign:
                 context.append(path)
         return context
 
-    def _framework_baseline_reference_keywords(self) -> set[str]:
-        """Derive bounded path-ranking terms from the public operator contract."""
-        keywords = {
-            token
-            for token in re.findall(
-                r"[a-z0-9]+", f"{self.name} {self.framework} {self.arch}".lower()
-            )
-            if len(token) >= 3
-        }
-        public_text = ""
-        for relative in ("agent_problem.json", "reference.py", "input.py"):
-            path = self.workspace / relative
-            if not path.is_file():
-                continue
-            try:
-                public_text += "\n" + path.read_text(
-                    encoding="utf-8", errors="replace"
-                ).lower()
-            except OSError:
-                continue
-        for term in (
-            "attention",
-            "backward",
-            "bwd",
-            "causal",
-            "decode",
-            "gqa",
-            "mask",
-            "mla",
-            "nvrtc",
-            "paged",
-            "prefill",
-            "ragged",
-            "softmax",
-            "varlen",
-        ):
-            if term in public_text:
-                keywords.add(term)
-        if self.arch.lower().startswith("sm_12"):
-            keywords.update({"blackwell", "sm120"})
-        if hardware_vendor(self.platform, self.arch) == "ppu":
-            keywords.update({"ppu", "sail", "hggc", "actlize", "m890"})
-        return keywords
-
-    def _framework_baseline_reference_catalog(self) -> list[str]:
-        """Rank a small exact-path catalog; reviewers may select only from this list."""
-        roots = (REPO_ROOT / "gpu-wiki", REPO_ROOT / "reference-projects")
-        candidates: list[str] = []
-        if shutil.which("rg"):
-            completed = subprocess.run(
-                ["rg", "--files", *(str(root) for root in roots if root.is_dir())],
-                cwd=str(REPO_ROOT),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode in {0, 1}:
-                candidates = [line.strip() for line in completed.stdout.splitlines()]
-        if not candidates:
-            for root in roots:
-                if not root.is_dir():
-                    continue
-                for path in root.rglob("*"):
-                    if path.is_file():
-                        candidates.append(path.relative_to(REPO_ROOT).as_posix())
-
-        keywords = self._framework_baseline_reference_keywords()
-        targets_ppu = hardware_vendor(self.platform, self.arch) == "ppu"
-        wants_backward = bool(keywords & {"backward", "bwd"})
-        ranked: list[tuple[int, str]] = []
-        for raw_path in candidates:
-            path = Path(raw_path)
-            try:
-                absolute = path if path.is_absolute() else REPO_ROOT / path
-                relative = absolute.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
-            except (OSError, ValueError):
-                continue
-            source = REPO_ROOT / relative
-            suffix = source.suffix.lower()
-            if (
-                suffix not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
-                or not source.is_file()
-            ):
-                continue
-            if suffix != ".md":
-                try:
-                    if source.stat().st_size < _FRAMEWORK_BASELINE_REFERENCE_MIN_SOURCE_BYTES:
-                        continue
-                except OSError:
-                    continue
-            lowered = relative.lower().replace("-", "_")
-            score = sum(10 for keyword in keywords if keyword in lowered)
-            if score == 0:
-                continue
-            if relative.startswith("reference-projects/") and suffix != ".md":
-                score += 4
-            if relative.startswith("gpu-wiki/"):
-                score += 2
-            if "/sources/prs/" in lowered:
-                score -= 5
-            if not wants_backward and any(
-                term in lowered for term in ("_bwd", "bwd_", "backward")
-            ):
-                score -= 15
-            if any(term in lowered for term in ("paged", "varlen", "gqa", "sm120")):
-                score += 3
-            if any(term in lowered for term in ("_for_sail", "actlize", "hggc", "ppu")):
-                if not targets_ppu:
-                    continue
-                score += 3
-            ranked.append((score, relative))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
-        per_project: dict[str, int] = {}
-        catalog: list[str] = []
-        for _score, relative in ranked:
-            if len(catalog) >= _FRAMEWORK_BASELINE_REFERENCE_CATALOG_LIMIT:
-                break
-            project = "/".join(relative.split("/")[:2])
-            if per_project.get(project, 0) >= _FRAMEWORK_BASELINE_REFERENCE_PER_PROJECT_LIMIT:
-                continue
-            per_project[project] = per_project.get(project, 0) + 1
-            catalog.append(relative)
-        return catalog
-
-    def _framework_baseline_reference_catalog_text(self) -> str:
-        catalog = self._framework_baseline_reference_catalog()
-        lines = [
-            "# Bounded implementation reference catalog",
-            "",
-            "Select at most two exact paths from this list. A path is navigational evidence only; "
-            "do not claim facts about file contents you have not read.",
-            "",
-        ]
-        lines.extend(f"- `{path}`" for path in catalog)
-        return "\n".join(lines) + "\n"
-
-    def _framework_baseline_review_references(
-        self, guidance: str
-    ) -> list[dict[str, str]]:
-        catalog = set(self._framework_baseline_reference_catalog())
-        references: list[dict[str, str]] = []
-        in_section = False
-        for line in guidance.splitlines():
-            stripped = line.strip()
-            if stripped == "TARGETED_REFERENCES:":
-                in_section = True
-                continue
-            if in_section and stripped.endswith(":") and not stripped.startswith("-"):
-                break
-            if not in_section:
-                continue
-            match = re.fullmatch(
-                r"- path: ([^|]+?)\s*\|\s*purpose: (.+)", stripped
-            )
-            if match is None:
-                continue
-            path = match.group(1).strip().strip("`")
-            purpose = " ".join(match.group(2).split())[:500]
-            if path not in catalog or any(item["path"] == path for item in references):
-                continue
-            references.append({"path": path, "purpose": purpose})
-            if len(references) >= _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT:
-                break
-        return references
-
-    def _framework_baseline_selected_references(
-        self, reviews: dict[str, object]
-    ) -> list[dict[str, object]]:
-        """Choose at most two reviewer-nominated paths, preferring consensus then rank."""
-        catalog = self._framework_baseline_reference_catalog()
-        rank = {path: index for index, path in enumerate(catalog)}
-        nominations: dict[str, dict[str, object]] = {}
-        for reviewer in self._framework_baseline_correctness_reviewers():
-            record = reviews.get(reviewer)
-            if not isinstance(record, dict):
-                continue
-            references = record.get("references")
-            if not isinstance(references, list):
-                continue
-            for item in references:
-                if not isinstance(item, dict) or item.get("path") not in rank:
-                    continue
-                path = str(item["path"])
-                current = nominations.setdefault(
-                    path,
-                    {"path": path, "purpose": str(item.get("purpose", "")), "votes": 0},
-                )
-                current["votes"] = int(current["votes"]) + 1
-        ordered = sorted(
-            nominations.values(),
-            key=lambda item: (-int(item["votes"]), rank[str(item["path"])]),
-        )
-        return ordered[:_FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT]
-
     def _framework_baseline_correctness_context_digest(self) -> str:
         digest = hashlib.sha256()
         digest.update(
@@ -2082,8 +1600,6 @@ class Campaign:
             digest.update(relative.encode())
             digest.update(len(contents).to_bytes(8, "big"))
             digest.update(contents)
-        digest.update(b"\0reference-catalog\0")
-        digest.update(self._framework_baseline_reference_catalog_text().encode())
         return digest.hexdigest()
 
     def _load_framework_baseline_correctness_guidance(
@@ -2117,22 +1633,6 @@ class Campaign:
             for reviewer in enabled_reviewers
         ):
             return None
-        selected_references = value.get("selected_references")
-        catalog = set(self._framework_baseline_reference_catalog())
-        if (
-            not isinstance(selected_references, list)
-            or len(selected_references)
-            > _FRAMEWORK_BASELINE_SELECTED_REFERENCE_LIMIT
-            or any(
-                not isinstance(item, dict)
-                or not isinstance(item.get("path"), str)
-                or item["path"] not in catalog
-                or not isinstance(item.get("purpose"), str)
-                or not isinstance(item.get("votes"), int)
-                for item in selected_references
-            )
-        ):
-            return None
         return value
 
     def _run_framework_baseline_correctness_reviewer(
@@ -2156,15 +1656,6 @@ class Campaign:
                     source_hashes[relative.as_posix()] = hashlib.sha256(
                         destination.read_bytes()
                     ).hexdigest()
-                catalog_path = context_root / "reference_catalog.md"
-                catalog_path.parent.mkdir(parents=True, exist_ok=True)
-                catalog_path.write_text(
-                    self._framework_baseline_reference_catalog_text(),
-                    encoding="utf-8",
-                )
-                source_hashes["reference_catalog.md"] = hashlib.sha256(
-                    catalog_path.read_bytes()
-                ).hexdigest()
 
                 prompt = _render(
                     PROMPTS_DIR / "framework_baseline_correctness_review.md",
@@ -2247,9 +1738,6 @@ class Campaign:
                     {
                         "status": "ok",
                         "guidance": guidance[:16000],
-                        "references": self._framework_baseline_review_references(
-                            guidance
-                        ),
                         "session_id": result.session_id,
                     },
                     result,
@@ -2318,9 +1806,6 @@ class Campaign:
             "context_digest": self._framework_baseline_correctness_context_digest(),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "reviews": reviews,
-            "selected_references": self._framework_baseline_selected_references(
-                reviews
-            ),
         }
         path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2342,24 +1827,6 @@ class Campaign:
                 file=sys.stderr,
                 flush=True,
             )
-
-    @staticmethod
-    def _framework_baseline_guidance_without_reference_nominations(
-        guidance: str,
-    ) -> str:
-        """Hide raw nominations so V1 sees only the supervisor's final shortlist."""
-        lines: list[str] = []
-        skipping = False
-        for line in guidance.splitlines():
-            stripped = line.strip()
-            if stripped == "TARGETED_REFERENCES:":
-                skipping = True
-                continue
-            if skipping and stripped in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS:
-                skipping = False
-            if not skipping:
-                lines.append(line)
-        return "\n".join(lines).strip()
 
     def _framework_baseline_correctness_guidance_text(self) -> str:
         reviewers = self._framework_baseline_correctness_reviewers()
@@ -2396,11 +1863,7 @@ class Campaign:
             record = record if isinstance(record, dict) else {}
             sections.append(f"\n### {label}\n")
             if record.get("status") == "ok":
-                guidance = (
-                    self._framework_baseline_guidance_without_reference_nominations(
-                        str(record.get("guidance", ""))
-                    )
-                )
+                guidance = str(record.get("guidance", ""))
                 sections.append(guidance + "\n")
             else:
                 sections.append(
@@ -2408,26 +1871,6 @@ class Campaign:
                     + str(record.get("reason", "no valid response"))
                     + "\n"
                 )
-        sections.append("\n### Supervisor-selected implementation references\n")
-        selected_references = value.get("selected_references")
-        if isinstance(selected_references, list) and selected_references:
-            for item in selected_references:
-                assert isinstance(item, dict)
-                sections.append(
-                    f"- `{item['path']}` — {item['purpose']} "
-                    f"(nominated by {item['votes']}/{len(reviewers)} configured reviewers)\n"
-                )
-            sections.append(
-                "Read only these exact files as static design evidence. Do not open sibling "
-                "files, follow imports or links recursively, execute/import the reference, "
-                "delegate computation to it, or copy a prebuilt implementation. Raw reviewer "
-                "nominations were reconciled and are not additional authorization.\n"
-            )
-        else:
-            sections.append(
-                "- None selected. Do not broaden research unless the bounded fallback in Step B "
-                "is needed for framework/toolchain syntax.\n"
-            )
         sections.append(
             "\nBefore implementation, write a concise internal checklist that resolves any "
             "disagreement and covers output initialization/padding, paged addressing, causal "
@@ -2637,23 +2080,13 @@ class Campaign:
 
     def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
         """Return the only ordinary evaluator command the V1 implementation Agent should run."""
-        command = ["python", "tools/sandbox.py", "--kind", "run"]
-        if self.sandbox_hardware:
-            command += ["--hardware", self.sandbox_hardware]
-        if self.sandbox_ssh:
-            command += ["--ssh", self.sandbox_ssh]
-        elif self.sandbox_url:
-            command += ["--url", self.sandbox_url]
-        elif self.sandbox_profile:
-            command += ["--gateway-profile", self.sandbox_profile]
-        command += [
-            "--no-sync",
-            "--",
-            "python",
-            "test_kernel.py",
-            "--version",
-            f"v{n}",
-        ]
+        command = ["python3", "tools/sandbox.py", "--kind", "run", "--no-sync"]
+        if self.atrex_bench_root:
+            command += ["--mode", "full", "--version", f"v{n}"]
+        else:
+            # SOL needs the Dev compatibility route. Top-level --version, like
+            # --mode, requires Typed evaluation; pass the label to its harness.
+            command += ["--", "python3", "test_kernel.py", "--version", f"v{n}", "--no-memory"]
         shape_ids = (
             self._framework_baseline_smoke_shape_ids()
             if self.atrex_bench_root
@@ -2663,7 +2096,6 @@ class Campaign:
             command += ["--shape-id", shape_id]
         if self.atrex_bench_root:
             command += ["--timed-runs", "1"]
-        command.append("--no-memory")
         if shape_ids:
             scope = (
                 f"The supervisor selected {len(shape_ids)} opaque V0 ids spanning the baseline "
@@ -2677,27 +2109,10 @@ class Campaign:
         return shlex.join(command), scope
 
     def _framework_baseline_sandbox_directive(self) -> str:
-        """Concise V1-specific boundary without generic repeated full-evaluator examples."""
-        endpoint = (
-            self.sandbox_ssh
-            or self.sandbox_url
-            or self.sandbox_profile
-            or "agate configuration"
-        )
-        hardware = self.sandbox_hardware or "the configured remote GPU"
-        return (
-            "## V1 GPU sandbox boundary\n\n"
-            f"- Target `{hardware}` through `{endpoint}`. Every GPU import, compile, smoke, "
-            "correctness check, and timer must cross `tools/sandbox.py`; never execute "
-            "`kernel.py`, `test_kernel.py`, a profiler, or a JIT-capable GPU import on the host.\n"
-            "- Use only the bounded smoke command below during the ordinary V1 turn. Do not "
-            "run a full-workload evaluator, `--multi-seed`, a separate benchmark, or profiling.\n"
-            "- Keep `--no-memory`: the supervisor parses evaluator output and owns canonical "
-            "memory. Sandbox uploads are allowlist-only; declare inputs for any custom smoke "
-            "helper, and never upload optimizer memory or private evaluator inputs.\n"
-            "- The remote executor is supervisor-owned infrastructure. Do not start, stop, "
-            "restart, signal, reconfigure, or cancel its jobs. Report an infrastructure "
-            "failure and exit.\n"
+        from .session_io import sandbox_boundary_directive
+        return sandbox_boundary_directive(
+            self.sandbox_hardware or self.platform, self.sandbox_profile,
+            self.sandbox_url, self.sandbox_ssh,
         )
 
     def _framework_baseline_prompt(self, n: int) -> str:
@@ -3124,8 +2539,6 @@ class Campaign:
         engine = LongHorizonCampaign(
             base_campaign=self,
             max_version=self.max_iters,
-            fast_episodes=self.fast_episodes,
-            fast_trials=self.fast_trials,
             token_budget=self.token_budget,
             handoff_resumes=self.handoff_resumes,
             max_stall=self.max_stall,

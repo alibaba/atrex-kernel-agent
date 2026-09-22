@@ -3,14 +3,13 @@
 This package implements the native optimization engine used by
 `orchestrator/optimize.py`. It is not a separate command-line entry point.
 
-The Supervisor maintains each version in an isolated Git worktree; the coding Agent receives a separate persistent Git-free draft. It retains the existing engineering loop and submits `candidate_ready`, `pivot`, or `blocked` through Runtime `episode-report`. The Supervisor commits the exact measured candidate. See [handoff and promotion](../docs/supervisor-promotion.md).
+The Supervisor maintains each version in an isolated Git worktree; the coding Agent receives a separate persistent Git-free draft. It explores Directions, records Experiments and submits `candidate_ready`, `pivot`, or `blocked` through Runtime `episode-report`. The Supervisor commits the exact measured candidate. See [handoff and promotion](../docs/supervisor-promotion.md).
 
-The supervisor validates the journal and candidate commit, checks production policy, and requires a policy-matched recorded same-allocation ABBA in Full mode, reusing exact existing evidence. Fast mode uses the selected private Evaluate record. A strict correctness-passing
+The supervisor validates the journal and candidate commit, checks production policy, and requires a policy-matched recorded same-allocation ABBA for every candidate, reusing exact existing evidence. A strict correctness-passing
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
-An episode candidate commit contains only `kernel.py`. Plans, profiles, planner discussions,
-journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
+An episode candidate commit contains only `kernel.py`. Scratch diagnostics, journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
 worktree is removed.
 
 Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
@@ -24,7 +23,7 @@ promotion; `memory/vN.json` remains the canonical supervisor-owned record.
 Every canonical record carries a compact copy of all structured experiments already persisted in
 the episode journal. If the supervisor is terminated while an episode is active, the next startup
 resumes the registered episode worktree in place, including its source edits, checkpoints, journal,
-plans, profiles, and generated intermediate files. If that worktree is missing or no longer matches
+scratch files and generated intermediate state. If that worktree is missing or no longer matches
 the recorded branch and baseline, recovery falls back to archiving it and recording an
 `interrupted` `memory/vN.json`. Recovery remains idempotent across repeated termination.
 

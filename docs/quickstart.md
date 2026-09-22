@@ -29,18 +29,9 @@ t-head projects in that collection are the only PPU-specific implementation refe
 they clone over SSH (`git@github.com:t-head/...`), so initialize them with an SSH key that can reach
 that org. `reference-projects/README.md` indexes every project by vendor, DSL, and operator.
 
-The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
-configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
-repository evidence. V1, fast episodes, and full episodes each have independent Codex and Qoder
-switches. V1 and fast reviewers default off; full reviewers default on. A Codex- or Qoder-owned
-episode performs an enabled matching review in the current session to avoid recursion. The campaign
-probes a reviewer only when
-it is first enabled for an episode mode, caches that decision under `.atrex_long_horizon/`, reuses it
-after restarts, and never retries a reviewer that failed the probe. Reviews are non-persistent by
-default; an optional campaign-private Codex reviewer thread may span episodes. Disabled and
-unavailable reviewers are recorded explicitly without discarding available reviews. Enabled
-external consultations always run with maximum reasoning effort, independently of the primary
-episode's configured effort.
+Framework Baseline may use optional read-only correctness reviewers (`--v1-ask-codex`,
+`--v1-ask-qoder`; both default off). Optimization Episodes do not require external plan reviews,
+separate plan/profile files, or Phase Markers. See the [unified workflow](design.md#campaign-lifecycle).
 
 ## 1. Clone the Repository
 
@@ -56,14 +47,14 @@ cd atrex-kernel-agent
   containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
   the generalized public contract using schema `atrex.agent_problem.v1`.
 
-Production native campaigns omit detailed shapes from baseline/optimization prompts and public workspace inputs. The legacy Agent-side evaluator packager still needs a scoped private-input path; this is not yet a filesystem secrecy boundary against the coding Agent (see the isolation guide's compatibility grants). If
+Production native campaigns omit detailed shapes from baseline/optimization prompts and public workspace inputs. The Supervisor packages evaluator inputs privately. Bwrap enforces the filesystem boundary; native mode retains same-UID limitations. If
 `agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
 preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
 `reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public
 `agent_problem.json`, validates that its development cases do not duplicate evaluator cases, and
 persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
 injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
-opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape privately.
+opaque ids; pass `--shape-id` with one of those ids to profile that real shape privately.
 
 Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
 contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are
@@ -72,8 +63,8 @@ fresh workspace when resuming an older production campaign that exposed exact sh
 
 For native Atrex-Bench and SOL operators, V0 does not launch a coding Agent. The supervisor commits
 the verbatim reference wrapper, runs exactly one official full-workload base-seed evaluator, writes
-README/memory/report programmatically, and records measurement metadata in a second commit whose
-memory points to the stable source SHA. A setup Agent is retained only for derived legacy inputs.
+README and canonical memory programmatically, and records measurement metadata in a second commit whose
+memory points to the stable source SHA. Derived legacy layouts without a canonical evaluator are rejected instead of launching a Setup Agent.
 
 ## 2. Launch the Orchestrated Loop
 
@@ -94,7 +85,7 @@ layer over the same orchestrator, not a separate optimization workflow.
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
 ```bash
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
     --agent-cli qodercli \
@@ -109,7 +100,7 @@ to run `bwrap` and access only the intended GPU devices; do not attach cloud cre
 service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
@@ -234,19 +225,16 @@ verifying any deferred remote cleanup.
    framework-native V1 in production mode. When enabled, read-only reviewers provide bounded
    correctness guidance; the coding Agent implements and smoke-tests, while the supervisor owns full
    evaluation, policy review, memory, and the final commit.
-5. **Run isolated optimization episodes.** Each episode owns one candidate direction in a private
-   Git branch and worktree. By default, the first two episodes run five
-   `plan -> implement -> evaluator` trials at maximum primary-Agent reasoning effort without
-   profiling, multi-seed validation, or ABBA. Later episodes use the full
-   profile/research/plan/edit/repair loop.
-6. **Verify and promote.** Fast mode compares the fastest passing hash-matched trial with canonical
-   incumbent memory. Full mode runs an independent incumbent/candidate ABBA comparison in one
-   isolated GPU allocation. Production also applies its fail-closed policy review. Only a strict
-   passing improvement is squash-promoted.
+5. **Run isolated optimization episodes.** Each Agent gets a Git-free draft and empty `scratch/`.
+   It uses Directions, targeted research/profiling, code edits, measurements and Experiments;
+   it submits `episode-report` when ready, pivoted or blocked. Rejected reports can be corrected.
+6. **Verify and promote.** The Supervisor seals exact measured source and applies same-allocation
+   ABBA, reusing a matching record when available. Production also applies fail-closed policy
+   review. Only a passing improvement is promoted; every outcome writes canonical memory.
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-GPU evaluations and full-mode profiles use the `tools/sandbox.py` HTTP client and the Campaign-owned [Supervisor Runtime](supervisor-runtime.md) on `--sandbox-hardware`;
+GPU evaluations and profiles use the `tools/sandbox.py` HTTP client and the Campaign-owned [Supervisor Runtime](supervisor-runtime.md) on `--sandbox-hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
 
@@ -269,7 +257,7 @@ Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied thr
 To use Codex, pass `--agent-cli codex`:
 
 ```bash
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli codex --max-iters 20 --token-budget 8000000
@@ -283,8 +271,7 @@ after normalization or terminal-only fallback. The orchestrator uses `session_me
 the exact workspace or thread when stdout omits it, verifies every available usage component against
 `turn.completed.usage`, and records ledger or cleanup errors without failing the Agent run. If ledger
 observation fails during an episode resume, consecutive cumulative stdout totals still provide a
-non-duplicated invocation total while phase attribution is disabled. Optimization and
-plan-generation skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
+non-duplicated invocation total while phase attribution is disabled. Measurement, Journal and knowledge Skills stay in the campaign-scoped `.agents/skills/` tree, so the user's global
 Codex installation is not modified. Optional Codex config overrides use a JSON object or an array of
 literal `key=value` values:
 
@@ -299,7 +286,7 @@ To use Pi, select it as the backend and optionally configure its provider and mo
 
 ```bash
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli pi --max-iters 20 --token-budget 8000000
@@ -315,7 +302,7 @@ leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
 ```bash
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --workspace /path/to/runs --max-iters 20
@@ -335,7 +322,7 @@ libraries and evidence-backed framework changes are allowed. Use production mode
 framework-pure implementation:
 
 ```bash
-python orchestrator/optimize.py \
+python3 orchestrator/optimize.py \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --optimization-mode production --framework Triton \
@@ -356,13 +343,17 @@ package a non-compliant final candidate. Production runs use a separate
 leaderboard campaign.
 
 With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
-session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
-supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
-contract and immutable reference, concurrently when both are enabled. Reviewers nominate only from a
-bounded local path catalog; the supervisor reconciles their choices and injects at most two exact reference
-paths alongside the available reviews. V1 reads only that shortlist without recursively browsing siblings.
-The reviews are cached for restart and never receive private shapes or write access to the candidate. The
-coding Agent implements and smoke-tests only, without full evaluation, memory writing, or commits. The
+session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids.
+SOL V1 instead uses `--kind run --no-sync -- python3 test_kernel.py --version v1 --no-memory`:
+the version belongs to the harness, not the top-level typed shorthand, and no typed `--mode`,
+Shape selector or timing override is added. SOL has no safe subset selector, so this prescribed
+smoke already evaluates its full workload through the Dev compatibility route.
+The supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
+contract and immutable operator reference, concurrently when both are enabled. Only correctness guidance
+is injected; there is no implementation-reference catalog or shortlist. V1 may make at most one Wiki query
+for missing framework/toolchain knowledge. Reviews are cached for restart and never receive private shapes
+or write access to the candidate; caches from the retired reference-selection schema are regenerated. The
+coding Agent implements and smoke-tests only, without a separate full evaluation, memory writing, or commits. The
 supervisor then runs policy review in parallel with one combined full-workload evaluator that measures the
 base seed and checks five additional seeds, writes memory, and pins V1. Use
 `--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed
@@ -380,26 +371,16 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 
 ```text
 --max-iters N                    Hard cap on canonical versions/episodes
---fast-episodes N                Fast post-baseline episodes (default: 2; 0 disables)
 --token-budget N                 Hard token cap across episode turns (0 = no cap)
 --agent-cli CLI                  claude (default), qodercli, codex, or pi
---long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex, qoder)
 --v1-ask-codex / --no-v1-ask-codex                 Configure ask-codex for V1 (default: off)
 --v1-ask-qoder / --no-v1-ask-qoder                 Configure ask-qoder for V1 (default: off)
---fast-episode-ask-codex / --no-fast-episode-ask-codex
-                                                    Configure fast ask-codex (default: off)
---fast-episode-ask-qoder / --no-fast-episode-ask-qoder
-                                                    Configure fast ask-qoder (default: off)
---full-episode-ask-codex / --no-full-episode-ask-codex
-                                                    Configure full ask-codex (default: on)
---full-episode-ask-qoder / --no-full-episode-ask-qoder
-                                                    Configure full ask-qoder (default: on)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
---setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
+--problem-generation-timeout S   Public contract authoring timeout per attempt (default/cap: 1800s)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
 --sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
 --sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
@@ -412,13 +393,13 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
---verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
---verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 120)
---min-improvement-pct PCT        Strict gain required in fast or full verification
+--verify-repeats N               ABBA repeat pairs (default: 2)
+--verify-run-timeout S           Evaluator budget per ABBA run (default: 120)
+--min-improvement-pct PCT        Strict gain required in ABBA verification
 --arch ARCH                      Override runtime architecture detection
 ```
 
-Run `python orchestrator/optimize.py --help` for the complete current interface. Some Qoder models
+Run `python3 orchestrator/optimize.py --help` for the complete current interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 
@@ -428,39 +409,47 @@ episode, while canonical `memory/vN.json` is written only after the episode reac
 The supervisor validates that this numbered record is both parseable and committed at `HEAD` before
 it advances campaign state, including failed, pivoted, blocked, and interrupted rounds.
 
-### Direct sandbox and profiling
+### Agent measurement examples
 
-Inside a live Agent Session, use the scoped client (the Campaign already selected the target):
-
-```bash
-python3 tools/sandbox.py --no-sync -- python3 test_kernel.py --no-memory
-python3 tools/sandbox.py --sync profiles/v1 -- \
-  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
-```
-
-For standalone operator diagnostics outside an Agent Session, run the private executable from the AKA checkout. It uses operator credentials and is not mounted into Agent sandboxes:
+These commands require an active Runtime-authorized Agent session; operator endpoint flags belong
+on the orchestrator command, not these calls:
 
 ```bash
-python3 supervisor/gateway.py --workspace /path/to/campaign --hardware REMOTE_GPU \
-  --url https://your-gateway --no-sync -- python3 test_kernel.py --no-memory
-python3 supervisor/gateway.py --workspace /path/to/campaign --hardware H20 --ssh user@gpu-host \
-  --ssh-gpu 0 \
-  --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
-  --no-sync -- python3 test_kernel.py --no-memory
+python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind profile --profile-level sol --no-sync
+python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
+python3 tools/sandbox.py --kind wiki-query "Operator, target architecture, DSL and concrete question" --brief
 ```
 
-Only code and evaluator/profile inputs cross the sandbox boundary. Optimization memory, plans,
-edits, and Git state remain on the coordinator.
+Use `skills/gpu-measurement` for operations and `skills/runtime-records` for querying records,
+registering Directions/Experiments and submitting `episode-report`. Do not launch evaluators or
+profiler scripts locally. Historical results are reusable facts; Agent analysis can be revised.
 
-## 3. Inspect Outputs
+### Outputs
 
-Each optimization workspace records the full optimization trail:
+- Canonical `kernel.py` and `memory/vN.json`: incumbent source and Supervisor-generated outcomes.
+- Controller `.atrex_long_horizon/`: Campaign checkpoints, Episode archives and Session captures.
+- Private sibling `.atrex-supervisor-runtime/`: sealed measurements, Journals and promotion audits.
+- Agent draft `scratch/`: temporary requests and diagnostics; new Episodes start empty, same-Episode
+  resume preserves it. No required `plans/` or `profiles/` directory.
+- SOL campaigns package a final `submission.json` when final validation succeeds.
 
-- `kernel.py`: current best kernel at Git `HEAD`
-- `memory/live.json`: ignored, non-canonical progress for the active Long Horizon episode
-- `memory/v<N>.json`: canonical episode/version records
-- `memory/long_horizon_e<NNNN>.json`: promoted-episode evidence
-- `plans/`: evidence-based optimization plans
-- `profiles/`: profiler artifacts and extracted bottleneck evidence
-- `.atrex_long_horizon/`: restart state, journals, handoffs, telemetry, and archived attempts
-- `submission.json`: SOL-ExecBench submission output for SOL campaigns
+## Upgrading the workflow
+
+Finish any active Fast Episode with the old executable, then upgrade at an Episode boundary.
+Remove Fast/Full plan-review and long-reviewer CLI flags; use `--problem-generation-timeout`
+instead of `--setup-timeout` only if customizing public-contract authoring. No Setup Agent or
+per-mode optimization switch remains. Keep a backup of the Campaign and its private Supervisor
+store before migration; see [upgrade and rollback](design.md#upgrade-and-rollback).
+
+Relinking retires known old plan/Setup Skills and replaces conflicting current Skill discovery
+entries with canonical links. Original directories/files/links are preserved outside the workspace
+under the logged `skill-migrations` backup path; unrelated custom Skills remain untouched. If
+migration fails on permissions or a symlinked discovery root, stop the Supervisor and repair or
+back up that path before retrying. Do not delete user-edited Skill directories to force a resume.
+
+Public-contract authoring retains a 30-minute cap per attempt: the effective timeout is
+`min(--problem-generation-timeout, 1800)` seconds. A smaller positive value shortens the budget;
+a larger value does not extend it. One repair attempt is allowed after validation failure, so
+the two Agent sessions together have at most 60 minutes of timeout budget, excluding staging
+and validation overhead. An existing valid contract skips authoring entirely.

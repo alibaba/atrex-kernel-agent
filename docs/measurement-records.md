@@ -108,6 +108,28 @@ Each complete ABBA batch is persisted before the next batch starts. The checkpoi
 
 ## Optional repeated measurement
 
+Atrex-Bench full and correctness-only Evaluate default to six correctness cases per Shape (base
+plus five additional seeds). Extra cases add correctness work, not performance timing runs.
+Explicit Shape smoke defaults to one case; `--multi-seed N` overrides the count. Resolved seed/mode
+policy enters task identity, so old implicit-single-seed records are not reused under the new default.
+Before sealing a report, the Supervisor may reuse a successful full or correctness-only six-case
+record when all correctness inputs/policies match; only timing iterations and performance repetitions
+may differ. This does not relax Agent-request deduplication or ABBA acceptance identity.
+
+SOL-ExecBench does not use this six-case equivalence. Its acceptance request is the standard full
+`workload.jsonl` evaluation with no typed mode and no additional seeds. Reuse therefore requires the
+exact saved request identity, including the trusted harness, workload contract and optional
+`config.json`.
+
+SOL Evaluate identities also bind `evaluation_contract: sol_execbench_coverage_v1` for both Agent
+requests and Supervisor acceptance. Earlier unversioned records may have discarded workload
+coverage counters during projection; they remain readable but cannot satisfy a new request.
+After upgrading, the first matching SOL task is measured again under the configured one- or
+three-repetition policy, even if the old record already contains coverage counters. The new Record
+then supports normal duplicate rejection and acceptance reuse. No record deletion or manual
+invalidation is required; acceptance still checks positive, complete coverage. Atrex-Bench and
+non-Evaluate request identities are unchanged by this SOL contract marker.
+
 The default is **one** measurement. Operators may set `ATREX_AKA_MEASUREMENT_REPETITIONS=3` before starting the Campaign. Only `1` and `3` are accepted; the Agent cannot set this policy through request environment flags.
 
 Three repeats apply to full Evaluate and whole ABBA comparisons. The Runtime takes each Shape's median over the three completed measurements, then recomputes geometric/arithmetic means. ABBA aggregates candidate and baseline separately and recomputes their speedup. Correctness-only Evaluate, Profile, Dev, Check and Disassemble remain single-operation requests. A rejected or incomplete repetition cannot become a successful median. Legacy evaluation logs receive the aggregate used in the Agent response, not just the final physical repetition.
@@ -117,6 +139,11 @@ After successful repeats, the aggregate replaces only the final result marker in
 This increases GPU cost and wall time; repeats are sequential and do not multiply the enclosing deadline automatically. For repeated or multi-batch work, configure `ATREX_AKA_REQUEST_TIMEOUT_SECONDS` for the whole operation. The repetition count enters the dedup key, so switching policy does not silently reuse a result measured with another count. Dynamic changes in the remote environment behind the same target name cannot be inferred from a local request hash; use a new Campaign/storage scope when intentionally requalifying such an environment.
 
 ## Validation and rollback
+
+SOL upgrade regressions seed a retained store with unversioned responses missing coverage, then
+exercise the real Record reservation and acceptance paths: one replacement task, subsequent reuse,
+Agent duplicate rejection, unchanged legacy records, and rejection of incomplete or failed results.
+They also cover one- and three-repetition policies and Agent/acceptance identity alignment.
 
 Regression fixtures run outside the repository, per project convention. They exercise a local fake Gateway and real Supervisor subprocess/HTTP paths: all six measurement operations, exact source/result reads, bounded metadata-only listings that skip unreadable headers, cross-Session dedup, immutable identity checks, corrupt-index recovery, transient storage failure, accepted-ID polling, new-job infrastructure retry, cancellation/timeout budgets, ABBA checkpoints, default single execution and per-Shape median aggregation. Submission regressions cover HTTP/CLI rejection, bounded backoff, restart after rejection, recovery of saved legacy CLI rejections, and retained uncertainty after a lost POST response. Output checks cover non-marker diagnostics, last-marker-only aggregation, identical record reads and continued filtering of hidden-case failure logs. Coverage also includes Runtime authorization, hidden-result projection, deadlines and publication failures. These checks are not production GPU queue-time evidence or a real-model optimization-quality benchmark.
 

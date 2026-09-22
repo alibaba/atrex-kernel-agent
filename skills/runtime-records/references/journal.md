@@ -1,6 +1,6 @@
 # Journal and worked Episode example
 
-Use Runtime Journal in a controller-managed Episode; do not mix local `long_horizon.journal append/finalize` with these commands in the same Episode. Keep Setup, Fast/Full, planning, profiling, Wiki attribution, Phase Markers, and independent verification exactly as prescribed by the Episode prompt. Fast-mode experiment/evaluation minimums apply to `candidate_ready` and `pivot`, not `blocked`; a blocked report still needs a nonempty blocker and must satisfy every other report/lifecycle check.
+Use Runtime Journal in a controller-managed Episode; do not mix legacy local append/finalize commands with these tools. Plans and conclusions belong in Directions and Experiments, not mandatory separate files. Every report must satisfy the lifecycle and evidence checks; `blocked` also requires a nonempty blocker. Framework Baseline follows its own finish procedure.
 
 This example links one exploration to its measured Kernel and terminal report. It is not a mandatory
 optimization strategy or permission to run operations forbidden by the phase. Create request files
@@ -80,7 +80,7 @@ Edit `kernel.py`, then run the evaluator prescribed by the current phase. For an
 evaluation where no additional options are required:
 
 ```bash
-python3 tools/sandbox.py --kind run --mode full --no-sync
+python3 tools/sandbox.py --kind run --no-sync
 ```
 
 The response contains `gateway_record_id` and `kernel_id`; see [result formats](records.md).
@@ -171,7 +171,7 @@ proposed/deferred Directions may remain for later exploration.
 
 ## Candidate report
 
-Leave the selected measurement's exact source in `kernel.py`. The Supervisor seals the measured source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
+Leave the selected measurement's exact source in `kernel.py`. The Supervisor reuses matching six-case correctness evidence, or performs the missing check, before sealing that source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
 
 ```json
 {
@@ -193,8 +193,16 @@ Response:
 
 The selected Experiment must belong to this Episode, use `baseline`, `keep_after`, or `adopt`, and
 cite a passing Evaluate record for byte-identical current `kernel.py`. Profile/Dev/Check/Disassemble
-or ABBA alone cannot satisfy this report binding. Fulfil the phase's full validation requirements;
-custom-input or correctness-only diagnostics are not substitutes for standard performance evidence.
+or ABBA alone cannot satisfy this report binding; custom-input or correctness-only diagnostics are
+not substitutes for standard performance evidence. Before accepting `candidate_ready`, the Supervisor
+reuses a matching successful full or correctness-only Evaluate with the base case plus five additional
+seeds. Ordinary Atrex-Bench Evaluate already checks these six cases. If evidence is missing or does
+not match the complete contract, the Supervisor performs a correctness-only check without timing.
+You need not submit or cite an extra check yourself. `candidate_correctness_failed` returns a Record
+ID and repair instructions: fix the Kernel, update its full Evaluate/Experiment evidence and resubmit.
+No report is finalized or Supervisor candidate commit created on failure. Infrastructure/unknown
+outcomes are blockers, not evidence that the Kernel is incorrect. Pivot/blocked reports do not trigger
+this check; replaying an accepted report republishes handoff without rerunning it.
 Do not submit `candidate_commit` in a managed Episode. Do not write canonical `memory/vN.json`. `accepted` confirms handoff, not that
 the candidate has won the Supervisor's independent gates. Stop after successful handoff.
 
@@ -206,7 +214,7 @@ If exploration found no candidate to advance, use:
 {"status":"pivot","summary":"The explored change did not improve the incumbent; try a different direction"}
 ```
 
-Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. In Full mode, Journals may be empty if no Direction needs closing. Fast-mode pivot reports still require the configured experiment/evaluation minimums.
+Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. Journals may be empty if no Direction needs closing; do not invent experiments to satisfy a count.
 Save to the same report path and call `episode-report` as above; the response is
 `{"status":"accepted","message":"Report accepted and recorded"}`.
 
@@ -218,7 +226,7 @@ If infrastructure or missing authority prevents progress:
 {"status":"blocked","summary":"Cannot obtain the required measurement","blocker":"The Runtime reports that the GPU service is unavailable"}
 ```
 
-Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. Fast-mode minimum counts do not apply to blocked reports. A blocked report can be submitted
+Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. A blocked report can be submitted
 without an Experiment only if no Direction needs closing. Otherwise record actual Kernel-bound
 diagnostic evidence, then block/defer with an unresolved assessment. If no Gateway Record exists,
 closure remains blocked and normal session recovery handles the failure; never fabricate evidence.

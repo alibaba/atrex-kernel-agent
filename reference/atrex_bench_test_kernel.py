@@ -324,10 +324,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--multi-seed",
         type=int,
-        default=0,
+        default=None,
         help=(
-            "Additional correctness cases; v2+ runs skip performance while the "
-            "combined v1 framework-baseline gate still measures it"
+            "Additional correctness cases (default: 5, or 0 for targeted Shape smoke). "
+            "Explicit multi-seed v2+ requests retain their correctness-only behavior."
         ),
     )
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
@@ -343,9 +343,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    explicit_multi_seed = args.multi_seed is not None
+    if not explicit_multi_seed:
+        args.multi_seed = 0 if args.shape_ids else 5
     if args.multi_seed < 0:
         raise SystemExit("--multi-seed must be non-negative")
-    correctness_only = args.multi_seed > 0 and args.version not in {"v0", "v1"}
+    correctness_only = explicit_multi_seed and args.multi_seed > 0 and args.version not in {"v0", "v1"}
 
     workspace = Path(__file__).resolve().parent
     runtime_root = workspace / ATREX_BENCH_DIR
