@@ -9,7 +9,7 @@ agent in this repository to translate the task into that command and start the c
 Running sessions write live conversations and provider usage records. See
 [Session observability](session-observability.md) for paths, accounting semantics, and privacy limits.
 
-Coordinator-side Agent isolation is optional: add `--agent-sandbox bwrap` on Linux with Bubblewrap and permitted user namespaces. `--agent-sandbox none` remains the default and preserves native macOS/Linux execution. This is separate from the GPU execution sandbox. See [Agent workspace isolation](agent-workspace-isolation.md) for Provider configuration, extra read-only grants, scope limits and rollback.
+Coordinator-side Agent isolation defaults to `bwrap`: use Linux with Bubblewrap installed and permitted user namespaces. There is no automatic native fallback. On macOS run the coordinator inside Lima/Linux, or explicitly opt out with `--agent-sandbox none` (or `ATREX_AGENT_SANDBOX=none`) for native execution without filesystem isolation. This is separate from the GPU execution sandbox. See [Agent workspace isolation](agent-workspace-isolation.md) for Provider configuration, extra read-only grants, scope limits and rollback.
 
 - `bash`
 - `git`

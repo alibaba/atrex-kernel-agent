@@ -1,6 +1,6 @@
 # Agent workspace isolation
 
-AKA can launch coding-agent sessions inside a Linux Bubblewrap namespace. This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. It is opt-in: `--agent-sandbox none` remains the default on Linux and macOS.
+AKA launches coding-agent sessions inside a Linux Bubblewrap namespace by default (`--agent-sandbox bwrap`). This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. Native execution remains available only through an explicit `--agent-sandbox none` or `ATREX_AGENT_SANDBOX=none`; unsupported hosts or missing Bubblewrap fail instead of silently disabling isolation.
 
 The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) handles remote requests; [Supervisor-owned handoff](supervisor-promotion.md) keeps optimization Episode Git/control state outside a persistent Agent draft. Framework Baseline and auxiliary workflows retain their scoped behavior.
 
@@ -31,7 +31,7 @@ Direct launches omit Bubblewrap's `--die-with-parent`, preserving the native pat
 
 ## Usage and rollback
 
-Add these options to an existing campaign command:
+Campaigns use Bubblewrap by default; the explicit option below is equivalent:
 
 ```bash
 python3 orchestrator/optimize.py \
@@ -41,17 +41,17 @@ python3 orchestrator/optimize.py \
   --agent-sandbox bwrap
 ```
 
-The coordinator needs Linux, `bwrap` on `PATH`, and permission to create unprivileged user/mount/PID namespaces. A remote GPU Gateway does not satisfy that requirement. On macOS either keep the native path or run the coordinator inside a Linux VM such as Lima. A container host must permit Bubblewrap namespace/proc mounts; selecting `bwrap` never silently bypasses a failed isolation setup.
+The coordinator needs Linux, `bwrap` on `PATH`, and permission to create unprivileged user/mount/PID namespaces. A remote GPU Gateway does not satisfy that requirement. On macOS run the coordinator inside a Linux VM such as Lima, or explicitly select `none` to accept native execution without filesystem isolation. A container host must permit Bubblewrap namespace/proc mounts; `bwrap` never silently bypasses a failed isolation setup.
 
 | Setting | Meaning |
 | --- | --- |
-| `--agent-sandbox none\|bwrap` | Native execution or the opt-in namespace; default `none`, also configurable with `ATREX_AGENT_SANDBOX` |
+| `--agent-sandbox none\|bwrap` | Default `bwrap`; explicit `none` disables filesystem isolation. `ATREX_AGENT_SANDBOX` sets the CLI default; an explicit flag wins. |
 | `--bwrap-executable PATH` | Bubblewrap executable; default `bwrap`, or `ATREX_BWRAP_EXECUTABLE` |
 | `--agent-read-only-path PATH` | Explicit extra read-only host path, repeatable; mounted at its original absolute path |
 
 Additional grants are operator-authorized exceptions, not automatic dependency discovery. Broad host-home/repository roots and paths overlapping the writable workspace/session homes are rejected. Custom wrappers, external CA bundles, SSH identities, plugins or installations outside the supported layouts may need a narrowly scoped grant and corresponding client configuration. Do not grant whole credential or transcript directories to make a missing dependency disappear.
 
-To roll back the launch boundary, stop the campaign normally and launch with `--agent-sandbox none`. Existing prompts, accepted commits and evaluation policy remain compatible. Isolated Provider sessions are not automatically imported into the operator's global Home; a recovery that requires native CLI thread state must continue in the mode/Home that created it, or start a fresh Agent invocation using the existing recovery flow.
+When upgrading a previously native Campaign, explicitly retain `--agent-sandbox none` if its recovery must use the same native Provider Home; omitted flags now select `bwrap`. To disable the launch boundary, stop the campaign normally and launch with `--agent-sandbox none`. Existing prompts, accepted commits and evaluation policy remain compatible. Isolated Provider sessions are not automatically imported into the operator's global Home; a recovery that requires native CLI thread state must continue in the mode/Home that created it, or start a fresh Agent invocation using the existing recovery flow.
 
 ## Filesystem and credentials
 

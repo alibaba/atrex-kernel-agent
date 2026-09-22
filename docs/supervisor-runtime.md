@@ -152,7 +152,7 @@ Operations receive the running Gateway module instance so CLI execution as `__ma
 
 ## Platform, compatibility and rollback
 
-Native Linux/macOS (`--agent-sandbox none`) remains supported. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user.
+Agent isolation defaults to `bwrap`, requiring a Linux coordinator with Bubblewrap; macOS users can run it inside Lima. Native Linux/macOS remains supported through explicit `--agent-sandbox none` (or `ATREX_AGENT_SANDBOX=none`), never an automatic fallback. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user.
 
 With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Managed optimization Episodes use Git-free drafts; their Git, Journal, handoff and promotion audit are controller-only. Framework Baseline retains its separate initialization boundary; explicitly configured helper grants remain. Explicit operator grants remain trusted exceptions.
 

@@ -408,8 +408,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "(cannot be deduced from the op dir).",
     )
     ap.add_argument("--agent-sandbox", choices=("none", "bwrap"),
-                    default=os.environ.get("ATREX_AGENT_SANDBOX", "none"),
-                    help="Coordinator-side Agent isolation; none preserves native macOS/Linux execution (default), bwrap requires Linux.")
+                    default=os.environ.get("ATREX_AGENT_SANDBOX", "bwrap"),
+                    help="Coordinator-side Agent isolation; bwrap is the default and requires Linux. Use none explicitly for native macOS/Linux execution without filesystem isolation.")
     ap.add_argument("--bwrap-executable", default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"))
     ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
                     help="Explicit extra read-only host path granted at the same path inside the Agent sandbox (repeatable).")
