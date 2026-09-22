@@ -276,7 +276,7 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
             event_type = event.get("type")
             if event_type == "result":
                 terminal = token_usage_from_mapping(event.get("usage"))
-                if terminal.total_tokens is None:
+                if terminal.total_tokens is None and self.id != "claude":
                     terminal = token_usage_from_model_usage(event.get("modelUsage"))
                 if terminal.total_tokens is not None:
                     normalized.append(
@@ -293,7 +293,10 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
             if usage is None and isinstance(message, Mapping):
                 usage = message.get("usage")
             # Task progress counters are cumulative, not new model responses.
-            parsed = token_usage_from_mapping(usage if event_type == "assistant" else None)
+            is_main_response = self.id != "claude" or not event.get("parent_tool_use_id")
+            parsed = token_usage_from_mapping(
+                usage if event_type == "assistant" and is_main_response else None
+            )
             message_id = (
                 message.get("id")
                 if isinstance(message, Mapping)

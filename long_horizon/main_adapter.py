@@ -180,8 +180,8 @@ def session_id_from_stream(
     return codex_thread_id_from_stream(stdout)
 
 
-def tokens_from_stream(stdout: str) -> int:
-    return token_usage_from_stream(stdout)
+def tokens_from_stream(stdout: str, *, backend: str = "") -> int:
+    return token_usage_from_stream(stdout, backend=backend)
 
 
 def normalize_stream(
@@ -203,7 +203,7 @@ def normalize_stream(
         events, terminal_usage = adapter.normalize_stream(stdout)
     except Exception as exc:
         events = ()
-        terminal_usage = terminal_usage_from_stream(stdout)
+        terminal_usage = terminal_usage_from_stream(stdout, backend=agent_cli)
         observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
     capabilities = replace(
         adapter.capabilities,

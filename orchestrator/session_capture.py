@@ -62,13 +62,15 @@ def captured_observation(stdout: str, events, capabilities) -> CapturedObservati
     if total["total_tokens"] is None:
         return None
     # Legacy phases still depend on stream order. Native-only responses have no
-    # reliable position among those markers; include them in the total, not in a
-    # fabricated phase. Full per-response counters remain in token-usage.json.
+    # reliable position among those markers; do not fabricate a phase. Claude's
+    # total follows result.usage and excludes separately observed child counters.
+    # Full per-response counters remain in token-usage.json for every backend.
     normalized = [event for event in events if event.kind != "terminal_usage"]
     if not normalized:
         normalized.extend(
             NormalizedAgentEvent(0, "usage_delta", TokenUsage(**row["usage"]))
             for row in report["responses"]
+            if report["backend"] != "claude" or row["agent"] == "main"
         )
     usage = TokenUsage(**total)
     normalized.append(NormalizedAgentEvent(0, "terminal_usage", usage))

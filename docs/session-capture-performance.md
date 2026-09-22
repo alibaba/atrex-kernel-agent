@@ -45,6 +45,8 @@ This burst-output benchmark exposes capture overhead without hiding it behind mo
 
 Run from the AKA checkout containing this change. Python 3.11+ and the standard library suffice; using the measured Python/OS gives a closer comparison. The helper is created in a temporary directory, not committed. It needs no installed provider CLI.
 
+The helper below now supplies Claude's `result.usage` as well as `modelUsage`, matching the current accounting contract. The archived measurements above used the earlier modelUsage-only fixture; their raw samples and script hashes remain unchanged and are not measurements of this updated helper.
+
 <details>
 <summary>Copy-paste benchmark command (includes the complete helper)</summary>
 
@@ -126,7 +128,8 @@ def make_fixture(path, mib):
         line = json.dumps(event, separators=(',', ':')) + '\n'
         assert len(line.encode()) == 4096
         records.append(line)
-    records.append(json.dumps({'type':'result', 'modelUsage':{'synthetic':{key:value*mib*256 for key,value in counters.items()}}})+'\n')
+    total = {key:value*mib*256 for key,value in counters.items()}
+    records.append(json.dumps({'type':'result', 'usage':total, 'modelUsage':{'synthetic':total}})+'\n')
     path.write_text(''.join(records))
 
 

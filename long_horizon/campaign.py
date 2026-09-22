@@ -684,8 +684,12 @@ class LongHorizonCampaign:
             "performance": {
                 "latency_us": verification.candidate_latency_us,
                 "latency_us_geomean": verification.candidate_latency_us,
-                "latency_us_arith_mean": representative.get(
-                    "latency_us_arith_mean", verification.candidate_latency_us
+                # ABBA projections may omit this summary. Derive it from the
+                # persisted per-Shape aggregate, not the GeoMean or last repeat.
+                "latency_us_arith_mean": (
+                    sum(by_shape.values()) / len(by_shape)
+                    if by_shape
+                    else _positive_finite(representative.get("latency_us_arith_mean"))
                 ),
                 "latency_us_by_shape": by_shape if isinstance(by_shape, dict) else {},
                 "measurement_scope": "real_evaluator_shapes",
