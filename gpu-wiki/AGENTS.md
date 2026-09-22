@@ -1,14 +1,7 @@
 # GPU Wiki Agent Entry
 
-In an AKA campaign, follow the Wiki guidance and query limits in the current Episode or
-Framework Baseline prompt and the workspace's `skills/KernelWiki/SKILL.md`.
-Use `python3 tools/sandbox.py --kind wiki-query` for Session queries. The same scoped query
-is available as `gpu-wiki.query`: discover it with `python3 tools/plugin.py list`, then call
-`python3 tools/plugin.py call gpu-wiki.query --input scratch/wiki_request.json`.
-The JSON input has a `request` string and optional `max_records`, `max_bytes`, and `exclude`.
-The direct commands below remain available for standalone Wiki maintenance and queries.
-
-Read `README.md` first. This wiki is **two independent JSON record stores**, and
+Read [README.md](README.md) first, including its AKA campaign query instructions.
+This wiki is **two independent JSON record stores**, and
 which one to ask depends on whether a benchmark could prove the answer wrong.
 
 **Default door — describe your situation, do not compose a query.**

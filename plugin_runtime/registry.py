@@ -1,4 +1,4 @@
-"""AKA local plugin discovery, workspace wiring, and tool invocation."""
+"""Supervisor plugin discovery, dependency pinning, and tool invocation."""
 
 from __future__ import annotations
 
@@ -13,10 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .execution import execute_json, resolve_command
+from .files import FileBudget, IGNORED_DIRECTORIES, MAX_DOCUMENT_BYTES, tree_digest
 from .schema import PluginError, check_schema, read_json, validate_schema
 
 NAME = re.compile(r"[a-z][a-z0-9-]*")
 STATE_DIR = ".atrex_plugins"
+RUNTIME_TOOLS = {"gpu-wiki.query": "wiki-query"}
+ENV_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}")
 SKILL_ROOTS = (".claude/skills", ".qoder/skills", ".agents/skills")
 RESERVED_MOUNTS = frozenset(
     {
@@ -36,31 +39,16 @@ def local_file(root: Path, relative: str) -> Path:
     if not isinstance(relative, str):
         raise PluginError("invalid_manifest", "file path must be a string")
     path = (root / relative).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
+    if not path.is_relative_to(root.resolve()) or not path.is_file():
         raise PluginError(
             "invalid_manifest", f"missing or out-of-plugin file: {relative}"
         )
+    relative_path = path.relative_to(root.resolve())
+    if any(part in IGNORED_DIRECTORIES or part.endswith((".pyc", ".pyo")) for part in relative_path.parts):
+        raise PluginError("invalid_manifest", f"metadata cannot live in a fingerprint-excluded path: {relative}")
+    if path.stat().st_size > MAX_DOCUMENT_BYTES:
+        raise PluginError("invalid_manifest", f"plugin metadata exceeds {MAX_DOCUMENT_BYTES} bytes: {relative}")
     return path
-
-
-def tree_digest(root: Path) -> str:
-    """Fingerprint local code/data, excluding Git metadata and generated Python caches."""
-    digest = hashlib.sha256()
-    if not root.exists():
-        return "missing"
-    if root.is_file():
-        return hashlib.sha256(root.read_bytes()).hexdigest()
-    for directory, dirs, names in os.walk(root):
-        dirs[:] = sorted(
-            d for d in dirs if d not in {".git", "__pycache__", ".pytest_cache"}
-        )
-        for name in sorted(names):
-            if name == ".git" or name.endswith((".pyc", ".pyo")):
-                continue
-            path = Path(directory) / name
-            digest.update(str(path.relative_to(root)).encode())
-            digest.update(path.read_bytes())
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -84,9 +72,19 @@ class PluginRegistry:
                 "invalid_config", f"missing plugin directory: {self.plugin_dir}"
             )
         self.plugins: list[Plugin] = []
+        self.file_budget = FileBudget()
         seen = set()
         if plugin_root is None:
-            manifests = sorted(self.plugin_dir.glob("*/plugin.json"))
+            manifests = []
+            with os.scandir(self.plugin_dir) as entries:
+                for entry in entries:
+                    try:
+                        self.file_budget.visit()
+                    except ValueError as exc:
+                        raise PluginError("invalid_config", str(exc)) from exc
+                    if entry.is_dir() and (Path(entry.path) / "plugin.json").exists():
+                        manifests.append(Path(entry.path) / "plugin.json")
+            manifests.sort()
         else:
             # A Supervisor-pinned root avoids scanning/hashing unrelated plugins.
             # Keep its lexical path, as full discovery does for symlinked roots.
@@ -97,7 +95,9 @@ class PluginRegistry:
         for manifest in manifests:
             try:
                 plugin = self._load(manifest.parent)
-            except OSError as exc:
+            except PluginError:
+                raise
+            except (OSError, ValueError) as exc:
                 raise PluginError(
                     "invalid_manifest",
                     f"cannot read local plugin {manifest.parent}: {exc}",
@@ -106,12 +106,14 @@ class PluginRegistry:
                 raise PluginError("invalid_config", f"duplicate plugin id: {plugin.id}")
             seen.add(plugin.id)
             self.plugins.append(plugin)
-        self.mounts()  # Fail before installing anything on conflicting resources.
-        self.environment(Path("/workspace"))
+        self.mounts()  # Reject conflicting resource/Skill declarations at discovery.
+        # Check conflicts now; caller-provided placeholder values exist only
+        # when environment() renders a concrete invocation.
+        tuple(self._environment_declarations())
 
     def _load(self, root: Path) -> Plugin:
         manifest_path = root / "plugin.json"
-        manifest = read_json(manifest_path)
+        manifest = read_json(manifest_path.resolve(), budget=self.file_budget)
         required = {"id", "version", "api_version"}
         optional = {
             "instructions",
@@ -140,13 +142,12 @@ class PluginRegistry:
         for key in optional:
             if key in manifest and not isinstance(manifest[key], dict):
                 raise PluginError("invalid_manifest", f"{key} must be an object")
-        files = {manifest_path}
         for phase, relative in manifest.get("instructions", {}).items():
             if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", phase):
                 raise PluginError(
                     "invalid_manifest", f"invalid instruction scope: {phase}"
                 )
-            files.add(local_file(root, relative))
+            local_file(root, relative)
         if not manifest.get("tools") and not manifest.get("skills"):
             raise PluginError(
                 "invalid_manifest", "plugin must contribute tools or skills"
@@ -170,8 +171,9 @@ class PluginRegistry:
                     "output_schema",
                     "timeout_seconds",
                     "command",
+                    "runtime_tool",
                 }
-                or "command" not in tool
+                or ("command" in tool) == ("runtime_tool" in tool)
             ):
                 raise PluginError("invalid_manifest", f"invalid tool: {name}")
             if (
@@ -183,11 +185,15 @@ class PluginRegistry:
                     "invalid_manifest", f"invalid description/timeout: {name}"
                 )
             loaded = dict(tool)
-            loaded["resolved_command"] = resolve_command(root, tool)
+            if "runtime_tool" in tool:
+                expected = RUNTIME_TOOLS.get(f"{manifest['id']}.{name}")
+                if expected is None or tool["runtime_tool"] != expected:
+                    raise PluginError("invalid_manifest", f"unsupported Runtime tool: {name}")
+            else:
+                loaded["resolved_command"] = resolve_command(root, tool)
             for field in ("input_schema", "output_schema"):
                 path = local_file(root, tool[field])
-                files.add(path)
-                loaded[field] = read_json(path)
+                loaded[field] = read_json(path, budget=self.file_budget)
                 check_schema(loaded[field])
             tools[name] = loaded
         resources = {}
@@ -225,17 +231,16 @@ class PluginRegistry:
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or not isinstance(item, str):
                 raise PluginError("invalid_manifest", "invalid environment declaration")
         digest = hashlib.sha256()
-        for path in sorted(files):
-            digest.update(str(path.relative_to(root)).encode())
-            digest.update(path.read_bytes())
-        digest.update(tree_digest(root).encode())
+        # Source, manifest, schemas and instructions are all covered by this tree.
+        # Metadata parsing above is bounded separately; do not hash it twice.
+        digest.update(tree_digest(root, budget=self.file_budget).encode())
         for name, (path, _mount) in sorted(resources.items()):
             digest.update(name.encode())
             digest.update(str(path).encode())
-            digest.update(tree_digest(path).encode())
+            digest.update(tree_digest(path, budget=self.file_budget).encode())
         for name, skill in sorted(manifest.get("skills", {}).items()):
             digest.update(name.encode())
-            digest.update(tree_digest((root / skill["path"]).resolve()).encode())
+            digest.update(tree_digest((root / skill["path"]).resolve(), budget=self.file_budget).encode())
         return Plugin(root, manifest, tools, resources, digest.hexdigest())
 
     def snapshot(self) -> dict:
@@ -251,6 +256,12 @@ class PluginRegistry:
                     "commands": {
                         name: list(tool["resolved_command"])
                         for name, tool in p.tools.items()
+                        if "resolved_command" in tool
+                    },
+                    "runtime_tools": {
+                        name: tool["runtime_tool"]
+                        for name, tool in p.tools.items()
+                        if "runtime_tool" in tool
                     },
                 }
                 for p in self.plugins
@@ -289,36 +300,6 @@ class PluginRegistry:
                 "discovered plugins changed; restore the locked inputs or use a new workspace",
             )
 
-    def install(self, workspace: Path) -> None:
-        self.check_lock(workspace)
-        mounts = self.mounts()
-        for name, source in mounts.items():
-            destination = workspace / name
-            if (destination.exists() or destination.is_symlink()) and not (
-                destination.is_symlink() and destination.resolve() == source
-            ):
-                raise PluginError(
-                    "mount_conflict", f"plugin mount would replace {destination}"
-                )
-        state = workspace / STATE_DIR
-        state.mkdir(parents=True, exist_ok=True)
-        for name, source in mounts.items():
-            destination = workspace / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if not destination.is_symlink():
-                destination.symlink_to(source)
-        lock = state / "lock.json"
-        if not lock.exists():
-            lock.write_text(json.dumps(self.snapshot(), indent=2) + "\n")
-        (state / "instructions.md").write_text(self.instructions("common"))
-        ignore = workspace / ".gitignore"
-        existing = ignore.read_text() if ignore.exists() else ""
-        additions = [f"/{STATE_DIR}/", *(f"/{name}" for name in mounts)]
-        missing = [line for line in additions if line not in existing.splitlines()]
-        if missing:
-            with ignore.open("a") as stream:
-                stream.write("\n# Plugin runtime\n" + "\n".join(missing) + "\n")
-
     def catalog(self) -> list[dict]:
         return [
             {
@@ -349,44 +330,32 @@ class PluginRegistry:
             if (plugin.root / skill["path"] / "SKILL.md").is_file()
         ]
 
-    def instructions(self, phase: str, **values: str) -> str:
-        parts = ["## Enabled plugins"]
-        if not self.plugins:
-            parts.append("No plugins enabled.")
+    def _environment_declarations(self):
+        seen = set()
         for plugin in self.plugins:
-            parts.append(f"### {plugin.id} ({plugin.manifest['version']})")
-            parts.extend(
-                f"- `{plugin.id}.{name}`: {tool['description']}"
-                for name, tool in plugin.tools.items()
-            )
-            parts.extend(
-                f"- Skill `{skill['id']}` (name: `{skill['name']}`): {skill['description']} Read `{skill['path']}/SKILL.md`."
-                for skill in self.skill_catalog()
-                if skill["plugin"] == plugin.id
-            )
-            for key in dict.fromkeys(("common", phase)):
-                relative = plugin.manifest.get("instructions", {}).get(key)
-                if relative:
-                    text = local_file(plugin.root, relative).read_text()
-                    for name, value in values.items():
-                        text = text.replace("{{" + name + "}}", str(value))
-                    parts.append(text)
-        return "\n\n".join(parts)
+            for key, value in plugin.manifest.get("environment", {}).items():
+                if key in seen or key == "PLUGIN_ROOT":
+                    raise PluginError(
+                        "invalid_manifest", f"conflicting environment variable: {key}"
+                    )
+                seen.add(key)
+                yield plugin.id, key, value
 
     def environment(
         self, workspace: Path, context: dict[str, str] | None = None
     ) -> dict[str, str]:
         values = dict(context or {}, workspace=str(workspace.resolve()))
         environment = {}
-        for plugin in self.plugins:
-            for key, value in plugin.manifest.get("environment", {}).items():
-                if key in environment or key == "PLUGIN_ROOT":
-                    raise PluginError(
-                        "invalid_manifest", f"conflicting environment variable: {key}"
-                    )
-                for name, replacement in values.items():
-                    value = value.replace("{" + name + "}", replacement)
-                environment[key] = value
+        for plugin_id, key, value in self._environment_declarations():
+            for name, replacement in values.items():
+                value = value.replace("{" + name + "}", replacement)
+            if unresolved := sorted(set(ENV_PLACEHOLDER.findall(value))):
+                raise PluginError(
+                    "invalid_manifest",
+                    f"plugin {plugin_id} environment {key} has unresolved placeholders: "
+                    f"{', '.join(unresolved)}; provide their context values or fix the declaration",
+                )
+            environment[key] = value
         return environment
 
     def _tool_environment(self, plugin: Plugin) -> dict[str, str]:
@@ -402,6 +371,8 @@ class PluginRegistry:
         if plugin is None or tool_name not in plugin.tools:
             raise PluginError("tool_not_found", f"tool is not enabled: {name}")
         tool = plugin.tools[tool_name]
+        if "runtime_tool" in tool:
+            raise PluginError("runtime_required", f"{name} requires the authenticated Supervisor route")
         started = time.monotonic()
         call_id = "plugin-call-" + uuid.uuid4().hex
         status = "ok"

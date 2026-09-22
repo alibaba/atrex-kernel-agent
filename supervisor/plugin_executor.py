@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orchestrator.plugins import PluginRegistry  # noqa: E402
-from plugin_runtime.schema import decode_json  # noqa: E402
+from orchestrator.plugins import PluginRegistry
+from plugin_runtime.schema import PluginError, decode_json
+
+from supervisor.plugin_output import (
+    MAX_OUTPUT_BYTES,
+    OUTPUT_ERROR_EXIT_CODE,
+    OUTPUT_ERROR_FIELD,
+)
 
 
 def load_pinned_registry(request: dict) -> PluginRegistry:
@@ -31,8 +38,23 @@ def main() -> int:
     workspace = Path.cwd()
     # The Supervisor already applied its cached manifest environment and scoped
     # Campaign identity. Do not rebuild the unrelated catalogs to reconstruct it.
-    result = registry.call(request["tool"], request["input"], workspace, supervised=True)
-    print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+    try:
+        result = registry.call(request["tool"], request["input"], workspace, supervised=True)
+    except PluginError as error:
+        if error.code != "invalid_output":
+            raise
+        # Keep the diagnostic private; do not turn all nonzero process exits
+        # into this known-output classification.
+        traceback.print_exc(file=sys.stderr)
+        print(json.dumps({OUTPUT_ERROR_FIELD: "invalid_output"}))
+        return OUTPUT_ERROR_EXIT_CODE
+    rendered = json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n"
+    if len(rendered.encode()) > MAX_OUTPUT_BYTES:
+        # Emit a small status instead of hitting the parent executor's larger
+        # transport cap, which would otherwise erase this known outcome.
+        print(json.dumps({OUTPUT_ERROR_FIELD: "result_too_large"}))
+        return OUTPUT_ERROR_EXIT_CODE
+    sys.stdout.write(rendered)
     return 0
 
 

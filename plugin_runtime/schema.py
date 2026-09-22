@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 
+from .files import FileBudget, read_text
+
 
 class PluginError(ValueError):
     def __init__(self, code: str, message: str):
@@ -20,9 +22,9 @@ def decode_json(text: str) -> object:
     return json.loads(text, parse_constant=reject_constant)
 
 
-def read_json(path: Path) -> object:
+def read_json(path: Path, *, budget: FileBudget | None = None) -> object:
     try:
-        return decode_json(path.read_text(encoding="utf-8"))
+        return decode_json(read_text(path, budget=budget))
     except (OSError, ValueError) as exc:
         raise PluginError("invalid_config", f"cannot read JSON {path}: {exc}") from exc
 

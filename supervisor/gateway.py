@@ -92,6 +92,7 @@ from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
 )
+from supervisor.errors import GatewayConfigurationError  # noqa: E402
 from supervisor.projection import bounded_text, profile_result  # noqa: E402
 from supervisor.gateway_jobs import (  # noqa: E402
     SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
@@ -417,18 +418,27 @@ def _safe_relative(value: str) -> str:
     return normalized
 
 
-def find_agate() -> str | None:
-    """Honor an explicit operator executable; never silently bypass it."""
-    configured = os.environ.get("ATREX_AGATE_EXECUTABLE", "").strip()
+def find_agate(environment: Mapping[str, str] | None = None) -> str | None:
+    """Find the operator's client, or return None if default discovery finds none.
+
+    An invalid explicit ATREX_AGATE_EXECUTABLE raises GatewayConfigurationError;
+    it must never degrade to another executable or the direct HTTP transport.
+    Runtime requests validate using the same frozen environment as their executor.
+    """
+    environment = os.environ if environment is None else environment
+    configured = environment.get("ATREX_AGATE_EXECUTABLE", "").strip()
+    search_path = environment.get("PATH", os.defpath)
     if configured:
-        executable = shutil.which(os.path.expanduser(configured))
+        if configured.startswith("~/") and "HOME" in environment:
+            configured = str(Path(environment["HOME"]) / configured[2:])
+        executable = shutil.which(os.path.expanduser(configured), path=search_path)
         if executable is None:
-            raise FileNotFoundError(f"ATREX_AGATE_EXECUTABLE is not executable: {configured}")
+            raise GatewayConfigurationError()
         return executable
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
-    return shutil.which("agate")
+    return shutil.which("agate", path=search_path)
 
 
 def _uses_standard_oss_gateway(
@@ -4658,6 +4668,8 @@ def _main(argv: list[str] | None = None) -> int:
         label = args.kind if args.kind in DIAGNOSTIC_KINDS else "ABBA comparison"
         try:
             return operation(sys.modules[__name__], args, Path(args.workspace).resolve(), queue_wait_grace)
+        except GatewayConfigurationError:
+            raise
         except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
             raise SystemExit(
                 f"sandbox: {label} failed: {bounded_actionable_diagnostic(exc)}"
@@ -5449,6 +5461,8 @@ def main(argv: list[str] | None = None) -> int:
             status="failed",
             failure_type=type(exc).__name__,
         )
+        if isinstance(exc, GatewayConfigurationError):
+            raise SystemExit(f"sandbox: {exc} {exc.response['error']['next_action']}") from None
         raise
     finally:
         for signum, handler in previous_handlers.items():

@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from supervisor.gateway import (
-    EPISODE_EVALUATIONS_PATH, build_parser, configured_queue_wait_grace, validate_evaluation_options,
+    EPISODE_EVALUATIONS_PATH, build_parser, configured_queue_wait_grace, find_agate, validate_evaluation_options,
 )
 from supervisor.workspace import (
     MAX_FILE_BYTES, MAX_TOTAL_BYTES, InputSizeLimitError, publish, read_input, relative_path, snapshot,
@@ -34,6 +34,9 @@ from supervisor.measurement_records import JOB_ROOT_ENV, MeasurementStore
 from supervisor.measurements import QUERY_KINDS
 from supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
 from supervisor.errors import AgentRequestError, RuntimeStateError
+from supervisor.plugin_output import (
+    MAX_OUTPUT_BYTES, check_executor_output_failure, project_plugin_output, raise_output_error,
+)
 from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_HARNESS
 from .episode_workspace import EpisodeWorkspace
 
@@ -720,6 +723,11 @@ class SupervisorRuntime:
                     if parsed is not None and parsed.kind in QUERY_KINDS:
                         from supervisor.measurements import query
                         return query(self.measurements, parsed, capability.workspace)
+                    if parsed is not None and not self.config.ssh:
+                        # Invalid operator overrides are known configuration
+                        # failures, not Agent errors or unknown GPU outcomes.
+                        # Reject before staging, task reservation or execution.
+                        find_agate(environment)
                     if parsed is not None and parsed.kind != "env":
                         snapshot(capability.workspace, staged)
                         if candidate_source is not None:
@@ -929,7 +937,6 @@ class SupervisorRuntime:
             }, ensure_ascii=False).encode())
 
     def execute_plugin(self, capability: Capability, request: dict) -> dict:
-        from plugin_runtime.schema import validate_schema
         with _validating_request():
             if request == {"action": "list"}:
                 return {"exit_code": 0, "stdout": json.dumps(self.plugins.public_catalog()) + "\n", "stderr": ""}
@@ -938,14 +945,24 @@ class SupervisorRuntime:
             if not isinstance(request["tool"], str):
                 raise ValueError("tool must be a catalog name")
             tool = self.plugins.validate_call(request["tool"], request["input"])
-        if request["tool"] == "gpu-wiki.query":
+        if tool.get("runtime_tool") == "wiki-query":
             # Reuse the existing scoped, bounded Wiki executor and private audit.
             value = request["input"]
             argv = [value["request"]]
             for name in ("max_records", "max_bytes", "exclude"):
                 if name in value:
                     argv += ["--" + name.replace("_", "-"), str(value[name])]
-            return self.execute(capability, "/v1/wiki/query", {"tool": "query_nl", "argv": argv})
+            response = self.execute(capability, "/v1/wiki/query", {"tool": "query_nl", "argv": argv})
+            # The schema describes successful tool output, not executor failures.
+            # Validate after dispatch (outside _validating_request): drift is a
+            # Supervisor failure, not an Agent-repairable input error.
+            if response["exit_code"] == 0:
+                # The Wiki projection may already have truncated an oversized
+                # stdout. Classify the size before trying to decode that prefix.
+                if len(response["stdout"].encode()) > MAX_OUTPUT_BYTES:
+                    raise_output_error(request["tool"], "result_too_large")
+                project_plugin_output(request["tool"], tool["output_schema"], response["stdout"])
+            return response
         with tempfile.TemporaryDirectory(dir=self.root, prefix="plugin-") as temporary:
             staged = Path(temporary)
             with _validating_request():
@@ -968,13 +985,10 @@ class SupervisorRuntime:
             )
             self.audit_process(capability, "plugin", [request["tool"]], process)
             if process.returncode:
+                check_executor_output_failure(request["tool"], process.returncode, process.stdout)
                 # Plugin errors can contain private resources or evaluator paths.
                 raise RuntimeError("Plugin execution failed; inspect private request diagnostics")
-            result = json.loads(process.stdout)
-            validate_schema(tool["output_schema"], result, "output")
-            rendered = json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n"
-            if len(rendered.encode()) > 256 * 1024:
-                raise RuntimeError("Plugin response exceeds the public result limit")
+            rendered = project_plugin_output(request["tool"], tool["output_schema"], process.stdout)
             return {"exit_code": 0, "stdout": rendered, "stderr": ""}
 
     def _wiki_command(self, capability, tool, argv, staged, environment):

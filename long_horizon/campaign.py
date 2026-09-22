@@ -482,7 +482,6 @@ class LongHorizonCampaign:
             and state.consecutive_without_promotion > GOAL_AFTER_STALLS
         ) else "episode"
 
-
     def _expected_shape_ids(self) -> set[str] | None:
         private_reference_dir = self.base_campaign.private_reference_dir
         if private_reference_dir is None:
@@ -1384,6 +1383,7 @@ class LongHorizonCampaign:
                 "Cannot resume an unfinished Fast Episode with the unified workflow. "
                 "Finish it with the previous release, then upgrade at an Episode boundary."
             )
+        episode_mode = self._episode_mode(state, active)
         episode = int(active.get("episode", 0))
         base_commit = str(active.get("base_commit", ""))
         branch = str(active.get("episode_branch", ""))
@@ -1525,7 +1525,7 @@ class LongHorizonCampaign:
                     "violation": None,
                     "base_commit": base_commit,
                     "episode_branch": branch,
-                    "mode": self._episode_mode(state, active),
+                    "mode": episode_mode,
                     "recovered_after_supervisor_interruption": True,
                 }
                 if promoted:
@@ -1601,7 +1601,7 @@ class LongHorizonCampaign:
                 journal=journal,
                 candidate_commit=candidate_commit,
                 episode_workspace=worktree_path,
-                episode_mode=self._episode_mode(state, active),
+                episode_mode=episode_mode,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1623,7 +1623,7 @@ class LongHorizonCampaign:
                 "violation": "supervisor process interrupted",
                 "base_commit": base_commit,
                 "episode_branch": branch,
-                "mode": self._episode_mode(state, active),
+                "mode": episode_mode,
                 "candidate_commit": candidate_commit or None,
                 "summary": outcome.get("summary"),
                 "next_directions": outcome.get("next_directions"),
@@ -1829,7 +1829,10 @@ class LongHorizonCampaign:
                 agent_workspace,
                 prompt,
                 handoff_path=handoff_path,
-                handoff_resumes=max(self.handoff_resumes, GOAL_HANDOFF_RESUMES) if episode_mode == "goal" else self.handoff_resumes,
+                handoff_resumes=(
+                    max(self.handoff_resumes, GOAL_HANDOFF_RESUMES)
+                    if episode_mode == "goal" else self.handoff_resumes
+                ),
                 completion_check=lambda handoff: self._completion_check(
                     worktree,
                     journal_path,

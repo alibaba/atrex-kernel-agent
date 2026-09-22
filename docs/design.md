@@ -37,8 +37,11 @@ Episode workflow. It never changes correctness or promotion gates. See
 [Goal scheduling](../long_horizon/README.md#goal-scheduling). Operator-enabled
 [plugins](plugins.md) expose schema-described tools through the authenticated Runtime; plugin
 resources and execution remain private, while declared public Skills are copied into the workspace.
-Production reviewer timeouts have a persisted one-retry allowance with fresh isolated evidence;
-explicit service outages wait without consuming coding Episodes.
+Production reviewer execution timeouts, explicitly reported by the completed Session, have a
+persisted one-retry allowance with fresh isolated evidence. Unrelated OS/socket timeouts propagate
+without consuming that allowance; explicit service outages wait without consuming coding Episodes.
+Reviewer execution timeouts update only their separate retry budget, leaving any existing
+infrastructure outage status, count, deadline and reason unchanged.
 
 Every optimization Episode uses the same report and ABBA acceptance path. Profiling, Wiki and
 custom probes answer concrete questions, not mandatory phase checklists. Directions hold plans;

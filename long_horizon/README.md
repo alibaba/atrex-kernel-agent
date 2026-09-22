@@ -103,13 +103,21 @@ Other exits, invalid verdicts and policy violations fail without an infrastructu
 
 Retry state is private under `<Supervisor scope>/review_timeouts/` and `infrastructure/`, keyed
 by candidate evidence, backend and timeout. Agent workspace files cannot reset these budgets.
+Reads are bounded and validate the stage, counters and deadlines. Unreadable or corrupt state
+blocks validation with an operator repair hint; it is never overwritten or treated as a fresh
+budget. The Supervisor log identifies the affected file. Restore a valid same-stage backup or
+repair its permissions before resuming; do not delete the state to bypass a consumed retry budget.
 
 GPU execution continues to use the existing Measurement Record/job state machine, rather than
 an extra outer resubmission loop. It polls accepted job IDs, retries confirmed infrastructure
 outcomes, checkpoints ABBA batches, and refuses blind resubmission when the outcome is unknown.
 See [Measurement records](../docs/measurement-records.md).
 `ATREX_AGATE_EXECUTABLE`, when set, must resolve to an executable; an invalid override fails
-instead of silently choosing another Gateway wrapper.
+instead of silently choosing another Gateway wrapper or direct HTTP transport. The managed
+Runtime returns a non-repairable `gateway_configuration_invalid` error before dispatch;
+standalone Gateway CLI calls print a traceback-free `sandbox:` diagnostic. The operator must
+correct or unset the override and restart the Supervisor. Without an override, a missing
+default client still permits the explicit-URL HTTP fallback.
 
 ## Goal scheduling
 

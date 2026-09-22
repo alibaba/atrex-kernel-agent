@@ -6,6 +6,7 @@ from pathlib import Path
 from plugin_runtime import PluginError
 from plugin_runtime import PluginRegistry as Registry
 from plugin_runtime.schema import validate_schema
+from plugin_runtime.files import read_text
 
 from .constants import REPO_ROOT
 
@@ -40,15 +41,10 @@ class PluginRegistry(Registry):
             "Tools run through the Supervisor; plugin code and resources are not workspace files."
         ]
         for plugin in self.plugins:
-            # AKA's Episode/conversion/Framework Baseline prompts and mounted
-            # KernelWiki Skill own Wiki guidance. The manifest templates are for
-            # standalone plugin_runtime consumers, not a second AKA workflow.
-            if plugin.id == "gpu-wiki":
-                continue
             for key in dict.fromkeys(("common", phase)):
                 relative = plugin.manifest.get("instructions", {}).get(key)
                 if relative:
-                    text = local_file(plugin.root, relative).read_text()
+                    text = read_text(local_file(plugin.root, relative))
                     for name, value in values.items():
                         text = text.replace("{{" + name + "}}", str(value))
                     parts.append(text)

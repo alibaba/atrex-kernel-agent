@@ -238,6 +238,9 @@ def result_from_eval(
                     if metric in output:
                         value = _finite_number(output[metric])
                         if value is None:
+                            # Absent key = no observation; null = an observed
+                            # non-finite/invalid value. Keep null sticky so a
+                            # later finite case cannot hide an invalid maximum.
                             numerical_metrics[metric] = None
                         elif numerical_metrics.get(metric, 0.0) is not None:
                             numerical_metrics[metric] = max(numerical_metrics.get(metric, 0.0), value)

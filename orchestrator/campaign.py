@@ -630,13 +630,12 @@ class Campaign:
         workspace: Path,
         framework: str,
         require_gluon: bool,
+        *,
+        candidate_digest: str,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
         from .infrastructure_retry import check_review_service
 
-        candidate_digest = _production_review_digest(
-            workspace, framework, require_gluon
-        )
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
         if cached is not None:
@@ -780,7 +779,9 @@ class Campaign:
         try:
             return retry_review(
                 self.workspace, stage,
-                lambda: self._review_production_candidate_once(workspace, framework, require_gluon),
+                lambda: self._review_production_candidate_once(
+                    workspace, framework, require_gluon, candidate_digest=digest,
+                ),
             )
         except ValueError as exc:
             return [f"independent production policy review failed: {exc}"]
@@ -807,6 +808,7 @@ class Campaign:
         link_runtime(
             self.workspace,
             native_root,
+            plugin_registry=self.plugin_registry,
             is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
         )
         install_workspace_policy(
