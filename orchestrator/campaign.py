@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional
 
 from .constants import (
+    SUPPLEMENTAL_PENDING_PREFIX,
+    SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
@@ -387,6 +389,14 @@ class Campaign:
             request_timeout=request_timeout,
             queue_timeout=queue_timeout,
         ))
+        self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
+
+    def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None) -> str:
+        """Validate frozen candidate bytes using private plans and recorded GPU probes."""
+        from .numerical_policy import validate_candidate
+
+        self.start_runtime()
+        return validate_candidate(self, workspace, source=source, parent=parent)
 
     @property
     def plugin_registry(self):
@@ -399,9 +409,11 @@ class Campaign:
             OPERATOR=self.name,
         )
 
-    def measure_for_acceptance(self, workspace: Path, argv: list[str]) -> dict:
+    def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
+                               parent=None, reference_snapshot: Path | None = None) -> dict:
         self.start_runtime()
-        return self._supervisor_runtime.execute_trusted(workspace, argv)
+        return self._supervisor_runtime.execute_trusted(workspace, argv, execution_timeout=execution_timeout,
+                                                       parent=parent, reference_snapshot=reference_snapshot)
 
     def recorded_kernel(self, kernel_id: str) -> bytes:
         self.start_runtime()
@@ -1289,10 +1301,15 @@ class Campaign:
         result: Optional[dict] = None
         if not problem:
             result, problem = self._framework_baseline_external_gates(n)
-        if problem and not recovery_used:
+        numerical_repairs = 0
+        while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
+            not recovery_used or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
+        ):
             # The implementation Agent intentionally runs only a bounded smoke subset.
             # Give one focused repair turn when the authoritative combined gate finds a
             # full-domain or policy problem, then rerun the independent gates once.
+            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+                numerical_repairs += 1
             self._recover_framework_baseline(
                 problem, v0_blob, baseline_commit, pre_head
             )
@@ -1322,7 +1339,8 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
+            outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
+            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
         try:
@@ -2271,6 +2289,8 @@ class Campaign:
                 f"the candidate is not a self-contained {self.framework} implementation: "
                 + "; ".join(violations)
             )
+        if not validation_problem:
+            validation_problem = self.supplemental_numerical_feedback(self.workspace)
         return result, validation_problem
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
@@ -2399,7 +2419,7 @@ class Campaign:
         memory["masked"] = False
         memory["git_commit_hash"] = None
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        memory["correctness"] = {"status": "FAIL"}
+        memory["correctness"] = {"status": "UNKNOWN" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,
             "action_description": f"rejected {self.framework} baseline attempt",

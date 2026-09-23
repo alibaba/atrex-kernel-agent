@@ -74,6 +74,10 @@ completed task. Runtime handles infrastructure retries; follow its error guidanc
 
 ## Finish
 
+The Supervisor performs full correctness, policy and (in production) supplemental numerical
+validation after smoke. If it returns a measured counterexample, repair the implementation using
+the supplied distributions and metrics; do not change evaluator inputs, probes or thresholds.
+
 After smoke passes, leave those exact bytes in `kernel.py`, print
 `v{{N}}: framework candidate smoke-passed ({{FRAMEWORK}})`, and stop. Do not submit `episode-report`,
 write canonical memory, or commit. If blocked, state the concrete blocker and available Gateway

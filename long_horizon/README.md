@@ -66,11 +66,10 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Correctness validation
 
-The random-input acceptance policy addresses reported optimization runs in which
-the independent distribution-stress gate and numerical reviewer were too strict
-for the operators under optimization to pass, blocking further progress. Required
-multi-seed checks and correctness-passing ABBA verification remain the acceptance
-criteria, with the evaluator's existing comparison metrics and tolerances.
+Required multi-seed checks and correctness-passing ABBA remain mandatory. Production
+also uses [Supervisor-owned supplemental numerical probes](../docs/numerical-validation.md).
+The planner proposes experiments, not acceptance verdicts; only measured candidate
+failures require a Kernel repair. Invalid inputs/reference outputs go back to the planner.
 
 Correctness uses the immutable evaluator's ordinary random input generator over the
 full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
@@ -89,8 +88,9 @@ random cases; `--correctness-only` skips timing. Inputs come directly from the o
 contract rather than the Atrex-Bench seed policy.
 
 Production admission and promotion retain independent dependency/framework review.
-Numerical acceptance comes from the evaluator's random-input results. Resume checks
-production policy, then continues normal optimization and candidate verification.
+Numerical acceptance combines ordinary correctness with applicable supplemental probes.
+Plans and raw evidence live outside Agent workspaces. Resume rechecks the sealed candidate;
+matching GPU records are reused. This does not restore Fast Episodes or Agent-managed evaluators.
 
 ## Reviewer recovery and GPU reliability
 

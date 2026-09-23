@@ -88,6 +88,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
 from orchestrator.session_tail import read_regular_bytes  # noqa: E402
+from orchestrator.sandbox_config import queue_wait_grace  # noqa: E402
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
@@ -166,7 +167,6 @@ DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
 MAX_COMMAND_TIMEOUT = 600
-DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
@@ -1034,6 +1034,11 @@ def _test_kernel_script_index(
 
 def _is_test_kernel_command(parts: list[str]) -> bool:
     return _test_kernel_script_index(parts) is not None
+
+
+def _is_numerical_probe_command(parts: list[str]) -> bool:
+    """Select evaluator dependencies, never grant an acceptance verdict."""
+    return _python_script_index(parts, "numerical_probe.py") is not None
 
 
 def _shell_command_operand(
@@ -3327,14 +3332,7 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
 
 def configured_queue_wait_grace(environment: Mapping[str, str] | None = None) -> int:
     """Read the operator's remote queue budget consistently in both executors."""
-    values = os.environ if environment is None else environment
-    try:
-        grace = int(values.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)))
-    except ValueError as error:
-        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer") from error
-    if grace < 0:
-        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
-    return grace
+    return queue_wait_grace(os.environ if environment is None else environment)
 
 
 def gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
@@ -4738,7 +4736,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
-    evaluator_command = _is_test_kernel_command(args.command)
+    evaluator_command = _is_test_kernel_command(args.command) or _is_numerical_probe_command(args.command)
     profile_command = _is_profile_command(args.command)
     profile_request = gateway_kind == "profile" or profile_command
     if profile_command:
@@ -5274,10 +5272,12 @@ def _main(argv: list[str] | None = None) -> int:
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
+        from supervisor.projection import NUMERICAL_RESULT_PREFIX, numerical_result
         command_stdout = "\n".join(
-            line
+            (NUMERICAL_RESULT_PREFIX + json.dumps(numerical_result(json.loads(line[len(NUMERICAL_RESULT_PREFIX):])))
+             if line.startswith(NUMERICAL_RESULT_PREFIX) else line)
             for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
+            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX))
         )
     if command_stdout:
         print(command_stdout)
@@ -5311,7 +5311,7 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     if baseline_path:
         from supervisor.operations import validate_comparison
         validate_comparison(args)
-    evaluator = kind == "run" or bool(baseline_path)
+    evaluator = kind == "run" or bool(baseline_path) or _is_numerical_probe_command(command)
     selected = set(_evaluation_input_paths(workspace, command) if evaluator else
                    _command_input_paths(workspace, command, args.input))
     selected.add("kernel.py")

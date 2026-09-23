@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -27,6 +28,22 @@ RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+
+
+def _nonfinite_output_roles(error: object) -> tuple[str, ...]:
+    """Parse runtime diagnostics without exposing private output details."""
+    if not isinstance(error, str) or not error.strip().startswith("Non-finite output detected:"):
+        return ()
+    flags = {
+        role: re.findall(rf"\b{role}_finite\s*=\s*(True|False)\b", error)
+        for role in ("reference", "candidate")
+    }
+    if any(len(values) != 1 for values in flags.values()):
+        return ("unknown",)
+    roles = tuple(role for role, values in flags.items() if values == ["False"])
+    # A non-finite diagnostic with missing/contradictory roles is an invalid
+    # probe, never evidence that the optimization agent must repair its kernel.
+    return roles or ("unknown",)
 
 
 def _finite_number(value: object) -> float | None:
@@ -215,6 +232,7 @@ def result_from_eval(
     max_abs = 0.0
     max_rel = 0.0
     numerical_metrics = {}
+    nonfinite_outputs: set[str] = set()
     for shape_id in shape_ids:
         status = correctness_status.get(shape_id)
         status = status if isinstance(status, dict) else {}
@@ -230,10 +248,12 @@ def result_from_eval(
         for case in cases if isinstance(cases, list) else []:
             if not isinstance(case, dict):
                 continue
-            outputs = case.get("outputs")
-            for output in outputs if isinstance(outputs, list) else []:
+            outputs = [output for section in ("outputs", "mutated_inputs", "unexpected_mutations")
+                       for output in (case.get(section) or [])]
+            for output in outputs:
                 if not isinstance(output, dict):
                     continue
+                nonfinite_outputs.update(_nonfinite_output_roles(output.get("error")))
                 for metric in ("relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff", "max_elementwise_rel_diff"):
                     if metric in output:
                         value = _finite_number(output[metric])
@@ -250,6 +270,13 @@ def result_from_eval(
                     max_abs = max(max_abs, abs_diff)
                 if rel_diff is not None:
                     max_rel = max(max_rel, rel_diff)
+
+    if nonfinite_outputs:
+        failures.append("non-finite output: " + ", ".join(sorted(nonfinite_outputs)))
+        # The comparator returns zero placeholders before computing any norm.
+        # Those placeholders must not masquerade as measured zero error.
+        numerical_metrics = {name: None for name in numerical_metrics}
+        max_abs = max_rel = None
 
     latency_by_shape: dict[str, float] = {}
     if require_performance:
@@ -299,6 +326,7 @@ def result_from_eval(
     return {
         "all_pass": not failures,
         "numerical_metrics": numerical_metrics,
+        "nonfinite_outputs": sorted(nonfinite_outputs),
         "failures": failures,
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,
@@ -346,6 +374,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--atol", type=float, default=1e-2)
     parser.add_argument("--rtol", type=float, default=0.05)
+    parser.add_argument("--correctness-max-rel-l2", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--timed-runs", type=int, default=100)
     parser.add_argument("--candidate-timeout-s", type=float, default=20.0)
@@ -418,7 +447,9 @@ def main(argv: list[str] | None = None) -> int:
             "--perf-timeout-s",
             str(args.perf_timeout_s),
         ]
-        correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(workspace)
+        correctness_max_rel_l2 = args.correctness_max_rel_l2
+        if correctness_max_rel_l2 is None:
+            correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(workspace)
         if correctness_max_rel_l2 is not None:
             command.extend(
                 ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]

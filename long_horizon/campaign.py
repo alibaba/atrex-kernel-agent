@@ -35,6 +35,7 @@ from .models import (
 from .protocol import read_handoff
 from .session import LongSessionRunner
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
+from orchestrator.constants import SUPPLEMENTAL_PENDING_PREFIX
 from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
 
@@ -658,6 +659,12 @@ class LongHorizonCampaign:
             return (
                 "candidate journal must be finalized after the exact candidate commit"
             )
+        if self.base_campaign.optimization_mode == "production":
+            sealed = git_blob(worktree.path, candidate, "kernel.py")
+            # Recovered reports must not bypass the newly installed gate. Only
+            # private recorded ordinary correctness authorizes timeout skipping.
+            self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)
+            return self.base_campaign.supplemental_numerical_feedback(worktree.path, sealed)
         return ""
 
     def _copy_runtime_artifacts(
@@ -986,7 +993,7 @@ class LongHorizonCampaign:
                 "status": (
                     "PASS"
                     if measurement_complete
-                    else ("FAIL" if violation else "UNKNOWN")
+                    else ("FAIL" if violation and not violation.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),

@@ -299,6 +299,7 @@ class Capability:
     deadline: float | None = field(default=None, repr=False)
     request_id: str = ""
     journal: JournalBinding | None = None
+    parent: Capability | None = field(default=None, repr=False)
 
 
 class _Server(ThreadingHTTPServer):
@@ -603,7 +604,8 @@ class SupervisorRuntime:
 
     def _live(self, capability):
         with self.lock:
-            return not self.closed and any(value is capability for value in self.capabilities.values())
+            return (not self.closed and any(value is capability for value in self.capabilities.values())
+                    and (capability.parent is None or self._live(capability.parent)))
 
     def _acquire(self, lock, capability, deadline):
         wait_deadline = min(deadline, time.monotonic() + self.config.queue_timeout)
@@ -682,22 +684,28 @@ class SupervisorRuntime:
         finally:
             self.slots.release()
 
-    def execute_trusted(self, workspace: Path, argv: list[str]) -> dict:
+    def execute_trusted(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
+                        parent=None, reference_snapshot: Path | None = None) -> dict:
         """Controller-only execution/reuse; no Session, draft publication or HTTP switch."""
-        capability = Capability(workspace.resolve(strict=True), {})
+        capability = Capability(workspace.resolve(strict=True), {}, parent=parent)
         token = secrets.token_urlsafe(32)
         with self.lock:
             if self.closed:
                 raise RuntimeError("Supervisor Runtime is closed")
             self.capabilities[token] = capability
         try:
-            with self.request_lock(capability, time.monotonic() + self.request_timeout_seconds, "acceptance"):
-                return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True)
+            deadline = time.monotonic() + self.request_timeout_seconds
+            if parent is not None and parent.deadline is not None:
+                deadline = min(deadline, parent.deadline)
+            with self.request_lock(capability, deadline, "acceptance"):
+                return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True,
+                                    execution_timeout=execution_timeout, reference_snapshot=reference_snapshot)
         finally:
             self.revoke(token)
 
     def execute(self, capability: Capability, route: str, request: dict, *,
-                reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None) -> dict:
+                reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None,
+                execution_timeout: int | None = None, reference_snapshot: Path | None = None) -> dict:
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -780,7 +788,7 @@ class SupervisorRuntime:
                     if self.config.atrex_bench_root:
                         environment["ATREX_BENCH_RUNTIME_ROOT"] = str(self.config.atrex_bench_root)
                     if self.config.private_reference_dir:
-                        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.config.private_reference_dir)
+                        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(reference_snapshot or self.config.private_reference_dir)
                     # Keep the legacy report compiler's log alongside private records.
                     (staged / ".atrex_long_horizon").mkdir()
                     (staged / ".atrex_long_horizon/journal.json").write_text("{}")
@@ -789,6 +797,10 @@ class SupervisorRuntime:
                             if relative_path(value).parts[0] not in {"profiles", "scratch"}:
                                 raise ValueError("--sync must be inside profiles/ or scratch/")
                     command = self.config.command(staged) + argv
+                    if execution_timeout is not None:
+                        if type(execution_timeout) is not int or not 1 <= execution_timeout <= 600:
+                            raise ValueError("Trusted execution timeout must be 1–600 seconds")
+                        command[command.index("--timeout") + 1] = str(execution_timeout)
                     kind = "gateway"
             if kind == "gateway" and parsed is not None and parsed.kind != "env" and not parsed.dry_run:
                 from supervisor.measurements import execute
@@ -896,6 +908,24 @@ class SupervisorRuntime:
             evidence.update(additional_seeds=5, correctness_cases=6, evaluator="atrex_bench")
         else:
             evidence.update(additional_seeds=0, workloads=total, evaluator="sol_execbench")
+        validator = getattr(self, "numerical_validator", None)
+        if self.config.optimization_mode == "production":
+            if validator is None:
+                raise RuntimeStateError("Production numerical validator is not configured")
+            feedback = validator(capability.journal.service.git_workspace, source, parent=capability)
+            if not self._live(capability):
+                raise SessionRevokedError("Session revoked during numerical validation")
+            if feedback:
+                from .constants import SUPPLEMENTAL_REPAIR_PREFIX
+                if feedback.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+                    raise AgentRequestError(
+                        "The candidate failed a measured supplemental numerical probe; report not accepted.",
+                        code="candidate_numerical_failed", next_action=feedback,
+                    )
+                raise RuntimeStateError(
+                    "Supplemental numerical validation is incomplete; report not accepted.",
+                    code="candidate_numerical_pending", next_action=feedback,
+                )
         return evidence
 
     def execute_journal(self, capability: Capability, request: dict) -> dict:

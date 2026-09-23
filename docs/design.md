@@ -69,7 +69,8 @@ flowchart LR
 - Supervisor: bind report → selected Experiment → passing Evaluate → exact Kernel; reuse matching
   base-plus-five-seed correctness (the Atrex-Bench Evaluate default), or run the missing untimed check,
   before accepting and committing the candidate;
-  require independent policy approval in production and passing recorded ABBA; promote
+  require independent policy approval and [supplemental numerical validation](numerical-validation.md)
+  in production, plus passing recorded ABBA; promote
   only a strict improvement. Ordinary Evaluate is not an ABBA comparison.
 
 Agent-run ABBA is optional. Its exact acceptance command is injected from the verifier's effective
