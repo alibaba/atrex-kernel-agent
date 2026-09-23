@@ -32,6 +32,17 @@ deterministic V0 initialization. Framework Baseline remains a bounded implementa
 not an optimization Episode: it smoke-tests and exits; the Supervisor decides acceptance.
 Public-contract generation, when required, is a separate preprocessing session, not kernel setup.
 
+After sustained stalls, the controller can select a broader goal strategy within this same
+Episode workflow. It never changes correctness or promotion gates. See
+[Goal scheduling](../long_horizon/README.md#goal-scheduling). Operator-enabled
+[plugins](plugins.md) expose schema-described tools through the authenticated Runtime; plugin
+resources and execution remain private, while declared public Skills are copied into the workspace.
+Production reviewer execution timeouts, explicitly reported by the completed Session, have a
+persisted one-retry allowance with fresh isolated evidence. Unrelated OS/socket timeouts propagate
+without consuming that allowance; explicit service outages wait without consuming coding Episodes.
+Reviewer execution timeouts update only their separate retry budget, leaving any existing
+infrastructure outage status, count, deadline and reason unchanged.
+
 Every optimization Episode uses the same report and ABBA acceptance path. Profiling, Wiki and
 custom probes answer concrete questions, not mandatory phase checklists. Directions hold plans;
 Experiments hold evidence links and analysis. No separate plan/profile document or Agent-written
@@ -58,16 +69,18 @@ flowchart LR
 - Supervisor: bind report → selected Experiment → passing Evaluate → exact Kernel; reuse matching
   base-plus-five-seed correctness (the Atrex-Bench Evaluate default), or run the missing untimed check,
   before accepting and committing the candidate;
-  require independent policy approval in production and passing recorded ABBA; promote
+  require independent policy approval and [supplemental numerical validation](numerical-validation.md)
+  in production, plus passing recorded ABBA; promote
   only a strict improvement. Ordinary Evaluate is not an ABBA comparison.
 
 Agent-run ABBA is optional. Its exact acceptance command is injected from the verifier's effective
 configuration. Matching recorded evidence is reused; changed inputs/options/evaluator/policy can
 require another measurement. The measurement repetition policy is unchanged by workflow simplification.
 
-`--agent-sandbox none` preserves native macOS/Linux coordination with same-UID limitations.
-Linux `--agent-sandbox bwrap` provides a filesystem boundary with scoped Provider Homes and
-explicit mounts. GPU execution isolation is a separate boundary. See
+Agent execution defaults to `--agent-sandbox none`: native macOS/Linux coordination with same-UID
+access, not filesystem isolation. Opt-in `--agent-sandbox bwrap` requires Linux and Bubblewrap
+and provides a filesystem boundary with scoped Provider Homes and explicit mounts, with no
+silent native fallback. GPU execution isolation is a separate boundary. See
 [workspace isolation](agent-workspace-isolation.md) and [Supervisor Runtime](supervisor-runtime.md).
 
 ## Agent-facing workspace

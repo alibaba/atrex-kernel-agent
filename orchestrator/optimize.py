@@ -43,6 +43,7 @@ try:
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
@@ -92,6 +93,7 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
+        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
@@ -409,7 +411,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     )
     ap.add_argument("--agent-sandbox", choices=("none", "bwrap"),
                     default=os.environ.get("ATREX_AGENT_SANDBOX", "none"),
-                    help="Coordinator-side Agent isolation; none preserves native macOS/Linux execution (default), bwrap requires Linux.")
+                    help="Coordinator-side Agent isolation; none (default) uses native macOS/Linux execution without filesystem isolation. Opt in to bwrap on Linux; isolation failures never silently fall back.")
     ap.add_argument("--bwrap-executable", default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"))
     ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
                     help="Explicit extra read-only host path granted at the same path inside the Agent sandbox (repeatable).")
@@ -600,7 +602,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "--max-stall",
         type=int,
         default=0,
-        help="Optional: stop after N consecutive unpromoted episodes (0 = disabled).",
+        help="Stop after N non-promotions (0 = disabled). After 50 completed Episodes, "
+        "more than 3 stalls enable goal strategy, which takes precedence over this stop.",
     )
     ap.add_argument(
         "--convert-after",
@@ -625,6 +628,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "directory. Default: current working directory.",
     )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
+    ap.add_argument("--production-review-timeout", type=int, default=DEPENDENCY_REVIEW_TIMEOUT_S,
+                    help="Independent production reviewer timeout in seconds (default: %(default)s)")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
     from orchestrator.agent_sandbox import sandbox_executable
@@ -879,6 +884,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         framework_baseline=args.framework_baseline,
         framework_baseline_timeout=args.framework_baseline_timeout,
         handoff_resumes=args.handoff_resumes,
+        production_review_timeout=args.production_review_timeout,
         verify_repeats=args.verify_repeats,
         verify_run_timeout=args.verify_run_timeout,
         min_improvement_pct=args.min_improvement_pct,

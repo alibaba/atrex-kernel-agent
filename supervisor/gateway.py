@@ -88,11 +88,15 @@ if str(REPO_ROOT) not in sys.path:
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
 from orchestrator.session_tail import read_regular_bytes  # noqa: E402
+from orchestrator.sandbox_config import queue_wait_grace  # noqa: E402
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
 )
-from supervisor.projection import bounded_text, profile_result  # noqa: E402
+from supervisor.errors import GatewayConfigurationError  # noqa: E402
+from supervisor.projection import (  # noqa: E402
+    NUMERICAL_RESULT_PREFIX, bounded_text, numerical_result, profile_result,
+)
 from supervisor.gateway_jobs import (  # noqa: E402
     SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
 )
@@ -105,6 +109,7 @@ INPUT_SKIP_DIRS = {
     ".pytest_cache",
     ".ruff_cache",
     ".atrex_environment",
+    ".atrex_plugins",
     # Memory is optimizer state owned and updated by the local agent.  The pod
     # receives only code/harness inputs and returns test output/profile files.
     "memory",
@@ -130,6 +135,7 @@ INPUT_SKIP_PATHS = {
     # are deliberately local-only.  Omitting these also leaves useful headroom
     # below the gateway worker's per-argument limit.
     "tools/sandbox.py",
+    "tools/plugin.py",
     "tools/local_gateway.py",
     "tools/memory_manager.py",
     # The durable host-side monitor is never invoked inside a GPU worker.  It
@@ -163,7 +169,6 @@ DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
 MAX_COMMAND_TIMEOUT = 600
-DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
@@ -415,12 +420,27 @@ def _safe_relative(value: str) -> str:
     return normalized
 
 
-def find_agate() -> str | None:
-    """Find agate beside the active Python before consulting the shell PATH."""
+def find_agate(environment: Mapping[str, str] | None = None) -> str | None:
+    """Find the operator's client, or return None if default discovery finds none.
+
+    An invalid explicit ATREX_AGATE_EXECUTABLE raises GatewayConfigurationError;
+    it must never degrade to another executable or the direct HTTP transport.
+    Runtime requests validate using the same frozen environment as their executor.
+    """
+    environment = os.environ if environment is None else environment
+    configured = environment.get("ATREX_AGATE_EXECUTABLE", "").strip()
+    search_path = environment.get("PATH", os.defpath)
+    if configured:
+        if configured.startswith("~/") and "HOME" in environment:
+            configured = str(Path(environment["HOME"]) / configured[2:])
+        executable = shutil.which(os.path.expanduser(configured), path=search_path)
+        if executable is None:
+            raise GatewayConfigurationError()
+        return executable
     adjacent = Path(sys.executable).resolve().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
-    return shutil.which("agate")
+    return shutil.which("agate", path=search_path)
 
 
 def _uses_standard_oss_gateway(
@@ -1018,6 +1038,11 @@ def _is_test_kernel_command(parts: list[str]) -> bool:
     return _test_kernel_script_index(parts) is not None
 
 
+def _is_numerical_probe_command(parts: list[str]) -> bool:
+    """Select evaluator dependencies, never grant an acceptance verdict."""
+    return _python_script_index(parts, "numerical_probe.py") is not None
+
+
 def _shell_command_operand(
     command: list[str], executable_index: int
 ) -> tuple[str, int] | None:
@@ -1177,7 +1202,7 @@ def evaluation_policy(command: list[str], mode: str | None = None) -> dict[str, 
     legacy_check = (seed_value is not None and additional > 0
                     and str(_option_value(command, "--version", "v0")) not in {"v0", "v1"})
     return {"schema_version": 1, "num_correctness_cases": 1 + additional,
-            "mode": mode or ("correctness_only" if legacy_check else "full")}
+            "mode": mode or ("correctness_only" if legacy_check or "--correctness-only" in _command_parts(command) else "full")}
 
 
 def read_json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
@@ -3309,14 +3334,7 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
 
 def configured_queue_wait_grace(environment: Mapping[str, str] | None = None) -> int:
     """Read the operator's remote queue budget consistently in both executors."""
-    values = os.environ if environment is None else environment
-    try:
-        grace = int(values.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)))
-    except ValueError as error:
-        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer") from error
-    if grace < 0:
-        raise ValueError("ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
-    return grace
+    return queue_wait_grace(os.environ if environment is None else environment)
 
 
 def gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
@@ -4650,6 +4668,8 @@ def _main(argv: list[str] | None = None) -> int:
         label = args.kind if args.kind in DIAGNOSTIC_KINDS else "ABBA comparison"
         try:
             return operation(sys.modules[__name__], args, Path(args.workspace).resolve(), queue_wait_grace)
+        except GatewayConfigurationError:
+            raise
         except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
             raise SystemExit(
                 f"sandbox: {label} failed: {bounded_actionable_diagnostic(exc)}"
@@ -4718,7 +4738,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
-    evaluator_command = _is_test_kernel_command(args.command)
+    evaluator_command = _is_test_kernel_command(args.command) or _is_numerical_probe_command(args.command)
     profile_command = _is_profile_command(args.command)
     profile_request = gateway_kind == "profile" or profile_command
     if profile_command:
@@ -5254,11 +5274,25 @@ def _main(argv: list[str] | None = None) -> int:
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
-        command_stdout = "\n".join(
-            line
-            for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX))
-        )
+        projected = []
+        for line in command_stdout.splitlines():
+            if line.startswith(NUMERICAL_RESULT_PREFIX):
+                try:
+                    payload = json.loads(line[len(NUMERICAL_RESULT_PREFIX):])
+                    if not isinstance(payload, dict):
+                        continue
+                    line = NUMERICAL_RESULT_PREFIX + json.dumps(
+                        numerical_result(payload), allow_nan=False,
+                    )
+                except (ValueError, TypeError, AttributeError, RecursionError, OverflowError):
+                    # A killed probe can leave a partial receipt. Never replay
+                    # raw private diagnostics or discard the other valid markers
+                    # and remote exit code because one receipt is malformed.
+                    continue
+                projected.append(line)
+            elif line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)):
+                projected.append(line)
+        command_stdout = "\n".join(projected)
     if command_stdout:
         print(command_stdout)
     if remote_stderr and not hide_evaluator_details:
@@ -5291,7 +5325,7 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
     if baseline_path:
         from supervisor.operations import validate_comparison
         validate_comparison(args)
-    evaluator = kind == "run" or bool(baseline_path)
+    evaluator = kind == "run" or bool(baseline_path) or _is_numerical_probe_command(command)
     selected = set(_evaluation_input_paths(workspace, command) if evaluator else
                    _command_input_paths(workspace, command, args.input))
     selected.add("kernel.py")
@@ -5441,6 +5475,8 @@ def main(argv: list[str] | None = None) -> int:
             status="failed",
             failure_type=type(exc).__name__,
         )
+        if isinstance(exc, GatewayConfigurationError):
+            raise SystemExit(f"sandbox: {exc} {exc.response['error']['next_action']}") from None
         raise
     finally:
         for signum, handler in previous_handlers.items():

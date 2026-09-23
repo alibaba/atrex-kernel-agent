@@ -13,6 +13,7 @@ from .session_tail import read_regular_bytes
 
 WORKSPACE_ROLE_ENV = "ATREX_AGENT_WORKSPACE_ROLE"
 WORKSPACE_LAYOUTS = {
+    "numerical-review": (("review_request.json", "candidate", "trusted", "instructions.md", "driver.py", "transport.py"), ("numerical_review.json",)),
     "production-review": (("review_request.json", "candidate"), ("dependency_review.json",)),
     "problem-generation": (
         ("reference.py", "input.py", "shapes.json", "metadata.json"),
@@ -39,6 +40,7 @@ class AuxiliaryWorkspace:
         *, input_files: dict[str, Path] | None = None,
     ):
         self.workspace = workspace
+        self.role = role
         self.inputs, self.outputs = WORKSPACE_LAYOUTS[role]
         input_files = dict(input_files or {})
         if set(input_files) - set(self.inputs):
@@ -98,6 +100,12 @@ class AuxiliaryWorkspace:
                 os.replace(temporary, self.workspace / name)
             finally:
                 Path(temporary).unlink(missing_ok=True)
+
+    def recover_numerical_plan(self) -> None:
+        """Recover a timeout artifact as untrusted planner data, not an accepted report."""
+        if self.role != "numerical-review":
+            raise ValueError("Timeout artifact recovery requires a numerical planner")
+        self.publish()
 
     def close(self) -> None:
         primary_error = sys.exception()

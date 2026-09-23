@@ -18,6 +18,8 @@ run ABBA, or add a separate benchmark.
 - Additional constraints: {{NOTES}}
 {{AGENT_RUNTIME}}
 
+{{PLUGINS}}
+
 {{HARDWARE}}
 {{SANDBOX}}
 {{EVALUATOR}}
@@ -71,6 +73,10 @@ candidate, and rerun the same command. Read existing records rather than repeati
 completed task. Runtime handles infrastructure retries; follow its error guidance if returned.
 
 ## Finish
+
+The Supervisor performs full correctness, policy and (in production) supplemental numerical
+validation after smoke. If it returns a measured counterexample, repair the implementation using
+the supplied distributions and metrics; do not change evaluator inputs, probes or thresholds.
 
 After smoke passes, leave those exact bytes in `kernel.py`, print
 `v{{N}}: framework candidate smoke-passed ({{FRAMEWORK}})`, and stop. Do not submit `episode-report`,

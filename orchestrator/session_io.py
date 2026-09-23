@@ -37,6 +37,7 @@ from .environment_recovery import (
 )
 from .hardware import hardware_vendor
 from .recovery_processes import spawn_owned_session
+from .sandbox_config import queue_wait_grace
 from .workspace_state import speedup_vs_reference
 
 
@@ -504,7 +505,14 @@ def _sandbox_command(
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    effective_timeout = wall_timeout if wall_timeout is not None else timeout + 240
+    # The gateway wait includes GPU queueing; --timeout bounds remote execution.
+    # Keep the outer process alive for the same queue grace used by sandbox.py.
+    if wall_timeout is not None:
+        effective_timeout = wall_timeout
+    else:
+        uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
+        grace = 0 if uses_ssh else queue_wait_grace(environment)
+        effective_timeout = timeout + grace + 240
     raise_if_environment_blocked()
     process = spawn_owned_session(
         cmd,

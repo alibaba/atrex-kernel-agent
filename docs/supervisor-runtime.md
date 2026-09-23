@@ -41,6 +41,7 @@ The service listens on `127.0.0.1` with a random port. Its authenticated endpoin
 | --- | --- |
 | `POST /v1/gateway/execute` | `{"argv": ["--kind", "run", "--no-sync"]}` |
 | `POST /v1/wiki/query` | `{"tool": "query_hardware", "argv": ["--list", "products"]}` |
+| `POST /v1/plugins/execute` | `{"action":"list"}` or `{"action":"call","tool":"gpu-wiki.query","input":{"request":"..."}}` |
 
 `GET /healthz` is an unauthenticated liveness check without Campaign data. Responses preserve the CLI boundary: `{"exit_code": 0, "stdout": "...", "stderr": "..."}`. The client prints those streams and returns the exit code; Agents do not need to write HTTP requests or handle bearer tokens themselves.
 
@@ -94,6 +95,8 @@ Agent-authored `--input-path`, `--shapes-path` and `--baseline-path` files use d
 Check/Disassemble and ABBA convert expected validation, I/O and execution failures into bounded `sandbox: ...` CLI errors rather than Python tracebacks. ABBA validates each nonblank `workload.jsonl` record as an object with a unique, non-empty string `uuid`; malformed records identify the physical line number and ask the operator to repair the workload contract before GPU submission. Failed ABBA child processes report the batch number, exit code and up to 4,000 characters of nested stderr, preserving its beginning and end when truncated. Timeouts or malformed results also retain bounded stderr and warn against blind resubmission. Existing generalized-result projection still withholds private diagnostics from Agents.
 
 The Gateway retains its supported-contract Dev fallback. Invalid explicit custom-input or new typed options fail rather than silently running a different request. Physical job execution now polls known IDs and retries confirmed terminal infrastructure failures under the [measurement recovery policy](measurement-records.md#failure-and-recovery-policy). There is no HTTP-level blind resubmission: a broken connection can leave an unknown remote outcome. The existing independent Supervisor verifier invokes `supervisor/gateway.py` directly and retains its full diagnostic format and promotion rules; Campaign Record IDs and deduplication apply to the managed HTTP route, not standalone verifier calls.
+
+`find_agate()` returns `None` only when no explicit executable is configured and default discovery finds no client; an explicit Gateway URL can still use direct HTTP. An invalid `ATREX_AGATE_EXECUTABLE` instead raises `GatewayConfigurationError`, with no alternate executable or HTTP fallback. Managed Gateway requests check the frozen executor environment before staging or reserving a measurement and return HTTP 503, `repairable: false`, `error.code: "gateway_configuration_invalid"`, and an operator repair hint. This is a known pre-dispatch configuration failure, not an unknown job outcome. Record queries, CLI help and SSH execution do not require an Agate client. The standalone Gateway CLI converts the same error to a traceback-free `sandbox:` diagnostic. Neither response exposes the configured private path.
 
 ## Wiki
 
@@ -151,7 +154,7 @@ Operations receive the running Gateway module instance so CLI execution as `__ma
 
 ## Platform, compatibility and rollback
 
-Native Linux/macOS (`--agent-sandbox none`) remains supported. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user.
+Agent execution defaults to `none` on Linux/macOS. HTTP routing and authorization are still used, but native execution is **not filesystem isolation**: an unsandboxed Agent retains the operating-system access of its user. Opt-in `--agent-sandbox bwrap` (or `ATREX_AGENT_SANDBOX=bwrap`) requires a Linux coordinator with Bubblewrap; macOS users can run it inside Lima. Explicit bwrap requests never silently fall back to native execution.
 
 With `--agent-sandbox bwrap`, the Agent does not receive the private evaluator checkout, private reference directory, Supervisor storage or Gateway credentials. Existing workspace evaluator copies needed by the independent verifier are masked, and old Agate configuration copies in resumed Provider Homes are also masked. The shared host network permits loopback Runtime and model access. Managed optimization Episodes use Git-free drafts; their Git, Journal, handoff and promotion audit are controller-only. Framework Baseline retains its separate initialization boundary; explicitly configured helper grants remain. Explicit operator grants remain trusted exceptions.
 

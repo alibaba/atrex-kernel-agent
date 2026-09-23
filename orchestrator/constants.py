@@ -25,6 +25,8 @@ CONVERT_PERF_TOL = (
 DEFAULT_CONVERT_AFTER = (
     3  # mandatory Triton->Gluon escalation after three consecutive stalls
 )
+SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
+SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
 DEFAULT_HANDOFF_RESUMES = 2
 DEFAULT_VERIFY_REPEATS = 2
 DEFAULT_VERIFY_RUN_TIMEOUT = 120

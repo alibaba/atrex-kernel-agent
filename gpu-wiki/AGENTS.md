@@ -1,6 +1,7 @@
 # GPU Wiki Agent Entry
 
-Read `README.md` first. This wiki is **two independent JSON record stores**, and
+Read [README.md](README.md) first, including its AKA campaign query instructions.
+This wiki is **two independent JSON record stores**, and
 which one to ask depends on whether a benchmark could prove the answer wrong.
 
 **Default door — describe your situation, do not compose a query.**
