@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS
+from orchestrator.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, SUPPLEMENTAL_PENDING_PREFIX
 from orchestrator.hardware import hardware_vendor
 
 from . import main_adapter
@@ -234,6 +234,8 @@ def _latest_complete_episode_performance(
         kernel_bytes = kernel_path.read_bytes()
         kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
         kernel_mtime = kernel_path.stat().st_mtime
+        manifest = episode_workspace / "solution.json"
+        solution_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None
     except (OSError, UnicodeError):
         return None
     for line in reversed(lines):
@@ -251,6 +253,12 @@ def _latest_complete_episode_performance(
         ):
             continue
         schema_version = payload.get("schema_version")
+        if isinstance(schema_version, int) and schema_version >= 3:
+            if "solution_sha256" not in payload or payload["solution_sha256"] != solution_sha256:
+                continue
+        elif solution_sha256 is not None:
+            # Legacy receipts do not certify a candidate with a manifest.
+            continue
         recorded_kernel_sha256 = payload.get("kernel_sha256")
         if isinstance(schema_version, int) and schema_version >= 2:
             if recorded_kernel_sha256 != kernel_sha256:
@@ -330,9 +338,13 @@ def _episode_head_matches_incumbent(
     if episode_workspace is None:
         return False
     try:
-        return (episode_workspace / "kernel.py").read_bytes() == (
-            workspace / "kernel.py"
-        ).read_bytes()
+        for name in ("kernel.py", "solution.json"):
+            candidate, incumbent = episode_workspace / name, workspace / name
+            if name == "solution.json" and not candidate.exists() and not incumbent.exists():
+                continue
+            if candidate.read_bytes() != incumbent.read_bytes():
+                return False
+        return True
     except OSError:
         return False
 
@@ -761,8 +773,8 @@ class LongHorizonCampaign:
     ) -> VerificationResult:
         """Score the final recorded evaluator result without launching ABBA.
 
-        ``tools/sandbox.py`` fingerprints ``kernel.py`` in every episode result.  The
-        reader below selects a complete passing trial result whose fingerprint matches
+        ``tools/sandbox.py`` fingerprints ``kernel.py`` and ``solution.json`` in
+        every episode result. The reader below selects a complete passing trial result whose fingerprint matches
         the final selected candidate, then compares that measurement with canonical
         incumbent memory.  This deliberately trades statistical rigor for turnaround.
         """
@@ -781,7 +793,7 @@ class LongHorizonCampaign:
                 None,
                 error=(
                     "fast mode requires one complete passing evaluator result for the "
-                    "final kernel.py"
+                    "final kernel.py and solution.json pair"
                 ),
                 artifact=artifact,
             )
@@ -920,7 +932,9 @@ class LongHorizonCampaign:
             return (
                 "candidate journal must be finalized after the exact candidate commit"
             )
-        return ""
+        # Run while the coding session is still resumable. A measured probe
+        # failure becomes focused repair feedback, not a terminal rejection.
+        return self.base_campaign._supplemental_numerical_feedback(worktree.path)
 
     def _copy_runtime_artifacts(
         self, worktree: EpisodeWorktree, episode_dir: Path
@@ -1260,7 +1274,9 @@ class LongHorizonCampaign:
                 "status": (
                     "PASS"
                     if measurement_complete
-                    else ("FAIL" if violation else "UNKNOWN")
+                    else ("FAIL" if violation and not violation.startswith(
+                        SUPPLEMENTAL_PENDING_PREFIX
+                    ) else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),
@@ -1321,6 +1337,9 @@ class LongHorizonCampaign:
                     "production policy rejected candidate: "
                     + "; ".join(policy_violations)
                 )
+        if not violation:
+            # Normally cached by _completion_check; also covers recovered handoffs.
+            violation = self.base_campaign._supplemental_numerical_feedback(worktree.path)
         verification: VerificationResult | None = None
         accepted = False
         if not violation:

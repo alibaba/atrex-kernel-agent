@@ -20,6 +20,8 @@ from typing import Optional
 
 from . import agent_runtime as _agent_runtime
 from .constants import (
+    SUPPLEMENTAL_PENDING_PREFIX,
+    SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
@@ -206,8 +208,8 @@ class Campaign:
     v1_ask_qoder: bool = False
     fast_episode_ask_codex: bool = False
     fast_episode_ask_qoder: bool = False
-    full_episode_ask_codex: bool = True
-    full_episode_ask_qoder: bool = True
+    full_episode_ask_codex: bool = False
+    full_episode_ask_qoder: bool = False
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
@@ -1451,10 +1453,16 @@ class Campaign:
         result: Optional[dict] = None
         if not problem:
             result, problem = self._framework_baseline_external_gates(n)
-        if problem and not recovery_used:
+        numerical_repairs = 0
+        while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
+            not recovery_used
+            or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
+        ):
             # The implementation Agent intentionally runs only a bounded smoke subset.
-            # Give one focused repair turn when the authoritative combined gate finds a
-            # full-domain or policy problem, then rerun the independent gates once.
+            # Ordinary failures retain one repair turn. Supplemental counterexamples
+            # get their own bounded repair budget even if bring-up already used it.
+            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+                numerical_repairs += 1
             self._recover_framework_baseline(
                 problem, v0_blob, baseline_commit, pre_head
             )
@@ -1484,7 +1492,8 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
+            outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
+            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
         try:
@@ -2730,7 +2739,21 @@ class Campaign:
                 f"the candidate is not a self-contained {self.framework} implementation: "
                 + "; ".join(violations)
             )
+        if not validation_problem:
+            validation_problem = self._supplemental_numerical_feedback(
+                standard_correctness_passed=True
+            )
         return result, validation_problem
+
+    def _supplemental_numerical_feedback(
+        self, workspace: Path | None = None, *, standard_correctness_passed: bool = False
+    ) -> str:
+        from .numerical_policy import supplemental_feedback
+
+        return supplemental_feedback(
+            self, workspace or self.workspace,
+            standard_correctness_passed=standard_correctness_passed,
+        )
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
         """Validate V1 once: base-seed performance plus five extra correctness cases."""
@@ -2817,7 +2840,7 @@ class Campaign:
     ) -> None:
         """Run one recovery session; unexpected exits invoke the progress supervisor."""
         print(
-            f"[orchestrator] WARNING: framework baseline rejected ({problem}); "
+            f"[orchestrator] framework baseline needs repair ({problem}); "
             "starting one recovery session",
             file=sys.stderr,
             flush=True,
@@ -2858,7 +2881,8 @@ class Campaign:
         memory["masked"] = False
         memory["git_commit_hash"] = None
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        memory["correctness"] = {"status": "FAIL"}
+        validation_incomplete = problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
+        memory["correctness"] = {"status": "UNKNOWN" if validation_incomplete else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,
             "action_description": f"rejected {self.framework} baseline attempt",
@@ -2869,7 +2893,7 @@ class Campaign:
             memory["pitfalls_and_fixes"] = pitfalls
         pitfalls.append(
             {
-                "error_type": "production_policy"
+                "error_type": "validation_incomplete" if validation_incomplete else "production_policy"
                 if "self-contained" in problem
                 else "correctness",
                 "error_message": problem,

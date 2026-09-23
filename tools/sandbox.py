@@ -88,6 +88,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
+from orchestrator.sandbox_config import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
@@ -160,7 +161,6 @@ DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
 MAX_COMMAND_TIMEOUT = 600
-DEFAULT_QUEUE_WAIT_GRACE = 14_400
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
@@ -2792,7 +2792,7 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
 def _report_infrastructure_failure(job: dict) -> bool:
     """Preserve the failure category without revealing private evaluator details."""
     error = job.get("error")
-    if (isinstance(error, dict) and error.get("class") == "infra"
+    if (isinstance(error, dict) and (error.get("error_class") or error.get("class")) == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
         print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
@@ -3709,8 +3709,11 @@ def _record_episode_evaluation(
         kernel_sha256 = hashlib.sha256((workspace / "kernel.py").read_bytes()).hexdigest()
     except OSError:
         kernel_sha256 = None
+    manifest = workspace / "solution.json"
+    solution_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
+        "solution_sha256": solution_sha256,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "gateway_kind": gateway_kind,
         "job_id": str(job_id) if job_id else None,
@@ -3825,11 +3828,29 @@ def _public_numerical_result_line(line: str) -> str:
     for row in payload.get("runs", []):
         item = {key: row.get(key) for key in (
             "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
-            "shape_count", "seeds", "world_size", "selection_digest", "numerical_metrics")}
+            "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
+        # Preserve the driver's failure receipt across the privacy boundary.
+        # Raw evaluator/input exceptions can contain hidden workload values.
+        item["input_error"] = (
+            "input generation or evaluator execution incomplete; private diagnostics withheld"
+            if row.get("input_error") else ""
+        )
         result = row.get("result")
         item["result"] = ({key: result.get(key) for key in (
             "all_pass", "max_abs_err", "max_rel_err", "evaluator")}
             if isinstance(result, dict) else None)
+        if isinstance(result, dict):
+            item["result"]["nonfinite_outputs"] = [
+                role for role in ("reference", "candidate", "unknown")
+                if role in result.get("nonfinite_outputs", [])
+            ]
+            metrics = result.get("numerical_metrics") or {}
+            item["result"]["numerical_metrics"] = {
+                key: value for key, value in metrics.items()
+                if key in {"relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff",
+                           "max_elementwise_rel_diff", "max_abs_err", "max_rel_err"}
+                and (value is None or type(value) in {int, float} and math.isfinite(value))
+            }
         public["runs"].append(item)
     if payload.get("error"):
         public["error"] = "numerical evaluator failed; private diagnostics withheld"
@@ -4201,17 +4222,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
-        queue_wait_grace = int(
-            os.environ.get(
-                "ATREX_SANDBOX_QUEUE_WAIT_GRACE", str(DEFAULT_QUEUE_WAIT_GRACE)
-            )
-        )
+        queue_wait_grace = configured_queue_wait_grace(os.environ)
     except ValueError as exc:
-        raise SystemExit(
-            "sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be an integer"
-        ) from exc
-    if queue_wait_grace < 0:
-        raise SystemExit("sandbox: ATREX_SANDBOX_QUEUE_WAIT_GRACE must be non-negative")
+        raise SystemExit(f"sandbox: {exc}") from exc
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
     args.health_command = combined_health_command(

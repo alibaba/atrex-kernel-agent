@@ -12,7 +12,9 @@ incumbent and candidate in an exact same-allocation ABBA schedule. A strict corr
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
-An episode candidate commit contains only `kernel.py`. Plans, profiles, planner discussions,
+An episode candidate commit changes `kernel.py` and may update its `solution.json` manifest. Both
+files must match the reviewed commit and are promoted together, so framework conversions retain
+their matching language, dependency, and source-role declarations. Plans, profiles, planner discussions,
 journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
 worktree is removed.
 
@@ -71,11 +73,9 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Correctness validation
 
-The random-input acceptance policy addresses reported optimization runs in which
-the independent distribution-stress gate and numerical reviewer were too strict
-for the operators under optimization to pass, blocking further progress. Required
-multi-seed checks and correctness-passing ABBA verification remain the acceptance
-criteria, with the evaluator's existing comparison metrics and tolerances.
+Required multi-seed checks, independent dependency/framework review and
+correctness-passing ABBA verification use the evaluator's existing metrics and
+tolerances. Numerical review adds a bounded experiment-and-repair loop.
 
 Correctness uses the immutable evaluator's ordinary random input generator over the
 full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
@@ -88,12 +88,84 @@ apply. The transport adapter and typed sandbox requests use the same selection.
 V1 runs the base random case plus five additional correctness cases. Optimization
 episodes retain their required random-seed checks, and candidate promotion requires
 correctness-passing incumbent/candidate ABBA evaluation. `--multi-seed N` requests
-N additional random cases; `--correctness-only` skips timing. Inputs come directly
-from the operator's `input.py` without distribution rewriting or suite authoring.
+N additional random cases; `--correctness-only` skips timing. Ordinary validation
+uses the operator's original `input.py` generator.
 
-Production admission and promotion retain independent dependency/framework review.
-Numerical acceptance comes from the evaluator's random-input results. Resume checks
-production policy, then continues normal optimization and candidate verification.
+The numerical reviewer may suggest up to three targeted distributions with
+candidate and contract evidence. It has no rejection verdict. The supervisor
+executes them through the immutable evaluator in isolated GPU allocations, using
+at most three matching workloads, two seeds and all ranks per distribution. Public
+input constraints select the relevant dispatch regime without disclosing hidden
+workloads. Generators address actual tensor ABI leaves (including `lhs.0` for tuple
+members) and preserve unmentioned structural inputs. Supplemental floating-point
+outputs use the evaluator's relative L2 comparator with a fixed threshold of
+`1e-3` per output tensor (FP4 retains its benchmark threshold of `0.2`):
+`||candidate - reference||2 / max(||reference||2, 1e-12)`.
+The non-FP4 bound is an explicit supplemental accuracy policy: at most 0.1%
+normalized aggregate error on regenerated distributions. It is not mathematically
+equivalent to the ordinary allclose tolerances, so passing ordinary validation
+alone does not establish supplemental correctness. The FP4 exception preserves
+the benchmark's quantization error budget. This replaces elementwise allclose for these regenerated distributions; absolute
+and elementwise relative errors remain diagnostic. Non-finite outputs, structural
+mismatches and forbidden input mutations still fail through the evaluator.
+Supplemental receipts retain only the role labels `reference` / `candidate` for
+non-finite outputs, or `unknown` when the runtime diagnostic cannot establish the
+roles. Unknown roles require planner validation rather than kernel repair. Raw
+output names, tensors and exceptions remain private. A non-finite reference makes the probe invalid and returns its diagnostic to the
+planner to repair the input distribution or packed encoding and rerun all retained
+cases. This does not spend a kernel repair turn. Unresolved invalid plans remain
+validation blockers, subject to the planner-timeout policy below. Only candidate-only
+non-finite output with a finite reference is a measured kernel failure. Undefined
+comparison metrics are recorded as null, including the evaluator's zero placeholders. The
+supervisor records the comparison policy in feedback; reviewers and coding agents
+cannot change it. Ordinary workload validation retains its original comparator.
+Unsupported suggestions remain explicitly advisory, not invented executable tests.
+
+Passing the requested probes closes the suggestion without another subjective
+review. A failing workload/seed with receipts for all ranks produces `needs_repair` feedback, including the
+distribution and comparison metrics. V1 gets up to two supplemental repair turns,
+independent of its ordinary bring-up recovery. Episodes receive feedback before
+terminal handoff acceptance and resume the same coding session within the configured
+handoff budget. The updated candidate reruns the same probes before normal admission
+or promotion; no failed candidate is accepted on repair-budget exhaustion.
+
+Probes evaluate each workload/seed independently, so an evaluator stopping on a
+counterexample cannot be mistaken for missing coverage. A pass requires every
+requested probe; a complete counterexample goes directly to the coding agent.
+Suggestions with no matching available workload remain recorded as unsupported
+advisories and do not block executable cases or promotion. They are never recorded
+as passing tests and are reconsidered when the workload set changes.
+The sandbox privacy filter retains failure receipt counts and aggregate numerical
+metrics, while withholding private workload values and raw evaluator exceptions.
+
+Incomplete receipts and input-generation failures are `needs_validation`, not kernel
+correctness failures. The planner gets one bounded probe-plan repair before reporting
+a validation blocker; this does not consume a coding-agent repair. Failed experiments cannot
+be silently dropped or converted to passing evidence. Confirmed service outages use
+the infrastructure recovery policy below. Supplemental correctness probes never enter
+ABBA timing aggregates.
+
+Each numerical planning attempt uses `--production-review-timeout` (default: 600
+seconds), without a doubled-timeout retry. A complete, valid plan already written
+at timeout is usable only after its evidence digest and unchanged source files are
+verified. When a timed-out attempt has no usable plan, supplemental expansion is
+recorded as `skipped_planner_timeout` only if the current candidate passed standard
+correctness, all candidate/contract evidence is readable and unchanged, and no
+measured supplemental candidate failure exists. The candidate continues through
+ordinary admission gates; this skip is not a supplemental test pass. Invalid
+reference diagnostics remain in the audit record, and retained plans run again
+for subsequent candidate edits. Missing standard evidence, unreadable or changed
+files, measured candidate failures, and non-timeout planning errors remain
+`needs_validation`. Planning attempts and any written responses are recorded as
+`numerical_planning-*.json` beside the feedback.
+
+Read `verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json` for
+agent feedback and `supplemental-*/numerical_result.json` for audit records. Pending
+probe plans persist under `.atrex_numerical_advice/` in the private reference directory
+or `~/.local/state/atrex-kernel-agent/numerical_advice/`, outside the agent
+workspace. Coding-agent edits to feedback files cannot replace the retained plan.
+Restarts rerun the probes against the current candidate.
+In-process cache keys include candidate, contract, evaluator and workload contents.
 
 ## Infrastructure recovery during validation
 
@@ -173,3 +245,10 @@ archives active work, `_recover_completed_handoff` rechecks terminal handoffs, a
 before the next admission budget check, so a completed handoff can be finalized
 before a budget stops further exploration. The [diagram source](../assets/episode-mode-state-machine.dot)
 is kept alongside the rendered SVG.
+
+Supplemental plans persist in the supervisor private-reference directory, or in
+`~/.local/state/atrex-kernel-agent/numerical_advice` when no private reference is
+configured. This state must stay outside coding-agent workspaces and writable
+mounts. Restart loads accept only structurally valid probe plans; workspace
+feedback is an audit copy, never an admission decision. As with the private
+reference corpus, deployments must protect supervisor state from agent writes.

@@ -14,7 +14,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_REVIEWER_CACHE = Path(".atrex_long_horizon/plan_reviewer_availability.json")
-PLAN_REVIEWER_CACHE_SCHEMA_VERSION = 1
+PLAN_REVIEWER_CACHE_SCHEMA_VERSION = 2
 DEFAULT_PLAN_REVIEWER_PROBE_TIMEOUT_S = 120
 
 REVIEWER_ENVIRONMENT = {
@@ -79,10 +79,11 @@ def _probe_reviewer(
     helper = REPO_ROOT / "skills" / "gen-plan" / "scripts" / helper_name
     environment = os.environ.copy()
     environment["ATREX_AGENT_CLI"] = agent_cli
-    # A parent campaign's decision must never suppress a fresh campaign's one-time probe.
-    for enabled_name, reason_name in REVIEWER_ENVIRONMENT.values():
-        environment.pop(enabled_name, None)
-        environment.pop(reason_name, None)
+    # Discovery is called only for requested reviewers. Exercise the CLI even
+    # when the helper defaults off or a parent campaign cached a disabled verdict.
+    enabled_name, reason_name = REVIEWER_ENVIRONMENT[reviewer]
+    environment[enabled_name] = "1"
+    environment[reason_name] = "startup availability probe"
     try:
         completed = subprocess.run(
             [

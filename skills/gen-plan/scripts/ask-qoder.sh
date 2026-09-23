@@ -100,13 +100,9 @@ done
 reviewer_enabled="${ATREX_PLAN_REVIEW_QODER_ENABLED:-}"
 reviewer_reason="${ATREX_PLAN_REVIEW_QODER_REASON:-}"
 if [[ -z "$reviewer_enabled" ]]; then
+    reviewer_enabled="0"
     cached_reason="$(python3 "$script_dir/cached-reviewer-disable-reason.py" qoder)"
-    if [[ -n "$cached_reason" ]]; then
-        reviewer_enabled="0"
-        reviewer_reason="$cached_reason"
-    else
-        reviewer_enabled="1"
-    fi
+    reviewer_reason="${cached_reason:-disabled by default; explicitly enable this reviewer to consult it}"
 fi
 if [[ "$reviewer_enabled" == "0" ]]; then
     reason="${reviewer_reason:-disabled by campaign configuration or availability probe}"

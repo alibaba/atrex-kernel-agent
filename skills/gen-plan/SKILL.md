@@ -24,7 +24,12 @@ implementation.
 Python supplies `ATREX_EPISODE_MODE` (default: `full`). Fast/full plans must contain exactly
 one coherent optimization category. Goal plans may cover multiple evidence-backed directions,
 including interacting algorithm, layout, and kernel changes; validate the combined result.
-The campaign selects the mode and reviewer configuration.
+The campaign selects the mode and reviewer configuration. Both reviewers default off
+for V1, fast episodes, and full episodes. Enable the desired reviewer with the
+stage-specific `--v1-ask-*`, `--fast-episode-ask-*`, or `--full-episode-ask-*` flag.
+When invoking the shell helpers outside a campaign, explicitly set
+`ATREX_PLAN_REVIEW_CODEX_ENABLED=1` or `ATREX_PLAN_REVIEW_QODER_ENABLED=1` to enable
+that reviewer; otherwise it stays disabled.
 
 ## Hard boundaries
 
