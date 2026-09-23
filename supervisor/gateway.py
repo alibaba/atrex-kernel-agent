@@ -94,7 +94,9 @@ from orchestrator.ssh_health import (  # noqa: E402
     combined_health_command,
 )
 from supervisor.errors import GatewayConfigurationError  # noqa: E402
-from supervisor.projection import bounded_text, profile_result  # noqa: E402
+from supervisor.projection import (  # noqa: E402
+    NUMERICAL_RESULT_PREFIX, bounded_text, numerical_result, profile_result,
+)
 from supervisor.gateway_jobs import (  # noqa: E402
     SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
 )
@@ -5272,13 +5274,25 @@ def _main(argv: list[str] | None = None) -> int:
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details:
-        from supervisor.projection import NUMERICAL_RESULT_PREFIX, numerical_result
-        command_stdout = "\n".join(
-            (NUMERICAL_RESULT_PREFIX + json.dumps(numerical_result(json.loads(line[len(NUMERICAL_RESULT_PREFIX):])))
-             if line.startswith(NUMERICAL_RESULT_PREFIX) else line)
-            for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX))
-        )
+        projected = []
+        for line in command_stdout.splitlines():
+            if line.startswith(NUMERICAL_RESULT_PREFIX):
+                try:
+                    payload = json.loads(line[len(NUMERICAL_RESULT_PREFIX):])
+                    if not isinstance(payload, dict):
+                        continue
+                    line = NUMERICAL_RESULT_PREFIX + json.dumps(
+                        numerical_result(payload), allow_nan=False,
+                    )
+                except (ValueError, TypeError, AttributeError, RecursionError, OverflowError):
+                    # A killed probe can leave a partial receipt. Never replay
+                    # raw private diagnostics or discard the other valid markers
+                    # and remote exit code because one receipt is malformed.
+                    continue
+                projected.append(line)
+            elif line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)):
+                projected.append(line)
+        command_stdout = "\n".join(projected)
     if command_stdout:
         print(command_stdout)
     if remote_stderr and not hide_evaluator_details:

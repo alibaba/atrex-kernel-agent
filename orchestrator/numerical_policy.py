@@ -421,7 +421,18 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
                 try:
                     evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial, cancel=cancel)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-                    evaluation = {"status": "needs_validation", "diagnosis": str(exc)}
+                    # Evaluations also enter the planner's repair request. Keep
+                    # raw exception text (paths, commands and input details) in
+                    # a separate private record, never in either Agent's context.
+                    record.setdefault("probe_errors", []).append({
+                        "attempt": attempt, "type": type(exc).__name__, "message": str(exc),
+                    })
+                    evaluation = {
+                        "status": "needs_validation",
+                        "diagnosis": "Supplemental probe could not complete. No Kernel failure was established. "
+                                     "Check the existing plan against the public input contract; if it remains valid, "
+                                     "ask the operator to inspect the private numerical validation record.",
+                    }
                 record.setdefault("evaluations", []).append(evaluation)
                 record["status"] = evaluation["status"]
                 if evaluation["status"] != "needs_validation" or attempt == 1:
