@@ -76,10 +76,10 @@ Agent-run ABBA is optional. Its exact acceptance command is injected from the ve
 configuration. Matching recorded evidence is reused; changed inputs/options/evaluator/policy can
 require another measurement. The measurement repetition policy is unchanged by workflow simplification.
 
-Agent isolation defaults to `--agent-sandbox bwrap`, requiring Linux and Bubblewrap. It provides
-a filesystem boundary with scoped Provider Homes and explicit mounts, with no silent native
-fallback. Explicit `--agent-sandbox none` preserves native macOS/Linux coordination with same-UID
-limitations. GPU execution isolation is a separate boundary. See
+Agent execution defaults to `--agent-sandbox none`: native macOS/Linux coordination with same-UID
+access, not filesystem isolation. Opt-in `--agent-sandbox bwrap` requires Linux and Bubblewrap
+and provides a filesystem boundary with scoped Provider Homes and explicit mounts, with no
+silent native fallback. GPU execution isolation is a separate boundary. See
 [workspace isolation](agent-workspace-isolation.md) and [Supervisor Runtime](supervisor-runtime.md).
 
 ## Agent-facing workspace

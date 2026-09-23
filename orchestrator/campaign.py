@@ -177,7 +177,7 @@ class Campaign:
     sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
-    agent_sandbox: str = "bwrap"  # default coordinator isolation, independent of GPU transport
+    agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
     bwrap_executable: str = "bwrap"
     agent_read_only_paths: tuple[str, ...] = ()
     optimization_mode: str = (

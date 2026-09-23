@@ -62,7 +62,7 @@ SYSTEM_PATHS = (
 
 
 def sandbox_executable(environment: dict[str, str]) -> str | None:
-    mode = environment.get("ATREX_AGENT_SANDBOX", "bwrap")
+    mode = environment.get("ATREX_AGENT_SANDBOX", "none")
     if mode == "none":
         return None
     if mode != "bwrap":
