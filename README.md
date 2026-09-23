@@ -42,7 +42,7 @@ AKA supports:
 
 ## News
 
-- [2026-09] **Atrex Kernel Agent v0.3.0 is in preparation.** It brings resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
+- [2026-09] We released **Atrex Kernel Agent v0.3.0** with resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
 - [2026-07] We released **Atrex Kernel Agent v0.2.0** with an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
