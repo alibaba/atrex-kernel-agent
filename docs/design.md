@@ -19,8 +19,6 @@ promotion; it is not a second CLI.
 
 ![Atrex Kernel Agent v0.3.0 architecture and workflow](../assets/atrex-architecture-current.png)
 
-The figure is generated from [its Graphviz source](../assets/atrex-architecture-current.dot).
-
 ## Design Goals
 
 - **Mechanical control**: termination and acceptance are decided by code rather than Agent
