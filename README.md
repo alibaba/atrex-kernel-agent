@@ -21,8 +21,12 @@ supervisor control.
 
 The repository has one supported entry point, `orchestrator/optimize.py`. The internal
 `long_horizon/` package supplies the episode engine; it is not a second CLI.
+The supervisor establishes an evaluator-backed V0 and, when enabled, a framework-native V1. Coding
+agents then explore fast, full, or goal episodes in isolated Git worktrees. The supervisor owns
+correctness, production policy, performance verification, and promotion; every outcome is recorded
+without letting an unverified candidate replace the incumbent.
 
-![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
+![Atrex Kernel Agent v0.3.0 architecture and workflow](assets/atrex-architecture-current.png)
 
 AKA supports:
 
@@ -32,10 +36,13 @@ AKA supports:
 - Triton, CuteDSL, CUDA, FlyDSL, and TileLang campaigns;
 - Claude, Qoder, Codex, and Pi coding-agent backends;
 - leaderboard and fail-closed production modes;
+- automatic local plugins and structured GPU Wiki retrieval with traceable attribution;
+- production-mode numerical probes and mode-specific performance verification;
 - resumable, Git-isolated optimization with canonical measurement history.
 
 ## News
 
+- [2026-09] We released **Atrex Kernel Agent v0.3.0** with resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
 - [2026-07] We released **Atrex Kernel Agent v0.2.0** with an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
@@ -62,6 +69,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 | [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
+| [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 

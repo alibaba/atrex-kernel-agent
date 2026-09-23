@@ -17,7 +17,7 @@ The internal `long_horizon/` engine supplies worktree isolation, journals, hando
 fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
 promotion; it is not a second CLI.
 
-![Atrex Kernel Agent architecture and workflow](../assets/atrex-architecture-current.png)
+![Atrex Kernel Agent v0.3.0 architecture and workflow](../assets/atrex-architecture-current.png)
 
 ## Design Goals
 
