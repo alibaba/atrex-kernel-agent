@@ -598,9 +598,9 @@ def main():
                         help="Measured same-size bandwidth ceiling in TB/s. Use a memcpy kernel with the same data volume as a practical memory-bandwidth baseline.")
 
     parser.add_argument("--peak-tflops", type=float, default=None,
-                        help="Peak compute throughput in TFLOPS for --dtype. REQUIRED for a GPU not in the built-in table (e.g. Blackwell); source it from gpu-wiki. Overrides the built-in value when the GPU is known.")
+                        help="Peak compute throughput in TFLOPS for --dtype. REQUIRED for a GPU not in the built-in table (e.g. Blackwell); cite enabled knowledge tools or primary specifications. Overrides the built-in value when the GPU is known.")
     parser.add_argument("--peak-bandwidth-tb-s", type=float, default=None,
-                        help="Peak HBM bandwidth in TB/s. REQUIRED for a GPU not in the built-in table; source it from gpu-wiki. Overrides the built-in value when the GPU is known.")
+                        help="Peak HBM bandwidth in TB/s. REQUIRED for a GPU not in the built-in table; cite enabled knowledge tools or primary specifications. Overrides the built-in value when the GPU is known.")
 
     parser.add_argument("--grid-blocks", type=int,
                         help="Number of blocks in the grid. If provided, --time-ms is treated as whole-kernel latency and divided by grid-blocks to derive per-tile latency. If omitted, --flops, --bytes, and --time-ms are assumed to be tile-level values.")
@@ -677,7 +677,7 @@ def main():
         if args.num_units is not None:
             spec["num_units"] = args.num_units
         spec.setdefault("unit_type", "SM")
-        spec.setdefault("description", f"{args.gpu} (peaks provided via CLI; source: gpu-wiki)")
+        spec.setdefault("description", f"{args.gpu} (peaks provided via CLI; verify the cited specification)")
         HARDWARE_SPECS[gpu] = spec
     elif gpu not in HARDWARE_SPECS:
         print(

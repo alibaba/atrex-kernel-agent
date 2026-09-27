@@ -49,10 +49,27 @@ class AgentRequestError(ValueError):
 class RuntimeStateError(RuntimeError):
     """A Supervisor-owned failure, not a malformed Agent request."""
 
-    def __init__(self, message: str, *, code: str = "runtime_state_unavailable") -> None:
+    def __init__(self, message: str, *, code: str = "runtime_state_unavailable",
+                 next_action: str = ESCALATE_RUNTIME) -> None:
         super().__init__(message)
         self.response = error_response(
-            message, code=code, repairable=False, next_action=ESCALATE_RUNTIME
+            message, code=code, repairable=False, next_action=next_action
+        )
+
+
+class GatewayConfigurationError(RuntimeStateError):
+    """An explicit operator executable override is invalid, not an Agent input error."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Supervisor ATREX_AGATE_EXECUTABLE does not resolve to an executable.",
+            code="gateway_configuration_invalid",
+            next_action=(
+                "Ask the operator to correct ATREX_AGATE_EXECUTABLE to an executable path "
+                "or command on the Supervisor PATH, or unset it to use default discovery, "
+                "then restart the Supervisor. Do not change Agent arguments, install a "
+                "replacement client, or bypass the Runtime."
+            ),
         )
 
 

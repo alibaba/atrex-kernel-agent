@@ -5,11 +5,15 @@ description: Query GPU optimization knowledge and hardware facts through the ses
 
 # GPU Wiki
 
-Describe the operator, DSL, runtime architecture and observed bottleneck. Distinguish
-measurements from hypotheses. Do not reduce the question to arbitrary keywords.
+In every natural-language Wiki request, state the true target product separately from
+the authoritative runtime architecture; never infer either from a scheduler label or
+masked device name. If the true product is unavailable, say so rather than substitute
+another GPU. Ask for that product's hardware specification and relevant architecture/ISA
+facts alongside the operator, DSL and bottleneck. Distinguish measurements from hypotheses.
+Do not reduce the question to arbitrary keywords.
 
 ```bash
-python3 tools/sandbox.py --kind wiki-query "Triton normalization on sm_120; measured DRAM-bound, looking for useful fusion strategies" --brief
+python3 tools/sandbox.py --kind wiki-query "Target B200, runtime sm_100. Triton normalization is measured DRAM-bound; which fusion strategies apply? Include B200 hardware specifications and relevant architecture/ISA facts." --brief
 python3 tools/sandbox.py --kind wiki-query --file scratch/wiki-question.txt
 python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
 python3 tools/sandbox.py --kind wiki-hardware --product sm120

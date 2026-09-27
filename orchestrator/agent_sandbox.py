@@ -1,4 +1,4 @@
-"""Opt-in Bubblewrap boundary for managed Episode drafts and legacy roles.
+"""Default Bubblewrap boundary for managed Episode drafts and legacy roles.
 
 Only system runtime paths, selected installations, this workspace and explicit
 grants enter the namespace. Git is granted only to legacy, non-managed roles; GPU/Wiki
@@ -70,12 +70,17 @@ def sandbox_executable(environment: dict[str, str]) -> str | None:
     if platform.system() != "Linux":
         raise RuntimeError(
             "Agent Bubblewrap requires a Linux coordinator; use Lima/Linux, "
-            "or --agent-sandbox none for the existing native path"
+            "or explicitly disable isolation with --agent-sandbox none "
+            "(ATREX_AGENT_SANDBOX=none)"
         )
     executable = environment.get("ATREX_BWRAP_EXECUTABLE", "bwrap")
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if not resolved:
-        raise RuntimeError(f"Agent Bubblewrap executable not found: {executable}")
+        raise RuntimeError(
+            f"Agent Bubblewrap executable not found: {executable}. "
+            "Install bwrap or set --bwrap-executable; to explicitly disable isolation, "
+            "use --agent-sandbox none (ATREX_AGENT_SANDBOX=none)"
+        )
     return resolved
 
 

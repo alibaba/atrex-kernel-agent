@@ -13,7 +13,11 @@ benchmark is not, by itself, a reason to stop.
 - Additional constraints: {{NOTES}}
 {{AGENT_RUNTIME}}
 
+{{PLUGINS}}
+
 {{RESUME_DIRECTIVE}}
+
+{{GOAL_DIRECTIVE}}
 
 Use `scratch/` for temporary requests, diagnostics, and saved source copies.
 
@@ -66,6 +70,9 @@ Choose an evidence-backed state:
    accepting the report: six-case multi-seed correctness for Atrex-Bench, or the official full
    `workload.jsonl` evaluation for SOL-ExecBench. A failed check leaves the Episode open for repair
    and resubmission.
+   In production, the Supervisor also runs targeted numerical probes. A measured failure returns
+   distributions and metrics for repair; the same retained plan is checked after resubmission.
+   Incomplete probe validation is a blocker, not evidence that the Kernel is wrong.
 2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 

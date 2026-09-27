@@ -107,7 +107,15 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         "when they only build or launch the candidate's self-authored kernel. Prebuilt kernels/operators/math "
         "implementations, alternate DSLs, hidden dispatch, PyTorch compute fallbacks, and external "
         "implementation loading remain forbidden. Ambiguous evidence is rejected.\n"
-        "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
+        "- Validate correctness with the immutable evaluator's ordinary random input generator "
+        "over the full workload set. Native Atrex-Bench uses allclose for ordinary operators "
+        "and relative L2 error <= 0.2 for NVFP4 operators. Keep the configured allclose "
+        "tolerances and required random-seed coverage; correctness must pass before promotion.\n"
+        "- The Supervisor also plans and measures targeted supplemental numerical probes. "
+        "Measured candidate failures require a repair; input/reference/probe failures remain validation blockers, "
+        "not Kernel failures. Follow the returned distributions and metrics, then measure the repaired candidate "
+        "and resubmit. Do not modify probe plans, trusted inputs or comparison thresholds.\n"
+        "- Keep `solution.json` consistent with the implementation. Before submitting the report, inspect `kernel.py` "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
     )
@@ -124,6 +132,7 @@ def install_workspace_policy(
     framework: str,
     *,
     agent_runtime: str | None = None,
+    update_tracked_files: bool = True,
 ) -> None:
     """Persist immutable mode, framework, and optional campaign runtime identity.
 
@@ -176,6 +185,11 @@ def install_workspace_policy(
             json.dumps(state, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    if not update_tracked_files:
+        # Episode checkouts preserve their protected Git boundary. The current
+        # policy is supplied by optimization_mode_directive in every prompt.
+        return
 
     claude_path = workspace / "CLAUDE.md"
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""

@@ -426,7 +426,7 @@ if [[ -f "$OUTPUT_DIR/summary.txt" ]]; then
     if [[ "$COLLECT_SOURCE" == true ]]; then
         echo "  3. See $OUTPUT_DIR/analysis/stall_hotspots_run.txt for hotspot instructions"
     fi
-    echo "  4. Query gpu-wiki based on the diagnosis for optimization suggestions"
+    echo "  4. Consult enabled knowledge tools based on the diagnosis for optimization suggestions"
 elif [[ -f "$OUTPUT_DIR/analysis/metrics_key_run.txt" ]]; then
     # Metrics were parsed but classification was skipped (e.g. --no-classify).
     echo "  1. See $OUTPUT_DIR/analysis/metrics_key_run.txt for detailed metrics"

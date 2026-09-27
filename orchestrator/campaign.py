@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional
 
 from .constants import (
+    SUPPLEMENTAL_PENDING_PREFIX,
+    SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
     ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
@@ -188,6 +190,7 @@ class Campaign:
     )
     framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
     handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
+    production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
@@ -215,6 +218,8 @@ class Campaign:
             )
         if self.problem_generation_timeout <= 0:
             raise ValueError("problem_generation_timeout must be positive")
+        if self.production_review_timeout <= 0:
+            raise ValueError("production_review_timeout must be positive")
 
     @property
     def campaign_name(self) -> str:
@@ -384,10 +389,31 @@ class Campaign:
             request_timeout=request_timeout,
             queue_timeout=queue_timeout,
         ))
+        self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
 
-    def measure_for_acceptance(self, workspace: Path, argv: list[str]) -> dict:
+    def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None) -> str:
+        """Validate frozen candidate bytes using private plans and recorded GPU probes."""
+        from .numerical_policy import validate_candidate
+
         self.start_runtime()
-        return self._supervisor_runtime.execute_trusted(workspace, argv)
+        return validate_candidate(self, workspace, source=source, parent=parent)
+
+    @property
+    def plugin_registry(self):
+        self.start_runtime()
+        return self._supervisor_runtime.plugins
+
+    def plugin_directive(self, phase: str) -> str:
+        return self.plugin_registry.instructions(
+            phase, PLATFORM=self.platform, ARCH=self.arch, FRAMEWORK=self.framework,
+            OPERATOR=self.name,
+        )
+
+    def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
+                               parent=None, reference_snapshot: Path | None = None) -> dict:
+        self.start_runtime()
+        return self._supervisor_runtime.execute_trusted(workspace, argv, execution_timeout=execution_timeout,
+                                                       parent=parent, reference_snapshot=reference_snapshot)
 
     def recorded_kernel(self, kernel_id: str) -> bytes:
         self.start_runtime()
@@ -611,16 +637,17 @@ class Campaign:
             ]
         return []
 
-    def _review_production_candidate(
+    def _review_production_candidate_once(
         self,
         workspace: Path,
         framework: str,
         require_gluon: bool,
+        *,
+        candidate_digest: str,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        candidate_digest = _production_review_digest(
-            workspace, framework, require_gluon
-        )
+        from .infrastructure_retry import check_review_service
+
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
         if cached is not None:
@@ -662,63 +689,61 @@ class Campaign:
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
-            result = run_session(
-                review_workspace,
-                DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
-                timeout=DEPENDENCY_REVIEW_TIMEOUT_S,
-                agent_cli=self.agent_cli,
-                reasoning_effort="high",
-                agent_plugins=False,
-                extra_environment=self.agent_boundary_environment("production-review"),
-            )
-            self._account(result, "independent production policy review")
-            if result.exit_status != 0 or result.timed_out:
+            try:
+                result = run_session(
+                    review_workspace,
+                    DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
+                    timeout=self.production_review_timeout,
+                    agent_cli=self.agent_cli,
+                    reasoning_effort="high",
+                    agent_plugins=False,
+                    extra_environment=self.agent_boundary_environment("production-review"),
+                )
+                self._account(result, "independent production policy review")
+                check_review_service(result)
+            except ValueError as exc:
+                return [f"independent production policy review failed: {exc}"]
+            changed = []
+            for relative, expected_hash in source_hashes.items():
+                candidate_path = candidate_root / relative
+                if (
+                    not candidate_path.is_file()
+                    or hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                    != expected_hash
+                ):
+                    changed.append(relative)
+            if changed:
                 errors = [
-                    "independent production policy review agent failed "
-                    f"(exit={result.exit_status}, timeout={result.timed_out})"
+                    "independent production policy review modified candidate evidence: "
+                    + ", ".join(sorted(changed))
                 ]
             else:
-                changed = []
-                for relative, expected_hash in source_hashes.items():
-                    candidate_path = candidate_root / relative
-                    if (
-                        not candidate_path.is_file()
-                        or hashlib.sha256(candidate_path.read_bytes()).hexdigest()
-                        != expected_hash
-                    ):
-                        changed.append(relative)
-                if changed:
+                review_path = review_workspace / "dependency_review.json"
+                try:
+                    review_payload = json.loads(
+                        review_path.read_text(encoding="utf-8")
+                    )
+                    errors, review_summary = _validate_production_review(
+                        review_payload,
+                        candidate_files=frozenset(source_hashes),
+                    )
+                except (
+                    OSError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                    ValueError,
+                ) as exc:
                     errors = [
-                        "independent production policy review modified candidate evidence: "
-                        + ", ".join(sorted(changed))
+                        "independent production policy review produced no valid verdict: "
+                        f"{type(exc).__name__}: {exc}"
                     ]
                 else:
-                    review_path = review_workspace / "dependency_review.json"
-                    try:
-                        review_payload = json.loads(
-                            review_path.read_text(encoding="utf-8")
-                        )
-                        errors, review_summary = _validate_production_review(
-                            review_payload,
-                            candidate_files=frozenset(source_hashes),
-                        )
-                    except (
-                        OSError,
-                        UnicodeError,
-                        json.JSONDecodeError,
-                        ValueError,
-                    ) as exc:
-                        errors = [
-                            "independent production policy review produced no valid verdict: "
-                            f"{type(exc).__name__}: {exc}"
-                        ]
-                    else:
-                        status = "accepted" if not errors else "rejected"
-                        print(
-                            f"[production-policy] independent full-candidate review {status}: "
-                            f"{review_summary}",
-                            flush=True,
-                        )
+                    status = "accepted" if not errors else "rejected"
+                    print(
+                        f"[production-policy] independent full-candidate review {status}: "
+                        f"{review_summary}",
+                        flush=True,
+                    )
 
         try:
             reviewed_digest = _production_review_digest(
@@ -752,6 +777,27 @@ class Campaign:
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
         return list(dict.fromkeys([*errors, *persistence_errors]))
 
+    def _review_production_candidate(
+        self,
+        workspace: Path,
+        framework: str,
+        require_gluon: bool,
+    ) -> list[str]:
+        """Bound timeout retries across sessions and supervisor restarts."""
+        from .infrastructure_retry import retry_review
+
+        digest = _production_review_digest(workspace, framework, require_gluon)
+        stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
+        try:
+            return retry_review(
+                self.workspace, stage,
+                lambda: self._review_production_candidate_once(
+                    workspace, framework, require_gluon, candidate_digest=digest,
+                ),
+            )
+        except ValueError as exc:
+            return [f"independent production policy review failed: {exc}"]
+
     def _production_kernel_violations(
         self,
         workspace: Path | None = None,
@@ -774,6 +820,7 @@ class Campaign:
         link_runtime(
             self.workspace,
             native_root,
+            plugin_registry=self.plugin_registry,
             is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
         )
         install_workspace_policy(
@@ -1254,10 +1301,15 @@ class Campaign:
         result: Optional[dict] = None
         if not problem:
             result, problem = self._framework_baseline_external_gates(n)
-        if problem and not recovery_used:
+        numerical_repairs = 0
+        while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
+            not recovery_used or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
+        ):
             # The implementation Agent intentionally runs only a bounded smoke subset.
             # Give one focused repair turn when the authoritative combined gate finds a
             # full-domain or policy problem, then rerun the independent gates once.
+            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+                numerical_repairs += 1
             self._recover_framework_baseline(
                 problem, v0_blob, baseline_commit, pre_head
             )
@@ -1287,7 +1339,8 @@ class Campaign:
                 accepted=False,
                 outcome={"summary": problem, "next_directions": []},
             )
-            raise RuntimeError(f"framework baseline v{n} rejected: {problem}")
+            outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
+            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
         commit = self._commit_framework_baseline(n, result or {})
         try:
@@ -2119,6 +2172,7 @@ class Campaign:
         smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
         return _render(
             PROMPTS_DIR / "framework_baseline.md",
+            PLUGINS=self.plugin_directive("framework_baseline"),
             WORKSPACE=str(self.workspace),
             N=n,
             PREV=n - 1,
@@ -2235,6 +2289,8 @@ class Campaign:
                 f"the candidate is not a self-contained {self.framework} implementation: "
                 + "; ".join(violations)
             )
+        if not validation_problem:
+            validation_problem = self.supplemental_numerical_feedback(self.workspace)
         return result, validation_problem
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
@@ -2363,7 +2419,7 @@ class Campaign:
         memory["masked"] = False
         memory["git_commit_hash"] = None
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        memory["correctness"] = {"status": "FAIL"}
+        memory["correctness"] = {"status": "UNKNOWN" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,
             "action_description": f"rejected {self.framework} baseline attempt",

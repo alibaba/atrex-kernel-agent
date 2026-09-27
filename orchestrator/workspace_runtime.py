@@ -24,7 +24,8 @@ def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
     return (
         f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
         f"`runtime-records`, `KernelWiki`, and optional timeline diagnostics{extra}. "
-        "Read the relevant Skill for request schemas/examples."
+        "Read the relevant Skill for request schemas/examples. "
+        "Use `python3 tools/plugin.py list` for additional operator-enabled tools and Skills."
     )
 
 
@@ -87,7 +88,8 @@ def _archive_skill_entry(workspace: Path, path: Path) -> None:
     logging.getLogger(__name__).warning("Archived legacy/conflicting Skill %s to %s", path, backup)
 
 
-def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_ppu: bool = False) -> None:
+def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_ppu: bool = False,
+                 plugin_registry=None) -> None:
     from .agent_home import open_private_directory
     from supervisor.workspace import publish
 
@@ -96,6 +98,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     for name in ("tools", "skills", "reference", "reference-projects", "gpu-wiki"):
         _remove_legacy_link(workspace / name)
     publish(workspace, "tools/sandbox.py", (REPO_ROOT / "tools/sandbox.py").read_bytes())
+    publish(workspace, "tools/plugin.py", (REPO_ROOT / "tools/plugin.py").read_bytes())
     names = ["gpu-measurement", "runtime-records", "KernelWiki", "autonomous-gpu-kernel-timeline"]
     if is_ppu:
         names.append("ppu-acu-joint-profile")
@@ -107,6 +110,10 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
         for filename in manifest.files:
             source = REPO_ROOT / manifest.root / filename
             publish(workspace, f"skills/{name}/{filename}", source.read_bytes())
+    if plugin_registry is None:
+        from .plugins import PluginRegistry
+        plugin_registry = PluginRegistry()
+    names.extend(plugin_registry.install_agent_skills(workspace))
     for backend in (".claude", ".qoder", ".agents"):
         _remove_legacy_link(workspace / backend / "agents")
         root = workspace / backend / "skills"

@@ -482,15 +482,46 @@ def evaluation(result: dict) -> dict:
     return value
 
 
+NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
+
+
+def numerical_result(payload: dict) -> dict:
+    """Public probe receipts, never raw inputs, exception text or workload kwargs."""
+    public = {"schema_version": 1, "runs": [], "all_pass": payload.get("all_pass") is True}
+    for row in payload.get("runs", [])[:3]:
+        item = {key: row.get(key) for key in (
+            "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
+            "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
+        item["input_error"] = "input generation or evaluator execution incomplete; private diagnostics withheld" if row.get("input_error") else ""
+        result = row.get("result")
+        item["result"] = None
+        if isinstance(result, dict):
+            item["result"] = {
+                "all_pass": result.get("all_pass"),
+                "nonfinite_outputs": [role for role in ("reference", "candidate", "unknown")
+                                      if role in result.get("nonfinite_outputs", [])],
+                "numerical_metrics": {key: value for key, value in (result.get("numerical_metrics") or {}).items()
+                    if key in {"relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff",
+                               "max_elementwise_rel_diff", "max_abs_err", "max_rel_err"}
+                    and (value is None or type(value) in {int, float} and math.isfinite(value))},
+            }
+        public["runs"].append(item)
+    if payload.get("error"):
+        public["error"] = "numerical evaluator failed; private diagnostics withheld"
+    return public
+
+
 def project_response(process: subprocess.CompletedProcess, *, generalized=False, wiki=False, private_paths=()) -> dict:
     """Keep legacy sentinels parseable, bound diagnostics, omit transport envelopes."""
     stdout, stderr = process.stdout or "", process.stderr or ""
+    numerical = any(line.startswith(NUMERICAL_RESULT_PREFIX) for line in stdout.splitlines())
     projected = []
     for line in stdout.splitlines():
         prefix = next((prefix for prefix in (
             "[test_kernel] RESULT_JSON=", "[sandbox] PROFILE_JSON=",
             "[sandbox] CHECK_JSON=", "[sandbox] DISASSEMBLE_JSON=",
             "[sandbox] ABBA_JSON=",
+            NUMERICAL_RESULT_PREFIX,
         ) if line.startswith(prefix)), None)
         if prefix:
             try:
@@ -506,6 +537,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
                     # compare() already emits abba()'s public metric projection.
                     "[sandbox] ABBA_JSON=": dict,
+                    NUMERICAL_RESULT_PREFIX: numerical_result,
                 }[prefix]
                 projected.append(prefix + json.dumps(formatter(raw), ensure_ascii=False))
             except (ValueError, TypeError):
@@ -513,17 +545,20 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
         else:
             projected.append(line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
-    if generalized and process.returncode and not wiki:
+    if generalized and (process.returncode or numerical) and not wiki:
         # A completed comparison can fail correctness while still providing
         # useful, public per-side results. Keep them without exposing raw logs.
         stdout = "\n".join(line for line in projected if line.startswith((
             "[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON=",
+            NUMERICAL_RESULT_PREFIX,
         )))
         stderr = (
             "ABBA comparison failed; see ABBA_JSON for baseline/candidate results; hidden-case diagnostics withheld.\n"
             if any(line.startswith("[sandbox] ABBA_JSON=") for line in projected)
             else "GPU request failed; hidden-case diagnostics withheld. Ask the operator to inspect the failure.\n"
         )
+        if numerical and process.returncode == 0:
+            stderr = ""
     for path in sorted((path for path in private_paths if path), key=len, reverse=True):
         stdout, stderr = stdout.replace(path, "<supervisor>"), stderr.replace(path, "<supervisor>")
     result = {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}

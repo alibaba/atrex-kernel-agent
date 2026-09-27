@@ -35,6 +35,7 @@ from .models import (
 from .protocol import read_handoff
 from .session import LongSessionRunner
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
+from orchestrator.constants import SUPPLEMENTAL_PENDING_PREFIX
 from .telemetry import summarize_episode
 from .verifier import GatewayABBAValidator
 
@@ -54,6 +55,9 @@ MEMORY_EXPERIMENT_FIELDS = (
 MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
 EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
 EPISODE_REASONING_EFFORT = "max"
+GOAL_AFTER_EPISODES = 50
+GOAL_AFTER_STALLS = 3
+GOAL_HANDOFF_RESUMES = 20
 
 
 def _render(template: str, values: dict[str, object]) -> str:
@@ -468,6 +472,16 @@ class LongHorizonCampaign:
     def workspace(self) -> Path:
         return self.base_campaign.workspace
 
+    @staticmethod
+    def _episode_mode(state: SupervisorState, active: dict[str, Any] | None = None) -> str:
+        """Goal widens search, never changes the Journal or acceptance contract."""
+        if active is not None:
+            # Do not widen a running or legacy Episode after a restart.
+            return "goal" if active.get("mode") == "goal" else "episode"
+        return "goal" if (
+            state.episodes >= GOAL_AFTER_EPISODES
+            and state.consecutive_without_promotion > GOAL_AFTER_STALLS
+        ) else "episode"
 
     def _expected_shape_ids(self) -> set[str] | None:
         private_reference_dir = self.base_campaign.private_reference_dir
@@ -490,6 +504,7 @@ class LongHorizonCampaign:
         resumed: bool = False,
         agent_workspace: Path | None = None,
         verifier: GatewayABBAValidator | None = None,
+        episode_mode: str = "episode",
     ) -> str:
         directives = main_adapter.episode_directives(
             self.base_campaign, version
@@ -526,6 +541,15 @@ class LongHorizonCampaign:
             template,
             {
                 "EPISODE": episode,
+                "GOAL_DIRECTIVE": (
+                    "This is a goal-oriented Episode after sustained stalls. Reassess the operator "
+                    "roadmap and explore materially different Directions sequentially within the "
+                    "Runtime's Direction limits. Preserve measured Kernel IDs so you can restore "
+                    "the best validated candidate before reporting. Continue until the useful "
+                    "roadmap is completed or exhausted; do not stop at the first failed Direction. "
+                    "Journal, correctness, production policy, and ABBA promotion rules are unchanged."
+                    if episode_mode == "goal" else ""
+                ),
                 "VERSION": version,
                 "WORKSPACE": agent_workspace or worktree.path,
                 "ACCEPTANCE_REQUEST": acceptance_request,
@@ -539,6 +563,7 @@ class LongHorizonCampaign:
                 "HARDWARE": directives["hardware"],
                 "SANDBOX": directives["sandbox"],
                 "AGENT_RUNTIME": directives["agent_runtime"],
+                "PLUGINS": directives["plugins"],
                 "RESUME_DIRECTIVE": (
                     "This episode is resuming after a supervisor restart. Keep and reuse the "
                     "existing workspace, scratch files, and source "
@@ -634,6 +659,12 @@ class LongHorizonCampaign:
             return (
                 "candidate journal must be finalized after the exact candidate commit"
             )
+        if self.base_campaign.optimization_mode == "production":
+            sealed = git_blob(worktree.path, candidate, "kernel.py")
+            # Recovered reports must not bypass the newly installed gate. Only
+            # private recorded ordinary correctness authorizes timeout skipping.
+            self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)
+            return self.base_campaign.supplemental_numerical_feedback(worktree.path, sealed)
         return ""
 
     def _copy_runtime_artifacts(
@@ -660,6 +691,7 @@ class LongHorizonCampaign:
         journal: dict[str, Any],
         verification: VerificationResult,
         episode_workspace: Path,
+        episode_mode: str = "episode",
     ) -> dict[str, Any]:
         representative = _representative_candidate_result(verification)
         by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
@@ -773,7 +805,7 @@ class LongHorizonCampaign:
             "git_commit_hash": candidate_commit,
             "long_horizon": {
                 "status": "candidate_ready",
-                "mode": "episode",
+                "mode": episode_mode,
                 "verification": "abba",
             },
         }
@@ -788,6 +820,7 @@ class LongHorizonCampaign:
         candidate_commit: str,
         verification: VerificationResult | None = None,
         episode_workspace: Path | None = None,
+        episode_mode: str = "episode",
     ) -> dict[str, Any]:
         outcome = (
             journal.get("outcome") if isinstance(journal.get("outcome"), dict) else {}
@@ -960,7 +993,7 @@ class LongHorizonCampaign:
                 "status": (
                     "PASS"
                     if measurement_complete
-                    else ("FAIL" if violation else "UNKNOWN")
+                    else ("FAIL" if violation and not violation.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "UNKNOWN")
                 ),
                 "max_abs_err": representative.get("max_abs_err"),
                 "max_rel_err": representative.get("max_rel_err"),
@@ -978,7 +1011,7 @@ class LongHorizonCampaign:
             "long_horizon": {
                 "status": status,
                 "candidate_commit": candidate_commit or None,
-                "mode": "episode",
+                "mode": episode_mode,
             },
         }
 
@@ -1089,6 +1122,7 @@ class LongHorizonCampaign:
         """Archive and commit one terminal episode exactly once."""
         episode = worktree.episode
         base_commit = worktree.base_commit
+        episode_mode = self._episode_mode(state, active)
         journal_path = worktree.path / RUNTIME_DIR / "journal.json"
         state.episodes = max(state.episodes, episode)
         if not tokens_accounted:
@@ -1109,7 +1143,7 @@ class LongHorizonCampaign:
         attempt = {
             "episode": episode,
             "version": memory_version,
-            "mode": "episode",
+            "mode": episode_mode,
             "status": status,
             "accepted": accepted,
             "violation": violation or None,
@@ -1177,6 +1211,7 @@ class LongHorizonCampaign:
                 journal=journal,
                 episode_workspace=worktree.path,
                 verification=verification,
+                episode_mode=episode_mode,
             )
             promotion_commit = promote_candidate(
                 self.workspace,
@@ -1206,6 +1241,7 @@ class LongHorizonCampaign:
                 candidate_commit=candidate_commit,
                 verification=verification,
                 episode_workspace=worktree.path,
+                episode_mode=episode_mode,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1254,7 +1290,7 @@ class LongHorizonCampaign:
             " recovered=true" if recovered_after_supervisor_interruption else ""
         )
         print(
-            f"[long-horizon] episode={episode} mode=episode "
+            f"[long-horizon] episode={episode} mode={episode_mode} "
             f"status={status} accepted={accepted} "
             f"version=v{memory_version} tokens={max(0, int(tokens))} "
             f"commit={promotion_commit or outcome_commit or '-'}{recovery_label}",
@@ -1354,6 +1390,7 @@ class LongHorizonCampaign:
                 "Cannot resume an unfinished Fast Episode with the unified workflow. "
                 "Finish it with the previous release, then upgrade at an Episode boundary."
             )
+        episode_mode = self._episode_mode(state, active)
         episode = int(active.get("episode", 0))
         base_commit = str(active.get("base_commit", ""))
         branch = str(active.get("episode_branch", ""))
@@ -1495,7 +1532,7 @@ class LongHorizonCampaign:
                     "violation": None,
                     "base_commit": base_commit,
                     "episode_branch": branch,
-                    "mode": "episode",
+                    "mode": episode_mode,
                     "recovered_after_supervisor_interruption": True,
                 }
                 if promoted:
@@ -1571,6 +1608,7 @@ class LongHorizonCampaign:
                 journal=journal,
                 candidate_commit=candidate_commit,
                 episode_workspace=worktree_path,
+                episode_mode=episode_mode,
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
@@ -1592,7 +1630,7 @@ class LongHorizonCampaign:
                 "violation": "supervisor process interrupted",
                 "base_commit": base_commit,
                 "episode_branch": branch,
-                "mode": "episode",
+                "mode": episode_mode,
                 "candidate_commit": candidate_commit or None,
                 "summary": outcome.get("summary"),
                 "next_directions": outcome.get("next_directions"),
@@ -1705,12 +1743,14 @@ class LongHorizonCampaign:
                 episode = worktree.episode
                 memory_version = int(active["memory_version"])
                 base_commit = worktree.base_commit
+                episode_mode = self._episode_mode(state, active)
             else:
                 episode = state.episodes + 1
+                episode_mode = self._episode_mode(state)
 
 
             if resumed:
-                active.setdefault("mode", "episode")
+                active.setdefault("mode", episode_mode)
                 if active.get("resumed_from_phase") == "preparing":
                     worktree.reset_scratch()
                     main_adapter.link_episode_runtime(
@@ -1728,7 +1768,7 @@ class LongHorizonCampaign:
                     "base_commit": base_commit,
                     "episode_branch": worktree.branch,
                     "worktree": str(worktree.path),
-                    "mode": "episode",
+                    "mode": episode_mode,
                     "phase": "preparing",
                 }
                 store.save_active(active)
@@ -1776,9 +1816,11 @@ class LongHorizonCampaign:
                 resumed=resumed,
                 agent_workspace=agent_workspace,
                 verifier=verifier,
+                episode_mode=episode_mode,
             )
             store.write_brief(episode, prompt)
             telemetry_environment = {
+                "ATREX_EPISODE_MODE": episode_mode,
                 "ATREX_SESSION_CAPTURE_DIR": str(store.episode_dir(episode) / "sessions"),
                 "ATREX_TELEMETRY_CAMPAIGN_ID": str(
                     getattr(self.base_campaign, "campaign_name", self.workspace.name)
@@ -1794,7 +1836,10 @@ class LongHorizonCampaign:
                 agent_workspace,
                 prompt,
                 handoff_path=handoff_path,
-                handoff_resumes=self.handoff_resumes,
+                handoff_resumes=(
+                    max(self.handoff_resumes, GOAL_HANDOFF_RESUMES)
+                    if episode_mode == "goal" else self.handoff_resumes
+                ),
                 completion_check=lambda handoff: self._completion_check(
                     worktree,
                     journal_path,
@@ -1872,6 +1917,7 @@ class LongHorizonCampaign:
             if (
                 self.max_stall
                 and state.consecutive_without_promotion >= self.max_stall
+                and self._episode_mode(state) != "goal"
                 and not main_adapter.conversion_required(
                     self.base_campaign,
                     state.consecutive_without_promotion,

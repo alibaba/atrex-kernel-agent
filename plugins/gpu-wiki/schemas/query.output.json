@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": ["query_id", "records", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "query_id": {"type": "string", "minLength": 1},
+    "records": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["wiki_id", "store", "source", "type", "payload"],
+        "properties": {
+          "wiki_id": {"type": "string", "minLength": 1},
+          "store": {"type": "string"},
+          "source": {"type": "string"},
+          "type": {"type": "string"},
+          "payload": {"type": "object"}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

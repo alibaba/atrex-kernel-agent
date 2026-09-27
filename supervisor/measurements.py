@@ -272,6 +272,15 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
             response = dict(response, stdout="\n".join(lines) + "\n")
             task.finish(response, cacheable=cacheable, pending=pending)
             if reuse_completed and not cacheable:
+                from supervisor.gateway_jobs import retry_kind
+                from orchestrator.infrastructure_retry import InfrastructureUnavailable
+
+                if states and all(state.get("phase") == "terminal" for state in states) and any(
+                    retry_kind(job_from_process(subprocess.CompletedProcess(
+                        [], state["process"]["returncode"], state["process"]["stdout"], state["process"]["stderr"]))) == "infra"
+                    for state in states
+                ):
+                    raise InfrastructureUnavailable("Recorded GPU validation infrastructure failure")
                 raise RuntimeError("Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record")
             if operation == "evaluate" and repetitions > 1 and samples:
                 from supervisor.gateway import EPISODE_EVALUATIONS_PATH

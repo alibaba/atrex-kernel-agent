@@ -30,7 +30,7 @@ def _read(path: Path) -> bytes:
     return value
 
 
-def _tree(root: Path):
+def bounded_tree_entries(root: Path):
     """Never follow mutable symlinks; enforce aggregate limits before publication."""
     count = total = 0
     if root.is_symlink():
@@ -91,7 +91,7 @@ class EpisodeWorkspace:
             with open_private_directory(self.root / name):
                 pass
             if fresh:
-                for relative, content in _tree(self.worktree / name):
+                for relative, content in bounded_tree_entries(self.worktree / name):
                     publish(self.root, f"{name}/{relative}", content)
         # These are controller-created asset links, never copied from Agent files.
         # Do not install the evaluator or copy .git / control checkpoints.
@@ -124,6 +124,6 @@ class EpisodeWorkspace:
             content = sealed_source
         publish(self.worktree, "kernel.py", content)
         for name in DIAGNOSTIC_TREES:
-            for relative, data in _tree(self.root / name):
+            for relative, data in bounded_tree_entries(self.root / name):
                 publish(self.worktree, f"{name}/{relative}", data)
         durable_write_json(self.state_path, dict(state, kernel_digest=hashlib.sha256(content).hexdigest()))
