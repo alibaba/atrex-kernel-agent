@@ -46,7 +46,7 @@ echo "  Kernel:     $KERNEL_DEMO"
 echo "=========================================="
 
 # Step 1: Create workspace directory structure
-mkdir -p "$WORKSPACE"/{memory,plans,profiles}
+mkdir -p "$WORKSPACE"/{memory,scratch}
 
 # Step 2: Initialize git
 cd "$WORKSPACE"
@@ -80,17 +80,5 @@ cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
 echo ""
 echo "Workspace initialized at: $WORKSPACE"
 echo ""
-echo "Directory structure:"
-echo "  $WORKSPACE/"
-echo "  ├── kernel.py          (copied from kernel_demo)"
-echo "  ├── CLAUDE.md          (agent behavior constraints)"
-echo "  ├── .gitignore"
-echo "  ├── memory/            (iteration JSON files)"
-echo "  ├── plans/             (optimization plans)"
-echo "  └── profiles/          (profiling artifacts)"
-echo ""
-echo "Next steps:"
-echo "  1. Parse user input (platform, framework, dtype, shapes)"
-echo "  2. Run Step 0: Hardware spec lookup + Roofline analysis"
-echo "  3. Write README.md with Stop Conditions"
-echo "  4. Enter Stage 1: Baseline Implementation"
+echo "Supervisor workspace ready: kernel.py, CLAUDE.md, memory/, scratch/."
+echo "The Supervisor will install public contracts and measure V0."

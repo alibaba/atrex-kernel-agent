@@ -41,9 +41,20 @@ If the probe-free benchmark already answers the question, do not profile. After 
 stop when its evidence answers the question. Do not collect timeline merely because ACU ran, collect
 ACU merely because timeline ran, or invoke `merge.py` merely because both artifacts exist.
 
+Set `<PROFILE_DIR>` to a workspace-relative directory under `scratch/`, such as `scratch/episode_N`.
 Keep mode-specific attempts separate, for example under `<PROFILE_DIR>/acu/attempt-N`,
 `<PROFILE_DIR>/timeline/attempt-N`, and `<PROFILE_DIR>/joint/attempt-N`. Never combine events from
 different launches into one apparent execution.
+Bare artifact filenames in the examples below are relative to the selected `scratch/` attempt
+directory; resolve `PPU_PROFILE_SKILL` before changing that working directory. GPU launches still
+run remotely through `tools/sandbox.py`, not in the local Agent process.
+
+Keep receipts and every file they reference under `scratch/`, including source snapshots, raw
+captures, binaries, and correctness evidence. Use relative paths between these files so their
+bindings survive remote synchronization and publication to the controller workspace. Synchronize
+the complete evidence tree with `--sync scratch/...` before submitting `episode-report`, and do
+not delete or rewrite cited evidence afterward. `scratch/` is the only published diagnostics tree;
+top-level `profiles/` evidence will be missing during the controller's terminal revalidation.
 
 ## Persist only terminal-reusable evidence
 
@@ -67,7 +78,7 @@ new evidence:
       "finding": "owner-local ranges show the wait on the measured critical path",
       "decision_impact": "next edit targets the load/tensor handoff instead of the epilogue",
       "evidence": {
-        "artifact": "profiles/episode_N/timeline/attempt-N/fine.timeline.receipt.json",
+        "artifact": "scratch/episode_N/timeline/attempt-N/evidence/fine.timeline.receipt.json",
         "sha256": "lowercase SHA-256 of that exact JSON artifact",
         "schema": "ppu-fixed-slot-receipt/v5",
         "evidence_id": "evidence_id read from the artifact"

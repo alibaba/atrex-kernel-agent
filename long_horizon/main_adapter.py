@@ -35,7 +35,6 @@ from orchestrator.optimization_policy import install_workspace_policy
 from orchestrator.session_io import _sandbox_command
 from orchestrator.workspace_runtime import (
     _agent_runtime_directive,
-    _plan_generator_directive,
     link_runtime,
 )
 from orchestrator.workspace_state import (
@@ -95,24 +94,17 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     )
 
 
-def episode_directives(
-    campaign: Campaign, version: int, *, fast: bool = False
-) -> dict[str, str]:
-    agent_cli = getattr(campaign, "agent_cli", "claude")
+def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
+    """Public operator guidance for the single optimization workflow."""
     return {
-        "plugins": campaign.plugin_directive("fast_episode" if fast else "episode"),
+        "plugins": campaign.plugin_directive("episode"),
         "hardware": hardware_directive(campaign.platform, campaign.arch),
-        "sandbox": (
-            campaign._fast_sandbox_directive()
-            if fast
-            else campaign._sandbox_directive()
-        ),
+        "sandbox": campaign._sandbox_directive(),
         "evaluator": campaign._evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(
-            agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
+            campaign.agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
         ),
-        "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 
 
@@ -193,8 +185,8 @@ def session_id_from_stream(
     return codex_thread_id_from_stream(stdout)
 
 
-def tokens_from_stream(stdout: str) -> int:
-    return token_usage_from_stream(stdout)
+def tokens_from_stream(stdout: str, *, backend: str = "") -> int:
+    return token_usage_from_stream(stdout, backend=backend)
 
 
 def normalize_stream(
@@ -216,12 +208,15 @@ def normalize_stream(
         events, terminal_usage = adapter.normalize_stream(stdout)
     except Exception as exc:
         events = ()
-        terminal_usage = terminal_usage_from_stream(stdout)
+        terminal_usage = terminal_usage_from_stream(stdout, backend=agent_cli)
         observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
     capabilities = replace(
         adapter.capabilities,
         usage_delta_observed=any(event.kind == "usage_delta" for event in events),
     )
+    from orchestrator.session_capture import captured_observation
+
+    captured = captured_observation(stdout, events, capabilities)
     if agent_cli == "codex" and codex_observer is not None and session_id:
         try:
             (
@@ -229,10 +224,16 @@ def normalize_stream(
                 terminal_usage,
                 capabilities,
                 ledger_errors,
-            ) = observe_codex_usage(codex_observer, session_id, terminal_usage)
+            ) = observe_codex_usage(codex_observer, session_id, terminal_usage, captured=captured)
             observation_errors += ledger_errors
         except Exception as exc:
+            codex_observer.invalidate()
+            if captured is not None:
+                events, terminal_usage, capabilities, capture_errors = captured[:4]
+                observation_errors += capture_errors
             observation_errors += (f"codex_ledger_unavailable:{type(exc).__name__}",)
+    elif captured is not None:
+        return captured[:4]
     return events, terminal_usage, capabilities, observation_errors
 
 

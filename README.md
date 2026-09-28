@@ -21,12 +21,12 @@ supervisor control.
 
 The repository has one supported entry point, `orchestrator/optimize.py`. The internal
 `long_horizon/` package supplies the episode engine; it is not a second CLI.
-The supervisor establishes an evaluator-backed V0 and, when enabled, a framework-native V1. Coding
-agents then explore fast, full, or goal episodes in isolated Git worktrees. The supervisor owns
-correctness, production policy, performance verification, and promotion; every outcome is recorded
-without letting an unverified candidate replace the incumbent.
 
-![Atrex Kernel Agent v0.3.0 architecture and workflow](assets/atrex-architecture-current.png)
+The Campaign-owned [Supervisor GPU/Wiki Runtime](docs/supervisor-runtime.md) handles Agent measurement and knowledge requests through a scoped HTTP client, keeping Gateway credentials and evaluator packaging on the coordinator.
+
+[Runtime Journal and Episode Reports](docs/runtime-journal.md) provide durable Directions, measurement-linked Experiments and correctable report submission. [Supervisor-owned handoff and promotion](docs/supervisor-promotion.md) bind exact measured source to private Git commits and acceptance evidence; optimization Agents work in persistent Git-free drafts.
+
+![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
 
 AKA supports:
 
@@ -36,13 +36,11 @@ AKA supports:
 - Triton, CuteDSL, CUDA, FlyDSL, and TileLang campaigns;
 - Claude, Qoder, Codex, and Pi coding-agent backends;
 - leaderboard and fail-closed production modes;
-- automatic local plugins and structured GPU Wiki retrieval with traceable attribution;
-- production-mode numerical probes and mode-specific performance verification;
 - resumable, Git-isolated optimization with canonical measurement history.
 
 ## News
 
-- [2026-09] We released **Atrex Kernel Agent v0.3.0** with resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
+- [2026-09] We released **Atrex Kernel Agent v0.3.0**. Its [release notes](docs/releases/v0.3.0.md) document the earlier Fast/Full/Goal workflow; the current unified Episode and Supervisor Runtime are described above.
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
 - [2026-07] We released **Atrex Kernel Agent v0.2.0** with an orchestrated clean-session loop, native SOL-ExecBench operator workflow, Triton-to-Gluon conversion support, and a fuller NVIDIA profiling toolchain. [[Release](https://github.com/alibaba/atrex-kernel-agent/releases/tag/v0.2.0)]
@@ -66,12 +64,13 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | Document | Contents |
 | --- | --- |
 | [Quick Start](docs/quickstart.md) | Setup, commands, campaign steps, configuration, and outputs |
-| [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
+| [Architecture Design](docs/design.md) | Unified Episode workflow, authority boundaries, verification, recovery and upgrade |
+| [Agent Workspace Isolation](docs/agent-workspace-isolation.md) | Default coordinator Bubblewrap boundary, scoped Provider Homes, and explicit native opt-out |
+| [Supervisor Handoff and Promotion](docs/supervisor-promotion.md) | Git-free Episode drafts, exact-source commits, recorded verification, and private audit recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 | [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
-| [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 
-Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
+Run `python3 orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
 
 For a GPU server reachable through OpenSSH, use a dedicated low-privilege account and pass
 `--sandbox-ssh user@gpu-host --sandbox-ssh-gpu 0` with an explicit `--framework`. AKA keeps Agent,

@@ -1,9 +1,24 @@
-## GPU sandbox safety boundary (mandatory)
+## Execution boundary
 
-- Target remote hardware: **{{HARDWARE}}**{{ENDPOINT}}. All GPU execution must cross this sandbox boundary, including when a gateway endpoint is localhost; source edits, optimizer state, and Git operations remain in the workspace.
-- Follow the declared evaluator route: an orchestrator-installed Atrex-Bench adapter must never be edited; only a derived legacy boundary may create its harness before V0. After V0 every route's harness remains immutable.
-- Sandbox uploads are allowlist-only. `test_kernel.py`, dispatch-signature collection, standard profile wrappers, and direct `import kernel` checks select their required inputs automatically. For any nonstandard command or dynamically opened local file, declare each dependency before `--` with repeatable `--input <relative-file-or-directory>`. Never use a generic `python -c print(...)` job to infer evaluator health; it does not exercise the evaluator payload or code path.
-- Never run `test_kernel.py`, GPU timers, `ncu`, `rocprofv3`, or the profile wrappers outside the sandbox interface. Never upload or create optimizer `memory/` as worker state; memory updates, plans, edits, and git operations stay local.
-- Never delete or move Git-tracked workspace files or directories, including `memory/`, `roofline.json`, helpers, historical plans, and profiles. Do not remove local state to shrink a sandbox payload; the sandbox wrapper owns input filtering.
-- The campaign dependency environment is immutable. Never run `pip`, `python -m pip`, `uv pip`, `conda`, `setup.py`, or another package installer/build command on the host or through the sandbox executor. Use only preinstalled dependencies. If an import is unavailable, record the blocker or choose an implementation that uses available tooling; do not install or locally compile a third-party library. Do not import or execute JIT-capable GPU package code directly on the host: even a preinstalled package such as `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, or `vllm` can invoke `ninja`, `ptxas`, or `nvcc` on first use. Static source inspection is allowed. The orchestrator terminates a session that violates this rule.
-- The remote executor is shared infrastructure owned by the orchestrator/monitor, not by a coding session. Never start, stop, restart, signal, replace, or reconfigure its gateway service, `screen` session, or SSH-host services; never delete or edit gateway state or cancel/modify gateway jobs directly. If the endpoint is unavailable, record an infrastructure failure and exit so the orchestrator can retry or enter environment recovery. Do not attempt to repair it.
+- Target remote hardware: **{{HARDWARE}}**{{ENDPOINT}}. All GPU execution goes through
+  `python3 tools/sandbox.py`. Do not bypass the scoped Runtime or obtain Agate credentials.
+  Local static inspection is allowed; local GPU/JIT imports, evaluators, timers, and profilers are not.
+- Typed operations such as `--kind run` and `--kind profile` select their inputs automatically and
+  take no command after `--`. For custom Dev commands, use `--kind dev --input <path> ... -- <command>`;
+  declare every extra local file/directory with repeatable `--input`. Uploads are allowlist-only.
+  A trivial Dev probe does not establish evaluator health, and diagnostics/custom-input checks do
+  not replace official correctness/performance evidence. The current phase may further restrict GPU use.
+- Git is Supervisor-only: do not run Git commands or access `.git`. Keep evaluator/public-contract
+  inputs (`definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
+  `agent_problem.json`, `metadata.json`, `roofline.json`), `CLAUDE.md`, `README.md`, and canonical
+  `memory/v*.json` unchanged. Never search outside the workspace for private cases or source operators,
+  recreate private evaluator drivers, or delete/move existing tracked files and historical evidence
+  to shrink uploads. Do not upload `memory/` as worker state. The Supervisor records measurements,
+  writes canonical memory, commits source, and manages acceptance.
+- Use preinstalled dependencies only. Do not install packages or build third-party libraries locally
+  or remotely (pip, uv, conda, setup.py, ninja, cmake, or package managers). GPU packages may JIT on
+  import, so inspect their source locally but run imports/probes only through permitted GPU operations.
+  If required tooling is unavailable, choose supported tooling or report a blocker.
+- Shared Gateway infrastructure is Supervisor-owned. Do not start, stop, signal, reconfigure, or
+  replace its services, screen/SSH sessions, state, database, logs, or jobs. Report infrastructure
+  failure; do not repair the service yourself.

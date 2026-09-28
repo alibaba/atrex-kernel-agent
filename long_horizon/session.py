@@ -129,6 +129,9 @@ class LongSessionRunner:
                 {str(key): str(value) for key, value in telemetry_environment.items()}
             )
         telemetry_attempt_prefix = environment.get("ATREX_TELEMETRY_ATTEMPT_ID")
+        from orchestrator.agent_home import prepare_agent_environment
+
+        environment = prepare_agent_environment(workspace, environment, session_id)
         codex_observer = None
         codex_setup_errors: tuple[str, ...] = ()
         if is_codex:
@@ -233,13 +236,20 @@ class LongSessionRunner:
             )
             if ledger_failed:
                 codex_ledger_usable = False
+            from orchestrator.session_capture import captured_observation
+
+            captured = captured_observation(stdout, events, capabilities)
+            native_usage_observed = bool(
+                captured is not None and captured.capabilities.usage_delta_observed
+            )
             ledger_usage_observed = bool(
                 is_codex
                 and capabilities.usage_delta_observed
-                and not ledger_failed
+                and (not ledger_failed or native_usage_observed)
             )
             resume_usage_qualified = bool(
                 ledger_usage_observed
+                and terminal_usage.measurement == "exact"
                 and not any(
                     value.startswith("codex_")
                     for value in observation_errors
@@ -276,7 +286,7 @@ class LongSessionRunner:
                 else (
                     0
                     if is_codex
-                    else main_adapter.tokens_from_stream(stdout)
+                    else main_adapter.tokens_from_stream(stdout, backend=self.agent_cli)
                 )
             )
             invocations.append(

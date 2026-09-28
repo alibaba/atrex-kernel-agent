@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -25,25 +26,54 @@ GENERATORS = {"uniform", "log_uniform", "sparse", "alternating", "constant", "ra
 def validate_suite(suite):
     if not isinstance(suite, dict) or suite.get("schema_version") != 1:
         raise ValueError("unsupported numerical suite schema")
-    if type(suite.get("world_size")) is not int or suite["world_size"] < 1:
+    if set(suite) - {"schema_version", "world_size", "seeds", "coverage", "cases"}:
+        raise ValueError("numerical suite cannot override evaluator policy")
+    if type(suite.get("world_size")) is not int or not 1 <= suite["world_size"] <= 64:
         raise ValueError("numerical suite requires a positive world_size")
     seeds = suite.get("seeds", [])
-    if len(seeds) < 2 or len(set(seeds)) != len(seeds) or any(type(s) is not int for s in seeds):
-        raise ValueError("numerical suite requires at least two distinct integer seeds")
+    if (not isinstance(seeds, list) or len(seeds) != 2
+            or any(type(s) is not int or not 0 <= s < 2**32 for s in seeds) or len(set(seeds)) != 2):
+        raise ValueError("numerical suite requires two distinct uint32 seeds")
     cases = suite.get("cases", [])
-    if not 1 <= len(cases) <= 3 or len({c["id"] for c in cases}) != len(cases):
+    if (not isinstance(cases, list) or not 1 <= len(cases) <= 3
+            or any(not isinstance(c, dict) or not isinstance(c.get("id"), str)
+                   or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", c["id"]) for c in cases)
+            or len({c["id"] for c in cases}) != len(cases)):
         raise ValueError("supplemental validation requires one to three distinct cases")
     for case in cases:
-        if not case.get("purpose") or not case.get("fields"):
+        if (not isinstance(case.get("purpose"), str) or not 1 <= len(case["purpose"]) <= 2000
+                or not isinstance(case.get("fields"), dict) or not 1 <= len(case["fields"]) <= 32):
             raise ValueError("every numerical case needs a purpose and explicit input rules")
-        for rule in case["fields"].values():
+        for name, rule in case["fields"].items():
+            if not isinstance(name, str) or not 1 <= len(name) <= 128 or not isinstance(rule, dict):
+                raise ValueError("numerical fields require bounded ABI paths and generator objects")
             kind = rule.get("generator")
             if kind not in GENERATORS:
                 raise ValueError(f"unsupported numerical generator: {kind}")
+            required = {"constant": {"value"}, "uniform": {"low", "high"},
+                        "log_uniform": {"min_exp", "max_exp"}, "sparse": {"low", "high", "density"},
+                        "alternating": {"amplitude"}, "ramp": {"low", "high"},
+                        "packed_bytes": set(), "near_constant": {"center", "amplitude"}}[kind]
+            optional = {"log_uniform": {"signed"}, "alternating": {"opposite_ranks"}, "ramp": {"axis"}}.get(kind, set())
+            if not required <= rule.keys() or set(rule) - required - optional - {"generator"}:
+                raise ValueError(f"invalid arguments for numerical generator {kind}")
+            for key in required:
+                if type(rule[key]) not in {int, float} or not math.isfinite(rule[key]):
+                    raise ValueError("generator parameters must be finite numbers")
+            for key in optional & rule.keys():
+                if type(rule[key]) is not (int if key == "axis" else bool):
+                    raise ValueError("invalid optional generator parameter type")
+            if ("low" in rule and rule["low"] > rule["high"]
+                    or "min_exp" in rule and rule["min_exp"] > rule["max_exp"]
+                    or "amplitude" in rule and rule["amplitude"] < 0
+                    or "density" in rule and not 0 <= rule["density"] <= 1):
+                raise ValueError("invalid numerical generator range")
+        if not isinstance(case.get("input_constraints", {}), dict):
+            raise ValueError("input_constraints must be an object")
         for bounds in case.get("input_constraints", {}).values():
             if not isinstance(bounds, dict) or not bounds or set(bounds) - {"min", "max", "eq"}:
                 raise ValueError("input constraints require min/max/eq scalar bounds")
-            if any(type(value) not in {int, float, bool} for value in bounds.values()):
+            if any(type(value) not in {int, float, bool} or not math.isfinite(value) for value in bounds.values()):
                 raise ValueError("input constraint bounds must be numeric")
     if suite.get("coverage", "compact") != "compact":
         raise ValueError("supplemental validation uses bounded compact coverage")

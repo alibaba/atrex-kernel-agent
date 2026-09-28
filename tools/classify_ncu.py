@@ -372,7 +372,7 @@ def format_summary(metrics, findings):
             symptoms_for_wiki.add(PATTERNS[f[0]][2])
     for s in sorted(symptoms_for_wiki):
         lines.append(
-            f"knowledge: symptom '{s}'; consult enabled tools via .atrex_plugins/instructions.md"
+            f"knowledge: symptom '{s}'; discover enabled tools with `python3 tools/plugin.py list`"
         )
 
     return "\n".join(lines) + "\n"

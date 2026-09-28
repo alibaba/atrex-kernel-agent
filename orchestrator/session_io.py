@@ -86,7 +86,8 @@ def _render(template_path: Path, **kw: str) -> str:
 def ensure_submodules(platform: str = "", arch: str = "") -> None:
     """Initialize submodules required by the optimization pipeline.
 
-    Covers 3rdparty/ncu-report-skill. Optional plugin skills are installed when available.
+    Always covers 3rdparty/ncu-report-skill. KernelWiki's Agent-facing skill
+    and the GPU Wiki JSON stores are repository-native, not submodules.
     PPU campaigns also require their vendor reference projects: without those
     working trees the framework-baseline catalog silently contains no usable
     PPU implementation sources.
@@ -432,7 +433,7 @@ def sandbox_directive(
     url: str = "",
     ssh: str = "",
 ) -> str:
-    """Mandatory safety boundary plus full-mode workflow for full episodes."""
+    """Execution boundary and GPU measurement guidance for optimization Episodes."""
     endpoint = _sandbox_endpoint(profile, url, ssh)
     safety = _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
@@ -443,22 +444,10 @@ def sandbox_directive(
     return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
 
 
-def fast_sandbox_directive(
-    hardware: str,
-    profile: str = "",
-    url: str = "",
-    ssh: str = "",
-) -> str:
-    """Mandatory safety boundary for fast episodes.
-
-    The fast episode prompt already describes the fast-specific execution
-    contract (single evaluator, no multi-seed, no profile, supervisor-owned
-    memory), so only the invariant safety boundary is injected here.
-    """
-    endpoint = _sandbox_endpoint(profile, url, ssh)
-    return _render(
-        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", ssh: str = "") -> str:
+    """Execution boundary without optimization guidance, for baseline sessions."""
+    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware,
+                   ENDPOINT=_sandbox_endpoint(profile, url, ssh))
 
 
 def _sandbox_command(
@@ -477,9 +466,8 @@ def _sandbox_command(
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
     preflight: bool = False,
-    cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    """Run the private GPU executor for trusted Supervisor verification."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
         raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
     cmd = [
@@ -543,7 +531,7 @@ def _sandbox_command(
             except ProcessLookupError:
                 pass
         try:
-            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
+            # The private executor handles SIGTERM with bounded SSH cleanup;
             # allow that 15-second cleanup window to persist a retry marker.
             return process.communicate(timeout=20)
         except subprocess.TimeoutExpired:
@@ -556,8 +544,6 @@ def _sandbox_command(
     deadline = time.monotonic() + effective_timeout
     try:
         while True:
-            if cancel_event is not None and cancel_event.is_set():
-                raise subprocess.SubprocessError("sandbox command cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 stdout, stderr = stop_process_group()

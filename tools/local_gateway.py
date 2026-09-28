@@ -72,6 +72,10 @@ MAX_SOURCE_BYTES = 24 * 1024 * 1024
 MAX_PROFILE_COUNTERS = 256
 PROFILE_LEVELS = frozenset({"survey", "sol", "deep"})
 PROFILE_TOOLS = frozenset({"ncu", "rocprofv3"})
+INFRASTRUCTURE_REASONS = frozenset({
+    "scheduler_stopped", "scheduler_restarted", "execution_error", "invalid_eval_result",
+    "evaluator_failed", "invalid_diagnostic_result", "diagnostic_failed",
+})
 
 
 def _json_dumps(value: Any) -> str:
@@ -85,8 +89,13 @@ def _json_loads(value: str | None) -> Any:
 
 
 def _error(reason: str, message: str, trace_id: str | None = None, **details: Any) -> dict[str, Any]:
+    infrastructure = reason in INFRASTRUCTURE_REASONS
+    if infrastructure:
+        details = {**details, "failure_origin": "infrastructure"}
+    elif reason == "command_timeout":
+        details = {**details, "failure_origin": "unknown"}
     return {
-        "error_class": "local_gateway",
+        "error_class": "infra" if infrastructure else "local_gateway",
         "reason": reason,
         "message": message,
         "details": details,

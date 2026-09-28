@@ -62,9 +62,6 @@
 	path = reference-projects/tilelang
 	url = https://github.com/tile-ai/tilelang.git
 	shallow = false
-[submodule "gpu-wiki/3rdparty/KernelWiki"]
-	path = gpu-wiki/3rdparty/KernelWiki
-	url = https://github.com/mit-han-lab/KernelWiki.git
 [submodule "gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys"]
 	path = gpu-wiki/3rdparty/modern-gpu-programming-for-mlsys
 	url = https://github.com/mlc-ai/modern-gpu-programming-for-mlsys.git

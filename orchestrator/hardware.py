@@ -152,7 +152,7 @@ def hardware_directive(platform: str, arch: str) -> str:
         "build/target flags your DSL/compiler exposes for THAT architecture and generation. Do NOT fall "
         "back to an older-arch portable path because of the device name, and do NOT assume a different "
         "vendor or generation than the detected one.\n"
-        "- Hardware facts must have auditable sources. State the exact true product and runtime "
-        "architecture when consulting enabled knowledge tools or primary specifications; never "
+        "- Hardware facts must have auditable sources. State the exact true product and authoritative "
+        "runtime architecture in every hardware-knowledge request and when consulting primary specifications; never "
         "substitute another hardware identity or guess missing limits.\n"
     )
