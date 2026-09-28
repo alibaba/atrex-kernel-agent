@@ -3266,6 +3266,11 @@ def _run_eval_with_retry(
             if not retryable:
                 raise
             if attempt == len(EVAL_RETRY_DELAYS):
+                # HTTP failures have no CompletedProcess envelope in which to
+                # preserve the status and diagnostics.  Emit the shared marker
+                # and re-raise so the caller retains its existing HTTP/status
+                # classification.  CLI failures below already have an envelope,
+                # so they return that process with the same marker appended.
                 print(EVAL_RETRIES_EXHAUSTED, file=sys.stderr)
                 raise
             detail = f"gateway HTTP {exc.status}; evaluator details withheld" if generalized else str(exc)
