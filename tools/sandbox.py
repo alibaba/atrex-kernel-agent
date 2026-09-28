@@ -242,8 +242,13 @@ ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
-EVAL_RETRY_DELAYS = (5, 15, 30)
+# One admission/transport retry is intentionally enough.  Eval attempts bypass
+# the separate cancellation retry and classify cancellation without an outcome
+# here instead, so retries never nest.  The worst case is therefore two
+# evaluator wait budgets plus this delay per shape batch.
+EVAL_RETRY_DELAYS = (5,)
 EVAL_RETRIES_EXHAUSTED = "[sandbox] eval retries exhausted; dev fallback disabled"
+ATREX_EVAL_BACKEND = "atrex"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -2683,6 +2688,7 @@ def _run_direct_job(
     payload: dict[str, Any],
     timeout: int,
     queue_wait_grace: int,
+    retry_cancelled_without_outcome: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     prior_note = ""
@@ -2706,7 +2712,11 @@ def _run_direct_job(
                     wait_for + 10,
                 )
                 if job.get("status") in ("succeeded", "failed", "cancelled"):
-                    if submission == 0 and _cancelled_without_outcome(job):
+                    if (
+                        retry_cancelled_without_outcome
+                        and submission == 0
+                        and _cancelled_without_outcome(job)
+                    ):
                         prior_note = (
                             f"[sandbox] gateway cancelled job_id={job_id} without a "
                             "result/error; resubmitted once"
@@ -3134,9 +3144,15 @@ def _typed_agate_command(
     queue_wait_grace: int,
     reference_dir: Path | None = None,
 ) -> list[str]:
-    """Build an agate eval/profile invocation for a typed request."""
+    """Build an agate eval/profile invocation for a typed request.
+
+    ``run`` is this sandbox's logical correctness/performance operation.  Its
+    request is assembled from the native Atrex-Bench contract, so the canonical
+    Agate entry point is explicitly ``eval --backend atrex``.  Gateway profiles
+    select an endpoint; they do not change the evaluator backend.
+    """
     command = (
-        [executable, "eval", "--backend", "atrex"]
+        [executable, "eval", "--backend", ATREX_EVAL_BACKEND]
         if kind == "run" else [executable, kind]
     )
     if args.url:
@@ -3210,6 +3226,8 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
     if job is not None:
         if job.get("status") == "succeeded" or job.get("result") is not None:
             return False
+        if _cancelled_without_outcome(job):
+            return True
         error = job.get("error")
         if not isinstance(error, dict):
             return False
@@ -3217,18 +3235,15 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
         reason = error.get("reason")
         if category == "code":
             return False
-        return reason in {"invalid_source", "source_validation_failed"} or (
-            category == "infra" and reason in {
-                "submit_failed", "dashboard_unreachable", "backend_unavailable",
-                "deps_install_timeout", "logs_unavailable",
-            }
-        )
+        return category == "infra" and reason in {
+            "submit_failed", "dashboard_unreachable", "backend_unavailable",
+            "deps_install_timeout", "logs_unavailable",
+        }
     if proc.returncode == 0:
         return False
     detail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).lower()
     return (
         any(marker in detail for marker in (
-            "source validation failed", "invalid_source", "source_validation_failed",
             "connection reset by peer", "connection refused",
             "temporary failure in name resolution", "ray job submit failed",
             "infra/submit_failed", "infra/dashboard_unreachable",
@@ -3247,10 +3262,7 @@ def _run_eval_with_retry(
         try:
             proc = action()
         except GatewayHTTPError as exc:
-            retryable = exc.status in {429, 502, 503, 504} or any(
-                marker in str(exc).lower()
-                for marker in ("source validation failed", "invalid_source", "source_validation_failed")
-            )
+            retryable = exc.status in {429, 502, 503, 504}
             if not retryable:
                 raise
             if attempt == len(EVAL_RETRY_DELAYS):
@@ -4100,6 +4112,7 @@ def _run_typed_gateway(
                             payload=batch_request,
                             timeout=args.timeout,
                             queue_wait_grace=queue_wait_grace,
+                            retry_cancelled_without_outcome=False,
                         )
                     if kind == "run":
                         return _run_eval_with_retry(direct_request, generalized=generalized)
@@ -4123,7 +4136,7 @@ def _run_typed_gateway(
                     reference_dir,
                 )
                 def cli_request() -> subprocess.CompletedProcess[str]:
-                    return _run_agate_with_cancel_retry(
+                    return _run_agate_once(
                         agate=agate,
                         executable=agate_executable,
                         url=args.url,

@@ -22,32 +22,27 @@ def process(code: int = 2, *, stderr: str = "", job: dict | None = None):
 
 
 class EvalRetryTests(unittest.TestCase):
-    def test_source_rejection_retries_eval_and_retains_original_error(self):
-        action = mock.Mock(side_effect=[
-            process(stderr="source validation failed: blocked import: ctypes"),
-            process(0, job={"job_id": "ev_ok", "status": "succeeded", "result": {}}),
-        ])
-        output = io.StringIO()
-        with mock.patch.object(sandbox, "EVAL_RETRY_DELAYS", (5, 15)), \
-             mock.patch.object(sandbox.time, "sleep") as sleep, \
-             contextlib.redirect_stderr(output):
+    def test_source_rejection_is_terminal(self):
+        action = mock.Mock(return_value=process(
+            stderr="source validation failed: blocked import: ctypes"
+        ))
+        with mock.patch.object(sandbox.time, "sleep") as sleep:
             result = sandbox._run_eval_with_retry(action, generalized=False)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(action.call_count, 2)
-        sleep.assert_called_once_with(5)
-        self.assertIn("blocked import: ctypes", output.getvalue())
-        self.assertIn("retrying the same eval", output.getvalue())
-
-    def test_persistent_rejection_is_bounded_and_returns_error(self):
-        action = mock.Mock(return_value=process(stderr="source validation failed"))
-        with mock.patch.object(sandbox, "EVAL_RETRY_DELAYS", (0, 0, 0)), \
-             mock.patch.object(sandbox.time, "sleep"), \
-             contextlib.redirect_stderr(io.StringIO()):
-            result = sandbox._run_eval_with_retry(action, generalized=False)
-        self.assertEqual(action.call_count, 4)
         self.assertEqual(result.returncode, 2)
-        self.assertIn(sandbox.EVAL_RETRIES_EXHAUSTED, result.stderr)
-        self.assertIn("source validation failed", result.stderr)
+        action.assert_called_once_with()
+        sleep.assert_not_called()
+
+    def test_structured_source_rejection_is_terminal(self):
+        action = mock.Mock(return_value=process(1, job={
+            "job_id": "ev_reject", "status": "failed", "error": {
+                "error_class": "input", "reason": "source_validation_failed",
+            },
+        }))
+        with mock.patch.object(sandbox.time, "sleep") as sleep:
+            result = sandbox._run_eval_with_retry(action, generalized=False)
+        self.assertEqual(result.returncode, 1)
+        action.assert_called_once_with()
+        sleep.assert_not_called()
 
     def test_completed_kernel_failures_and_code_errors_are_not_retried(self):
         for job in (
@@ -78,16 +73,44 @@ class EvalRetryTests(unittest.TestCase):
             self.assertEqual(sandbox._run_eval_with_retry(action, generalized=False).returncode, 0)
         self.assertEqual(action.call_count, 2)
 
-    def test_http_source_rejection_retries_without_dev(self):
+    def test_cancellation_without_outcome_uses_only_outer_retry(self):
         action = mock.Mock(side_effect=[
-            sandbox.GatewayHTTPError(400, "source validation failed"),
-            process(0),
+            process(1, job={"job_id": "ev_cancelled", "status": "cancelled"}),
+            process(0, job={"job_id": "ev_ok", "status": "succeeded", "result": {}}),
         ])
         with mock.patch.object(sandbox, "EVAL_RETRY_DELAYS", (0,)), \
              mock.patch.object(sandbox.time, "sleep"), \
              contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(sandbox._run_eval_with_retry(action, generalized=False).returncode, 0)
+            result = sandbox._run_eval_with_retry(action, generalized=False)
+        self.assertEqual(result.returncode, 0)
         self.assertEqual(action.call_count, 2)
+
+    def test_direct_eval_can_disable_nested_cancel_resubmission(self):
+        gateway = mock.Mock(side_effect=[
+            {"job_id": "ev_cancelled"},
+            {"job_id": "ev_cancelled", "status": "cancelled"},
+        ])
+        with mock.patch.object(sandbox, "_gateway_json", gateway):
+            result = sandbox._run_direct_job(
+                url="https://gateway.invalid",
+                kind="eval",
+                payload={},
+                timeout=60,
+                queue_wait_grace=0,
+                retry_cancelled_without_outcome=False,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(gateway.call_count, 2)
+
+    def test_http_source_rejection_is_terminal(self):
+        action = mock.Mock(side_effect=sandbox.GatewayHTTPError(
+            400, "source validation failed"
+        ))
+        with mock.patch.object(sandbox.time, "sleep") as sleep, \
+             self.assertRaises(sandbox.GatewayHTTPError):
+            sandbox._run_eval_with_retry(action, generalized=False)
+        action.assert_called_once_with()
+        sleep.assert_not_called()
 
     def test_http_retries_exhausted_keep_error_and_marker(self):
         action = mock.Mock(side_effect=sandbox.GatewayHTTPError(503, "unavailable"))
@@ -102,7 +125,7 @@ class EvalRetryTests(unittest.TestCase):
 
     def test_generalized_retry_logs_do_not_expose_hidden_cases(self):
         action = mock.Mock(side_effect=[
-            process(stderr="source validation failed: hidden-shape-secret"),
+            process(stderr="connection reset by peer: hidden-shape-secret"),
             process(0),
         ])
         output = io.StringIO()
@@ -112,6 +135,9 @@ class EvalRetryTests(unittest.TestCase):
             sandbox._run_eval_with_retry(action, generalized=True)
         self.assertNotIn("hidden-shape-secret", output.getvalue())
         self.assertIn("details withheld", output.getvalue())
+
+    def test_default_budget_allows_one_outer_retry(self):
+        self.assertEqual(sandbox.EVAL_RETRY_DELAYS, (5,))
 
     def test_typed_command_uses_canonical_eval_entry(self):
         args = argparse.Namespace(url=None, gateway_profile=None, hardware="test", timeout=60, env=[])
@@ -140,8 +166,8 @@ class EvalRetryTests(unittest.TestCase):
                  mock.patch.object(sandbox, "_typed_agate_command", return_value=["agate", "eval"]), \
                  mock.patch.object(sandbox, "EVAL_RETRY_DELAYS", (0,)), \
                  mock.patch.object(sandbox.time, "sleep"), \
-                 mock.patch.object(sandbox, "_run_agate_with_cancel_retry", return_value=process(
-                     stderr="source validation failed: hidden-shape-secret")) as runner, \
+                 mock.patch.object(sandbox, "_run_agate_once", return_value=process(
+                     stderr="connection reset by peer: hidden-shape-secret")) as runner, \
                  contextlib.redirect_stderr(output):
                 result = sandbox._run_typed_gateway(args, Path(tmp), [], "run", [], 0)
             self.assertEqual(result, 2)
