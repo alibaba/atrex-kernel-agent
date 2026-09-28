@@ -243,9 +243,10 @@ NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
 # One admission/transport retry is intentionally enough.  Eval attempts bypass
-# the separate cancellation retry and classify cancellation without an outcome
-# here instead, so retries never nest.  The worst case is therefore two
-# evaluator wait budgets plus this delay per shape batch.
+# the separate gateway retry loop and classify cancellation without an outcome
+# and queue timeout before start here instead, so retries never nest.  The one
+# retry also preserves the existing L20N -> l20n-ray placement failover.  The
+# worst case is therefore two evaluator wait budgets plus this delay per batch.
 EVAL_RETRY_DELAYS = (5,)
 EVAL_RETRIES_EXHAUSTED = "[sandbox] eval retries exhausted; dev fallback disabled"
 ATREX_EVAL_BACKEND = "atrex"
@@ -3226,7 +3227,7 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
     if job is not None:
         if job.get("status") == "succeeded" or job.get("result") is not None:
             return False
-        if _cancelled_without_outcome(job):
+        if _cancelled_without_outcome(job) or _queue_timeout_before_start(job):
             return True
         error = job.get("error")
         if not isinstance(error, dict):
@@ -3257,7 +3258,7 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
 def _run_eval_with_retry(
     action: Callable[[], subprocess.CompletedProcess[str]], *, generalized: bool
 ) -> subprocess.CompletedProcess[str]:
-    """Keep the same eval request and retain diagnostics across bounded retries."""
+    """Keep the typed eval route and retain diagnostics across bounded retries."""
     for attempt in range(len(EVAL_RETRY_DELAYS) + 1):
         try:
             proc = action()
@@ -3290,7 +3291,7 @@ def _run_eval_with_retry(
         delay = EVAL_RETRY_DELAYS[attempt]
         print(
             f"[sandbox] eval attempt {attempt + 1}/{len(EVAL_RETRY_DELAYS) + 1} failed: {detail}\n"
-            f"[sandbox] retrying the same eval request in {delay}s; dev fallback disabled",
+            f"[sandbox] retrying the typed eval request in {delay}s; dev fallback disabled",
             file=sys.stderr, flush=True,
         )
         time.sleep(delay)
@@ -4140,9 +4141,12 @@ def _run_typed_gateway(
                     queue_wait_grace,
                     reference_dir,
                 )
+                eval_agate = agate
+
                 def cli_request() -> subprocess.CompletedProcess[str]:
-                    return _run_agate_once(
-                        agate=agate,
+                    nonlocal eval_agate
+                    proc = _run_agate_once(
+                        agate=eval_agate,
                         executable=agate_executable,
                         url=args.url,
                         gateway_profile=args.gateway_profile,
@@ -4151,6 +4155,27 @@ def _run_typed_gateway(
                         ),
                         wait_budget=args.timeout + queue_wait_grace,
                     )
+                    # A Ray submit API mismatch is a placement failure, not an
+                    # evaluator outcome.  Preserve the old L20N compatibility
+                    # failover inside the single outer eval retry instead of
+                    # reintroducing the unbounded/nested gateway retry loop.
+                    fallback = (
+                        _l20n_failover_command(eval_agate)
+                        if kind == "run" and _ray_submit_version_mismatch(
+                            _job_response(proc.stdout or "")
+                        )
+                        else None
+                    )
+                    if fallback is not None:
+                        eval_agate = fallback
+                        print(
+                            "[sandbox] L20N submit cluster unavailable; "
+                            "next bounded eval attempt uses l20n-ray",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    return proc
+
                 if kind == "run":
                     return _run_eval_with_retry(cli_request, generalized=generalized)
                 return cli_request()
