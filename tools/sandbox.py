@@ -3227,7 +3227,11 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
     if job is not None:
         if job.get("status") == "succeeded" or job.get("result") is not None:
             return False
-        if _cancelled_without_outcome(job) or _queue_timeout_before_start(job):
+        if (
+            _cancelled_without_outcome(job)
+            or _queue_timeout_before_start(job)
+            or _ray_submit_version_mismatch(job)
+        ):
             return True
         error = job.get("error")
         if not isinstance(error, dict):
@@ -4118,7 +4122,7 @@ def _run_typed_gateway(
                             payload=batch_request,
                             timeout=args.timeout,
                             queue_wait_grace=queue_wait_grace,
-                            retry_cancelled_without_outcome=False,
+                            retry_cancelled_without_outcome=kind != "run",
                         )
                     if kind == "run":
                         return _run_eval_with_retry(direct_request, generalized=generalized)
@@ -4141,6 +4145,21 @@ def _run_typed_gateway(
                     queue_wait_grace,
                     reference_dir,
                 )
+                if kind != "run":
+                    # Profile keeps its established gateway recovery policy.
+                    # Only eval replaces that helper with the bounded outer
+                    # policy below to prevent a typed eval from becoming dev.
+                    return _run_agate_with_cancel_retry(
+                        agate=agate,
+                        executable=agate_executable,
+                        url=args.url,
+                        gateway_profile=args.gateway_profile,
+                        command_timeout=_gateway_job_timeout(
+                            args.timeout, queue_wait_grace
+                        ),
+                        wait_budget=args.timeout + queue_wait_grace,
+                    )
+
                 eval_agate = agate
 
                 def cli_request() -> subprocess.CompletedProcess[str]:
@@ -4161,7 +4180,7 @@ def _run_typed_gateway(
                     # reintroducing the unbounded/nested gateway retry loop.
                     fallback = (
                         _l20n_failover_command(eval_agate)
-                        if kind == "run" and _ray_submit_version_mismatch(
+                        if _ray_submit_version_mismatch(
                             _job_response(proc.stdout or "")
                         )
                         else None
@@ -4176,9 +4195,7 @@ def _run_typed_gateway(
                         )
                     return proc
 
-                if kind == "run":
-                    return _run_eval_with_retry(cli_request, generalized=generalized)
-                return cli_request()
+                return _run_eval_with_retry(cli_request, generalized=generalized)
 
             batch_items = list(enumerate(shape_batches))
             if batched:
