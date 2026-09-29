@@ -220,6 +220,9 @@ EVALUATION_INPUT_PATHS = frozenset(
         "workload.jsonl",
     }
 )
+ABBA_DRIVER_PATH = PurePosixPath(
+    "verification_artifacts/agent-comparison/test_kernel.py"
+)
 CANDIDATE_RUNTIME_INPUT_PATHS = frozenset(
     {
         "agent_problem.json",
@@ -777,7 +780,13 @@ def _python_script_index(parts: list[str], script_name: str) -> int | None:
     # Interpreter flags, environment assignments and wrapper executables are
     # not part of the canonical API. Target-bearing variants are rejected by
     # _is_unsafe_target_command instead of silently becoming generic Dev jobs.
-    return 1 if command[1] == script_name else None
+    entrypoint = PurePosixPath(command[1])
+    allowed = {PurePosixPath(script_name)}
+    if script_name == "test_kernel.py":
+        # same_allocation_abba copies its trusted driver into this private
+        # workspace-relative control path before launching a nested Dev job.
+        allowed.add(ABBA_DRIVER_PATH)
+    return 1 if entrypoint in allowed else None
 
 
 def _test_kernel_script_index(parts: list[str]) -> int | None:

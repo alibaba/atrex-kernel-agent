@@ -136,9 +136,12 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         print(json.dumps({"kind": "same_allocation_abba", "shape_count": len(ids),
                           "comparison_repeats": args.comparison_repeats}))
         return 0
-    control = workspace / "verification_artifacts" / "agent-comparison"
+    control = workspace / gateway.ABBA_DRIVER_PATH.parent
     control.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(gateway.REPO_ROOT / "long_horizon/remote_abba.py", control / "test_kernel.py")
+    shutil.copy2(
+        gateway.REPO_ROOT / "long_horizon/remote_abba.py",
+        workspace / gateway.ABBA_DRIVER_PATH,
+    )
     (control / "snapshots").mkdir(exist_ok=True)
     (control / "snapshots/baseline.py").write_text(baseline)
     (control / "snapshots/candidate.py").write_bytes((workspace / "kernel.py").read_bytes())
@@ -172,7 +175,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             nested += ["--ssh-runtime-bind", bind]
         for item in args.env:
             nested += ["--env", item]
-        nested += ["--", "python3", str((control / "test_kernel.py").relative_to(workspace)),
+        nested += ["--", "python3", gateway.ABBA_DRIVER_PATH.as_posix(),
                    str(request.relative_to(workspace)), str(result.relative_to(workspace))]
         batch = f"ABBA batch {index + 1}/{len(batches)}"
         identity = {"schedule": schedule, "shape_ids": shapes, "batch": index}
