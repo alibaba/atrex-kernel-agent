@@ -70,7 +70,7 @@ class NumericalCancellation:
         return seconds
 
 
-def validate_candidate(campaign, workspace, *, source=None, parent=None):
+def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="episode"):
     """Freeze inputs outside the Agent workspace before planning or execution.
 
     The caller must have verified ordinary correctness of these candidate bytes.
@@ -122,7 +122,7 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None):
                 return f"{SUPPLEMENTAL_PENDING_PREFIX}: trusted input.py/reference.py/shapes.json unavailable"
             publish(frozen, "test_kernel.py", HARNESS.read_bytes())
             return supplemental_feedback(campaign, frozen, state_root=state_root,
-                                         standard_correctness_passed=True, cancel=cancel)
+                                         standard_correctness_passed=True, cancel=cancel, flow=flow)
 
 
 def _digest(files):
@@ -135,16 +135,17 @@ def _digest(files):
 def _sources(campaign, workspace):
     from .session_io import _production_review_candidate_paths
 
-    private = workspace
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
-    for name in ("input.py", "reference.py", "agent_problem.json"):
-        path = private / name if (private / name).is_file() else workspace / name
+    # Metadata/configuration are part of the pinned public input contract and
+    # must be visible as evidence if the reviewer reasons about their values.
+    for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "config.json", "definition.json"):
+        path = workspace / name
         if path.is_file():
             files["trusted/" + name] = path
     # Private workload parameters are used only by the supervisor/remote evaluator.
-    shapes = private / "shapes.json"
+    shapes = workspace / "shapes.json"
     return files, shapes
 
 
@@ -358,7 +359,8 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
     return {"status": status, "probes": results}
 
 
-def supplemental_feedback(campaign, workspace, *, state_root, standard_correctness_passed=False, cancel):
+def supplemental_feedback(campaign, workspace, *, state_root, standard_correctness_passed=False,
+                          cancel, flow="episode"):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
@@ -370,7 +372,7 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
                              if (workspace / name).is_file()})
     validation_digest = _digest(validation_files)
     cache = getattr(campaign, "_supplemental_results", {})
-    key = (str(state_root), validation_digest, standard_correctness_passed)
+    key = (str(state_root), validation_digest, standard_correctness_passed, flow)
     if key in cache:
         return cache[key]
 
@@ -503,16 +505,27 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     if status in {"passed", "advisory", "skipped_planner_timeout"}:
         feedback = ""
     elif status == "needs_repair":
+        next_step = (
+            "Repair kernel.py, rerun the bounded V1 smoke command, then stop. "
+            "Do not submit episode-report. "
+            if flow == "framework_baseline" else
+            "Repair kernel.py, measure the changed candidate, record its Experiment and resubmit episode-report. "
+        )
         feedback = (
             f"{SUPPLEMENTAL_REPAIR_PREFIX}: {rendered}\n"
-            "Repair kernel.py, measure the changed candidate, record its Experiment and resubmit episode-report. "
+            + next_step +
             "The Supervisor reruns the retained probes. Do not edit the harness, probe plan or tolerances."
         )
     else:
+        pending_step = (
+            "Preserve the V1 candidate and ask the operator to inspect the private numerical validation record."
+            if flow == "framework_baseline" else
+            "Preserve the candidate; ask the operator to inspect the private numerical validation record, "
+            "or submit an evidence-backed blocked report."
+        )
         feedback = (
             f"{SUPPLEMENTAL_PENDING_PREFIX}: {rendered}\n"
-            "This is not a measured Kernel failure. Preserve the candidate; ask the operator to inspect "
-            "the private numerical validation record, or submit an evidence-backed blocked report."
+            "This is not a measured Kernel failure. " + pending_step
         )
     # Pending infrastructure/evaluator results are retryable even for unchanged code.
     if status != "needs_validation":

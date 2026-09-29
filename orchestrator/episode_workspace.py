@@ -24,7 +24,12 @@ MAX_TOTAL = 64 * 1024 * 1024
 
 
 def _read(path: Path) -> bytes:
-    value = read_regular_bytes(path, limit=MAX_FILE + 1)
+    try:
+        value = read_regular_bytes(path, limit=MAX_FILE + 1)
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise ValueError(f"Episode diagnostic file must be a regular non-symlink file: {path.name}") from error
     if len(value) > MAX_FILE:
         raise ValueError(f"Episode file exceeds 16 MiB: {path.name}")
     return value

@@ -73,6 +73,10 @@ class RequestDispatchTimeout(RuntimeError):
     """A queue/deadline failure known to precede executor creation."""
 
 
+class GatewayExecutionUnavailable(RuntimeError):
+    """A dispatched GPU request ended without a trustworthy outcome."""
+
+
 class SessionRevokedError(RuntimeError):
     """Authorization was lost before executor creation."""
 
@@ -235,7 +239,8 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
             and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, "ATREX_AKA_MEASUREMENT_REPETITIONS",
-                            "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT"}}
+                            "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",
+                            "ATREX_AKA_IDENTITY_KEY"}}
 
 
 @dataclass(frozen=True)
@@ -491,14 +496,13 @@ class SupervisorRuntime:
         return load_journal(self.episode_journal_path(episode))
 
     def register_episode(self, workspace: Path, *, episode: int, base_commit: str,
-                         branch: str, memory_version: int, minimum_experiments: int = 0,
+                         branch: str, memory_version: int,
                          supervisor_git: bool = False):
         """Trusted controller binding, never populated from an Agent request or file."""
         workspace = workspace.resolve(strict=True)
         if (type(episode) is not int or episode < 1 or type(memory_version) is not int
                 or memory_version < 1 or not isinstance(branch, str) or not branch
-                or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base_commit) is None
-                or type(minimum_experiments) is not int or minimum_experiments < 0):
+                or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base_commit) is None):
             raise ValueError("Invalid controller Episode identity")
         path = self.episode_journal_path(episode)
         evidence = path.parent
@@ -519,15 +523,6 @@ class SupervisorRuntime:
             if existing is not None:
                 if existing.service.path != path:
                     raise RuntimeError("Workspace already belongs to another Runtime Journal")
-                # Explicit historical minimum-count policies are immutable after binding.
-                # A repeated binding must not silently retain a different report gate.
-                if existing.service.minimum_experiments != minimum_experiments:
-                    raise RuntimeError(
-                        "Runtime Journal minimum_experiments changed for an already-bound "
-                        f"Episode: bound={existing.service.minimum_experiments}, "
-                        f"requested={minimum_experiments}. Resume with the original "
-                        "controller Episode trial contract; no binding was changed"
-                    )
                 if existing.service.supervisor_git != supervisor_git:
                     raise RuntimeError("Cannot change Git ownership during an Episode")
                 return existing.view.prepare() if existing.view else workspace
@@ -541,7 +536,7 @@ class SupervisorRuntime:
             binding = JournalBinding(SupervisorJournalService(
                 workspace=agent_workspace, git_workspace=workspace,
                 campaign_root=self.journals_root, evidence_root=evidence,
-                minimum_experiments=minimum_experiments, supervisor_git=supervisor_git), view=view)
+                supervisor_git=supervisor_git), view=view)
             self.journals[workspace] = binding
             self.journals[agent_workspace] = binding
             return agent_workspace
@@ -665,12 +660,14 @@ class SupervisorRuntime:
                             except ProcessLookupError:
                                 pass
                             process.wait()
-                            raise RuntimeError("Request interrupted; outcome may be unknown")
+                            raise GatewayExecutionUnavailable("Request interrupted; outcome may be unknown")
                         time.sleep(0.1)
                     output.seek(0)
                     errors.seek(0)
                     if os.fstat(output.fileno()).st_size > 4 * 1024 * 1024:
-                        raise RuntimeError("GPU output exceeds the parsing limit; outcome cannot be projected safely")
+                        raise GatewayExecutionUnavailable(
+                            "GPU output exceeds the parsing limit; outcome cannot be projected safely"
+                        )
                     return subprocess.CompletedProcess(command, process.returncode,
                         output.read(4 * 1024 * 1024 + 1).decode("utf-8", "replace"),
                         errors.read(128 * 1024 + 1).decode("utf-8", "replace"))
@@ -958,9 +955,24 @@ class SupervisorRuntime:
 
     def audit_process(self, capability, kind, argv, process, record_id=None):
         if self.audit_root:
+            audited_argv = list(argv)
+            if kind == "gateway":
+                audited_argv = []
+                redact_next = False
+                for value in argv:
+                    if redact_next:
+                        audited_argv.append("<redacted>")
+                        redact_next = False
+                        continue
+                    option = value.split("=", 1)[0]
+                    if option in {"--env", "--ssh-init", "--url"}:
+                        audited_argv.append(option + "=<redacted>" if "=" in value else option)
+                        redact_next = "=" not in value
+                    else:
+                        audited_argv.append(value)
             publish(self.audit_root, f"request-{capability.request_id or uuid.uuid4().hex}.json", json.dumps({
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "operation": kind, "argv": argv, "exit_code": process.returncode,
+                "operation": kind, "argv": audited_argv, "exit_code": process.returncode,
                 "stdout": process.stdout, "stderr": process.stderr,
                 "gateway_record_id": record_id,
                 "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
@@ -1001,7 +1013,7 @@ class SupervisorRuntime:
             invocation = dict(request, snapshot=self.plugins.snapshot())
             request_path = staged / ".plugin-request.json"
             request_path.write_text(json.dumps(invocation))
-            environment = dict(self.environment)
+            environment = scrub_environment(self.environment)
             environment.update(capability.context)
             # Preserve catalog-wide environment semantics without rehashing every
             # plugin/resource in the child. These are cached operator declarations.

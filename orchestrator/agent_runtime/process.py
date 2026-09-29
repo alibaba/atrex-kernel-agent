@@ -501,18 +501,20 @@ def _run_bounded(
     launch, view = wrap_agent_command(
         command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
     )
-    capture = start_session_capture(command, cwd, environment_values)
+    capture = None
     try:
+        capture = start_session_capture(command, cwd, environment_values)
         proc = spawn_owned_session(
             launch.command,
             role="coding-agent",
-            environment=environment_values,
+            environment=launch.environment,
             **({"inherited_fds": launch.pass_fds} if launch.pass_fds else {}),
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
         )
     except BaseException:
         finish_session_capture(capture, interrupted=True)

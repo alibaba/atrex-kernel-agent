@@ -9,9 +9,6 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from typing import Any
 
-FILTERED_PROVIDER_EVENTS = ("system/thinking_tokens",)
-
-
 def record_provider_line(line: str) -> bool:
     """Drop only high-frequency Claude token-estimate telemetry from Session evidence."""
     try:
@@ -23,11 +20,6 @@ def record_provider_line(line: str) -> bool:
         and event.get("type") == "system"
         and event.get("subtype") == "thinking_tokens"
     )
-
-
-def filter_provider_stdout(stdout: str) -> str:
-    """Preserve exact retained lines and their original line endings."""
-    return "".join(line for line in stdout.splitlines(keepends=True) if record_provider_line(line))
 
 
 def _record(sequence: int, record_type: str, source: str, **data: Any) -> dict[str, Any]:
@@ -314,6 +306,10 @@ def render_conversation(
     raw_provider_capture_complete: bool,
     error_type: str | None = None,
     system_prompt: str = "",
+    stderr: str = "",
+    started_at: str | None = None,
+    context: dict[str, Any] | None = None,
+    capture_errors: list[str] | None = None,
 ) -> str:
     """Render a reading view; original Provider streams remain separate audit files."""
     records = initial_records(
@@ -322,6 +318,10 @@ def render_conversation(
         prompt=prompt,
         system_prompt=system_prompt,
     )
+    if started_at is not None:
+        records[0]["started_at"] = started_at
+    if context is not None:
+        records[0]["context"] = context
     initial_count = len(records)
     sequence = initial_count
     for line in stdout.splitlines():
@@ -351,17 +351,19 @@ def render_conversation(
         )
     else:
         records.extend(native)
+    for line in stderr.splitlines():
+        records.append(provider_line_record(0, path="provider/stderr.log", line=line))
     for index, record in enumerate(records):
         record["sequence"] = index
     sequence = len(records)
-    records.append(
-        terminal_record(
-            sequence,
-            state=state,
-            exit_status=exit_status,
-            timed_out=timed_out,
-            raw_provider_capture_complete=raw_provider_capture_complete,
-            error_type=error_type,
-        )
+    terminal = terminal_record(
+        sequence,
+        state=state,
+        exit_status=exit_status,
+        timed_out=timed_out,
+        raw_provider_capture_complete=raw_provider_capture_complete,
+        error_type=error_type,
     )
+    terminal.update(capture_complete=not capture_errors, capture_errors=list(capture_errors or []))
+    records.append(terminal)
     return encode_records(records)

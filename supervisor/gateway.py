@@ -59,11 +59,13 @@ import argparse
 import ast
 import base64
 import hashlib
+import hmac
 import io
 import json
 import math
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -87,6 +89,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
+from orchestrator.agent_home import open_private_directory  # noqa: E402
 from orchestrator.session_tail import read_regular_bytes  # noqa: E402
 from orchestrator.sandbox_config import queue_wait_grace  # noqa: E402
 from orchestrator.ssh_health import (  # noqa: E402
@@ -98,7 +101,8 @@ from supervisor.projection import (  # noqa: E402
     NUMERICAL_RESULT_PREFIX, bounded_text, numerical_result, profile_result,
 )
 from supervisor.gateway_jobs import (  # noqa: E402
-    SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process, payload_identity,
+    SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process,
+    payload_identity, private_value_fingerprint,
 )
 
 DEFAULT_SYNC_PATHS = ("profiles",)
@@ -142,12 +146,6 @@ INPUT_SKIP_PATHS = {
     # can grow the materialized tools bundle enough to exceed agate's
     # per-argument limit despite being unrelated to validation.
     "tools/monitor_optimize_tasks.py",
-    # Duplicate of kernel.py from a prior session — not a runtime input.
-    "_cute_fa_kernel.py",
-    # Exploratory test/debug scripts that are not part of the evaluation harness.
-    "test_triton_dot.py",
-    "test_triton_dot2.py",
-    "valid.py",
 }
 INPUT_SKIP_SUFFIXES = {
     ".pyc",
@@ -1875,12 +1873,12 @@ import sys
 import tarfile
 from pathlib import Path, PurePosixPath
 
-BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
-END = "__ATREX_SANDBOX_OUTPUT_END__"
 RAW = {".ncu-rep", ".att", ".pftrace", ".otf2"}
 
 root = Path(sys.argv[1]).resolve()
 cfg = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__:" + cfg["frame_nonce"]
+END = "__ATREX_SANDBOX_OUTPUT_END__:" + cfg["frame_nonce"]
 max_bytes = int(cfg["max_file_bytes"])
 transport = cfg.get("transport", "inline")
 include_raw = bool(cfg["include_raw_profile"]) or transport == "oss"
@@ -1970,58 +1968,89 @@ exit $command_status
 """
 
 
-def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> None:
+def _extract_output_tar(tf: tarfile.TarFile, workspace: Path, sync_paths: list[str],
+                        max_file_bytes: int) -> None:
     """Safely extract a sandbox-owned output archive into ``workspace``."""
     workspace_root = workspace.resolve()
-    for member in tf.getmembers():
+    total_bytes = 0
+    for count, member in enumerate(tf):
+        if count >= 8192:
+            raise RuntimeError("sandbox output archive contains too many members")
         path = PurePosixPath(member.name)
-        if path.is_absolute() or ".." in path.parts:
+        if (path.is_absolute() or ".." in path.parts or not path.parts
+                or path.parts[0].startswith(".") or not any(
+                    path.as_posix() == root or path.as_posix().startswith(root + "/")
+                    for root in sync_paths
+                )):
             raise RuntimeError(
-                f"unsafe artifact path returned by sandbox: {member.name!r}"
+                f"artifact path outside declared synchronization roots: {member.name!r}"
             )
         if member.issym() or member.islnk():
             raise RuntimeError(
                 f"sandbox artifact links are not accepted: {member.name!r}"
             )
         target = workspace_root / path.as_posix()
-        try:
-            target.resolve(strict=False).relative_to(workspace_root)
-        except ValueError as exc:
-            raise RuntimeError(
-                f"sandbox artifact resolves outside workspace: {member.name!r}"
-            ) from exc
         if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
+            with open_private_directory(target):
+                pass
             continue
         if not member.isfile():
-            continue
+            raise RuntimeError(f"unsupported sandbox artifact type: {member.name!r}")
+        if member.size < 0:
+            raise RuntimeError("sandbox output archive contains a negative-sized file")
+        total_bytes += member.size
+        if member.size > max_file_bytes or total_bytes > 512 * 1024 * 1024:
+            raise RuntimeError("sandbox output archive exceeds the local size limit")
         source = tf.extractfile(member)
         if source is None:
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read())
-        try:
-            target.chmod(member.mode & 0o777)
-        except OSError:
-            pass
+            raise RuntimeError(f"sandbox artifact is unreadable: {member.name!r}")
+        with open_private_directory(target.parent) as parent:
+            temporary = ".runtime-" + secrets.token_hex(16)
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=parent,
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as output:
+                    remaining = member.size
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise RuntimeError(f"truncated sandbox artifact: {member.name!r}")
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                    os.fchmod(output.fileno(), member.mode & 0o700)
+                os.replace(temporary, path.name, src_dir_fd=parent, dst_dir_fd=parent)
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
 
 
-def _extract_output_archive(archive: Path, workspace: Path) -> None:
+def _extract_output_archive(archive: Path, workspace: Path, sync_paths: list[str],
+                            max_file_bytes: int) -> None:
     with tarfile.open(archive, mode="r:gz") as tf:
-        _extract_output_tar(tf, workspace)
+        _extract_output_tar(tf, workspace, sync_paths, max_file_bytes)
 
 
-def _extract_outputs(stdout: str, workspace: Path) -> str:
+def _extract_outputs(stdout: str, workspace: Path, sync_paths: list[str],
+                     max_file_bytes: int, frame_nonce: str) -> str:
     """Extract a legacy inline archive and return stdout without framing."""
-    if OUTPUT_BEGIN not in stdout or OUTPUT_END not in stdout:
+    begin = OUTPUT_BEGIN + ":" + frame_nonce
+    end = OUTPUT_END + ":" + frame_nonce
+    if begin not in stdout or end not in stdout:
         raise RuntimeError("sandbox response did not contain an artifact frame")
-    command_stdout, framed = stdout.rsplit(OUTPUT_BEGIN, 1)
-    encoded, trailing = framed.split(OUTPUT_END, 1)
+    command_stdout, framed = stdout.rsplit(begin, 1)
+    encoded, trailing = framed.split(end, 1)
     if trailing.strip():
         command_stdout += trailing
-    payload = base64.b64decode("".join(encoded.split()), validate=True)
+    encoded = "".join(encoded.split())
+    if len(encoded) > 4 * (512 * 1024 * 1024 // 3 + 1):
+        raise RuntimeError("sandbox output frame exceeds the local size limit")
+    payload = base64.b64decode(encoded, validate=True)
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
-        _extract_output_tar(tf, workspace)
+        _extract_output_tar(tf, workspace, sync_paths, max_file_bytes)
     return command_stdout.rstrip("\n")
 
 
@@ -2911,6 +2940,8 @@ def _run_ssh_job(
     temp: Path,
     workspace: Path,
     sync_outputs: bool,
+    sync_paths: list[str],
+    max_output_file_bytes: int,
 ) -> subprocess.CompletedProcess[str]:
     """Upload one stateless sandbox allocation, execute it, and retrieve outputs."""
     ssh = shutil.which("ssh")
@@ -3039,7 +3070,9 @@ def _run_ssh_job(
                 )
             else:
                 try:
-                    _extract_output_archive(local_archive, workspace)
+                    _extract_output_archive(
+                        local_archive, workspace, sync_paths, max_output_file_bytes
+                    )
                 except (OSError, RuntimeError, tarfile.TarError) as exc:
                     raise SSHTransportError(
                         f"cannot extract sandbox outputs: {exc}"
@@ -3052,12 +3085,14 @@ def _run_ssh_job(
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
         if not cleanup_succeeded:
             _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
-    if not cleanup_succeeded:
-        raise SSHTransportError(
-            f"remote workspace cleanup failed and was queued for recovery: {remote_dir}"
-        )
     if result is None:
         raise SSHTransportError("SSH job produced no result")
+    if not cleanup_succeeded:
+        warning = "[sandbox] remote workspace cleanup failed; cleanup queued for recovery"
+        result = subprocess.CompletedProcess(
+            args=result.args, returncode=result.returncode, stdout=result.stdout,
+            stderr="\n".join(part for part in (result.stderr, warning) if part),
+        )
     return result
 
 
@@ -3212,7 +3247,8 @@ def run_direct_job(
                 pass
             raise
 
-    return execute_job({"url": url, "kind": kind, "payload": payload_identity(payload)}, submit, poll,
+    return execute_job({"url_fingerprint": private_value_fingerprint(url),
+                        "kind": kind, "payload": payload_identity(payload)}, submit, poll,
                        wait_budget=timeout + queue_wait_grace)
 
 
@@ -3467,7 +3503,8 @@ def run_agate_with_cancel_retry(
     identity = dict(request_identity) if request_identity is not None else {"command": command_identity(agate)}
     if isinstance(identity.get("request"), dict):
         identity["request"] = payload_identity(identity["request"])
-    return execute_job(identity | {"url": url, "profile": gateway_profile},
+    return execute_job(identity | {"url_fingerprint": private_value_fingerprint(url),
+                                   "profile": gateway_profile},
                        submit, poll, wait_budget=wait_budget)
 
 
@@ -4721,6 +4758,8 @@ def _main(argv: list[str] | None = None) -> int:
                 _safe_relative(path) for path in (args.sync or list(DEFAULT_SYNC_PATHS))
             ]
         )
+        if any(PurePosixPath(path).parts[0] not in {"profiles", "scratch"} for path in sync_paths):
+            raise ValueError("--sync must be inside profiles/ or scratch/")
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
 
@@ -4921,7 +4960,7 @@ def _main(argv: list[str] | None = None) -> int:
         output_transport = "inline"
     if direct_http and bundle_bytes > 20 * 1024 * 1024:
         raise SystemExit(
-            f"sandbox: packaged payload is {bundle_bytes / 1024:.1f} KiB, "
+            f"sandbox: packaged payload is {bundle_bytes / (1024 * 1024):.1f} MiB, "
             "above the 20 MiB direct gateway request limit"
         )
     print(
@@ -4968,6 +5007,7 @@ def _main(argv: list[str] | None = None) -> int:
         "max_file_bytes": args.max_output_file_mb * 1024 * 1024,
         "include_raw_profile": args.include_raw_profile,
         "transport": output_transport,
+        "frame_nonce": secrets.token_hex(24),
     }
     with tempfile.TemporaryDirectory(prefix="atrex-sandbox-") as temp_dir:
         temp = Path(temp_dir)
@@ -5115,6 +5155,8 @@ def _main(argv: list[str] | None = None) -> int:
                     temp=temp,
                     workspace=workspace,
                     sync_outputs=bool(sync_paths),
+                    sync_paths=sync_paths,
+                    max_output_file_bytes=args.max_output_file_mb * 1024 * 1024,
                 )
             except SSHTransportError as exc:
                 _record_environment_failure(
@@ -5220,7 +5262,8 @@ def _main(argv: list[str] | None = None) -> int:
                     command_timeout=_dev_gateway_job_timeout(args.timeout),
                     wait_budget=args.timeout + queue_wait_grace,
                     request_identity={"kind": "dev", "command": command, "hardware": args.hardware,
-                                      "timeout": args.timeout, "env": gateway_environment,
+                                      "timeout": args.timeout,
+                                      "env_names": sorted(item.split("=", 1)[0] for item in gateway_environment),
                                       "inputs": bundle_digest(base64.b64decode(bundle)),
                                       "evaluator": bundle_digest(base64.b64decode(runtime_bundle)) if runtime_bundle else None},
                 )
@@ -5254,10 +5297,15 @@ def _main(argv: list[str] | None = None) -> int:
             with tempfile.TemporaryDirectory(prefix="atrex-oss-output-") as temp_dir:
                 archive = Path(temp_dir) / OSS_OUTPUT_ARCHIVE
                 _download_oss_artifact(artifact, archive)
-                _extract_output_archive(archive, workspace)
+                _extract_output_archive(
+                    archive, workspace, sync_paths, args.max_output_file_mb * 1024 * 1024
+                )
             command_stdout = remote_stdout.rstrip("\n")
         elif output_transport == "inline":
-            command_stdout = _extract_outputs(remote_stdout, workspace)
+            command_stdout = _extract_outputs(
+                remote_stdout, workspace, sync_paths,
+                args.max_output_file_mb * 1024 * 1024, output_cfg["frame_nonce"],
+            )
         elif output_transport == "ssh":
             command_stdout = remote_stdout.rstrip("\n")
         else:
@@ -5303,7 +5351,8 @@ def _main(argv: list[str] | None = None) -> int:
     return 0 if job.get("status") == "succeeded" else (proc.returncode or 1)
 
 
-def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, dict[str, bytes]]:
+def measurement_inputs(args, workspace: Path, environment: dict, *,
+                       identity_key: bytes) -> tuple[dict, dict[str, bytes]]:
     """Freeze the task's semantic inputs, excluding Episode/version/output paths."""
     baseline_path = _safe_relative(args.baseline_path) if args.baseline_path else None
     command = list(args.command)
@@ -5383,8 +5432,12 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
         index += 1
     options = {key: value for key, value in vars(args).items() if key not in {
         "workspace", "command", "version", "sync", "no_sync", "dry_run", "output_path", "record_id", "kernel_id",
-        "multi_seed", "timed_runs", "shape_id",
+        "multi_seed", "timed_runs", "shape_id", "env", "ssh_init", "url",
     }}
+    # Values may be secrets. Requests with custom environment are non-cacheable.
+    options["custom_environment"] = bool(args.env)
+    options["custom_environment_names"] = sorted(item.split("=", 1)[0] for item in args.env or [])
+    options["ssh_init_present"] = bool(args.ssh_init)
     options["kind"] = kind
     options["command"] = normalized
     if operation == "evaluate" and for_command:
@@ -5410,9 +5463,16 @@ def measurement_inputs(args, workspace: Path, environment: dict) -> tuple[dict, 
         raise ValueError("--baseline-path must name an existing regular workspace file")
     if "kernel.py" not in files and operation != "dev":
         raise ValueError("Measurement requires an existing kernel.py")
-    options["gateway_environment"] = {name: environment[name] for name in (
+    gateway_environment = {name: environment[name] for name in (
         "AGATE_URL", "ATREX_SANDBOX_PROFILE", *PROFILE_ENVIRONMENT_KEYS,
     ) if name in environment}
+    options["gateway_environment_names"] = sorted(gateway_environment)
+    sensitive_identity = json.dumps(
+        {"env": args.env, "ssh_init": args.ssh_init, "url": args.url,
+         "gateway_environment": gateway_environment},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
+    options["launcher_identity"] = hmac.new(identity_key, sensitive_identity, hashlib.sha256).hexdigest()
     return {"schema_version": 1, "operation": operation, "options": options,
             "inputs": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
             "evaluator": evaluator_files}, files

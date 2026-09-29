@@ -136,6 +136,9 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
             # retry_review owns this expected outcome and its durable budget.
             # Preserve any prior outage record; this is not a failed service step.
             raise
+        except CancelledError:
+            # Cancellation must not erase a previously scheduled outage retry.
+            raise
         except Exception:
             if record:
                 record.update(status="step_failed", finished_at=time.time())

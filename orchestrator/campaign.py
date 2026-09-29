@@ -391,12 +391,13 @@ class Campaign:
         ))
         self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
 
-    def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None) -> str:
+    def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None,
+                                        flow: str = "episode") -> str:
         """Validate frozen candidate bytes using private plans and recorded GPU probes."""
         from .numerical_policy import validate_candidate
 
         self.start_runtime()
-        return validate_candidate(self, workspace, source=source, parent=parent)
+        return validate_candidate(self, workspace, source=source, parent=parent, flow=flow)
 
     @property
     def plugin_registry(self):
@@ -405,7 +406,8 @@ class Campaign:
 
     def plugin_directive(self, phase: str) -> str:
         return self.plugin_registry.instructions(
-            phase, PLATFORM=self.platform, ARCH=self.arch, FRAMEWORK=self.framework,
+            phase, PLATFORM=self.platform, ARCH=self.arch or "<exact runtime architecture>",
+            FRAMEWORK=self.framework,
             OPERATOR=self.name,
         )
 
@@ -418,6 +420,31 @@ class Campaign:
     def recorded_kernel(self, kernel_id: str) -> bytes:
         self.start_runtime()
         return self._supervisor_runtime.measurements.read_kernel(kernel_id)
+
+    def republish_episode_report(self, episode: int, worktree: Path, *, base_commit: str,
+                                 branch: str) -> bool:
+        """Recover a finalized private report whose compatibility handoff was lost."""
+        from supervisor.journal import SupervisorJournalService
+
+        self.start_runtime()
+        runtime = self._supervisor_runtime
+        path = runtime.episode_journal_path(episode)
+        if not path.is_file():
+            return False
+        private = runtime.read_episode_journal(episode)
+        if not private.get("finalized_at"):
+            return False
+        if (private.get("episode") != episode or private.get("base_commit") != base_commit
+                or private.get("episode_branch") != branch
+                or private.get("state") not in {"candidate_ready", "pivot", "blocked"}):
+            raise RuntimeError("Finalized private report does not match the recovering Episode")
+        service = SupervisorJournalService(
+            workspace=worktree, git_workspace=worktree,
+            campaign_root=runtime.journals_root, evidence_root=path.parent,
+            supervisor_git=True,
+        )
+        service._publish_report(private)
+        return True
 
     def acceptance_measurement_context(self, incumbent_source: bytes) -> dict:
         """Public Kernel identity and frozen Runtime policy, without private inputs."""
@@ -445,7 +472,6 @@ class Campaign:
         base_commit: str,
         branch: str,
         memory_version: int,
-        minimum_experiments: int = 0,
         supervisor_git: bool = True,
     ) -> Path:
         """Start Runtime if needed and bind an Episode from trusted controller state."""
@@ -456,7 +482,6 @@ class Campaign:
             base_commit=base_commit,
             branch=branch,
             memory_version=memory_version,
-            minimum_experiments=minimum_experiments,
             supervisor_git=supervisor_git,
         )
 
@@ -1944,7 +1969,7 @@ class Campaign:
         if rejection:
             prompt = (
                 "# Repair the preserved V1 candidate\n\n"
-                f"The supervisor rejected the current candidate: **{rejection}**\n"
+                f"The supervisor rejected the current candidate:\n\n{rejection}\n\n"
                 "Keep sound work, fix this exact rejection, and finish V1. If a prior targeted "
                 "smoke passed but the supervisor's combined full-workload validation failed, "
                 "you may run exactly one full base-seed evaluator while repairing; do not run "
@@ -2290,7 +2315,9 @@ class Campaign:
                 + "; ".join(violations)
             )
         if not validation_problem:
-            validation_problem = self.supplemental_numerical_feedback(self.workspace)
+            validation_problem = self.supplemental_numerical_feedback(
+                self.workspace, flow="framework_baseline"
+            )
         return result, validation_problem
 
     def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:

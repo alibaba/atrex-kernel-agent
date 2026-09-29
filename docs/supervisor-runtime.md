@@ -9,7 +9,7 @@ The GPU/Wiki service owns execution and credentials. [Measurement records and re
 ```mermaid
 flowchart TD
     C["Campaign.start_runtime<br/>Loopback HTTP service"] --> S["run_bounded / session_environment<br/>Bind a fresh capability to this workspace"]
-    S --> A["Agent: tools/sandbox.py<br/>or existing query_*.py"]
+    S --> A["Agent: tools/sandbox.py<br/>GPU and Wiki requests"]
     A --> V{"SupervisorRuntime<br/>Authorize + validate arguments"}
     V -->|Invalid or revoked| E["Actionable error; no job submitted"]
     V -->|Pre-dispatch deadline| Q["429: request_not_started<br/>Repairable; retry unchanged after backoff"]
@@ -108,6 +108,8 @@ Retrieval, bridge execution and query telemetry run on the Supervisor. Agents ca
 
 GPU execution uses a regular-file snapshot, not the mutable Agent directory. Provider homes, Git, control state, benchmark checkout and linked assets are excluded; trusted evaluator code/private inputs are supplied separately. Arbitrary Dev commands retain the existing explicit `--input` packaging rules. Only a successful executor exit can publish requested files below `profiles/` or `scratch/`. Failed jobs retain their private diagnostics and legacy evaluator log, but do not copy partial outputs into the Agent workspace. Source, Git and control files cannot be replaced by remote output publication.
 
+Remote output archives are restricted to the declared synchronization roots, with local member/count/byte limits and no-follow publication. Inline transport uses a per-request frame tag to avoid accidental marker collisions; it is not an authentication boundary against arbitrary code inside the same remote allocation. The synchronization roots never include Git, memory or Supervisor control paths.
+
 Before recording request identity or dispatching a job, the Supervisor replaces `test_kernel.py`
 with the repository's evaluator: `reference/atrex_bench_test_kernel.py` for Atrex-Bench or
 `reference/test_kernel.py` for SOL. SOL snapshots also take `config.json` from the controller
@@ -120,7 +122,7 @@ from an adversarial process with the same host UID.
 
 All requested sync paths share one 64 MiB byte budget and a 4,096-entry traversal bound; overlapping selections do not charge the same file twice. Each no-follow read is limited to the smaller of 16 MiB and the remaining byte budget, plus one byte for overflow detection. Operator diagnostics distinguish the per-file limit from the cumulative limit and identify the file and remaining sync budget. If both limits bind equally, the diagnostic reports the cumulative limit. Validated payloads are spooled privately, and all size/path checks finish before any requested Agent file is published. Validation failure leaves these outputs untouched. Publication is atomic per file, not a multi-file transaction: an I/O failure during final publication can still leave some files updated and returns an unknown-outcome error. The evaluator log is appended separately even for failed correctness results.
 
-Completed request diagnostics are stored outside the candidate tree, under `<campaign-parent>/.atrex-supervisor-runtime/<workspace-key>/request-<uuid>.json`. These contain bounded command output, invocation arguments, timestamp and exit code for operator debugging. The separate `measurements/` store retains exact submitted inputs, physical job state and public results; its `record-read`, `kernel-read` and `kernel-records` queries never expose the private raw envelope. See [records and identity](measurement-records.md#records-and-identity). Private evidence can contain hidden evaluation details; protect it like Session traces. Temporary executor workspaces are deleted after completion, but retained evidence has no automatic cleanup.
+Completed request diagnostics are stored outside the candidate tree, under `<campaign-parent>/.atrex-supervisor-runtime/<workspace-key>/request-<uuid>.json`. These contain bounded command output, redacted Gateway invocation arguments, timestamp and exit code for operator debugging. The separate `measurements/` store retains exact submitted inputs, physical job state and public results; its `record-read`, `kernel-read` and `kernel-records` queries never expose the private raw envelope. See [records and identity](measurement-records.md#records-and-identity). Private evidence can contain hidden evaluation details; protect it like Session traces. Temporary executor workspaces are deleted after completion, but retained evidence has no automatic cleanup.
 
 Limits are 2 MiB per HTTP request, 512 argv entries, 16 active request processes, 4,096 files / 64 MiB per snapshot and 16 MiB per input file. Raw stdout is limited to 4 MiB for safe parsing, stderr to a 128 KiB diagnostic prefix; runaway output spooling is interrupted at 64 MiB. An oversized stdout is an unconfirmed outcome, not a successfully parsed prefix. Agent projections are at most 384 KiB stdout / 16 KiB stderr (Wiki stdout: 256 KiB), with explicit truncation or an error when a structured result cannot fit. Profile/assembly have additional per-field limits. Exact private paths and generalized failure details are withheld; raw arbitrary Dev output is not a semantic data-loss-prevention boundary.
 

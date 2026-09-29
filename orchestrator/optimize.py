@@ -633,6 +633,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
     from orchestrator.agent_sandbox import sandbox_executable
+    from orchestrator.plugins import PluginRegistry, PluginError
 
     try:
         sandbox_executable({"ATREX_AGENT_SANDBOX": args.agent_sandbox,
@@ -640,8 +641,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
                             "PATH": os.environ.get("PATH", "")})
         args.agent_read_only_path = [str(Path(path).expanduser().resolve(strict=True))
                                      for path in (args.agent_read_only_path or [])]
-    except (RuntimeError, ValueError, OSError) as error:
+        PluginRegistry()  # Fail before workspace/V0 side effects on malformed manifests.
+    except (RuntimeError, ValueError, OSError, PluginError) as error:
         ap.error(str(error))
+    if args.agent_sandbox == "none":
+        print(
+            "[orchestrator] WARNING: native Agent execution is same-UID cooperative mode. "
+            "Private measurement records and promotion evidence are not protected from a "
+            "deliberately adversarial Agent; use --agent-sandbox bwrap on Linux for isolation.",
+            file=sys.stderr, flush=True,
+        )
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
         args.workspace_suffix
     ):

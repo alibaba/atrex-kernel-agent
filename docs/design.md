@@ -61,7 +61,8 @@ flowchart LR
 ```
 
 - Agent: explore at most three Directions per Episode, one at a time; edit the candidate; record
-  decisive experiments; submit a repairable report. It cannot supply trusted measurements or Git identity.
+  decisive experiments; submit a repairable report. Under filesystem isolation it cannot supply
+  trusted measurements or Git identity; native same-UID mode has the limitation described below.
 - Supervisor Runtime: authorize Session/workspace scope, supply private evaluator inputs, snapshot
   precise sources, retry infrastructure failures, bound public results, persist records and Journal.
 - Evaluator/worker: correctness and performance facts. Profile duration or diagnostic Dev results
@@ -82,6 +83,11 @@ access, not filesystem isolation. Opt-in `--agent-sandbox bwrap` requires Linux 
 and provides a filesystem boundary with scoped Provider Homes and explicit mounts, with no
 silent native fallback. GPU execution isolation is a separate boundary. See
 [workspace isolation](agent-workspace-isolation.md) and [Supervisor Runtime](supervisor-runtime.md).
+In native mode, a deliberately adversarial Agent running under the same OS UID can also alter
+Supervisor-owned files and measurement records; their unkeyed digests detect accidental corruption,
+not same-UID forgery. Consequently the recorded acceptance and promotion chain is a cooperative
+workflow in this mode, not a security guarantee against reward hacking. Use Bubblewrap or a separate
+Agent UID when adversarial isolation is required.
 
 ## Agent-facing workspace
 

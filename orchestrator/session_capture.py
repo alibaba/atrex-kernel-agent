@@ -155,6 +155,9 @@ def finish_session_capture(capture, **status) -> None:
             # Accounting can fail too; retain the original CLI outcome and
             # leave the existing stream/ledger parser available as a fallback.
             clear_capture()
+        finally:
+            with capture._lock:
+                capture.finished = True
         print(f"[orchestrator] session capture failed at {capture.root}: {error}", flush=True)
 
 
@@ -203,6 +206,7 @@ class SessionCapture:
             lambda label, error: self._capture_error("resume_history_" + label, error),
         )
         self._usage = UsageAccumulator(backend)
+        self._usage_dirty = True
         self._tails: dict[str, TranscriptTail] = {}
         self._initial_sizes: dict[str, int] = {}
         self._host_transcripts = None
@@ -283,6 +287,7 @@ class SessionCapture:
     def _feed_usage(self, path: str, text: str, *, previous: bool = False) -> None:
         try:
             self._usage.feed(path, text, previous=previous)
+            self._usage_dirty = True
         except Exception as error:
             # Provider/native JSON is untrusted data. A malformed counter cannot
             # unwind a pipe reader or stop the other transcripts being captured.
@@ -314,6 +319,8 @@ class SessionCapture:
 
     def sync_native(self, *, final: bool = False) -> None:
         with self._lock:
+            if self.finished:
+                return
             self._sync_stdout_usage()
             for name, (path, previous_size) in self._native_paths(force=final).items():
                 try:
@@ -336,6 +343,8 @@ class SessionCapture:
 
     def _write_usage(self, finished: bool) -> dict:
         self._sync_stdout_usage()
+        if not finished and not self._usage_dirty:
+            return {}
         report = self._usage.report(finished=finished and not self.errors)
         report.update(
             session_id=self.session_id,
@@ -345,9 +354,12 @@ class SessionCapture:
             capture_errors=list(self.errors),
             capture_complete=bool(finished and not self.errors),
         )
-        _atomic(
-            self.root / "token-usage.json", json.dumps(report, ensure_ascii=False, indent=2) + "\n"
-        )
+        persisted = report if finished else dict(report)
+        if not finished and len(report.get("responses", [])) > 100:
+            persisted["responses"] = report["responses"][-100:]
+            persisted["responses_truncated"] = True
+        _atomic(self.root / "token-usage.json", json.dumps(persisted, ensure_ascii=False, indent=2) + "\n")
+        self._usage_dirty = False
         return report
 
     def _capture_error(self, label: str, error: Exception) -> None:
@@ -398,6 +410,13 @@ class SessionCapture:
                             dropping_line = not line.endswith("\n")
                             self._budget.warning(f"{name}_line_bytes_exceeded")
                             continue
+                        if name == "stdout":
+                            try:
+                                if not record_provider_line(line):
+                                    continue
+                            except Exception as error:
+                                self._capture_error(f"{name}_capture_filter", error)
+                                continue
                         if (
                             not self._budget.retain(size, file_used=self._pipe_bytes[name])
                             or not self._budget.record()
@@ -407,12 +426,6 @@ class SessionCapture:
                         # Only this bounded copy may enter persisted diagnostics.
                         # Keep it even if a disk sink fails, for final projection.
                         self._retained_chunks[name].append(line)
-                        try:
-                            if name == "stdout" and not record_provider_line(line):
-                                continue
-                        except Exception as error:
-                            self._capture_error(f"{name}_capture_filter", error)
-                            continue
                         if output is not None:
                             try:
                                 output.write(line)
@@ -514,16 +527,12 @@ class SessionCapture:
                 exit_status=exit_status,
                 timed_out=timed_out,
                 raw_provider_capture_complete=bool(self.native) and not self.errors,
+                stderr="".join(self._retained_chunks["stderr"]),
+                started_at=self.started_at,
+                context=self.context,
+                capture_errors=list(self.errors),
             )
-            # stderr can contain launch/auth/failure diagnostics absent from stdout.
-            rows = [json.loads(line) for line in conversation.splitlines()]
-            rows[0].update(started_at=self.started_at, context=self.context)
-            rows[-1].update(capture_complete=not self.errors, capture_errors=list(self.errors))
-            for line in "".join(self._retained_chunks["stderr"]).splitlines():
-                rows.insert(-1, provider_line_record(0, path="provider/stderr.log", line=line))
-            for index, row in enumerate(rows):
-                row["sequence"] = index
-            _atomic(self.root / "conversation.jsonl", encode_records(rows))
+            _atomic(self.root / "conversation.jsonl", conversation)
             report = self._write_usage(True)
             report.update(
                 state=state,

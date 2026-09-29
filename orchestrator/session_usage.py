@@ -137,7 +137,6 @@ class UsageAccumulator:
             "message_id": key, "path": path, "agent": "main" if not is_native else path,
             "usage": usage, "native": is_native, "kind": event["type"],
         }
-
     def _pi_evidence(self, finished: bool) -> tuple[list[dict], TokenUsage, bool, list[str]]:
         by_path: dict[str, list[dict]] = {}
         for row in self.responses.values():
@@ -383,21 +382,3 @@ class UsageAccumulator:
                 else "native_transcripts_and_stream; unexported calls cannot be counted"
             ),
         }
-
-
-def summarize_usage(
-    backend: str,
-    stdout: str,
-    native: dict[str, str],
-    *,
-    previous: dict[str, str] | None = None,
-    finished: bool = False,
-) -> dict:
-    """One-shot counterpart of the live incremental accounting."""
-    accumulator = UsageAccumulator(backend)
-    for path, text in (previous or {}).items():
-        accumulator.feed(path, text, previous=True)
-    accumulator.feed("provider/stdout.stream-json", stdout)
-    for path, text in sorted(native.items()):
-        accumulator.feed(path, text)
-    return accumulator.report(finished=finished)

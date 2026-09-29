@@ -176,7 +176,11 @@ def wrap_agent_command(
     if executable is None:
         if auxiliary_input_files:
             raise ValueError("Explicit auxiliary inputs require a Bubblewrap auxiliary workspace")
-        return SandboxLaunch(list(command), dict(environment)), None
+        native_environment = {
+            key: value for key, value in environment.items()
+            if key not in {"ATREX_EPISODE_PRIVATE_PATHS", "ATREX_AKA_RUNTIME_OWNER", "GIT_CEILING_DIRECTORIES"}
+        }
+        return SandboxLaunch(list(command), native_environment), None
     workspace = workspace.resolve(strict=True)
     if REPOSITORY_ROOT.is_relative_to(workspace):
         raise ValueError(

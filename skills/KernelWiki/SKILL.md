@@ -19,9 +19,9 @@ python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverag
 python3 tools/sandbox.py --kind wiki-hardware --product sm120
 ```
 
-The existing `gpu-wiki/tools/query_nl.py`, `query_wiki.py` and
-`query_hardware.py` commands are equivalent Session clients. The Supervisor owns
-stores, bridge execution and query telemetry; never override their host paths.
+Use the `tools/sandbox.py --kind wiki-*` commands above from an Agent workspace.
+The Supervisor owns stores, bridge execution and query telemetry; never override
+their host paths.
 
 For `repairable: true` with `error.code: "request_not_started"`, wait at least
 `retry_after_seconds` before retrying the unchanged query with backoff. The query

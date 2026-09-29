@@ -384,6 +384,8 @@ def promote_candidate(
         staged = git_text(
             incumbent_workspace, "diff", "--cached", "--name-only"
         ).splitlines()
+        if staged != ["kernel.py"]:
+            raise RuntimeError("Promotion requires only the sealed kernel.py change")
         violation = protected_violation([path for path in staged if path])
         if violation:
             raise RuntimeError(violation)

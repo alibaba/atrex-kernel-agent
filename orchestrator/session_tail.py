@@ -146,6 +146,39 @@ class TranscriptTail:
                     "native_capture", ValueError(f"resume transcript truncated: {path.name}")
                 )
                 return
+            def complete_lines():
+                while self.pending:
+                    newline = self.pending.find(b"\n")
+                    if self.dropping_line:
+                        if newline < 0:
+                            self.pending.clear()
+                            return
+                        del self.pending[:newline + 1]
+                        self.dropping_line = False
+                        continue
+                    if newline < 0:
+                        if len(self.pending) > budget.limits.line_bytes:
+                            self.dropping_line = True
+                            self.incomplete = True
+                            budget.warning("native_line_bytes_exceeded")
+                            self.pending.clear()
+                        return
+                    if newline + 1 > budget.limits.line_bytes:
+                        self.incomplete = True
+                        budget.warning("native_line_bytes_exceeded")
+                        del self.pending[:newline + 1]
+                        continue
+                    if not budget.record():
+                        self.stopped = True
+                        self.pending.clear()
+                        return
+                    line = bytes(self.pending[:newline + 1])
+                    del self.pending[:newline + 1]
+                    yield line
+
+            yield from complete_lines()
+            if self.stopped:
+                return
             stream.seek(self.offset)
             while self.offset < end:
                 available = min(
@@ -173,39 +206,14 @@ class TranscriptTail:
                 self.captured_bytes += len(chunk)
                 budget.used += len(chunk)
                 self.pending.extend(chunk)
-                consumed = 0
-                while True:
-                    newline = self.pending.find(b"\n", consumed)
-                    if self.dropping_line:
-                        if newline < 0:
-                            consumed = len(self.pending)
-                            break
-                        self.dropping_line = False
-                        consumed = newline + 1
-                        continue
-                    if newline < 0:
-                        if len(self.pending) - consumed > budget.limits.line_bytes:
-                            self.dropping_line = True
-                            self.incomplete = True
-                            budget.warning("native_line_bytes_exceeded")
-                            consumed = len(self.pending)
-                        break
-                    if newline + 1 - consumed > budget.limits.line_bytes:
-                        self.incomplete = True
-                        budget.warning("native_line_bytes_exceeded")
-                        consumed = newline + 1
-                        continue
-                    if not budget.record():
-                        self.stopped = True
-                        self.pending.clear()
-                        return
-                    yield bytes(self.pending[consumed : newline + 1])
-                    consumed = newline + 1
-                if consumed:
-                    del self.pending[:consumed]
+                yield from complete_lines()
+                if self.stopped:
+                    return
             if final and self.pending:
                 if budget.record():
-                    yield bytes(self.pending)
+                    line = bytes(self.pending)
+                    self.pending.clear()
+                    yield line
                 else:
                     self.stopped = True
                 self.pending.clear()

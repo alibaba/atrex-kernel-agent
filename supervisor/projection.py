@@ -471,7 +471,7 @@ def evaluation(result: dict) -> dict:
     shapes = result.get("latency_us_by_shape")
     if isinstance(shapes, dict):
         value["latency_us_by_shape"] = {
-            str(key)[:128]: item for key, item in list(shapes.items())[:4096]
+            str(key)[:128]: item for key, item in list(shapes.items())[:MAX_AGENT_EVALUATION_SHAPES]
             if _finite_number(item) is not None
         }
     value["failures"] = [bounded_text(item) for item in (result.get("failures") or [])[:8]]

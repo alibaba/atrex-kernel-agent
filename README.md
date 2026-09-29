@@ -26,8 +26,6 @@ The Campaign-owned [Supervisor GPU/Wiki Runtime](docs/supervisor-runtime.md) han
 
 [Runtime Journal and Episode Reports](docs/runtime-journal.md) provide durable Directions, measurement-linked Experiments and correctable report submission. [Supervisor-owned handoff and promotion](docs/supervisor-promotion.md) bind exact measured source to private Git commits and acceptance evidence; optimization Agents work in persistent Git-free drafts.
 
-![Atrex Kernel Agent architecture and workflow](assets/atrex-architecture-current.png)
-
 AKA supports:
 
 - SOL-ExecBench and native Atrex-Bench operator layouts;

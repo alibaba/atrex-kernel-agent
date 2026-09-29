@@ -6,8 +6,11 @@ import tempfile
 from pathlib import Path
 
 from supervisor.measurements import result_from_response
+from supervisor.measurement_records import EvidenceUnavailable
 from supervisor.workspace import read_input, publish
 from orchestrator.episode_workspace import PUBLIC_FILES
+from orchestrator.infrastructure_retry import InfrastructureUnavailable
+from orchestrator.supervisor_runtime import GatewayExecutionUnavailable, RequestDispatchTimeout
 
 from .git_episode import git_blob, warn_kernel_mismatch
 from .models import VerificationResult
@@ -105,5 +108,11 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
             scored.gateway_record_id = result["gateway_record_id"]
             scored.reused = response.get("reused") is True
             return scored
+        except InfrastructureUnavailable:
+            raise
+        except (GatewayExecutionUnavailable, RequestDispatchTimeout) as error:
+            raise InfrastructureUnavailable(str(error)) from error
+        except EvidenceUnavailable as error:
+            raise InfrastructureUnavailable(str(error)) from error
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
             return VerificationResult("ERROR", None, None, None, error=f"Recorded ABBA verification failed: {error}")

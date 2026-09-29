@@ -54,7 +54,7 @@ preprocessing session using the configured `--agent-cli` at maximum reasoning ef
 `agent_problem.json`, validates that its development cases do not duplicate evaluator cases, and
 persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
 injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
-opaque ids; pass `--shape-id` with one of those ids to profile that real shape privately.
+opaque ids; pass `--profile-shape-id` with one of those ids to profile that real shape privately.
 
 Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
 contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are

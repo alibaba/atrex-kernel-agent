@@ -38,6 +38,7 @@ For a Campaign workspace configured as `/work/campaign`, storage is under `/work
 
 ```text
 measurements/
+├── identity.key                       # Private, stable key for launcher-value fingerprints
 ├── kernels/kernel-<32 hex>/kernel.py
 ├── records/gateway-<32 hex>/
 │   ├── request.json                  # Semantic request, input/evaluator hashes
@@ -55,6 +56,7 @@ The configured Campaign root, not an individual Episode path, scopes lookups and
 - `kernel-…` is deterministic from the exact `kernel.py` bytes. Identical bytes retain the same ID across Episodes and stores. The underlying SHA-256 remains an internal integrity check, not the Agent-facing ID. Auxiliary source/input files are also part of the task identity, not of this single-file Kernel ID.
 - `gateway-…` is a fresh UUID for a new logical request. It binds the Kernel IDs, operation, request digest and stored public result. ABBA records bind both candidate and baseline IDs.
 - The task identity includes source/input bytes, operation, measurement options, hardware/transport settings, evaluator code hashes and the Supervisor repetition policy. Changed source, inputs or measurement conditions create a different task. Episode version labels, workspace paths and output publication paths do not make a new measurement.
+- Custom `--env` and `--ssh-init` values are not written into request identities or task checkpoints. A Campaign-private keyed fingerprint still distinguishes their exact values across restarts; measurements using these custom launcher controls are recorded but not reused as completed-task cache hits. Preserve `identity.key` when restoring a Campaign measurement store.
 - ABBA baseline paths are normalized before input validation and recording: `./baseline.py` and `baseline.py` identify the same input and task. Absolute paths, parent traversal and workspace-root paths remain invalid.
 - The evaluator bundle materializes selected symlink/hardlink files as regular-file snapshots. Its identity hashes their contents and modes, not host link targets or archive timestamps; duplicate file names and link/special-file entries in unnormalized bundles remain invalid. This does not relax the Agent workspace's symlink restrictions.
 - Evaluate, ABBA, Profile, Dev, Check and Disassemble are recorded. `env` and Wiki remain queries with their existing diagnostics; they are not Kernel measurements. Standalone operator/verifier execution retains its existing interface and has no Campaign record-query API.

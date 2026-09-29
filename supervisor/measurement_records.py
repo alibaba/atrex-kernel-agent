@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 import uuid
 from contextlib import contextmanager
@@ -141,8 +142,29 @@ class DuplicateTask(RuntimeError):
 class MeasurementStore:
     def __init__(self, root: Path):
         self.root = root
-        with open_private_directory(root):
-            pass
+        with open_private_directory(root) as directory:
+            lock = os.open("identity.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
+                           0o600, dir_fd=directory)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                try:
+                    descriptor = os.open(
+                        "identity.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600, dir_fd=directory,
+                    )
+                except FileExistsError:
+                    pass
+                else:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(secrets.token_bytes(32))
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.fsync(directory)
+                self.identity_key = read_regular_bytes(root / "identity.key", limit=33)
+            finally:
+                os.close(lock)
+        if len(self.identity_key) != 32:
+            raise ValueError("Measurement identity key is invalid; restore its private state")
 
     def kernel(self, source: bytes) -> dict:
         identity = source_identity(source)

@@ -83,24 +83,6 @@ _EXPERIMENT_ACTIONS = {
 
 
 
-def _episode_evaluation_count(episode_workspace: Path) -> int:
-    """Compatibility for explicitly registered historical minimum-count policies."""
-    path = episode_workspace / Path(".atrex_long_horizon/evaluations.jsonl")
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
-        return 0
-    count = 0
-    for line in lines:
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-            count += 1
-    return count
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -760,7 +742,6 @@ class SupervisorJournalService:
         campaign_root: Path,
         evidence_root: Path,
         git_workspace: Path | None = None,
-        minimum_experiments: int = 0,
         supervisor_git: bool = False,
     ) -> None:
         self.workspace = workspace
@@ -768,7 +749,6 @@ class SupervisorJournalService:
         self.campaign_root = campaign_root
         self.evidence_root = evidence_root
         self.path = evidence_root / "journal.json"
-        self.minimum_experiments = minimum_experiments
         self.supervisor_git = supervisor_git
 
     def sealed_source(self) -> bytes | None:
@@ -1052,15 +1032,6 @@ class SupervisorJournalService:
                 raise ValueError(violation)
         elif candidate_commit:
             raise ValueError(f"{status} cannot include candidate_commit")
-        if status != "blocked" and self.minimum_experiments:
-            if (
-                len(current["experiments"]) < self.minimum_experiments
-                or _episode_evaluation_count(self.git_workspace) < self.minimum_experiments
-            ):
-                raise ValueError(
-                    f"Fast Episode still requires {self.minimum_experiments} experiments "
-                    "and evaluator results; Runtime Journal does not relax phase policy"
-                )
         next_directions = [
             item["name"]
             for item in directions.values()

@@ -183,7 +183,9 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
     from supervisor.projection import project_response
     store = runtime.measurements
     try:
-        request, inputs = measurement_inputs(args, staged, environment)
+        request, inputs = measurement_inputs(
+            args, staged, environment, identity_key=store.identity_key,
+        )
     except ValueError as error:
         return {"exit_code": 2, "stdout": "", "stderr": f"sandbox: {error}\n"}
     request["supervisor_policy"] = {"mode": runtime.config.optimization_mode,
@@ -206,16 +208,26 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
                     or request["options"].get("evaluation_policy", {}).get("mode") == "correctness_only"):
                 repetitions = 1
             samples, responses, cacheable, pending = [], [], True, False
+            # The identity carries only a keyed fingerprint of launcher values.
+            # Retain evidence, but never cache a result measured with custom
+            # environment or SSH initialization as an interchangeable task.
+            custom_launcher = bool(args.env or args.ssh_init)
             for repetition in range(repetitions):
                 directory = task.directory / f"repetition-{repetition + 1}"
-                env = environment | {JOB_ROOT_ENV: str(directory)}
+                env = environment | {
+                    JOB_ROOT_ENV: str(directory),
+                    "ATREX_AKA_IDENTITY_KEY": store.identity_key.hex(),
+                }
                 if runtime.config.private_reference_dir is not None:
                     env["ATREX_PRIVATE_REFERENCE_DIR"] = str(task.directory / "inputs")
                 try:
                     process = runtime.run_executor(command, staged, env, capability)
                 except RequestDispatchTimeout as error:
                     if repetition or any(task.directory.glob("repetition-*/jobs/*/state.json")):
-                        raise RuntimeError("Measurement partially dispatched; durable job recovery required") from error
+                        from orchestrator.infrastructure_retry import InfrastructureUnavailable
+                        raise InfrastructureUnavailable(
+                            "Measurement partially dispatched; durable job recovery required"
+                        ) from error
                     raise
                 private_write(directory / "executor.json", {"returncode": process.returncode,
                               "stdout": process.stdout, "stderr": process.stderr})
@@ -270,7 +282,7 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
                 lines.append("[sandbox] RECORD_JSON=" + json.dumps(identity | {"operation": operation,
                              "status": "succeeded" if response["exit_code"] == 0 else "failed"}))
             response = dict(response, stdout="\n".join(lines) + "\n")
-            task.finish(response, cacheable=cacheable, pending=pending)
+            task.finish(response, cacheable=cacheable and not custom_launcher, pending=pending)
             if reuse_completed and not cacheable:
                 from supervisor.gateway_jobs import retry_kind
                 from orchestrator.infrastructure_retry import InfrastructureUnavailable
@@ -281,7 +293,9 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
                     for state in states
                 ):
                     raise InfrastructureUnavailable("Recorded GPU validation infrastructure failure")
-                raise RuntimeError("Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record")
+                raise InfrastructureUnavailable(
+                    "Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record"
+                )
             if operation == "evaluate" and repetitions > 1 and samples:
                 from supervisor.gateway import EPISODE_EVALUATIONS_PATH
                 # The old report compiler must see the same aggregate as the

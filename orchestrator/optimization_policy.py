@@ -71,10 +71,10 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
     if mode == "leaderboard":
         return (
             "## Optimization mode: leaderboard\n\n"
-            "Follow the workspace `CLAUDE.md` exactly. Its existing framework guidance remains "
-            "unchanged: the requested framework is a recommended direction, compatible mixed/alternate "
-            "implementations are allowed when evidence supports them, and third-party helper/kernel "
-            "libraries may be used.\n"
+            "Follow the workspace `CLAUDE.md` and the injected task constraints. The requested "
+            "framework is a recommended direction: compatible mixed or alternate implementations "
+            "and third-party helper/kernel libraries are allowed when evidence supports them, "
+            "unless a task-specific rule explicitly forbids them.\n"
         )
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")

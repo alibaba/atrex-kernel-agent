@@ -660,11 +660,13 @@ class LongHorizonCampaign:
                 "candidate journal must be finalized after the exact candidate commit"
             )
         if self.base_campaign.optimization_mode == "production":
-            sealed = git_blob(worktree.path, candidate, "kernel.py")
-            # Recovered reports must not bypass the newly installed gate. Only
-            # private recorded ordinary correctness authorizes timeout skipping.
-            self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)
-            return self.base_campaign.supplemental_numerical_feedback(worktree.path, sealed)
+            try:
+                sealed = git_blob(worktree.path, candidate, "kernel.py")
+                # Recovered reports must not bypass the newly installed gate.
+                self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)
+                return self.base_campaign.supplemental_numerical_feedback(worktree.path, sealed)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                return f"cannot verify production evidence: {error}"
         return ""
 
     def _copy_runtime_artifacts(
@@ -1064,15 +1066,19 @@ class LongHorizonCampaign:
                 "verifying"
             )
             store.save_active(active)
-            verification = verifier.verify(
-                worktree.path,
-                base_commit=worktree.base_commit,
-                candidate_commit=candidate_commit,
-                changed_paths=[
-                    path
-                    for path in paths
-                    if not path.startswith(EVIDENCE_PREFIXES)
-                ],
+            from orchestrator.infrastructure_retry import retry_infrastructure
+            verification = retry_infrastructure(
+                self.workspace,
+                f"abba-acceptance:{worktree.base_commit}:{candidate_commit}:"
+                f"{verifier.repeats}:{verifier.per_run_timeout}:{verifier.shape_batch_size}",
+                lambda: verifier.verify(
+                    worktree.path,
+                    base_commit=worktree.base_commit,
+                    candidate_commit=candidate_commit,
+                    changed_paths=[
+                        path for path in paths if not path.startswith(EVIDENCE_PREFIXES)
+                    ],
+                ),
             )
             if (
                 conversion_pending
@@ -1131,10 +1137,7 @@ class LongHorizonCampaign:
         episode_dir = store.episode_dir(episode)
         worktree.archive(episode_dir / "archive", "HEAD")
         self._copy_runtime_artifacts(worktree, episode_dir)
-        try:
-            journal = load_journal(journal_path)
-        except Exception:
-            journal = {}
+        journal = load_journal(journal_path)
         outcome = (
             journal.get("outcome")
             if isinstance(journal.get("outcome"), dict)
@@ -1328,7 +1331,14 @@ class LongHorizonCampaign:
         runtime = worktree.path / RUNTIME_DIR
         handoff = read_handoff(runtime / "handoff.json")
         if handoff is None:
-            return False
+            if not self.base_campaign.republish_episode_report(
+                worktree.episode, worktree.path,
+                base_commit=worktree.base_commit, branch=worktree.branch,
+            ):
+                return False
+            handoff = read_handoff(runtime / "handoff.json")
+            if handoff is None:
+                raise RuntimeError("Finalized private report could not restore its handoff")
         diagnosis = self._completion_check(
             worktree,
             runtime / "journal.json",
@@ -1806,7 +1816,6 @@ class LongHorizonCampaign:
             agent_workspace = self.base_campaign.register_runtime_episode(
                 worktree.path, episode=episode, memory_version=memory_version,
                 base_commit=base_commit, branch=worktree.branch,
-                minimum_experiments=0,
             )
             prompt = self._prompt(
                 episode=episode,

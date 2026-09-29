@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
+import hmac
 import io
 import math
 import os
@@ -157,6 +158,15 @@ def bundle_digest(data: bytes) -> str:
 def payload_identity(payload: dict) -> dict:
     """Canonicalize multipart workspace bundles without changing the sent request."""
     value = dict(payload)
+    if isinstance(value.get("env_vars"), dict):
+        environment = value.pop("env_vars")
+        encoded = json.dumps(environment, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False).encode()
+        key = bytes.fromhex(os.environ["ATREX_AKA_IDENTITY_KEY"]) if os.environ.get(
+            "ATREX_AKA_IDENTITY_KEY"
+        ) else b""
+        value["env_names"] = sorted(environment)
+        value["env_fingerprint"] = hmac.new(key, encoded, hashlib.sha256).hexdigest()
     # Gateway display labels default to the temporary staging directory name.
     # They must not turn a resumed logical task into a fresh physical job.
     value.pop("name", None)
@@ -172,6 +182,13 @@ def payload_identity(payload: dict) -> dict:
     if files:
         value["files"] = files
     return value
+
+
+def private_value_fingerprint(value: str) -> str:
+    """Bind a private launcher value to a checkpoint without storing it there."""
+    encoded = os.environ.get("ATREX_AKA_IDENTITY_KEY", "")
+    key = bytes.fromhex(encoded) if encoded else b""
+    return hmac.new(key, value.encode(), hashlib.sha256).hexdigest()
 
 
 def command_identity(command: list[str]) -> list:

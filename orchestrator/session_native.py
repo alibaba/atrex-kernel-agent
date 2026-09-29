@@ -8,7 +8,6 @@ import stat
 import time
 from pathlib import Path
 
-from .agent_runtime.codex_ledger import codex_thread_id_from_stream
 from .session_tail import read_regular_bytes
 
 DISCOVERY_INTERVAL_SECONDS = 5.0
@@ -137,9 +136,7 @@ class HostSessionTranscripts:
         self._metadata[path] = (fingerprint, ("", ""))
         return "", ""
 
-    def selected(self, stdout: str = "", *, force: bool = False) -> dict[str, tuple[Path, int]]:
-        if self.backend == "codex":
-            self.session_id = codex_thread_id_from_stream(stdout) or self.session_id
+    def selected(self, *, force: bool = False) -> dict[str, tuple[Path, int]]:
         identity = self.session_id
         if not identity or not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
             return {}
