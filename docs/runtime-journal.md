@@ -70,7 +70,7 @@ Each Experiment cites at least one visible Kernel-bound Evaluate/ABBA/Profile/De
 
 The Journal's private evidence reader derives full-evaluation eligibility from stored request options without carrying the raw request/options/inputs into its evidence view. Journal responses and compatibility reports are assembled separately; the eligibility flag is internal, not an Agent-facing field.
 
-Queries fold the current Journal plus finalized earlier Runtime Journals in this Campaign, including non-winning explorations. Unfinished previous Episodes, future Episodes and unrelated Campaigns are excluded. Stable global Direction/Experiment IDs and immutable ancestry avoid reconstructing identity from Episode-local indexes. List outputs are snapshots, not automatically refreshed files.
+Queries combine the current Journal with finalized earlier Runtime Journals in this Campaign, including non-winning explorations. The Supervisor builds a process-local Direction/Experiment history index on first use or restart, then ingests newly finalized Episodes once; ordinary requests read and replay only the current Episode. Unfinished previous Episodes, future Episodes and unrelated Campaigns are excluded. Stable global Direction/Experiment IDs and immutable ancestry avoid reconstructing identity from Episode-local indexes. List outputs are snapshots, not automatically refreshed files.
 
 ### Reports and old consumers
 
@@ -102,7 +102,7 @@ Private documents live beside the existing Measurement Store at `<Supervisor sco
 
 Before mutations, Runtime reads the legacy Journal without following symlinks. A symlink, invalid path component or non-regular file returns a repairable 400 with workspace-path repair instructions; no Journal mutation is applied. A missing legacy Journal remains valid. Storage-access failures, including I/O errors, remain non-repairable 503 infrastructure blockers rather than requests to rewrite evidence.
 
-Atomic document replacement favors simplicity but rewrites one bounded Episode document per update. History queries read finalized Journals and validate referenced records; very long Campaigns may need indexing later. Interpretation still depends on Agent submissions, and damaged history fails closed rather than silently discarding evidence. There is no automatic retention cleanup or retry of ambiguous mutations.
+Atomic document replacement favors simplicity but rewrites one bounded Episode document per update. The history index is derived, process-local state: restart rebuilds it from private Journals, and an earlier unfinished Episode that later finalizes triggers a rebuild. Point lookups use the index; list exports necessarily enumerate their visible entries. Operator edits to already-indexed finalized Journals require a Supervisor restart before queries reflect them. Interpretation still depends on Agent submissions, and damaged history found during indexing fails closed rather than silently discarding evidence. There is no automatic retention cleanup or retry of ambiguous mutations.
 
 Regression fixtures are kept outside the repository. They exercise a local fake GPU Gateway plus real HTTP/client, Git and filesystem paths: durable write/query, cross-Episode history, source/result binding, invalid-report repair, exact report replay, conflicting reports, privacy, scoped concurrent requests, legacy projection/validation and unchanged measurement APIs. These checks do not claim real-model optimization gains or production GPU qualification.
 

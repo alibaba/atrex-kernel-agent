@@ -13,9 +13,13 @@ import hashlib
 import json
 import os
 import re
+import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections import ChainMap
+from collections.abc import Callable, Mapping, MutableMapping
 from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +84,32 @@ _EXPERIMENT_ACTIONS = {
     "abandon_direction",
     "adopt",
 }
+
+
+class _HistoryIndex:
+    """Process-local projection of finalized, immutable Episode Journals."""
+
+    def __init__(self) -> None:
+        self.next_episode = 0
+        self.directions: dict[str, dict[str, Any]] = {}
+        self.statuses: dict[str, str] = {}
+        self.experiments: list[dict[str, Any]] = []
+        self.experiments_by_id: dict[str, dict[str, Any]] = {}
+        self.experiment_ids: set[str] = set()
+        self.pending: set[int] = set()
+
+
+_HISTORY_LOCK = threading.RLock()
+_HISTORY_INDEXES: dict[Path, _HistoryIndex] = {}
+
+
+@dataclass(frozen=True)
+class _VisibleHistory:
+    current: dict[str, Any]
+    directions: dict[str, dict[str, Any]]
+    statuses: dict[str, str]
+    experiments: list[dict[str, Any]]
+    experiments_by_id: dict[str, dict[str, Any]]
 
 
 
@@ -176,87 +206,161 @@ def load_journal(path: Path) -> dict[str, Any]:
     return value
 
 
-def _visible_journals(current: Path, campaign_root: Path) -> list[dict[str, Any]]:
-    current_value = load_journal(current)
-    values: list[dict[str, Any]] = []
-    for path in sorted((campaign_root / "episodes").glob("e*/journal.json")):
-        identity = re.fullmatch(r"e([0-9]{8,})", path.parent.name)
-        if identity is None or int(identity[1]) >= current_value["episode"]:
+def _index_historical_journal(index: _HistoryIndex, path: Path, episode: int) -> None:
+    try:
+        journal = load_journal(path)
+    except (ValueError, RuntimeStateError) as error:
+        raise RuntimeStateError(
+            "Historical Runtime Journal is unreadable; restore it before continuing."
+        ) from error
+    if journal["episode"] != episode:
+        raise RuntimeStateError("Historical Runtime Journal has a mismatched Episode identity")
+    if not journal.get("finalized_at"):
+        index.pending.add(episode)
+        return
+    _apply_direction_events(index.directions, index.statuses, journal)
+    for experiment in journal["experiments"]:
+        if not isinstance(experiment, dict):
             continue
-        try:
-            value = load_journal(path)
-        except (ValueError, RuntimeStateError) as error:
-            raise RuntimeStateError(
-                "Historical Runtime Journal is unreadable; restore it before continuing."
-            ) from error
-        if value["episode"] != int(identity[1]):
-            raise RuntimeStateError("Historical Runtime Journal has a mismatched Episode identity")
-        if value.get("finalized_at"):
-            values.append(value)
-    values.sort(key=lambda value: value["episode"])
-    values.append(current_value)
-    return values
+        experiment_id = experiment.get("experiment_id")
+        if not isinstance(experiment_id, str) or experiment_id in index.experiment_ids:
+            continue
+        index.experiment_ids.add(experiment_id)
+        indexed = dict(experiment)
+        index.experiments.append(indexed)
+        index.experiments_by_id[experiment_id] = indexed
+        _associate_experiments(index.directions, (experiment,))
 
 
-def _direction_views(
-    current: Path, campaign_root: Path, *, journals: list[dict[str, Any]] | None = None
-) -> dict[str, dict[str, Any]]:
-    views: dict[str, dict[str, Any]] = {}
-    statuses: dict[str, str] = {}
-    if journals is None:
-        journals = _visible_journals(current, campaign_root)
-    for journal in journals:
-        started: set[str] = set()
-        for event in journal["direction_events"]:
-            if not isinstance(event, dict):
-                raise RuntimeStateError("Runtime Journal contains an invalid Direction event")
-            direction_id = event.get("direction_id")
-            action = event.get("action")
-            try:
-                advance_direction(statuses, started, direction_id, action)
-                if action == "propose":
-                    for field in ("name", "hypothesis", "rationale", "recorded_at"):
-                        _text(event.get(field), f"Direction {field}")
-                    for field in ("plan", "success_criteria", "stop_conditions"):
-                        _text_list(event.get(field), f"Direction {field}")
-                _text_list(event.get("supporting_experiment_ids", []), "supporting_experiment_ids")
-            except ValueError as error:
-                raise RuntimeStateError(
-                    f"Invalid Direction history in Episode {journal['episode']}: {error}"
-                ) from error
-            if action == "propose":
-                views[direction_id] = {
-                    "direction_id": direction_id,
-                    "name": event["name"],
-                    "hypothesis": event["hypothesis"],
-                    "rationale": event["rationale"],
-                    "plan": event["plan"],
-                    "success_criteria": event["success_criteria"],
-                    "stop_conditions": event["stop_conditions"],
-                    "status": "proposed",
-                    "analysis": None,
-                    "recorded_at": event["recorded_at"],
-                    "supporting_experiment_ids": [],
-                    "associated_experiment_ids": [],
-                    "hypothesis_status": "unresolved",
-                    **relationship_fields(event),
-                }
-            elif direction_id in views:
-                views[direction_id]["status"] = _DIRECTION_STATUS[action]
-                views[direction_id]["analysis"] = event.get("analysis")
-                views[direction_id]["updated_at"] = event.get("recorded_at")
-                direction = views[direction_id]
-                assessment = event.get("hypothesis_status")
-                direction["hypothesis_status"] = assessment or "unresolved"
-                # Old automatic support lists are associations, not explicit judgments.
-                support = event.get("supporting_experiment_ids", [])
-                direction["supporting_experiment_ids"] = (
-                    list(support) if assessment is not None and action in _CLOSURES else []
+def _visible_history(current: Path, campaign_root: Path) -> _VisibleHistory:
+    """Replay finalized history once, then ingest only newly completed Episodes.
+
+    A restarted Supervisor rebuilds the projection from private Journals. During
+    a running Campaign finalized Journals are immutable; the current Journal is
+    still read on every request. An older unfinished Episode is rechecked and
+    forces a rebuild if it is finalized later than expected.
+    """
+    current_value = load_journal(current)
+    episode = current_value.get("episode")
+    if not isinstance(episode, int) or isinstance(episode, bool) or episode < 0:
+        raise RuntimeStateError("Runtime Journal has an invalid Episode identity")
+    root = campaign_root.resolve()
+    with _HISTORY_LOCK:
+        index = _HISTORY_INDEXES.get(root)
+        rebuild = index is None or episode < index.next_episode
+        if index is not None and not rebuild:
+            for pending in index.pending:
+                path = root / "episodes" / f"e{pending:08d}" / "journal.json"
+                if load_journal(path).get("finalized_at"):
+                    rebuild = True
+                    break
+        if rebuild:
+            index = _HistoryIndex()
+            for path in sorted((root / "episodes").glob("e*/journal.json")):
+                identity = re.fullmatch(r"e([0-9]{8,})", path.parent.name)
+                if identity is not None and int(identity[1]) < episode:
+                    _index_historical_journal(index, path, int(identity[1]))
+            index.next_episode = episode
+            _HISTORY_INDEXES[root] = index
+            if len(_HISTORY_INDEXES) > 16:
+                _HISTORY_INDEXES.pop(next(iter(_HISTORY_INDEXES)))
+        elif episode > index.next_episode:
+            # Sequential Episode numbers avoid re-globbing the entire Campaign.
+            # A sparse jump falls back to one directory scan, not an unbounded range.
+            if episode - index.next_episode > 4096:
+                paths = sorted((root / "episodes").glob("e*/journal.json"))
+                numbered = (
+                    (path, re.fullmatch(r"e([0-9]{8,})", path.parent.name))
+                    for path in paths
                 )
-                for experiment_id in support:
-                    if experiment_id not in direction["associated_experiment_ids"]:
-                        direction["associated_experiment_ids"].append(experiment_id)
-    for experiment in _visible_experiments(current, campaign_root, journals=journals):
+                for path, identity in numbered:
+                    if identity is not None and index.next_episode <= int(identity[1]) < episode:
+                        _index_historical_journal(index, path, int(identity[1]))
+            else:
+                for previous in range(index.next_episode, episode):
+                    path = root / "episodes" / f"e{previous:08d}" / "journal.json"
+                    if path.exists() or path.is_symlink():
+                        _index_historical_journal(index, path, previous)
+            index.next_episode = episode
+        return _VisibleHistory(
+            current=current_value,
+            directions=index.directions,
+            statuses=index.statuses,
+            experiments=index.experiments,
+            experiments_by_id=index.experiments_by_id,
+        )
+
+
+def _editable_direction(
+    views: MutableMapping[str, dict[str, Any]], direction_id: str
+) -> dict[str, Any]:
+    if isinstance(views, ChainMap) and direction_id not in views.maps[0]:
+        views[direction_id] = deepcopy(views[direction_id])
+    return views[direction_id]
+
+
+def _apply_direction_events(
+    views: MutableMapping[str, dict[str, Any]], statuses: MutableMapping[str, str],
+    journal: dict[str, Any],
+) -> None:
+    started: set[str] = set()
+    for event in journal["direction_events"]:
+        if not isinstance(event, dict):
+            raise RuntimeStateError("Runtime Journal contains an invalid Direction event")
+        direction_id = event.get("direction_id")
+        action = event.get("action")
+        try:
+            advance_direction(statuses, started, direction_id, action)
+            if action == "propose":
+                for field in ("name", "hypothesis", "rationale", "recorded_at"):
+                    _text(event.get(field), f"Direction {field}")
+                for field in ("plan", "success_criteria", "stop_conditions"):
+                    _text_list(event.get(field), f"Direction {field}")
+            _text_list(event.get("supporting_experiment_ids", []), "supporting_experiment_ids")
+        except ValueError as error:
+            raise RuntimeStateError(
+                f"Invalid Direction history in Episode {journal['episode']}: {error}"
+            ) from error
+        if action == "propose":
+            views[direction_id] = {
+                "direction_id": direction_id,
+                "name": event["name"],
+                "hypothesis": event["hypothesis"],
+                "rationale": event["rationale"],
+                "plan": event["plan"],
+                "success_criteria": event["success_criteria"],
+                "stop_conditions": event["stop_conditions"],
+                "status": "proposed",
+                "analysis": None,
+                "recorded_at": event["recorded_at"],
+                "supporting_experiment_ids": [],
+                "associated_experiment_ids": [],
+                "hypothesis_status": "unresolved",
+                **relationship_fields(event),
+            }
+        elif direction_id in views:
+            direction = _editable_direction(views, direction_id)
+            direction["status"] = _DIRECTION_STATUS[action]
+            direction["analysis"] = event.get("analysis")
+            direction["updated_at"] = event.get("recorded_at")
+            assessment = event.get("hypothesis_status")
+            direction["hypothesis_status"] = assessment or "unresolved"
+            support = event.get("supporting_experiment_ids", [])
+            direction["supporting_experiment_ids"] = (
+                list(support) if assessment is not None and action in _CLOSURES else []
+            )
+            for experiment_id in support:
+                if experiment_id not in direction["associated_experiment_ids"]:
+                    direction["associated_experiment_ids"].append(experiment_id)
+
+
+def _associate_experiments(
+    views: MutableMapping[str, dict[str, Any]],
+    experiments: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> None:
+    for experiment in experiments:
+        if not isinstance(experiment, dict):
+            continue
         direction = views.get(str(experiment.get("direction_id")))
         if direction is None:
             continue
@@ -265,31 +369,45 @@ def _direction_views(
             isinstance(experiment_id, str)
             and experiment_id not in direction["associated_experiment_ids"]
         ):
-            direction["associated_experiment_ids"].append(experiment_id)
-    return views
+            _editable_direction(views, direction["direction_id"])[
+                "associated_experiment_ids"
+            ].append(experiment_id)
+
+
+def _direction_state(
+    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
+) -> tuple[ChainMap[str, dict[str, Any]], ChainMap[str, str]]:
+    if history is None:
+        history = _visible_history(current, campaign_root)
+    views: ChainMap[str, dict[str, Any]] = ChainMap({}, history.directions)
+    statuses: ChainMap[str, str] = ChainMap({}, history.statuses)
+    _apply_direction_events(views, statuses, history.current)
+    _associate_experiments(views, history.current["experiments"])
+    return views, statuses
+
+
+def _direction_views(
+    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
+) -> Mapping[str, dict[str, Any]]:
+    return _direction_state(current, campaign_root, history=history)[0]
 
 
 def _visible_experiments(
-    current: Path, campaign_root: Path, *, journals: list[dict[str, Any]] | None = None
+    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
 ) -> list[dict[str, Any]]:
-    values: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    if journals is None:
-        journals = _visible_journals(current, campaign_root)
-    for journal in journals:
-        experiments = journal.get("experiments", [])
-        if not isinstance(experiments, list):
+    if history is None:
+        history = _visible_history(current, campaign_root)
+    values = list(history.experiments)
+    seen = {item["experiment_id"] for item in values}
+    for experiment in history.current["experiments"]:
+        if not isinstance(experiment, dict):
             continue
-        for experiment in experiments:
-            if not isinstance(experiment, dict):
-                continue
-            experiment_id = experiment.get("experiment_id")
-            if not isinstance(experiment_id, str) or experiment_id in seen:
-                continue
-            seen.add(experiment_id)
-            values.append(dict(experiment))
+        experiment_id = experiment.get("experiment_id")
+        if not isinstance(experiment_id, str) or experiment_id in seen:
+            continue
+        seen.add(experiment_id)
+        values.append(dict(experiment))
     return values
-
 
 def _save_journal(path: Path, campaign_root: Path, journal: dict[str, Any]) -> None:
     if (
@@ -330,12 +448,11 @@ def update_direction(
     _mutable_journal(path)
     value = dict(request)
     action = value.get("action")
-    journals = _visible_journals(path, campaign_root)
-    views = _direction_views(path, campaign_root, journals=journals)
-    statuses = {key: direction["status"] for key, direction in views.items()}
+    history = _visible_history(path, campaign_root)
+    views, statuses = _direction_state(path, campaign_root, history=history)
     started = {
         event["direction_id"]
-        for event in journals[-1]["direction_events"]
+        for event in history.current["direction_events"]
         if event["action"] == "start"
     }
     if action == "propose":
@@ -350,10 +467,15 @@ def update_direction(
                 direction_id,
                 value,
                 views,
-                {
-                    str(item["experiment_id"]): item
-                    for item in _visible_experiments(path, campaign_root, journals=journals)
-                },
+                ChainMap(
+                    history.experiments_by_id,
+                    {
+                        str(item["experiment_id"]): item
+                        for item in history.current["experiments"]
+                        if isinstance(item, dict)
+                        and isinstance(item.get("experiment_id"), str)
+                    },
+                ),
             )
         event = {
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
@@ -386,7 +508,7 @@ def update_direction(
         direction_id = _text(value["direction_id"], "Direction ID")
         advance_direction(statuses, started, direction_id, action)
         supporting = (
-            _closure_support(path, campaign_root, direction_id, value)
+            _closure_support(path, campaign_root, direction_id, value, history=history)
             if action in _CLOSURES
             else []
         )
@@ -559,7 +681,7 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
 
 def _closure_support(
     path: Path, campaign_root: Path, direction_id: str, value: Mapping[str, object],
-    *, journals: list[dict[str, Any]] | None = None,
+    *, history: _VisibleHistory | None = None,
 ) -> list[str]:
     assessment = value.get("hypothesis_status")
     if not isinstance(assessment, str) or assessment not in _HYPOTHESIS_STATUSES:
@@ -576,10 +698,14 @@ def _closure_support(
                 "Each Experiment must cite real Kernel-bound Gateway evidence."
             ),
         )
-    experiments = {
+    if history is None:
+        history = _visible_history(path, campaign_root)
+    current_experiments = {
         item["experiment_id"]: item
-        for item in _visible_experiments(path, campaign_root, journals=journals)
+        for item in history.current["experiments"]
+        if isinstance(item, dict) and isinstance(item.get("experiment_id"), str)
     }
+    experiments = ChainMap(history.experiments_by_id, current_experiments)
     for experiment_id in selected:
         experiment = experiments.get(experiment_id)
         if experiment is None:
@@ -693,9 +819,9 @@ def validate_report_evidence(
     selected_id: object,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], bytes | None]:
     """Read-only preflight shared by HTTP submission and Supervisor terminal rechecks."""
-    journals = _visible_journals(path, campaign_root)
-    current = journals[-1]
-    directions = _direction_views(path, campaign_root, journals=journals)
+    history = _visible_history(path, campaign_root)
+    current = history.current
+    directions = _direction_views(path, campaign_root, history=history)
     in_progress = [
         item["direction_id"] for item in directions.values() if item["status"] == "in_progress"
     ]
@@ -707,7 +833,7 @@ def validate_report_evidence(
         )
     for event in current["direction_events"]:
         if event.get("hypothesis_status") is not None:
-            _closure_support(path, campaign_root, event["direction_id"], event, journals=journals)
+            _closure_support(path, campaign_root, event["direction_id"], event, history=history)
     if status != "candidate_ready":
         if selected_id is not None and selected_id != "":
             raise ValueError(f"{status} cannot include selected_experiment_id")
@@ -811,7 +937,7 @@ class SupervisorJournalService:
             direction = _direction_views(self.path, self.campaign_root).get(direction_id)
             if direction is None:
                 raise ValueError("Direction ID is outside visible history")
-            return direction
+            return deepcopy(direction)
         if operation == "experiment_record":
             body = request.get("request")
             if not isinstance(body, Mapping):
@@ -837,12 +963,21 @@ class SupervisorJournalService:
             return _write_index(self.workspace, request.get("file"), {"experiments": experiments})
         if operation == "experiment_load":
             experiment_id = _text(request.get("experiment_id"), "Experiment ID")
-            for experiment in _visible_experiments(self.path, self.campaign_root):
-                if experiment.get("experiment_id") == experiment_id:
-                    visible = dict(experiment)
-                    visible.pop("sequence", None)
-                    return visible
-            raise ValueError("Experiment ID is outside visible history")
+            history = _visible_history(self.path, self.campaign_root)
+            experiment = history.experiments_by_id.get(experiment_id)
+            if experiment is None:
+                experiment = next(
+                    (
+                        item for item in history.current["experiments"]
+                        if isinstance(item, dict) and item.get("experiment_id") == experiment_id
+                    ),
+                    None,
+                )
+            if experiment is None:
+                raise ValueError("Experiment ID is outside visible history")
+            visible = dict(experiment)
+            visible.pop("sequence", None)
+            return visible
         if operation == "episode_report":
             body = request.get("request")
             if not isinstance(body, Mapping):

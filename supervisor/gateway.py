@@ -767,274 +767,21 @@ def _standard_command_name(value: str, names: set[str]) -> str | None:
     return None
 
 
-def _command_executable_index(
-    command: list[str], *, typed_launcher: bool = False
-) -> int | None:
-    """Classify supported launchers without executing or rewriting their argv.
-
-    Keep explicit wrapper recognition for legacy evaluator/profile commands:
-    an unknown target-bearing wrapper is rejected by _is_unsafe_target_command
-    rather than being misclassified as a generic Dev command.
-    """
-    def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
-        while start < len(command):
-            name, separator, _ = command[start].partition("=")
-            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
-                break
-            if shell_prefix and shlex.quote(command[start]) != command[start]:
-                break
-            if typed_launcher and name not in {
-                "PYTHONDONTWRITEBYTECODE",
-                "PYTHONUNBUFFERED",
-            }:
-                return None
-            start += 1
-        return start
-
-    index = assignment_end(0, shell_prefix=True)
-    if index is None:
-        return None
-    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
-        index += 1
-        while index < len(command):
-            option = command[index]
-            if option == "--":
-                index += 1
-                break
-            if option == "-" or option == "--ignore-environment" or option == "--debug":
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if re.fullmatch(r"-[iv]+", option):
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if option in {"-C", "--chdir", "-u", "--unset"}:
-                if index + 1 >= len(command):
-                    return None
-                if typed_launcher:
-                    return None
-                index += 2
-                continue
-            if (option.startswith(("-C", "-u")) and len(option) > 2) or (
-                option.startswith(("--chdir=", "--unset="))
-                and option.partition("=")[2]
-            ):
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if option.startswith("-"):
-                return None
-            break
-        index = assignment_end(index)
-        if index is None:
-            return None
-    while index < len(command):
-        launcher = command[index]
-        wrapper = _standard_command_name(
-            launcher,
-            {"command", "exec", "nice", "nohup", "stdbuf", "time", "timeout"},
-        )
-        if wrapper is None:
-            break
-        if typed_launcher:
-            return None
-        index += 1
-
-        if wrapper == "command":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option == "-p":
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "exec":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option == "-a":
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if re.fullmatch(r"-[cl]+", option):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "nice":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-n", "--adjustment"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-(?:n)?\d+", option)
-                    or option.startswith("--adjustment=")
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "time":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-f", "--format", "-o", "--output"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-[fo].+", option)
-                    or option.startswith("--format=")
-                    or option.startswith("--output=")
-                    or re.fullmatch(r"-[apqv]+", option)
-                    or option in {"--append", "--portability", "--quiet", "--verbose"}
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "timeout":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-k", "--kill-after", "-s", "--signal"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-[ks].+", option)
-                    or option.startswith(("--kill-after=", "--signal="))
-                    or option in {"--foreground", "--preserve-status", "--verbose"}
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-            if index >= len(command):
-                return None
-            index += 1
-        elif wrapper == "stdbuf":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-e", "--error", "-i", "--input", "-o", "--output"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if re.fullmatch(r"-[eio].+", option) or option.startswith(
-                    ("--error=", "--input=", "--output=")
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        else:
-            if index < len(command) and command[index] == "--":
-                index += 1
-            elif index < len(command) and command[index].startswith("-"):
-                return None
-    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
-        nested = _command_executable_index(
-            command[index:], typed_launcher=typed_launcher
-        )
-        return index + nested if nested is not None else None
-    return index if index < len(command) else None
-
-
-def _python_script_index(
-    parts: list[str], script_name: str, *, typed_launcher: bool = False
-) -> int | None:
-    """Locate a Python script; optionally require a prefix typed run may omit."""
+def _python_script_index(parts: list[str], script_name: str) -> int | None:
+    """Recognize a direct Python invocation of a trusted entry point."""
     command, opaque = _parsed_command_parts(parts)
-    if opaque:
+    if opaque or len(command) < 2:
         return None
-    index = _command_executable_index(command, typed_launcher=typed_launcher)
-
-    if (
-        index is None
-        or re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[index]).name) is None
-    ):
+    if re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[0]).name) is None:
         return None
-    index += 1
-    while index < len(command):
-        option = command[index]
-        if option == "--":
-            index += 1
-            break
-        if re.fullmatch(r"-[bBdEiIOPqRsSuvx]+", option):
-            if typed_launcher and re.fullmatch(r"-[Bu]+", option) is None:
-                return None
-            index += 1
-            continue
-        if option in {"-W", "-X"}:
-            if index + 1 >= len(command):
-                return None
-            if typed_launcher:
-                return None
-            index += 2
-            continue
-        if len(option) > 2 and option.startswith(("-W", "-X")):
-            if typed_launcher:
-                return None
-            index += 1
-            continue
-        if option == "--check-hash-based-pycs":
-            if index + 1 >= len(command) or command[index + 1] not in {
-                "always",
-                "default",
-                "never",
-            }:
-                return None
-            if typed_launcher:
-                return None
-            index += 2
-            continue
-        if option.startswith("-"):
-            return None
-        break
-
-    if index < len(command) and Path(command[index]).name == script_name:
-        return index
-    return None
+    # Interpreter flags, environment assignments and wrapper executables are
+    # not part of the canonical API. Target-bearing variants are rejected by
+    # _is_unsafe_target_command instead of silently becoming generic Dev jobs.
+    return 1 if command[1] == script_name else None
 
 
-def _test_kernel_script_index(
-    parts: list[str], *, typed_launcher: bool = False
-) -> int | None:
-    return _python_script_index(
-        parts, "test_kernel.py", typed_launcher=typed_launcher
-    )
+def _test_kernel_script_index(parts: list[str]) -> int | None:
+    return _python_script_index(parts, "test_kernel.py")
 
 
 def _is_test_kernel_command(parts: list[str]) -> bool:
@@ -1046,99 +793,29 @@ def _is_numerical_probe_command(parts: list[str]) -> bool:
     return _python_script_index(parts, "numerical_probe.py") is not None
 
 
-def _shell_command_operand(
-    command: list[str], executable_index: int
-) -> tuple[str, int] | None:
-    """Locate a shell script or the command string consumed by ``-c``."""
-    shell = _standard_command_name(command[executable_index], {"bash", "sh"})
-    if shell is None:
-        return None
-    index = executable_index + 1
-    while index < len(command):
-        option = command[index]
-        if option == "--":
-            index += 1
-            break
-        if shell == "bash" and option in {"--init-file", "--rcfile"}:
-            if index + 1 >= len(command):
-                return None
-            index += 2
-            continue
-        if shell == "bash" and (
-            option.startswith("--init-file=") or option.startswith("--rcfile=")
-        ):
-            index += 1
-            continue
-        if shell == "bash" and option in {
-            "--debug",
-            "--debugger",
-            "--login",
-            "--noediting",
-            "--noprofile",
-            "--norc",
-            "--posix",
-            "--protected",
-            "--restricted",
-            "--verbose",
-        }:
-            index += 1
-            continue
-        if shell == "bash" and option in {
-            "--dump-po-strings",
-            "--dump-strings",
-            "--help",
-            "--version",
-            "--wordexp",
-        }:
-            return None
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*c", option):
-            return ("command", index + 1) if index + 1 < len(command) else None
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*[oO]", option):
-            if index + 1 >= len(command):
-                return None
-            index += 2
-            continue
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]+", option):
-            index += 1
-            continue
-        if option.startswith("-"):
-            return None
-        break
-    return ("script", index) if index < len(command) else None
-
-
 def _is_profile_command(parts: list[str]) -> bool:
-    """Return whether argv invokes one of the repository profiler wrappers."""
+    """Recognize only documented profiler entry points."""
     command, opaque = _parsed_command_parts(parts)
-    if opaque:
+    if opaque or not command:
         return False
     if _python_script_index(command, "profile_driver.py") is not None:
         return True
-    index = _command_executable_index(command)
-    if index is None:
-        return False
-    frontend = _standard_command_name(command[index], {"ncu", "nsys", "rocprofv3"})
-    if frontend is not None and (
-        frontend != "nsys"
-        or (index + 1 < len(command) and command[index + 1] == "profile")
-    ):
-        for nested_index in range(index + 1, len(command)):
-            if (
-                _python_script_index(
-                    command[nested_index:], "profile_driver.py"
-                )
-                is not None
-            ):
-                return True
+
     wrappers = {"tools/profile_nvidia.sh", "tools/profile_kernel.sh"}
-    executable = PurePosixPath(command[index]).as_posix()
-    if Path(executable).name == "profile_driver.py" or executable in wrappers:
+    if command[0] == "profile_driver.py":
         return True
-    operand = _shell_command_operand(command, index)
-    return bool(
-        operand
-        and operand[0] == "script"
-        and PurePosixPath(command[operand[1]]).as_posix() in wrappers
+    if command[0] in wrappers:
+        return True
+    shell = _standard_command_name(command[0], {"bash", "sh"})
+    if shell is not None:
+        return len(command) > 1 and command[1] in wrappers
+
+    frontend = _standard_command_name(command[0], {"ncu", "nsys", "rocprofv3"})
+    if frontend is None or (frontend == "nsys" and command[1:2] != ["profile"]):
+        return False
+    return any(
+        _python_script_index(command[index:], "profile_driver.py") is not None
+        for index in range(1, len(command))
     )
 
 
@@ -1147,7 +824,8 @@ def _mentions_evaluator_target(value: str) -> bool:
     unquoted = value.translate(str.maketrans("", "", "\\'\""))
     return re.search(
         r"(?<![A-Za-z0-9_.-])"
-        r"(?:test_kernel\.py|profile_driver\.py|profile_nvidia\.sh|profile_kernel\.sh)"
+        r"(?:test_kernel\.py|profile_driver\.py|numerical_probe\.py|"
+        r"profile_nvidia\.sh|profile_kernel\.sh)"
         r"(?![A-Za-z0-9_.-])",
         unquoted,
     ) is not None
@@ -1156,7 +834,11 @@ def _mentions_evaluator_target(value: str) -> bool:
 def _is_unsafe_target_command(parts: list[str]) -> bool:
     """Reject target-bearing commands outside the supported launcher grammar."""
     command, _ = _parsed_command_parts(parts)
-    if _is_test_kernel_command(command) or _is_profile_command(command):
+    if (
+        _is_test_kernel_command(command)
+        or _is_profile_command(command)
+        or _is_numerical_probe_command(command)
+    ):
         return False
     return any(_mentions_evaluator_target(token) for token in command)
 
@@ -1415,12 +1097,12 @@ def _typed_workspace_limitation(
     if (
         kind == "run"
         and _is_test_kernel_command(command)
-        and _test_kernel_script_index(command, typed_launcher=True) is None
+        and _test_kernel_script_index(command) is None
     ):
         return "evaluator launcher semantics require the dev route"
     if kind == "profile":
         parts, opaque = _parsed_command_parts(command)
-        driver = _python_script_index(parts, "profile_driver.py", typed_launcher=True)
+        driver = _python_script_index(parts, "profile_driver.py")
         if opaque or driver is None or driver != len(parts) - 1:
             return "custom Profile commands/wrappers require the dev route"
     if (workspace / "workload.jsonl").is_file():
@@ -4777,8 +4459,10 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
     if _is_unsafe_target_command(args.command):
         raise SystemExit(
-            "sandbox: evaluator and profile targets must use a supported launcher "
-            "with separate arguments after --"
+            "sandbox: evaluator and profile targets require a direct command after --, "
+            "such as python3 test_kernel.py, python3 profile_driver.py, or "
+            "bash tools/profile_nvidia.sh profile_driver.py; do not wrap them in "
+            "env, timeout, or shell -c"
         )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)

@@ -57,9 +57,9 @@ Hidden-Shape Typed Profile responses expose opaque Shape IDs and bounded Kernel 
 
 The visible Kernel list is capped at 32 entries. `kernel_count`, `total_duration_us`, `dominant_kernel` and duration shares still describe the full Kernel list returned by the profiler; `kernels_omitted` reports excluded entries. Repeated projection preserves these aggregates, so the immediate response, saved Record and synchronized summary agree.
 
-Dev/SSH remains a compatibility path for custom commands/wrappers, auxiliary inputs, driver-specific `PROFILE_*` controls, and unsupported source contracts or Gateway interfaces. Hidden Shapes alone do not trigger fallback. A recognized hidden-Shape driver receives the selected private case only in its remote bundle. Other Typed-only options fail instead of being silently ignored by a fallback.
+Dev/SSH remains a compatibility path for custom non-evaluator commands, auxiliary inputs, driver-specific `PROFILE_*` controls, and unsupported source contracts or Gateway interfaces. Evaluator targets require canonical direct invocations (`python3 test_kernel.py`, `python3 profile_driver.py`, or the documented profiler scripts); `env`, `timeout`, interpreter flags, and `sh -c` wrappers around those targets are rejected rather than routed to a generic Dev job. Hidden Shapes alone do not trigger fallback. A recognized hidden-Shape driver receives the selected private case only in its remote bundle. Other Typed-only options fail instead of being silently ignored by a fallback.
 
-Read the mounted `gpu-measurement` Skill for Agent-facing examples. Existing evaluator commands retain their syntax and result markers:
+Read the mounted `gpu-measurement` Skill for Agent-facing examples. Canonical evaluator commands retain their result markers:
 
 ```bash
 python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --version v2 --no-memory
