@@ -3154,14 +3154,12 @@ def _typed_agate_command(
         str(reference_dir),
         "--operator",
         str(request["reference"]["operator"]),
-        "--mode",
-        str(request.get("mode") or "full"),
+        *(["--mode", str(request.get("mode") or "full")] if kind == "run" else []),
         "--num-correctness-cases",
         str(options["num_correctness_cases"]),
         "--bench-iters",
         str(options["bench_iters"]),
-        "--set",
-        "warmup_iters=5",
+        *(["--set", "warmup_iters=5"] if kind == "run" else []),
         "--http-timeout",
         str(MAX_HTTP_REQUEST_TIMEOUT),
         "--wait-timeout",
@@ -3170,7 +3168,7 @@ def _typed_agate_command(
         str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
     correctness_max_rel_l2 = options.get("correctness_max_rel_l2")
-    if correctness_max_rel_l2 is not None:
+    if kind == "run" and correctness_max_rel_l2 is not None:
         command += [
             "--set",
             f"correctness_max_rel_l2={json.dumps(correctness_max_rel_l2)}",
