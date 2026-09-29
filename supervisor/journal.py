@@ -419,7 +419,10 @@ def _visible_experiments(
 ) -> list[dict[str, Any]]:
     if history is None:
         history = _visible_history(current, campaign_root)
-    values = list(history.experiments)
+    # Cached history snapshots live for the Supervisor process lifetime. Keep
+    # their nested Experiment payloads private from callers just as Direction
+    # loads do; list construction is already proportional to the output size.
+    values = [deepcopy(item) for item in history.experiments]
     seen = {item["experiment_id"] for item in values}
     for experiment in history.current["experiments"]:
         if not isinstance(experiment, dict):
@@ -428,8 +431,9 @@ def _visible_experiments(
         if not isinstance(experiment_id, str) or experiment_id in seen:
             continue
         seen.add(experiment_id)
-        values.append(dict(experiment))
+        values.append(deepcopy(experiment))
     return values
+
 
 def _save_journal(path: Path, campaign_root: Path, journal: dict[str, Any]) -> None:
     if (
@@ -997,7 +1001,7 @@ class SupervisorJournalService:
                 )
             if experiment is None:
                 raise ValueError("Experiment ID is outside visible history")
-            visible = dict(experiment)
+            visible = deepcopy(experiment)
             visible.pop("sequence", None)
             return visible
         if operation == "episode_report":
