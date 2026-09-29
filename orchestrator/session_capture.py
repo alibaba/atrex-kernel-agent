@@ -126,7 +126,6 @@ def start_session_capture(command: list[str], cwd: Path, environment: dict[str, 
             root,
             backend=backend,
             command=command,
-            provider_home=None,
             context=context,
             native_environment=environment,
         )
@@ -168,7 +167,6 @@ class SessionCapture:
         *,
         backend: str,
         command: list[str],
-        provider_home: Path | None,
         context: dict[str, str],
         native_environment: dict[str, str] | None = None,
         limits: CaptureLimits | None = None,
@@ -177,7 +175,6 @@ class SessionCapture:
         self.root.mkdir(parents=True, mode=0o700)
         (self.root / "provider").mkdir()
         self.backend = backend
-        self.home = provider_home.resolve() if provider_home is not None else None
         self.session_id = self.root.name
         for flag in ("--session-id", "--resume"):
             if flag in command and command.index(flag) + 1 < len(command):
@@ -210,7 +207,7 @@ class SessionCapture:
         self._tails: dict[str, TranscriptTail] = {}
         self._initial_sizes: dict[str, int] = {}
         self._host_transcripts = None
-        if self.home is None and native_environment is not None:
+        if native_environment is not None:
             from .session_native import HostSessionTranscripts
 
             try:
@@ -246,29 +243,7 @@ class SessionCapture:
             except (OSError, ValueError) as error:
                 self._capture_error("native_capture", error)
                 return {}
-        if self.home is None:
-            return {}
-        # No broad Home scan: credentials/settings are never session artifacts.
-        patterns = (
-            ".claude/projects/**/*.jsonl",
-            ".codex/sessions/**/*.jsonl",
-            ".qoder-writable/projects/**/*.jsonl",
-            ".qoder-writable/tasks/**/*.jsonl",
-            ".qoder/projects/**/*.jsonl",
-            ".qoder/tasks/**/*.jsonl",
-            ".pi/agent/sessions/**/*.jsonl",
-        )
-        result = {}
-        count = 0
-        for pattern in patterns:
-            for path in self.home.glob(pattern):
-                count += 1
-                if count > self._budget.limits.files:
-                    self._budget.warning("native_files_exceeded")
-                    return result
-                relative = "provider/native/" + path.relative_to(self.home).as_posix()
-                result[relative] = (path, self._initial_sizes.get(relative, 0))
-        return result
+        return {}
 
     def _tail(self, name: str, path: Path, previous_size: int) -> TranscriptTail | None:
         if name not in self._tails:

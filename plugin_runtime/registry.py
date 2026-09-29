@@ -365,7 +365,11 @@ class PluginRegistry:
         self, name: str, request: object, workspace: Path, *, cwd: Path | None = None,
         supervised: bool = False,
     ) -> object:
-        self.check_lock(workspace)
+        # The Supervisor validates its private plugin lock before dispatch.
+        # The child receives a staged workspace without a lock file; checking
+        # that directory would not validate the actual pinned configuration.
+        if not supervised:
+            self.check_lock(workspace)
         plugin_id, _, tool_name = name.partition(".")
         plugin = next((p for p in self.plugins if p.id == plugin_id), None)
         if plugin is None or tool_name not in plugin.tools:
@@ -410,7 +414,7 @@ class PluginRegistry:
             raise
         finally:
             event_dir = workspace / STATE_DIR / "calls"
-            if (workspace / STATE_DIR / "lock.json").exists():
+            if not supervised and (workspace / STATE_DIR / "lock.json").exists():
                 event = {
                     "call_id": call_id,
                     "tool": name,

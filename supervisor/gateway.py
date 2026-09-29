@@ -770,7 +770,12 @@ def _standard_command_name(value: str, names: set[str]) -> str | None:
 def _command_executable_index(
     command: list[str], *, typed_launcher: bool = False
 ) -> int | None:
-    """Skip supported shell assignments, env, and execution wrappers."""
+    """Classify supported launchers without executing or rewriting their argv.
+
+    Keep explicit wrapper recognition for legacy evaluator/profile commands:
+    an unknown target-bearing wrapper is rejected by _is_unsafe_target_command
+    rather than being misclassified as a generic Dev command.
+    """
     def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
         while start < len(command):
             name, separator, _ = command[start].partition("=")

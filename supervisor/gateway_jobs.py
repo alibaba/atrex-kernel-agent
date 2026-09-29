@@ -162,6 +162,8 @@ def payload_identity(payload: dict) -> dict:
         environment = value.pop("env_vars")
         encoded = json.dumps(environment, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=False).encode()
+        # The empty-key fallback preserves standalone/cooperative CLI behavior;
+        # only Supervisor-supplied keys make this fingerprint an authenticity check.
         key = bytes.fromhex(os.environ["ATREX_AKA_IDENTITY_KEY"]) if os.environ.get(
             "ATREX_AKA_IDENTITY_KEY"
         ) else b""

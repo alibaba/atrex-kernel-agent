@@ -198,10 +198,14 @@ def _visible_journals(current: Path, campaign_root: Path) -> list[dict[str, Any]
     return values
 
 
-def _direction_views(current: Path, campaign_root: Path) -> dict[str, dict[str, Any]]:
+def _direction_views(
+    current: Path, campaign_root: Path, *, journals: list[dict[str, Any]] | None = None
+) -> dict[str, dict[str, Any]]:
     views: dict[str, dict[str, Any]] = {}
     statuses: dict[str, str] = {}
-    for journal in _visible_journals(current, campaign_root):
+    if journals is None:
+        journals = _visible_journals(current, campaign_root)
+    for journal in journals:
         started: set[str] = set()
         for event in journal["direction_events"]:
             if not isinstance(event, dict):
@@ -252,7 +256,7 @@ def _direction_views(current: Path, campaign_root: Path) -> dict[str, dict[str, 
                 for experiment_id in support:
                     if experiment_id not in direction["associated_experiment_ids"]:
                         direction["associated_experiment_ids"].append(experiment_id)
-    for experiment in _visible_experiments(current, campaign_root):
+    for experiment in _visible_experiments(current, campaign_root, journals=journals):
         direction = views.get(str(experiment.get("direction_id")))
         if direction is None:
             continue
@@ -265,10 +269,14 @@ def _direction_views(current: Path, campaign_root: Path) -> dict[str, dict[str, 
     return views
 
 
-def _visible_experiments(current: Path, campaign_root: Path) -> list[dict[str, Any]]:
+def _visible_experiments(
+    current: Path, campaign_root: Path, *, journals: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for journal in _visible_journals(current, campaign_root):
+    if journals is None:
+        journals = _visible_journals(current, campaign_root)
+    for journal in journals:
         experiments = journal.get("experiments", [])
         if not isinstance(experiments, list):
             continue
@@ -322,11 +330,12 @@ def update_direction(
     _mutable_journal(path)
     value = dict(request)
     action = value.get("action")
-    views = _direction_views(path, campaign_root)
+    journals = _visible_journals(path, campaign_root)
+    views = _direction_views(path, campaign_root, journals=journals)
     statuses = {key: direction["status"] for key, direction in views.items()}
     started = {
         event["direction_id"]
-        for event in load_journal(path)["direction_events"]
+        for event in journals[-1]["direction_events"]
         if event["action"] == "start"
     }
     if action == "propose":
@@ -343,7 +352,7 @@ def update_direction(
                 views,
                 {
                     str(item["experiment_id"]): item
-                    for item in _visible_experiments(path, campaign_root)
+                    for item in _visible_experiments(path, campaign_root, journals=journals)
                 },
             )
         event = {
@@ -549,7 +558,8 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
 
 
 def _closure_support(
-    path: Path, campaign_root: Path, direction_id: str, value: Mapping[str, object]
+    path: Path, campaign_root: Path, direction_id: str, value: Mapping[str, object],
+    *, journals: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     assessment = value.get("hypothesis_status")
     if not isinstance(assessment, str) or assessment not in _HYPOTHESIS_STATUSES:
@@ -567,7 +577,8 @@ def _closure_support(
             ),
         )
     experiments = {
-        item["experiment_id"]: item for item in _visible_experiments(path, campaign_root)
+        item["experiment_id"]: item
+        for item in _visible_experiments(path, campaign_root, journals=journals)
     }
     for experiment_id in selected:
         experiment = experiments.get(experiment_id)
@@ -682,8 +693,9 @@ def validate_report_evidence(
     selected_id: object,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], bytes | None]:
     """Read-only preflight shared by HTTP submission and Supervisor terminal rechecks."""
-    current = load_journal(path)
-    directions = _direction_views(path, campaign_root)
+    journals = _visible_journals(path, campaign_root)
+    current = journals[-1]
+    directions = _direction_views(path, campaign_root, journals=journals)
     in_progress = [
         item["direction_id"] for item in directions.values() if item["status"] == "in_progress"
     ]
@@ -695,7 +707,7 @@ def validate_report_evidence(
         )
     for event in current["direction_events"]:
         if event.get("hypothesis_status") is not None:
-            _closure_support(path, campaign_root, event["direction_id"], event)
+            _closure_support(path, campaign_root, event["direction_id"], event, journals=journals)
     if status != "candidate_ready":
         if selected_id is not None and selected_id != "":
             raise ValueError(f"{status} cannot include selected_experiment_id")
