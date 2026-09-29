@@ -262,23 +262,38 @@ def _visible_history(current: Path, campaign_root: Path) -> _VisibleHistory:
     root = campaign_root.resolve()
     with _HISTORY_LOCK:
         index = _HISTORY_INDEXES.get(root)
-        rebuild = index is None or episode < index.next_episode
+        # A straggling old-Episode binding may still issue a read while a newer
+        # Episode owns the Campaign. Build that older view privately; never
+        # replace the newest published Campaign snapshot with an older one.
+        older_snapshot = index is not None and episode < index.next_episode
+        rebuild = index is None or older_snapshot
         if index is not None and not rebuild:
             for pending in index.pending:
                 path = root / "episodes" / f"e{pending:08d}" / "journal.json"
-                if load_journal(path).get("finalized_at"):
+                try:
+                    pending_journal = load_journal(path)
+                except RuntimeStateError:
+                    # Rebuild via the directory index. A deleted abandoned
+                    # Episode disappears as it did in the former glob-based
+                    # implementation; an existing corrupt file still fails
+                    # closed when _index_historical_journal reads it below.
+                    rebuild = True
+                    break
+                if pending_journal.get("finalized_at"):
                     rebuild = True
                     break
         if rebuild:
-            index = _HistoryIndex()
+            rebuilt = _HistoryIndex()
             for path in sorted((root / "episodes").glob("e*/journal.json")):
                 identity = re.fullmatch(r"e([0-9]{8,})", path.parent.name)
                 if identity is not None and int(identity[1]) < episode:
-                    _index_historical_journal(index, path, int(identity[1]))
-            index.next_episode = episode
-            _HISTORY_INDEXES[root] = index
-            if len(_HISTORY_INDEXES) > 16:
-                _HISTORY_INDEXES.pop(next(iter(_HISTORY_INDEXES)))
+                    _index_historical_journal(rebuilt, path, int(identity[1]))
+            rebuilt.next_episode = episode
+            index = rebuilt
+            if not older_snapshot:
+                _HISTORY_INDEXES[root] = index
+                if len(_HISTORY_INDEXES) > 16:
+                    _HISTORY_INDEXES.pop(next(iter(_HISTORY_INDEXES)))
         elif episode > index.next_episode:
             # Published indexes are immutable. Build the next snapshot in
             # private, then replace the cache entry atomically while holding

@@ -1103,12 +1103,6 @@ def _typed_workspace_limitation(
         _evaluator_input_path(workspace, "shapes.json", required=True)
     except ValueError as exc:
         return str(exc)
-    if (
-        kind == "run"
-        and _is_test_kernel_command(command)
-        and _test_kernel_script_index(command) is None
-    ):
-        return "evaluator launcher semantics require the dev route"
     if kind == "profile":
         parts, opaque = _parsed_command_parts(command)
         driver = _python_script_index(parts, "profile_driver.py")
