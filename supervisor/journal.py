@@ -98,6 +98,21 @@ class _HistoryIndex:
         self.experiment_ids: set[str] = set()
         self.pending: set[int] = set()
 
+    def fork(self) -> "_HistoryIndex":
+        """Return an unpublished copy that can ingest the next Episode safely."""
+        result = _HistoryIndex()
+        result.next_episode = self.next_episode
+        # Direction events and Experiment association update nested lists, so
+        # these views require a deep copy. Existing Experiment rows are
+        # immutable after finalization and can be shared between snapshots.
+        result.directions = deepcopy(self.directions)
+        result.statuses = dict(self.statuses)
+        result.experiments = list(self.experiments)
+        result.experiments_by_id = dict(self.experiments_by_id)
+        result.experiment_ids = set(self.experiment_ids)
+        result.pending = set(self.pending)
+        return result
+
 
 _HISTORY_LOCK = threading.RLock()
 _HISTORY_INDEXES: dict[Path, _HistoryIndex] = {}
@@ -265,6 +280,11 @@ def _visible_history(current: Path, campaign_root: Path) -> _VisibleHistory:
             if len(_HISTORY_INDEXES) > 16:
                 _HISTORY_INDEXES.pop(next(iter(_HISTORY_INDEXES)))
         elif episode > index.next_episode:
+            # Published indexes are immutable. Build the next snapshot in
+            # private, then replace the cache entry atomically while holding
+            # _HISTORY_LOCK. Readers that already hold the old snapshot can
+            # continue iterating it without observing partial ingestion.
+            updated = index.fork()
             # Sequential Episode numbers avoid re-globbing the entire Campaign.
             # A sparse jump falls back to one directory scan, not an unbounded range.
             if episode - index.next_episode > 4096:
@@ -275,13 +295,15 @@ def _visible_history(current: Path, campaign_root: Path) -> _VisibleHistory:
                 )
                 for path, identity in numbered:
                     if identity is not None and index.next_episode <= int(identity[1]) < episode:
-                        _index_historical_journal(index, path, int(identity[1]))
+                        _index_historical_journal(updated, path, int(identity[1]))
             else:
                 for previous in range(index.next_episode, episode):
                     path = root / "episodes" / f"e{previous:08d}" / "journal.json"
                     if path.exists() or path.is_symlink():
-                        _index_historical_journal(index, path, previous)
-            index.next_episode = episode
+                        _index_historical_journal(updated, path, previous)
+            updated.next_episode = episode
+            _HISTORY_INDEXES[root] = updated
+            index = updated
         return _VisibleHistory(
             current=current_value,
             directions=index.directions,
