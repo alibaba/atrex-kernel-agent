@@ -16,10 +16,12 @@
 """Run optimizer GPU work through a gateway or an OpenSSH GPU host.
 
 In gateway mode, native Atrex-Bench correctness/performance commands use
-``agate run`` and profiling commands use ``profile``. ``dev`` remains the
+``agate eval`` and profiling commands use ``profile``. Failed typed evaluations
+retry the same eval route within a bounded budget, never switch to ``dev``.
+``dev`` remains the
 compatibility escape hatch for workloads those typed interfaces cannot represent
 (for example SOL-ExecBench, source-correlated custom profiling, or a community
-gateway that explicitly returns ``kind_not_supported``). OpenSSH mode executes
+gateway profile extension). OpenSSH mode executes
 the same allowlisted command bundle through a portable remote runner. Every
 invocation is stateless; callers must not rely on remote filesystem persistence.
 
@@ -81,7 +83,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -240,6 +242,15 @@ ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
+# One admission/transport retry is intentionally enough.  Eval attempts bypass
+# the separate gateway retry loop and classify cancellation without an outcome
+# and queue timeout before start here instead, so retries never nest.  The one
+# retry also preserves the existing L20N -> l20n-ray placement failover.  The
+# worst case is therefore two evaluator wait budgets plus this delay per batch.
+EVAL_RETRY_DELAYS = (5,)
+EVAL_RETRIES_EXHAUSTED = "[sandbox] eval retries exhausted; dev fallback disabled"
+EVAL_SUBMISSION_OUTCOME_UNKNOWN = "__ATREX_EVAL_SUBMISSION_OUTCOME_UNKNOWN__"
+ATREX_EVAL_BACKEND = "atrex"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -2644,6 +2655,10 @@ class GatewayHTTPError(RuntimeError):
         super().__init__(f"gateway HTTP {status}: {detail}")
 
 
+class GatewaySubmissionOutcomeUnknown(GatewayHTTPError):
+    """The submit response failed after the gateway may have accepted the job."""
+
+
 def _gateway_json(
     base_url: str,
     method: str,
@@ -2679,11 +2694,23 @@ def _run_direct_job(
     payload: dict[str, Any],
     timeout: int,
     queue_wait_grace: int,
+    retry_cancelled_without_outcome: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     prior_note = ""
     for submission in range(2):
-        accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        try:
+            accepted = _gateway_json(
+                url, "POST", f"/v1/jobs/{kind}", payload, 30
+            )
+        except GatewayHTTPError as exc:
+            # A gateway/proxy timeout can arrive after the POST created a job.
+            # Without its id the caller cannot cancel or safely resubmit it.
+            if exc.status in {502, 504}:
+                raise GatewaySubmissionOutcomeUnknown(
+                    exc.status, exc.detail
+                ) from exc
+            raise
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
@@ -2702,7 +2729,11 @@ def _run_direct_job(
                     wait_for + 10,
                 )
                 if job.get("status") in ("succeeded", "failed", "cancelled"):
-                    if submission == 0 and _cancelled_without_outcome(job):
+                    if (
+                        retry_cancelled_without_outcome
+                        and submission == 0
+                        and _cancelled_without_outcome(job)
+                    ):
                         prior_note = (
                             f"[sandbox] gateway cancelled job_id={job_id} without a "
                             "result/error; resubmitted once"
@@ -3004,7 +3035,12 @@ def _run_agate_once(
                 [*agate, "--no-wait"], capture_output=True, text=True,
                 timeout=min(MAX_HTTP_REQUEST_TIMEOUT, remaining))
         except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
+            return subprocess.CompletedProcess(
+                agate,
+                ENVIRONMENT_TEMPFAIL,
+                "",
+                f"{INFRASTRUCTURE_MARKER}\n{EVAL_SUBMISSION_OUTCOME_UNKNOWN}",
+            )
     job = _job_response(submitted.stdout or "")
     if submitted.returncode or not job:
         return submitted
@@ -3130,8 +3166,17 @@ def _typed_agate_command(
     queue_wait_grace: int,
     reference_dir: Path | None = None,
 ) -> list[str]:
-    """Build an agate run/profile invocation for a typed request."""
-    command = [executable, kind]
+    """Build an agate eval/profile invocation for a typed request.
+
+    ``run`` is this sandbox's logical correctness/performance operation.  Its
+    request is assembled from the native Atrex-Bench contract, so the canonical
+    Agate entry point is explicitly ``eval --backend atrex``.  Gateway profiles
+    select an endpoint; they do not change the evaluator backend.
+    """
+    command = (
+        [executable, "eval", "--backend", ATREX_EVAL_BACKEND]
+        if kind == "run" else [executable, kind]
+    )
     if args.url:
         command += ["--url", args.url]
     elif args.gateway_profile:
@@ -3191,6 +3236,95 @@ def _typed_agate_command(
 def _typed_fallback_allowed(detail: object) -> bool:
     text = str(detail).lower()
     return any(reason in text for reason in TYPED_FALLBACK_REASONS)
+
+
+def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
+    """Retry admission/transport failures, not a completed kernel evaluation."""
+    if TEST_RESULT_PREFIX in (proc.stdout or ""):
+        return False
+    if EVAL_SUBMISSION_OUTCOME_UNKNOWN in (proc.stderr or "").splitlines():
+        return False
+    job = _job_response(proc.stdout or "")
+    if job is not None:
+        if job.get("status") == "succeeded" or job.get("result") is not None:
+            return False
+        if (
+            _cancelled_without_outcome(job)
+            or _queue_timeout_before_start(job)
+            or _ray_submit_version_mismatch(job)
+        ):
+            return True
+        error = job.get("error")
+        if not isinstance(error, dict):
+            return False
+        category = error.get("error_class") or error.get("class")
+        reason = error.get("reason")
+        if category == "code":
+            return False
+        return category == "infra" and reason in {
+            "submit_failed", "dashboard_unreachable", "backend_unavailable",
+            "deps_install_timeout", "logs_unavailable",
+        }
+    if proc.returncode == 0:
+        return False
+    detail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).lower()
+    return (
+        any(marker in detail for marker in (
+            "connection reset by peer", "connection refused",
+            "temporary failure in name resolution", "ray job submit failed",
+            "infra/submit_failed", "infra/dashboard_unreachable",
+        ))
+        or bool(re.search(r"\bhttp(?: error)?\s*[:=]?\s*(429|502|503|504)\b", detail))
+        or (proc.returncode == ENVIRONMENT_TEMPFAIL
+            and INFRASTRUCTURE_MARKER in (proc.stderr or "").splitlines())
+    )
+
+
+def _run_eval_with_retry(
+    action: Callable[[], subprocess.CompletedProcess[str]], *, generalized: bool
+) -> subprocess.CompletedProcess[str]:
+    """Keep the typed eval route and retain diagnostics across bounded retries."""
+    for attempt in range(len(EVAL_RETRY_DELAYS) + 1):
+        try:
+            proc = action()
+        except GatewaySubmissionOutcomeUnknown:
+            # The submit POST may already have created a live job, but no job id
+            # is available to cancel it.  A retry could duplicate GPU work.
+            raise
+        except GatewayHTTPError as exc:
+            retryable = exc.status in {429, 502, 503, 504}
+            if not retryable:
+                raise
+            if attempt == len(EVAL_RETRY_DELAYS):
+                # HTTP failures have no CompletedProcess envelope in which to
+                # preserve the status and diagnostics.  Emit the shared marker
+                # and re-raise so the caller retains its existing HTTP/status
+                # classification.  CLI failures below already have an envelope,
+                # so they return that process with the same marker appended.
+                print(EVAL_RETRIES_EXHAUSTED, file=sys.stderr)
+                raise
+            detail = f"gateway HTTP {exc.status}; evaluator details withheld" if generalized else str(exc)
+        else:
+            if not _eval_retryable_failure(proc):
+                return proc
+            if attempt == len(EVAL_RETRY_DELAYS):
+                return subprocess.CompletedProcess(
+                    proc.args, proc.returncode or 1, proc.stdout,
+                    (proc.stderr or "").rstrip() + "\n" + EVAL_RETRIES_EXHAUSTED,
+                )
+            # Never disclose private reference/shape evidence from generalized tasks.
+            # Ordinary evaluations retain the original CLI error, including job IDs.
+            detail = "evaluation admission/transport failed; evaluator details withheld" if generalized else (
+                (proc.stderr or "") + "\n" + (proc.stdout or "")
+            ).strip()
+        delay = EVAL_RETRY_DELAYS[attempt]
+        print(
+            f"[sandbox] eval attempt {attempt + 1}/{len(EVAL_RETRY_DELAYS) + 1} failed: {detail}\n"
+            f"[sandbox] retrying the typed eval request in {delay}s; dev fallback disabled",
+            file=sys.stderr, flush=True,
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _finite_number(value: object) -> float | None:
@@ -3928,7 +4062,7 @@ def _run_typed_gateway(
     sync_paths: list[str],
     queue_wait_grace: int,
 ) -> int | None:
-    """Run agate run/profile, returning None only for a documented dev fallback."""
+    """Run agate eval/profile; failed eval requests never fall back to dev."""
     generalized = _is_generalized_workspace(workspace)
     try:
         request = _typed_request(
@@ -3945,6 +4079,10 @@ def _run_typed_gateway(
             top_kernels=args.top_kernels,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
+        if kind == "run":
+            detail = "private evaluator details withheld" if generalized else str(exc)
+            print(f"[sandbox] cannot build eval request: {detail}; dev fallback disabled", file=sys.stderr)
+            return 2
         print(
             f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev",
             file=sys.stderr,
@@ -3972,7 +4110,7 @@ def _run_typed_gateway(
                     "workspace": str(workspace),
                     "kind": kind,
                     "num_gpus": request.get("spec", {}).get("num_gpus", 1),
-                    "fallback_kind": "dev",
+                    "fallback_kind": None if kind == "run" else "dev",
                     "candidate_bytes": len(request["candidate"].encode("utf-8")),
                     "shape_count": (
                         "private"
@@ -4002,13 +4140,18 @@ def _run_typed_gateway(
                     _shape_batch_request(request, shape_ids) if batched else request
                 )
                 if args.url and agate_executable is None:
-                    return _run_direct_job(
-                        url=args.url,
-                        kind="eval" if kind == "run" else kind,
-                        payload=batch_request,
-                        timeout=args.timeout,
-                        queue_wait_grace=queue_wait_grace,
-                    )
+                    def direct_request() -> subprocess.CompletedProcess[str]:
+                        return _run_direct_job(
+                            url=args.url,
+                            kind="eval" if kind == "run" else kind,
+                            payload=batch_request,
+                            timeout=args.timeout,
+                            queue_wait_grace=queue_wait_grace,
+                            retry_cancelled_without_outcome=kind != "run",
+                        )
+                    if kind == "run":
+                        return _run_eval_with_retry(direct_request, generalized=generalized)
+                    return direct_request()
                 if agate_executable is None:
                     raise FileNotFoundError("agate")
                 reference_dir = None
@@ -4027,16 +4170,57 @@ def _run_typed_gateway(
                     queue_wait_grace,
                     reference_dir,
                 )
-                return _run_agate_with_cancel_retry(
-                    agate=agate,
-                    executable=agate_executable,
-                    url=args.url,
-                    gateway_profile=args.gateway_profile,
-                    command_timeout=_gateway_job_timeout(
-                        args.timeout, queue_wait_grace
-                    ),
-                    wait_budget=args.timeout + queue_wait_grace,
-                )
+                if kind != "run":
+                    # Profile keeps its established gateway recovery policy.
+                    # Only eval replaces that helper with the bounded outer
+                    # policy below to prevent a typed eval from becoming dev.
+                    return _run_agate_with_cancel_retry(
+                        agate=agate,
+                        executable=agate_executable,
+                        url=args.url,
+                        gateway_profile=args.gateway_profile,
+                        command_timeout=_gateway_job_timeout(
+                            args.timeout, queue_wait_grace
+                        ),
+                        wait_budget=args.timeout + queue_wait_grace,
+                    )
+
+                eval_agate = agate
+
+                def cli_request() -> subprocess.CompletedProcess[str]:
+                    nonlocal eval_agate
+                    proc = _run_agate_once(
+                        agate=eval_agate,
+                        executable=agate_executable,
+                        url=args.url,
+                        gateway_profile=args.gateway_profile,
+                        command_timeout=_gateway_job_timeout(
+                            args.timeout, queue_wait_grace
+                        ),
+                        wait_budget=args.timeout + queue_wait_grace,
+                    )
+                    # A Ray submit API mismatch is a placement failure, not an
+                    # evaluator outcome.  Preserve the old L20N compatibility
+                    # failover inside the single outer eval retry instead of
+                    # reintroducing the unbounded/nested gateway retry loop.
+                    fallback = (
+                        _l20n_failover_command(eval_agate)
+                        if _ray_submit_version_mismatch(
+                            _job_response(proc.stdout or "")
+                        )
+                        else None
+                    )
+                    if fallback is not None:
+                        eval_agate = fallback
+                        print(
+                            "[sandbox] L20N submit cluster unavailable; "
+                            "next bounded eval attempt uses l20n-ray",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    return proc
+
+                return _run_eval_with_retry(cli_request, generalized=generalized)
 
             batch_items = list(enumerate(shape_batches))
             if batched:
@@ -4053,13 +4237,15 @@ def _run_typed_gateway(
             else:
                 processes = [run_batch(batch_items[0])]
     except GatewayHTTPError as exc:
-        if _typed_fallback_allowed(exc):
+        if kind != "run" and _typed_fallback_allowed(exc):
             print(
                 f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
                 file=sys.stderr,
             )
             return None
         if exc.status in {429, 502, 503, 504}:
+            if not generalized:
+                print(str(exc), file=sys.stderr)
             print(INFRASTRUCTURE_MARKER, file=sys.stderr)
             return ENVIRONMENT_TEMPFAIL
         if generalized:
@@ -4077,12 +4263,14 @@ def _run_typed_gateway(
     jobs: list[dict[str, Any]] = []
     for proc in processes:
         detail = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode and _typed_fallback_allowed(detail):
+        if kind != "run" and proc.returncode and _typed_fallback_allowed(detail):
             print(
                 f"[sandbox] gateway {kind} interface rejected this request; using dev",
                 file=sys.stderr,
             )
             return None
+        if generalized and EVAL_RETRIES_EXHAUSTED in (proc.stderr or ""):
+            print(EVAL_RETRIES_EXHAUSTED, file=sys.stderr)
         if proc.stderr and not generalized:
             print("\n".join(line for line in proc.stderr.rstrip().splitlines()
                               if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
