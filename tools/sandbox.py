@@ -249,6 +249,7 @@ TYPED_KINDS = frozenset({"run", "profile"})
 # worst case is therefore two evaluator wait budgets plus this delay per batch.
 EVAL_RETRY_DELAYS = (5,)
 EVAL_RETRIES_EXHAUSTED = "[sandbox] eval retries exhausted; dev fallback disabled"
+EVAL_SUBMISSION_OUTCOME_UNKNOWN = "__ATREX_EVAL_SUBMISSION_OUTCOME_UNKNOWN__"
 ATREX_EVAL_BACKEND = "atrex"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
@@ -2654,6 +2655,10 @@ class GatewayHTTPError(RuntimeError):
         super().__init__(f"gateway HTTP {status}: {detail}")
 
 
+class GatewaySubmissionOutcomeUnknown(GatewayHTTPError):
+    """The submit response failed after the gateway may have accepted the job."""
+
+
 def _gateway_json(
     base_url: str,
     method: str,
@@ -2694,7 +2699,18 @@ def _run_direct_job(
     """Submit and wait for any public gateway job kind through HTTP."""
     prior_note = ""
     for submission in range(2):
-        accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        try:
+            accepted = _gateway_json(
+                url, "POST", f"/v1/jobs/{kind}", payload, 30
+            )
+        except GatewayHTTPError as exc:
+            # A gateway/proxy timeout can arrive after the POST created a job.
+            # Without its id the caller cannot cancel or safely resubmit it.
+            if exc.status in {502, 504}:
+                raise GatewaySubmissionOutcomeUnknown(
+                    exc.status, exc.detail
+                ) from exc
+            raise
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
@@ -3019,7 +3035,12 @@ def _run_agate_once(
                 [*agate, "--no-wait"], capture_output=True, text=True,
                 timeout=min(MAX_HTTP_REQUEST_TIMEOUT, remaining))
         except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
+            return subprocess.CompletedProcess(
+                agate,
+                ENVIRONMENT_TEMPFAIL,
+                "",
+                f"{INFRASTRUCTURE_MARKER}\n{EVAL_SUBMISSION_OUTCOME_UNKNOWN}",
+            )
     job = _job_response(submitted.stdout or "")
     if submitted.returncode or not job:
         return submitted
@@ -3223,6 +3244,8 @@ def _eval_retryable_failure(proc: subprocess.CompletedProcess[str]) -> bool:
     """Retry admission/transport failures, not a completed kernel evaluation."""
     if TEST_RESULT_PREFIX in (proc.stdout or ""):
         return False
+    if EVAL_SUBMISSION_OUTCOME_UNKNOWN in (proc.stderr or "").splitlines():
+        return False
     job = _job_response(proc.stdout or "")
     if job is not None:
         if job.get("status") == "succeeded" or job.get("result") is not None:
@@ -3266,6 +3289,10 @@ def _run_eval_with_retry(
     for attempt in range(len(EVAL_RETRY_DELAYS) + 1):
         try:
             proc = action()
+        except GatewaySubmissionOutcomeUnknown:
+            # The submit POST may already have created a live job, but no job id
+            # is available to cancel it.  A retry could duplicate GPU work.
+            raise
         except GatewayHTTPError as exc:
             retryable = exc.status in {429, 502, 503, 504}
             if not retryable:
