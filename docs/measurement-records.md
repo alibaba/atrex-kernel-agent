@@ -93,9 +93,9 @@ The duplicate response is not a Kernel failure. Read the result instead of chang
 | Evidence | Action |
 | --- | --- |
 | Accepted job ID, polling interrupted | Retain the ID; recovery polls that same job before considering another submission |
-| Eval submission definitively rejected (HTTP 429/5xx through the Agate CLI; direct HTTP 429/503) | Persist `rejected`, then retry the same Eval route once; never fall back to Dev |
-| Direct Eval POST returns HTTP 502/504 without an accepted ID | Outcome may be unknown; retain `submitting` for operator reconciliation and do not resubmit |
-| Other operation submission explicitly rejected with HTTP 429/5xx | Persist `rejected`, then retry submission with the existing bounded backoff; never leave a sticky `submitting` marker |
+| Eval submission definitively rejected with HTTP 429/503, through direct HTTP or the Agate CLI | Persist `rejected`, then retry the same Eval route once; never fall back to Dev |
+| Submission returns any other HTTP 5xx without an accepted ID, through direct HTTP or the Agate CLI | Outcome may be unknown; retain `submitting` for operator reconciliation and do not resubmit |
+| Other operation submission explicitly rejected with HTTP 429/503 | Persist `rejected`, then retry submission with the existing bounded backoff; never leave a sticky `submitting` marker |
 | Other definitive HTTP 4xx submission rejection, or Agate CLI argument-parsing error | Persist `rejected` and return the diagnostic without automatic retries; not a Candidate-failure cache entry |
 | Eval terminal admission/transport failure (`submit_failed`, `dashboard_unreachable`, `backend_unavailable`, `deps_install_timeout`, `logs_unavailable`, queue timeout before start or empty cancellation) | At most one new Eval job after five seconds across all retry causes |
 | Other operation terminal `error_class=infra` or `failure_origin=infrastructure` | New job after 5, 10, 20, 40, then 60-second backoff, within request budgets |
@@ -105,6 +105,8 @@ The duplicate response is not a Kernel failure. Read the result instead of chang
 | Explicit Candidate/compilation/correctness/validation rejection | Preserve the rejection and deduplicate; repairing inputs/source creates a new task |
 | Empty, malformed, unclassified or incomplete result | Not a reusable measurement; preserve available evidence |
 | POST interrupted before an accepted ID is durably saved | Outcome unknown; retain reservation and require operator reconciliation, never blindly resubmit |
+
+Eval CLI submission timeouts persist an uncertain `submitting` checkpoint and return exit 75 (`ENVIRONMENT_TEMPFAIL`) with a fixed operator-reconciliation diagnostic. The Agent response omits the command, endpoint, sidecar paths and partial submission output; no Python traceback is emitted.
 
 Typed Eval has one durable, shared five-second retry allowance across confirmed submission rejection and terminal admission/transport failure. Once consumed for a task identity, a later identical request does not create another allowance. Profile, Dev and the other operations retain the 5, 10, 20, 40, then 60-second backoff and enclosing deadline; if their request budget expires, a later identical request may continue from the saved definitive state. This classification requires an actual HTTP rejection response or its recognizable CLI representation, not merely a nonzero exit code or an `infra` label. An accepted job ID takes precedence over error status; polling failures retain that ID. Lost connections, timeouts and malformed replies without acceptance or rejection evidence still leave an uncertain submission.
 

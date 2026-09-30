@@ -23,7 +23,7 @@ class SubmissionRejected(RuntimeError):
 
     def __init__(self, process: subprocess.CompletedProcess, status: int | None = None):
         self.process = process
-        self.retryable = status is not None and (status == 429 or 500 <= status < 600)
+        self.retryable = status in {429, 503}
         super().__init__(f"Gateway rejected submission with HTTP {status}" if status is not None
                          else "Agate CLI rejected submission before dispatch")
 
@@ -39,7 +39,8 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
     # Agate's GatewayError formatter, used by its --no-wait submit commands.
     match = re.search(r"(?m)^agate: \[([45]\d{2})\](?:\s|$)", process.stderr or "")
     if match:
-        return SubmissionRejected(process, int(match[1]))
+        status = int(match[1])
+        return SubmissionRejected(process, status) if status < 500 or status == 503 else None
     # argparse exits before args.func can dispatch. Do not generalize this to
     # arbitrary code-2 errors: they can also occur after a request was accepted.
     if (process.returncode == 2 and re.match(r"usage: agate\b", process.stderr or "")
@@ -50,7 +51,7 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
     if response and response.get("error"):
         status = response.get("http_status", response.get("status_code"))
         if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
-            return SubmissionRejected(process, status)
+            return SubmissionRejected(process, status) if status < 500 or status == 503 else None
     return None
 
 

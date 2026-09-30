@@ -255,6 +255,7 @@ MAX_CUSTOM_INPUT_SOURCE_BYTES = 128 * 1024
 MAX_CUSTOM_SHAPES_BYTES = 256 * 1024
 ENV_RESULT_PREFIX = "[sandbox] ENV_JSON="
 ATREX_EVAL_BACKEND = "atrex"
+EVAL_SUBMISSION_OUTCOME_UNKNOWN = "__ATREX_EVAL_SUBMISSION_OUTCOME_UNKNOWN__"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -2901,10 +2902,6 @@ def run_direct_job(
         try:
             accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
         except GatewayHTTPError as error:
-            if eval_request and error.status in {502, 504}:
-                # A proxy timeout may arrive after the POST created a job. With
-                # no accepted ID, resubmission could duplicate GPU work.
-                raise
             process = subprocess.CompletedProcess(
                 [], 1, error.detail, f"agate: [{error.status}] {error.detail}"
             )
@@ -2912,6 +2909,9 @@ def run_direct_job(
             if response and isinstance(response.get("job_id"), str) and response["job_id"]:
                 # Acceptance evidence wins over the HTTP error status.
                 return process
+            if error.status >= 500 and error.status != 503:
+                # A server/proxy failure is not evidence that admission failed.
+                raise
             raise SubmissionRejected(process, error.status) from error
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
@@ -3185,12 +3185,19 @@ def run_agate_with_cancel_retry(
 
     def submit():
         if eval_request:
-            return subprocess.run(
-                [*current, "--no-wait"],
-                capture_output=True,
-                text=True,
-                timeout=min(MAX_HTTP_REQUEST_TIMEOUT, max(1, wait_budget)),
-            )
+            try:
+                return subprocess.run(
+                    [*current, "--no-wait"],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(MAX_HTTP_REQUEST_TIMEOUT, max(1, wait_budget)),
+                )
+            except subprocess.TimeoutExpired:
+                # Persist an uncertain submission without exposing argv or
+                # partially captured private output in the public response.
+                return subprocess.CompletedProcess(
+                    [], ENVIRONMENT_TEMPFAIL, "", EVAL_SUBMISSION_OUTCOME_UNKNOWN
+                )
         return subprocess.run(
             [*current, "--no-wait"], capture_output=True, text=True
         )
@@ -4246,9 +4253,10 @@ def _run_typed_gateway(
                 file=sys.stderr,
             )
             return None
-        if exc.status in {429, 502, 503, 504}:
+        if exc.status == 429 or exc.status >= 500:
             if not generalized:
                 print(str(exc), file=sys.stderr)
+            print("sandbox: Gateway submission outcome may be unknown; inspect the private checkpoint before resubmitting.", file=sys.stderr)
             return ENVIRONMENT_TEMPFAIL
         if generalized:
             raise SystemExit(
@@ -4281,6 +4289,13 @@ def _run_typed_gateway(
         job = parse_job_response(proc.stdout or "")
         if job is None:
             rejection = submission_rejection(proc)
+            if kind == "run" and rejection is None and proc.returncode:
+                print(
+                    "sandbox: Eval submission outcome could not be confirmed; "
+                    "do not resubmit blindly. Ask the operator to reconcile the private checkpoint.",
+                    file=sys.stderr,
+                )
+                return ENVIRONMENT_TEMPFAIL
             if kind == "run" and rejection is not None and rejection.retryable:
                 if not generalized and proc.stderr:
                     print(proc.stderr.rstrip(), file=sys.stderr)
