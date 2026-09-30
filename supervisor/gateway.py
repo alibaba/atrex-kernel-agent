@@ -255,7 +255,6 @@ MAX_CUSTOM_INPUT_SOURCE_BYTES = 128 * 1024
 MAX_CUSTOM_SHAPES_BYTES = 256 * 1024
 ENV_RESULT_PREFIX = "[sandbox] ENV_JSON="
 ATREX_EVAL_BACKEND = "atrex"
-EVAL_SUBMISSION_OUTCOME_UNKNOWN = "__ATREX_EVAL_SUBMISSION_OUTCOME_UNKNOWN__"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -3196,7 +3195,7 @@ def run_agate_with_cancel_retry(
                 # Persist an uncertain submission without exposing argv or
                 # partially captured private output in the public response.
                 return subprocess.CompletedProcess(
-                    [], ENVIRONMENT_TEMPFAIL, "", EVAL_SUBMISSION_OUTCOME_UNKNOWN
+                    [], ENVIRONMENT_TEMPFAIL, "", ""
                 )
         return subprocess.run(
             [*current, "--no-wait"], capture_output=True, text=True
@@ -4309,7 +4308,9 @@ def _run_typed_gateway(
                 )
             return proc.returncode or 2
         if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-            infrastructure = retry_kind(job) is not None
+            infrastructure = (
+                eval_retry_kind(job) if kind == "run" else retry_kind(job)
+            ) is not None
             if generalized:
                 print(
                     "[sandbox] generalized evaluation failed; hidden-case details withheld; "
