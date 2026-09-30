@@ -74,7 +74,8 @@ Top-level `--version`, `--multi-seed`, `--shape-id` and `--timed-runs` require
 `--kind run` without an explicit command. Mixing these top-level controls with a
 command is rejected before execution; they are not merged or silently ignored.
 Explicit shorthand controls require a compatible typed evaluation route and
-cannot silently fall back to Dev. ABBA still accepts `--version` and
+cannot silently fall back to Dev. Once a Typed Evaluate starts, admission,
+transport or evaluator failure also cannot change it into a Dev job. ABBA still accepts `--version` and
 `--timed-runs` without a command; Shape/seed overrides remain unsupported.
 
 Profile, Check and Disassemble accept repeatable `--requirement 'package==version'`

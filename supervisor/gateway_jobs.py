@@ -74,6 +74,41 @@ def retry_kind(job: object) -> str | None:
     return None
 
 
+def eval_retry_kind(job: object) -> str | None:
+    """Retry only a typed Eval's confirmed admission/transport failures."""
+    if not isinstance(job, dict) or job.get("status") not in {
+        "failed",
+        "cancelled",
+        "canceled",
+    }:
+        return None
+    if job.get("result") is not None:
+        return None
+    error = job.get("error") or {}
+    if not isinstance(error, dict):
+        return None
+    if job.get("status") in {"cancelled", "canceled"} and not error:
+        return "cancelled"
+    reason = error.get("reason")
+    message = str(error.get("message", ""))
+    if reason == "submit_failed" and "Version check returned 404" in message:
+        return "infra"
+    if reason == "timeout" and "never started executing" in message:
+        return "infra"
+    category = error.get("error_class") or error.get("class")
+    if category == "code":
+        return None
+    if category == "infra" and reason in {
+        "submit_failed",
+        "dashboard_unreachable",
+        "backend_unavailable",
+        "deps_install_timeout",
+        "logs_unavailable",
+    }:
+        return "infra"
+    return None
+
+
 def cacheable_job(job: object, identity: dict | None = None) -> bool:
     if not isinstance(job, dict) or retry_kind(job) is not None:
         return False
@@ -223,8 +258,17 @@ def command_identity(command: list[str]) -> list:
     return values
 
 
-def execute_job(identity: object, submit, poll, *, wait_budget: float) -> subprocess.CompletedProcess:
+def execute_job(
+    identity: object,
+    submit,
+    poll,
+    *,
+    wait_budget: float,
+    retry_classifier=retry_kind,
+    max_retries: int | None = None,
+) -> subprocess.CompletedProcess:
     """Persist each submission before polling. Never guess after an uncertain POST."""
+    retry_classifier = retry_kind if retry_classifier is None else retry_classifier
     directory = Path(os.environ[JOB_ROOT_ENV]) / "jobs" / digest(identity) if os.environ.get(JOB_ROOT_ENV) else None
     state = {}
     if directory:
@@ -301,8 +345,12 @@ def execute_job(identity: object, submit, poll, *, wait_budget: float) -> subpro
                     # Keep the accepted ID so a later request polls that same job.
                     return process
                 state = save("terminal", process)
-            kind = retry_kind(job)
-        if kind is None or (kind in {"timeout", "cancelled"} and retries.get(kind, 0) >= 1):
+            kind = retry_classifier(job)
+        if (
+            kind is None
+            or (kind in {"timeout", "cancelled"} and retries.get(kind, 0) >= 1)
+            or (max_retries is not None and sum(retries.values()) >= max_retries)
+        ):
             return process
         retries[kind] = retries.get(kind, 0) + 1
         count = sum(retries.values())

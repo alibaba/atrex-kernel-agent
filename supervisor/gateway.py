@@ -16,7 +16,9 @@
 """Run optimizer GPU work through a gateway or an OpenSSH GPU host.
 
 In gateway mode, native Atrex-Bench correctness/performance commands use
-``agate run`` and profiling commands use ``profile``. ``dev`` remains the
+``agate eval --backend atrex`` and profiling commands use ``profile``. Failed
+typed evaluations retry only confirmed admission/transport failures and never
+switch to ``dev``. ``dev`` remains the
 compatibility escape hatch for workloads those typed interfaces cannot represent
 (for example SOL-ExecBench, source-correlated custom profiling, or a community
 gateway that explicitly returns ``kind_not_supported``). OpenSSH mode executes
@@ -101,8 +103,9 @@ from supervisor.projection import (  # noqa: E402
     NUMERICAL_RESULT_PREFIX, bounded_text, numerical_result, profile_result,
 )
 from supervisor.gateway_jobs import (  # noqa: E402
-    SubmissionRejected, bundle_digest, command_identity, execute_job, job_from_process,
-    payload_identity, private_value_fingerprint,
+    SubmissionRejected, bundle_digest, command_identity, eval_retry_kind,
+    execute_job, job_from_process, payload_identity, private_value_fingerprint,
+    retry_kind, submission_rejection,
 )
 
 DEFAULT_SYNC_PATHS = ("profiles",)
@@ -251,6 +254,7 @@ TYPED_KINDS = frozenset({"run", "profile", "check", "disassemble"})
 MAX_CUSTOM_INPUT_SOURCE_BYTES = 128 * 1024
 MAX_CUSTOM_SHAPES_BYTES = 256 * 1024
 ENV_RESULT_PREFIX = "[sandbox] ENV_JSON="
+ATREX_EVAL_BACKEND = "atrex"
 TYPED_FALLBACK_REASONS = (
     "kind_not_supported",
     "invalid_source",
@@ -1174,7 +1178,7 @@ def _typed_workspace_limitation(
             except (TypeError, ValueError):
                 matches_default = False
             if not matches_default:
-                return f"non-default {option} is not exposed by agate run"
+                return f"non-default {option} is not exposed by agate eval"
     return None
 
 
@@ -2891,11 +2895,19 @@ def run_direct_job(
     queue_wait_grace: int,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
+    eval_request = kind == "eval"
+
     def submit():
         try:
             accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
         except GatewayHTTPError as error:
-            process = subprocess.CompletedProcess([], 1, error.detail, str(error))
+            if eval_request and error.status in {502, 504}:
+                # A proxy timeout may arrive after the POST created a job. With
+                # no accepted ID, resubmission could duplicate GPU work.
+                raise
+            process = subprocess.CompletedProcess(
+                [], 1, error.detail, f"agate: [{error.status}] {error.detail}"
+            )
             response = job_from_process(process)
             if response and isinstance(response.get("job_id"), str) and response["job_id"]:
                 # Acceptance evidence wins over the HTTP error status.
@@ -2939,7 +2951,9 @@ def run_direct_job(
 
     return execute_job({"url_fingerprint": private_value_fingerprint(url),
                         "kind": kind, "payload": payload_identity(payload)}, submit, poll,
-                       wait_budget=timeout + queue_wait_grace)
+                       wait_budget=timeout + queue_wait_grace,
+                       retry_classifier=eval_retry_kind if eval_request else None,
+                       max_retries=1 if eval_request else None)
 
 
 def _run_direct_gateway(
@@ -3167,8 +3181,19 @@ def run_agate_with_cancel_retry(
 ) -> subprocess.CompletedProcess[str]:
     """Recover accepted jobs and retry confirmed infrastructure failures."""
     current = list(agate)
+    eval_request = len(agate) > 1 and agate[1] == "eval"
+
     def submit():
-        return subprocess.run([*current, "--no-wait"], capture_output=True, text=True)
+        if eval_request:
+            return subprocess.run(
+                [*current, "--no-wait"],
+                capture_output=True,
+                text=True,
+                timeout=min(MAX_HTTP_REQUEST_TIMEOUT, max(1, wait_budget)),
+            )
+        return subprocess.run(
+            [*current, "--no-wait"], capture_output=True, text=True
+        )
 
     def poll(initial, remaining):
         job = parse_job_response(initial.stdout or "")
@@ -3195,7 +3220,9 @@ def run_agate_with_cancel_retry(
         identity["request"] = payload_identity(identity["request"])
     return execute_job(identity | {"url_fingerprint": private_value_fingerprint(url),
                                    "profile": gateway_profile},
-                       submit, poll, wait_budget=wait_budget)
+                       submit, poll, wait_budget=wait_budget,
+                       retry_classifier=eval_retry_kind if eval_request else None,
+                       max_retries=1 if eval_request else None)
 
 
 def build_typed_agate_command(
@@ -3214,8 +3241,11 @@ def build_typed_agate_command(
         request_sidecar_dir.mkdir(parents=True, exist_ok=True)
         candidate_path = request_sidecar_dir / "kernel.py"
         candidate_path.write_text(request["candidate"], encoding="utf-8")
-    agate_kind = "check" if kind == "check" else kind
-    command = [executable, agate_kind]
+    if kind == "run":
+        command = [executable, "eval", "--backend", ATREX_EVAL_BACKEND]
+    else:
+        agate_kind = "check" if kind == "check" else kind
+        command = [executable, agate_kind]
     if args.url:
         command += ["--url", args.url]
     elif args.gateway_profile:
@@ -4072,7 +4102,7 @@ def _run_typed_gateway(
     sync_paths: list[str],
     queue_wait_grace: int,
 ) -> int | None:
-    """Run agate run/profile, returning None only for a documented dev fallback."""
+    """Run agate eval/profile; a failed typed Eval never falls back to Dev."""
     generalized = _is_generalized_workspace(workspace)
     compatible_fallback = not _requires_typed_request(
         args, private_profile_shape=(kind == "profile" and generalized and _is_profile_command(command_parts)),
@@ -4098,7 +4128,7 @@ def _run_typed_gateway(
             evaluation_shapes_path=args.evaluation_shapes_path, evaluation_mode=args.evaluation_mode,
         )
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        if _requires_typed_request(args):
+        if kind == "run" or _requires_typed_request(args):
             raise ValueError(f"Invalid typed {kind} request: {exc}; no Dev fallback was submitted") from exc
         print(
             f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev",
@@ -4127,7 +4157,7 @@ def _run_typed_gateway(
                     "workspace": str(workspace),
                     "kind": kind,
                     "num_gpus": request.get("spec", {}).get("num_gpus", 1),
-                    "fallback_kind": "dev",
+                    "fallback_kind": None if kind == "run" else "dev",
                     "candidate_bytes": len(request["candidate"].encode("utf-8")),
                     "shape_count": (
                         "private"
@@ -4210,12 +4240,16 @@ def _run_typed_gateway(
             else:
                 processes = [run_batch(batch_items[0])]
     except GatewayHTTPError as exc:
-        if _typed_fallback_allowed(exc) and compatible_fallback:
+        if kind != "run" and _typed_fallback_allowed(exc) and compatible_fallback:
             print(
                 f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
                 file=sys.stderr,
             )
             return None
+        if exc.status in {429, 502, 503, 504}:
+            if not generalized:
+                print(str(exc), file=sys.stderr)
+            return ENVIRONMENT_TEMPFAIL
         if generalized:
             raise SystemExit(
                 f"sandbox: generalized {kind} gateway request failed; "
@@ -4231,7 +4265,12 @@ def _run_typed_gateway(
     jobs: list[dict[str, Any]] = []
     for proc in processes:
         detail = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode and _typed_fallback_allowed(detail) and compatible_fallback:
+        if (
+            kind != "run"
+            and proc.returncode
+            and _typed_fallback_allowed(detail)
+            and compatible_fallback
+        ):
             print(
                 f"[sandbox] gateway {kind} interface rejected this request; using dev",
                 file=sys.stderr,
@@ -4241,6 +4280,11 @@ def _run_typed_gateway(
             print(proc.stderr.rstrip(), file=sys.stderr)
         job = parse_job_response(proc.stdout or "")
         if job is None:
+            rejection = submission_rejection(proc)
+            if kind == "run" and rejection is not None and rejection.retryable:
+                if not generalized and proc.stderr:
+                    print(proc.stderr.rstrip(), file=sys.stderr)
+                return ENVIRONMENT_TEMPFAIL
             if proc.stdout and not generalized:
                 print(proc.stdout.rstrip())
             elif generalized:
@@ -4250,6 +4294,7 @@ def _run_typed_gateway(
                 )
             return proc.returncode or 2
         if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
+            infrastructure = retry_kind(job) is not None
             if generalized:
                 print(
                     "[sandbox] generalized evaluation failed; hidden-case details withheld; "
@@ -4258,6 +4303,8 @@ def _run_typed_gateway(
                 )
             else:
                 print(json.dumps(job, ensure_ascii=False))
+            if infrastructure:
+                return ENVIRONMENT_TEMPFAIL
             return proc.returncode or 1
         jobs.append(job)
 
