@@ -130,6 +130,17 @@ Only request decoding and pre-execution validation errors return HTTP 400 with a
 
 Once execution can have started, exceptions in execution, diagnostic persistence, output publication, projection, response encoding or temporary-directory cleanup return HTTP 503 with `repairable: false` and an unknown-outcome warning. A GPU job may already have completed even if returning its result failed; Agents must report the blocker rather than modify arguments and resubmit blindly. Dedicated pre-dispatch exception types select the 429/401 paths, not matching exception-message text. Supervisor exceptions, including programming errors, are logged with full tracebacks and a request ID through `orchestrator.supervisor_runtime`; without configured handlers, Python's `logging.lastResort` writes errors to Supervisor stderr. Operators should retain that stderr and not disable this logger. The authenticated response's `X-Request-ID` also identifies the private diagnostic file when one was written. Agent responses never contain these tracebacks. Ordinary executor exits still return HTTP 200 with the projected stdout/stderr and exit code, including nonzero exit codes.
 
+Confirmed Gateway HTTP 400 candidate-source rejections are ordinary nonzero
+executor results, not HTTP Runtime validation errors or unknown-outcome failures.
+Their bounded `SOURCE_ERROR_JSON` projection survives generalized-workspace
+filtering and record reads, with a source-repair hint and no hidden-case details.
+Trusted acceptance checks the private rejection checkpoint instead of treating
+the absence of a GPU measurement as an infrastructure outage. If this happens
+during `episode-report`, the report remains unaccepted and its HTTP 400 repair
+response includes the same source violations; no candidate commit is created.
+See
+[source rejection and recovery](measurement-records.md#failure-and-recovery-policy).
+
 Different capabilities do not share an execution lock. A single capability serializes its requests. Closing a Session revokes its capability; in-flight processes are terminated, allowing the existing Gateway signal handler a bounded cleanup window before forced termination. Campaign close stops the listener and joins handlers. This does not guarantee that a remote job has stopped if cancellation or the network fails.
 
 Without an explicit override, the managed Runtime derives its request budget as `Gateway execution timeout + configured remote queue grace + 120 seconds`. The default is `600 + 14,400 + 120 = 15,120 seconds` (4h 12m), restoring the prior default allowance instead of cutting it to 30 minutes. Remote grace comes from `ATREX_SANDBOX_QUEUE_WAIT_GRACE`; the Runtime validates and freezes it at startup, then passes the same value to Gateway subprocesses. This is a compatibility default, not a measured production p99 or a guarantee that every queued job will finish. No production queue-plus-run percentile evidence currently justifies a shorter default.

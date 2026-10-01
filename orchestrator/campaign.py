@@ -2356,6 +2356,11 @@ class Campaign:
             return None, f"combined validation failed to run: {exc}"
         self._print_v0_evaluator_output(test)
         if test.returncode != 0:
+            from supervisor.projection import source_error_from_stdout
+            source_error = source_error_from_stdout(test.stdout)
+            if source_error is not None:
+                error = source_error["error"]
+                return None, " ".join((error["message"], "; ".join(error["violations"]), error["next_action"]))
             return None, f"combined validation command failed (exit={test.returncode})"
         try:
             result = _test_result_from_stdout(test.stdout)

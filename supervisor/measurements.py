@@ -180,7 +180,9 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
             reuse_completed=False, reuse_correctness=False) -> dict:
     from supervisor.gateway import measurement_inputs, metadata_speedup_mean
     from orchestrator.supervisor_runtime import ROOT, RequestDispatchTimeout
-    from supervisor.projection import project_response
+    from supervisor.projection import (
+        SOURCE_ERROR_PREFIX, candidate_source_rejection, project_response, source_error_from_stdout,
+    )
     store = runtime.measurements
     try:
         request, inputs = measurement_inputs(
@@ -273,17 +275,27 @@ def execute(runtime, capability, staged, args, argv, environment, command, *,
             # Keep projected warnings/progress/diagnostics in place. Only the
             # last result marker represents the sample selected for aggregation.
             lines = response["stdout"].splitlines()
-            markers = [index for index, line in enumerate(lines) if prefix and line.startswith(prefix)]
+            markers = [index for index, line in enumerate(lines)
+                       if (prefix and line.startswith(prefix)) or line.startswith(SOURCE_ERROR_PREFIX)]
             for index in markers:
+                marker_prefix = SOURCE_ERROR_PREFIX if lines[index].startswith(SOURCE_ERROR_PREFIX) else prefix
                 value = (aggregated_result if aggregated_result is not None and index == markers[-1]
-                         else json.loads(lines[index][len(prefix):]))
-                lines[index] = prefix + json.dumps(value | identity)
+                         else json.loads(lines[index][len(marker_prefix):]))
+                lines[index] = marker_prefix + json.dumps(value | identity)
             if not markers:
                 lines.append("[sandbox] RECORD_JSON=" + json.dumps(identity | {"operation": operation,
                              "status": "succeeded" if response["exit_code"] == 0 else "failed"}))
             response = dict(response, stdout="\n".join(lines) + "\n")
             task.finish(response, cacheable=cacheable and not custom_launcher, pending=pending)
-            if reuse_completed and not cacheable:
+            # A source rejection is definitive and repairable, not missing GPU
+            # evidence. Require private checkpoints too; a Dev-printed marker
+            # alone must not authorize an acceptance classification.
+            source_rejected = source_error_from_stdout(response["stdout"]) is not None and bool(states) and all(
+                state.get("phase") == "rejected" and candidate_source_rejection(subprocess.CompletedProcess(
+                    [], state["process"]["returncode"], state["process"]["stdout"], state["process"]["stderr"])) is not None
+                for state in states
+            )
+            if reuse_completed and not cacheable and not source_rejected:
                 from supervisor.gateway_jobs import retry_kind
                 from orchestrator.infrastructure_retry import InfrastructureUnavailable
 

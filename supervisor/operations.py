@@ -14,6 +14,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from supervisor.projection import SOURCE_ERROR_PREFIX, candidate_source_rejection
+
 
 def _workload_shape_ids(path: Path) -> list[str]:
     ids, seen = [], set()
@@ -83,6 +85,10 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                 wait_budget=args.timeout + queue_wait_grace,
                 request_identity={"kind": args.kind, "request": request},
             )
+    source_error = candidate_source_rejection(process)
+    if source_error is not None:
+        print(SOURCE_ERROR_PREFIX + json.dumps(source_error))
+        return process.returncode or 1
     job = gateway.parse_job_response(process.stdout or "")
     if not job or job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
         print(json.dumps({"status": "failed", "operation": args.kind,

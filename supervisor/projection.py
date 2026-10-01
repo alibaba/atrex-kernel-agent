@@ -2,14 +2,94 @@
 from __future__ import annotations
 import json
 import math
+import re
 import subprocess
 from typing import Any
+
+from supervisor.errors import error_response
+from supervisor.gateway_jobs import submission_rejection
 
 MAX_AGENT_PROFILE_KERNELS = 32
 MAX_AGENT_EVALUATION_SHAPES = 4096
 MAX_AGENT_DISASSEMBLY_BYTES = 64 * 1024
 MAX_AGENT_PROFILE_METRICS = 64
 MAX_AGENT_DIAGNOSTICS = 16
+SOURCE_ERROR_PREFIX = "[sandbox] SOURCE_ERROR_JSON="
+_SOURCE_VIOLATION = re.compile(
+    r"(?:Blocked import|Forbidden attribute access): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
+    r"|Forbidden string literal matching: [A-Za-z_]\w*"
+)
+
+
+def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
+    """Only public candidate-source rules, never raw validation/evaluator text."""
+    error = value.get("error")
+    if (not isinstance(error, dict) or error.get("code") != "candidate_source_rejected"
+            or error.get("job_submitted") is not False):
+        raise ValueError("not a candidate source rejection")
+    raw_violations = error.get("violations", [])
+    if not isinstance(raw_violations, list):
+        raise ValueError("source violations must be a list")
+    violations = []
+    for item in raw_violations[:MAX_AGENT_DIAGNOSTICS]:
+        if (isinstance(item, str) and len(item) <= 256
+                and _SOURCE_VIOLATION.fullmatch(item) and item not in violations):
+            violations.append(item)
+    return error_response(
+        "Agate rejected candidate source before GPU submission.",
+        code="candidate_source_rejected", error_class="code", reason="source_validation_failed",
+        job_submitted=False, violations=violations,
+        next_action=(
+            "Remove or replace the listed forbidden imports, attribute accesses or string literals "
+            "in kernel.py, then retry the same operation with the repaired source. "
+            "Do not bypass source validation through Dev."
+        ),
+    )
+
+
+def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str, Any] | None:
+    """Recognize a confirmed HTTP 400 candidate-source rejection, not an unknown outcome."""
+    rejection = submission_rejection(process)
+    if rejection is None or rejection.status != 400:
+        return None
+    text = (process.stderr or "") + "\n" + (process.stdout or "")
+    # Direct HTTP errors preserve a JSON envelope, unlike the CLI's plain text.
+    try:
+        payload = json.loads(process.stdout or "")
+        error = payload.get("error", payload.get("detail")) if isinstance(payload, dict) else None
+        message = error.get("message") if isinstance(error, dict) else error
+        if isinstance(message, str):
+            text += "\n" + message
+    except (ValueError, TypeError):
+        pass
+    if "source validation failed" not in text.lower():
+        return None
+    candidate_lines = re.findall(r"(?m)^\s*-\s*candidate:\s*([^\n]+)", text)
+    if not candidate_lines:
+        return None  # Reference/input validation can contain private information.
+    violations = []
+    for line in candidate_lines:
+        match = re.match(r"(Blocked import|Forbidden attribute access):\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", line)
+        if match:
+            violations.append(f"{match[1]}: {match[2]}")
+            continue
+        match = re.match(r"Forbidden string literal matching ['\"]([A-Za-z_]\w*)['\"]:", line)
+        if match:
+            # Do not expose the matched literal, which may contain paths/data.
+            violations.append(f"Forbidden string literal matching: {match[1]}")
+    return source_error_result({"error": {
+        "code": "candidate_source_rejected", "job_submitted": False, "violations": violations,
+    }})
+
+
+def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:
+    for line in stdout.splitlines():
+        if line.startswith(SOURCE_ERROR_PREFIX):
+            try:
+                return source_error_result(json.loads(line[len(SOURCE_ERROR_PREFIX):]))
+            except (ValueError, TypeError, AttributeError):
+                continue
+    return None
 
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -522,6 +602,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
             "[sandbox] CHECK_JSON=", "[sandbox] DISASSEMBLE_JSON=",
             "[sandbox] ABBA_JSON=",
             NUMERICAL_RESULT_PREFIX,
+            SOURCE_ERROR_PREFIX,
         ) if line.startswith(prefix)), None)
         if prefix:
             try:
@@ -538,6 +619,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     # compare() already emits abba()'s public metric projection.
                     "[sandbox] ABBA_JSON=": dict,
                     NUMERICAL_RESULT_PREFIX: numerical_result,
+                    SOURCE_ERROR_PREFIX: source_error_result,
                 }[prefix]
                 projected.append(prefix + json.dumps(formatter(raw), ensure_ascii=False))
             except (ValueError, TypeError):
@@ -550,10 +632,12 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
         # useful, public per-side results. Keep them without exposing raw logs.
         stdout = "\n".join(line for line in projected if line.startswith((
             "[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON=",
-            NUMERICAL_RESULT_PREFIX,
+            NUMERICAL_RESULT_PREFIX, SOURCE_ERROR_PREFIX,
         )))
         stderr = (
-            "ABBA comparison failed; see ABBA_JSON for baseline/candidate results; hidden-case diagnostics withheld.\n"
+            "Candidate source rejected; fix the violations in SOURCE_ERROR_JSON and retry.\n"
+            if source_error_from_stdout(stdout) is not None
+            else "ABBA comparison failed; see ABBA_JSON for baseline/candidate results; hidden-case diagnostics withheld.\n"
             if any(line.startswith("[sandbox] ABBA_JSON=") for line in projected)
             else "GPU request failed; hidden-case diagnostics withheld. Ask the operator to inspect the failure.\n"
         )

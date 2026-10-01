@@ -100,7 +100,8 @@ from orchestrator.ssh_health import (  # noqa: E402
 )
 from supervisor.errors import GatewayConfigurationError  # noqa: E402
 from supervisor.projection import (  # noqa: E402
-    NUMERICAL_RESULT_PREFIX, bounded_text, numerical_result, profile_result,
+    NUMERICAL_RESULT_PREFIX, SOURCE_ERROR_PREFIX, bounded_text, candidate_source_rejection,
+    numerical_result, profile_result,
 )
 from supervisor.gateway_jobs import (  # noqa: E402
     SubmissionRejected, bundle_digest, command_identity, eval_retry_kind,
@@ -4271,6 +4272,10 @@ def _run_typed_gateway(
 
     jobs: list[dict[str, Any]] = []
     for proc in processes:
+        source_error = candidate_source_rejection(proc)
+        if source_error is not None:
+            print(SOURCE_ERROR_PREFIX + json.dumps(source_error))
+            return proc.returncode or 1
         detail = (proc.stderr or "") + (proc.stdout or "")
         if (
             kind != "run"

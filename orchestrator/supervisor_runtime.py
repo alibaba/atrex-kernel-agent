@@ -841,6 +841,16 @@ class SupervisorRuntime:
         )
         if not self._live(capability):
             raise SessionRevokedError("Session revoked before report acceptance")
+        from supervisor.projection import source_error_from_stdout
+        source_error = source_error_from_stdout(response["stdout"])
+        if source_error is not None:
+            error = source_error["error"]
+            raise AgentRequestError(
+                error["message"] + " The report was not accepted and no candidate commit was created.",
+                code=error["code"], next_action=error["next_action"],
+                error_class=error["error_class"], reason=error["reason"],
+                job_submitted=False, violations=error["violations"],
+            )
         try:
             result = result_from_response(response, "evaluate")
             identity = result or next((json.loads(line.split("=", 1)[1])

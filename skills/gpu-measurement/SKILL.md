@@ -29,6 +29,12 @@ Version labels do not request a fresh measurement. See the record-query examples
 in [requests.md](references/requests.md). Record reads return the saved result,
 not another GPU execution; a saved rejection still has a nonzero exit code.
 
+`SOURCE_ERROR_JSON` with `error.code: "candidate_source_rejected"` is a source
+repair, not an infrastructure blocker. Fix the listed forbidden imports,
+attribute accesses or string literals in `kernel.py`, then rerun the operation.
+No GPU job was submitted by that rejected request. Do not switch to Dev to bypass
+the source validator.
+
 Missing/revoked capability or transport failure is an infrastructure blocker.
 Do not bypass the Runtime or blindly retry an operation whose outcome is unknown.
 Gateway retry policy is owned by the Supervisor; do not add automatic client-side retry loops.

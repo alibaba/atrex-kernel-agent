@@ -108,6 +108,52 @@ The duplicate response is not a Kernel failure. Read the result instead of chang
 
 Eval CLI submission timeouts persist an uncertain `submitting` checkpoint and return exit 75 (`ENVIRONMENT_TEMPFAIL`) with a fixed operator-reconciliation diagnostic. The Agent response omits the command, endpoint, sidecar paths and partial submission output; no Python traceback is emitted.
 
+A confirmed HTTP 400 source-validation rejection that names the **candidate** returns
+`[sandbox] SOURCE_ERROR_JSON=` with `repairable: true`,
+`error.code: "candidate_source_rejected"`, `error_class: "code"` and
+`job_submitted: false`. Evaluate, Profile, Check and Disassemble use the same
+projection. It lists at most 16 forbidden candidate imports, attributes and string
+matching rules; matched literal contents, reference/input diagnostics, private
+paths and raw Gateway output remain hidden. For example:
+
+```json
+{
+  "ok": false,
+  "repairable": true,
+  "error": {
+    "code": "candidate_source_rejected",
+    "message": "Agate rejected candidate source before GPU submission.",
+    "error_class": "code",
+    "reason": "source_validation_failed",
+    "job_submitted": false,
+    "violations": [
+      "Blocked import: ctypes",
+      "Forbidden attribute access: ctypes.addressof",
+      "Forbidden string literal matching: environ"
+    ],
+    "next_action": "Remove or replace the listed forbidden imports, attribute accesses or string literals in kernel.py, then retry the same operation with the repaired source. Do not bypass source validation through Dev."
+  },
+  "gateway_record_id": "gateway-0123456789abcdef0123456789abcdef",
+  "kernel_id": "kernel-0123456789abcdef0123456789abcdef"
+}
+```
+
+The private checkpoint must also confirm the rejection before trusted acceptance
+returns this as a candidate repair rather than an infrastructure exception.
+Framework-baseline recovery receives the same safe violations and repair hint.
+The rejected request is recorded but is not a reusable GPU measurement or a
+permanent candidate-failure cache entry. There is no automatic retry or Dev
+fallback; repair the source first. Accepted jobs, proxy errors, transport failures
+and unrecognized validation output do not acquire this known-not-submitted status.
+
+Local regression checks replay the archived candidate-source rejections and cover
+CLI/direct-HTTP formats, all four typed operations, private diagnostic filtering,
+bounded/malformed projections, Record readback, trusted acceptance and report
+repair hints. A local fake Gateway also exercises the real HTTP thin client,
+private Gateway subprocess and Record query end-to-end. Accepted IDs and unknown
+submission outcomes remain outside the source-repair path. These checks do not
+execute a model or GPU job; test files remain outside the repository.
+
 Typed Eval has one durable, shared five-second retry allowance across confirmed submission rejection and terminal admission/transport failure. Once consumed for a task identity, a later identical request does not create another allowance. Profile, Dev and the other operations retain the 5, 10, 20, 40, then 60-second backoff and enclosing deadline; if their request budget expires, a later identical request may continue from the saved definitive state. This classification requires an actual HTTP rejection response or its recognizable CLI representation, not merely a nonzero exit code or an `infra` label. An accepted job ID takes precedence over error status; polling failures retain that ID. Lost connections, timeouts and malformed replies without acceptance or rejection evidence still leave an uncertain submission.
 
 Retryable failures do not bypass the request deadline, revocation or process cleanup. Separately, a request rejected in the Supervisor's local queue before any dispatch returns a safe-to-retry HTTP 429. A later repetition timing out before its own dispatch is **not** a claim that the overall request submitted no job: it follows the post-dispatch 503 path. Agents should not convert transport/unknown-outcome failures into retry loops. After operator inspection, an unchanged request can recover known job IDs and completed ABBA batches. Old `submitting` checkpoints with a saved, recognizable CLI rejection can recover automatically; bare markers with no saved response still require operator reconciliation. A no-ID uncertain submission cannot be safely repaired by deleting its index blindly.

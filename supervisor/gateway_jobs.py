@@ -23,6 +23,7 @@ class SubmissionRejected(RuntimeError):
 
     def __init__(self, process: subprocess.CompletedProcess, status: int | None = None):
         self.process = process
+        self.status = status
         self.retryable = status in {429, 503}
         super().__init__(f"Gateway rejected submission with HTTP {status}" if status is not None
                          else "Agate CLI rejected submission before dispatch")
