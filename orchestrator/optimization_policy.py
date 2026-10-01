@@ -71,10 +71,10 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
     if mode == "leaderboard":
         return (
             "## Optimization mode: leaderboard\n\n"
-            "Follow the workspace `CLAUDE.md` exactly. Its existing framework guidance remains "
-            "unchanged: the requested framework is a recommended direction, compatible mixed/alternate "
-            "implementations are allowed when evidence supports them, and third-party helper/kernel "
-            "libraries may be used.\n"
+            "Follow the workspace `CLAUDE.md` and the injected task constraints. The requested "
+            "framework is a recommended direction: compatible mixed or alternate implementations "
+            "and third-party helper/kernel libraries are allowed when evidence supports them, "
+            "unless a task-specific rule explicitly forbids them.\n"
         )
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
@@ -111,13 +111,11 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         "over the full workload set. Native Atrex-Bench uses allclose for ordinary operators "
         "and relative L2 error <= 0.2 for NVFP4 operators. Keep the configured allclose "
         "tolerances and required random-seed coverage; correctness must pass before promotion.\n"
-        "- Numerical review produces targeted supplemental tests, not subjective rejection verdicts. "
-        "The supervisor executes those probes; measured failures return to the coding Agent for repair "
-        "before baseline admission or episode completion. Read verification_artifacts/"
-        ".atrex_long_horizon_verify/numerical_feedback.json, fix the implementation, rerun ordinary "
-        "validation and submit the updated candidate. Passing the same probes closes the suggestion. "
-        "Incomplete probes remain validation blockers; never edit trusted inputs, probes or tolerances.\n"
-        "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
+        "- The Supervisor also plans and measures targeted supplemental numerical probes. "
+        "Measured candidate failures require a repair; input/reference/probe failures remain validation blockers, "
+        "not Kernel failures. Follow the returned distributions and metrics, then measure the repaired candidate "
+        "and resubmit. Do not modify probe plans, trusted inputs or comparison thresholds.\n"
+        "- Keep `solution.json` consistent with the implementation. Before submitting the report, inspect `kernel.py` "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
     )

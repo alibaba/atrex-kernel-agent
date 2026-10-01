@@ -80,6 +80,24 @@ def token_usage_exceeds(observed: TokenUsage, terminal: TokenUsage) -> bool:
     return False
 
 
+def merge_token_usage_evidence(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    """Preserve known counters without adding possibly overlapping observations.
+
+    Component maxima are a conservative reconciliation, not a proven total for
+    unseen child requests. The result must remain partial.
+    """
+    if left.total_tokens is None and right.total_tokens is None:
+        return TokenUsage.unavailable()
+    values = {}
+    for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+        known = [getattr(row, key) for row in (left, right) if getattr(row, key) is not None]
+        values[key] = max(known) if known else None
+    total = max(
+        left.total_tokens or 0, right.total_tokens or 0, sum(v or 0 for v in values.values())
+    )
+    return TokenUsage(**values, total_tokens=total, measurement="partial")
+
+
 def subtract_token_usage(total: TokenUsage, part: TokenUsage) -> TokenUsage:
     if token_usage_exceeds(part, total):
         raise ValueError("token usage part exceeds total")

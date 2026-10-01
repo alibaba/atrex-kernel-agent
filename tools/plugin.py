@@ -1,63 +1,37 @@
 #!/usr/bin/env python3
-"""Discover and invoke enabled local AKA plugin tools."""
-
+"""Discover and call operator-enabled plugins through the Session Runtime."""
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from orchestrator.plugins import (
-    PluginError,
-    PluginRegistry,
-    decode_json,
-    read_json,
-)
+from sandbox import MAX_REQUEST_FILE_BYTES, proxy_command
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--workspace", default=os.environ.get("ATREX_PLUGIN_WORKSPACE", ".")
-    )
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list")
-    call = commands.add_parser("call")
+    commands.add_parser("list", allow_abbrev=False)
+    call = commands.add_parser("call", allow_abbrev=False)
     call.add_argument("tool")
-    call.add_argument(
-        "--input", required=True, help="Request JSON file, or - for stdin"
-    )
+    call.add_argument("--input", required=True, help="JSON file, or - for stdin")
     args = parser.parse_args(argv)
-    try:
-        workspace = Path(args.workspace).resolve()
-        registry = PluginRegistry()
-        registry.check_lock(workspace)
-        if args.command == "list":
-            result = {"tools": registry.catalog(), "skills": registry.skill_catalog()}
-        else:
-            request = (
-                decode_json(sys.stdin.read())
-                if args.input == "-"
-                else read_json(Path(args.input))
-            )
-            result = registry.call(args.tool, request, workspace, cwd=Path.cwd())
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
-    except (PluginError, ValueError, OSError) as exc:
-        print(
-            json.dumps(
-                {
-                    "error": {
-                        "code": getattr(exc, "code", "invalid_input"),
-                        "message": str(exc),
-                    }
-                }
-            )
-        )
-        return 1
+    request = {"action": args.command}
+    if args.command == "call":
+        try:
+            if args.input == "-":
+                raw = sys.stdin.buffer.read(MAX_REQUEST_FILE_BYTES + 1)
+            else:
+                with Path(args.input).open("rb") as source:
+                    raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
+            if len(raw) > MAX_REQUEST_FILE_BYTES:
+                raise ValueError("Plugin input exceeds the request limit; shorten it before retrying")
+            request.update(tool=args.tool, input=json.loads(raw))
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+    return proxy_command("/v1/plugins/execute", request)
 
 
 if __name__ == "__main__":

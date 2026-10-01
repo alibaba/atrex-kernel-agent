@@ -204,7 +204,7 @@ def field_answer(record: dict, dotted: str) -> dict:
 # ------------------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--store", default=None, help="Store root (default: this repo).")
     ap.add_argument("--product", default=None, help="Look up one part's spec sheet.")
@@ -250,6 +250,10 @@ def emit(payload, human: bool) -> int:
 
 
 def main(argv=None) -> int:
+    from supervisor_runtime_proxy import maybe_proxy
+    proxied = maybe_proxy('query_hardware', list(sys.argv[1:] if argv is None else argv))
+    if proxied is not None:
+        return proxied
     args = build_parser().parse_args(argv)
     store = Path(args.store).resolve() if args.store else STORE
     entries = load_index(store)["records"]

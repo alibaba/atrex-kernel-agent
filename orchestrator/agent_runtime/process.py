@@ -300,6 +300,17 @@ def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) ->
             script = ((cwd or Path.cwd()) / entry).resolve() if mode == "script" and entry else None
             if script in TRUSTED_SANDBOX_ENTRYPOINTS:
                 return None
+            if mode == "script" and Path(entry).name == "sandbox.py" and script is not None:
+                # Runtime workspaces contain a regular copy of the HTTP-only
+                # client, not the repository's old monolithic transport. Do not
+                # reject the supported request path after this guard migration.
+                from ..session_tail import read_regular_bytes
+                canonical = Path(__file__).resolve().parents[2] / "tools/sandbox.py"
+                try:
+                    if read_regular_bytes(script, limit=128 * 1024 + 1) == canonical.read_bytes():
+                        return None
+                except (OSError, ValueError):
+                    pass
             if mode == "script" and Path(entry).name in {path.name for path in TRUSTED_SANDBOX_ENTRYPOINTS}:
                 return "unregistered sandbox transport executed on the host"
             if mode == "script" and Path(entry).name in {
@@ -458,22 +469,63 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
+) -> tuple[str, str, int, bool]:
+    environment = dict(os.environ if env is None else env)
+    if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
+        return _run_bounded(command, cwd, timeout, environment,
+                            auxiliary_input_files=auxiliary_input_files)
+    from ..supervisor_runtime import session_environment
+
+    with session_environment(cwd, environment) as environment:
+        if environment.get("ATREX_EPISODE_WORKSPACE") and command[:2] == ["codex", "exec"]:
+            command = [*command[:2], "--skip-git-repo-check", *command[2:]]
+        return _run_bounded(command, cwd, timeout, environment,
+                            auxiliary_input_files=auxiliary_input_files)
+
+
+def _run_bounded(
+    command: list[str], cwd: Path, timeout: int | None, env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    proc = spawn_owned_session(
-        command,
-        role="coding-agent",
-        environment=env,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    from ..agent_home import prepare_agent_environment
+    from ..agent_sandbox import wrap_agent_command
+    from ..session_capture import clear_capture, finish_session_capture, start_session_capture
+
+    clear_capture()
+    environment_values = prepare_agent_environment(
+        cwd, dict(os.environ if env is None else env),
+        (env or {}).get("ATREX_TELEMETRY_ATTEMPT_ID") or "\0".join(command),
     )
+    launch, view = wrap_agent_command(
+        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
+    )
+    capture = None
+    try:
+        capture = start_session_capture(command, cwd, environment_values)
+        proc = spawn_owned_session(
+            launch.command,
+            role="coding-agent",
+            environment=launch.environment,
+            **({"inherited_fds": launch.pass_fds} if launch.pass_fds else {}),
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+        )
+    except BaseException:
+        finish_session_capture(capture, interrupted=True)
+        if view:
+            view.close()
+        raise
+    finally:
+        launch.close()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
-    environment_values = os.environ if env is None else env
     environment_state_file = str(
         environment_values.get("ATREX_ENVIRONMENT_STATE_FILE", "")
     )
@@ -490,26 +542,65 @@ def run_bounded(
         daemon=True,
     )
     guard.start()
+    completed = False
     timed_out = False
+    interrupted = False
+    communicate = (
+        (lambda timeout=None: capture.communicate(proc, timeout))
+        if capture is not None else proc.communicate
+    )
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = communicate(timeout=timeout)
+        completed = True
     except subprocess.TimeoutExpired:
         timed_out = True
-        process_groups = descendant_process_groups(proc.pid)
+        # spawn_owned_session creates this PGID. Keep it even if the group
+        # leader has exited/reaped while descendants still hold stdout/stderr.
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGKILL)
-        stdout, stderr = proc.communicate()
+        stdout, stderr = communicate()
     except BaseException:
-        process_groups = descendant_process_groups(proc.pid)
+        interrupted = True
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGTERM)
         try:
-            proc.communicate(timeout=5)
+            communicate(timeout=5)
         except subprocess.TimeoutExpired:
             signal_process_groups(process_groups, signal.SIGKILL)
-            proc.communicate()
+            communicate()
         raise
     finally:
-        guard_stop.set()
-        guard.join(timeout=1)
+        try:
+            guard_stop.set()
+            guard.join(timeout=1)
+            finish_session_capture(
+                capture, exit_status=proc.returncode, timed_out=timed_out, interrupted=interrupted,
+            )
+            # A killed/failed auxiliary session may leave a syntactically valid
+            # but incomplete report. Only normal, successful completion can
+            # replace the caller's report; timeout draining is not completion.
+            if (
+                view is not None
+                and completed
+                and not timed_out
+                and not interrupted
+                and proc.returncode == 0
+                and not dependency_violations
+                and not environment_failures
+            ):
+                view.publish()
+            elif (view is not None and view.role == "numerical-review" and timed_out
+                  and not interrupted and not dependency_violations and not environment_failures):
+                # Unlike an auxiliary verdict, a probe plan is untrusted data:
+                # the controller still validates its schema/evidence and executes
+                # it. A truncated file can never become an admission verdict.
+                try:
+                    view.recover_numerical_plan()
+                except (OSError, ValueError):
+                    pass  # The planner timeout path will record unusable evidence.
+        finally:
+            if view is not None:
+                view.close()
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (

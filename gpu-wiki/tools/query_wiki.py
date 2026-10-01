@@ -536,7 +536,7 @@ def fallback(pool, ratio, limit, seed) -> list[tuple[dict, str]]:
 # ------------------------------------------------------------------------- main
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description=__doc__,
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("query", nargs="*", help="Free-text terms (AND unless --any).")
     ap.add_argument("--json-store", default=None, help="Store root (default: this repo).")
@@ -612,6 +612,10 @@ def envelope(hits, store, args, pool_size: int, total: int, kind: str) -> dict:
 
 
 def main(argv=None) -> int:
+    from supervisor_runtime_proxy import maybe_proxy
+    proxied = maybe_proxy('query_wiki', list(sys.argv[1:] if argv is None else argv))
+    if proxied is not None:
+        return proxied
     args = build_parser().parse_args(argv)
     if args.weight_importance < 0:
         die("--weight-importance must not be negative")
