@@ -1037,7 +1037,9 @@ class LocalScheduler:
                 # The active interpreter and its sibling tools must make that same
                 # toolchain the default for worker commands.  Invoking an
                 # interpreter by absolute path does not otherwise update PATH.
-                python_bin = str(Path(sys.executable).resolve().parent)
+                # A venv's Python commonly symlinks to the system binary.
+                # Resolving it discards the venv and its installed packages.
+                python_bin = str(Path(sys.executable).absolute().parent)
                 path_parts = [
                     part for part in env.get("PATH", "").split(os.pathsep)
                     if part and part != python_bin
