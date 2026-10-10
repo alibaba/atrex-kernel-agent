@@ -17,9 +17,6 @@ spec.loader.exec_module(worker)
 
 class LocalSandboxRunnerTests(unittest.TestCase):
     def test_disposable_fixture_has_native_evaluator_ancestor_without_modifying_bench(self):
-        layout_spec = importlib.util.spec_from_file_location("operator_layout", worker.SOURCE_ROOT / "orchestrator/operator_layout.py")
-        layout = importlib.util.module_from_spec(layout_spec)
-        layout_spec.loader.exec_module(layout)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             bench, work = root / "source-bench", root / "work"
@@ -29,7 +26,15 @@ class LocalSandboxRunnerTests(unittest.TestCase):
             (bench / "src/atrex_bench/__init__.py").write_text("# public package")
             before = {str(p.relative_to(bench)): p.read_bytes() for p in bench.rglob("*") if p.is_file()}
             fixture = worker.prepare_fixture(work, bench)
-            self.assertEqual(layout.find_atrex_bench_root(fixture), work / "bench")
+            # Import through the production package so compatibility wrappers
+            # can use relative imports, without sharing the test's module cache.
+            detected = subprocess.check_output(
+                [sys.executable, "-c",
+                 "from orchestrator.operator_layout import find_atrex_bench_root; "
+                 "import sys; from pathlib import Path; "
+                 "print(find_atrex_bench_root(Path(sys.argv[1])))",
+                 str(fixture)], cwd=worker.SOURCE_ROOT, text=True).strip()
+            self.assertEqual(Path(detected), work / "bench")
             self.assertEqual((work / "bench/scripts/run_eval.py").read_bytes(), (bench / "scripts/run_eval.py").read_bytes())
             (fixture / "metadata.json").write_text("measured reference data")
             self.assertEqual({str(p.relative_to(bench)): p.read_bytes() for p in bench.rglob("*") if p.is_file()}, before)
