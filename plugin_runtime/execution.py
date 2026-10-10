@@ -45,6 +45,7 @@ def execute_json(
     environment: dict[str, str],
     timeout: int,
     tool_name: str,
+    supervised: bool = False,
 ) -> object:
     process = subprocess.Popen(
         command,
@@ -54,11 +55,15 @@ def execute_json(
         text=True,
         cwd=cwd,
         env=environment,
-        start_new_session=True,
+        start_new_session=not supervised,
     )
     try:
         stdout, stderr = process.communicate(request_json, timeout=timeout)
     except BaseException as exc:
+        if supervised:
+            # The Supervisor owns this entire group. Do not leave descendants
+            # outside its cancellation/deadline boundary.
+            os.killpg(os.getpgrp(), signal.SIGKILL)
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:

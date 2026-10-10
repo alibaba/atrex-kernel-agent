@@ -69,6 +69,8 @@ class VerificationResult:
     artifact: str = ""
     candidate_performance_score: float | None = None
     incumbent_performance_score: float | None = None
+    gateway_record_id: str = ""
+    reused: bool = False
 
     @property
     def passed(self) -> bool:
@@ -85,6 +87,8 @@ class VerificationResult:
             "runs": [run.as_dict() for run in self.runs],
             "error": self.error or None,
             "artifact": self.artifact or None,
+            "gateway_record_id": self.gateway_record_id or None,
+            "reused": self.reused,
         }
 
 

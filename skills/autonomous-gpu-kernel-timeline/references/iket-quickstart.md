@@ -57,14 +57,14 @@ existing run directory:
 
 ```bash
 python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
-  --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
-  --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
+  --run-dir scratch/episode_N/timeline/attempt-N/iket-run \
+  --evidence-dir scratch/episode_N/timeline/attempt-N/evidence \
   --kernel-regex '^exact_generated_kernel_name$' \
-  --dictionary profiles/episode_N/timeline/attempt-N/events.json \
-  --clean-source profiles/episode_N/timeline/attempt-N/clean_kernel.py \
-  --instrumented-source profiles/episode_N/timeline/attempt-N/instrumented_kernel.py \
+  --dictionary scratch/episode_N/timeline/attempt-N/events.json \
+  --clean-source scratch/episode_N/timeline/attempt-N/clean_kernel.py \
+  --instrumented-source scratch/episode_N/timeline/attempt-N/instrumented_kernel.py \
   --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-  python profiles/episode_N/timeline/attempt-N/harness/profile_target.py
+  python scratch/episode_N/timeline/attempt-N/harness/profile_target.py
 ```
 
 For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
@@ -72,16 +72,16 @@ For a remote campaign command, pass the skill as an explicit sandbox input and s
 ```bash
 python tools/sandbox.py --kind profile \
   --input skills/autonomous-gpu-kernel-timeline \
-  --sync profiles/episode_N/timeline/attempt-N -- \
+  --sync scratch/episode_N/timeline/attempt-N -- \
   python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
-    --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
-    --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
+    --run-dir scratch/episode_N/timeline/attempt-N/iket-run \
+    --evidence-dir scratch/episode_N/timeline/attempt-N/evidence \
     --kernel-regex '^exact_generated_kernel_name$' \
-    --dictionary profiles/episode_N/timeline/attempt-N/events.json \
-    --clean-source profiles/episode_N/timeline/attempt-N/clean_kernel.py \
-    --instrumented-source profiles/episode_N/timeline/attempt-N/instrumented_kernel.py \
+    --dictionary scratch/episode_N/timeline/attempt-N/events.json \
+    --clean-source scratch/episode_N/timeline/attempt-N/clean_kernel.py \
+    --instrumented-source scratch/episode_N/timeline/attempt-N/instrumented_kernel.py \
     --workload-identity '<shape,dtype,layout>' --correctness passed -- \
-    python profiles/episode_N/timeline/attempt-N/harness/profile_target.py
+    python scratch/episode_N/timeline/attempt-N/harness/profile_target.py
 ```
 
 Use `capture-iket` and `export-iket` separately only for local debugging. Export succeeds only when a

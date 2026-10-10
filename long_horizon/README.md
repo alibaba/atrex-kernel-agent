@@ -3,33 +3,27 @@
 This package implements the native optimization engine used by
 `orchestrator/optimize.py`. It is not a separate command-line entry point.
 
-Each canonical optimization version is explored in an isolated Git branch and worktree. A coding
-agent may run multiple related profile/research/edit/validate cycles, preserve private checkpoint
-commits, and finally publish one structured handoff: `candidate_ready`, `pivot`, or `blocked`.
+The Supervisor maintains each version in an isolated Git worktree; the coding Agent receives a separate persistent Git-free draft. It explores Directions, records Experiments and submits `candidate_ready`, `pivot`, or `blocked` through Runtime `episode-report`. The Supervisor commits the exact measured candidate. See [handoff and promotion](../docs/supervisor-promotion.md).
 
-The supervisor validates the journal and candidate commit, checks production policy, and evaluates
-incumbent and candidate in an exact same-allocation ABBA schedule. A strict correctness-passing
+The supervisor validates the journal and candidate commit, checks production policy, and requires a policy-matched recorded same-allocation ABBA for every candidate, reusing exact existing evidence. A strict correctness-passing
 improvement is squash-promoted to the incumbent; every other outcome records canonical
 `memory/vN.json` evidence without changing the incumbent kernel.
 
-An episode candidate commit changes `kernel.py` and may update its `solution.json` manifest. Both
-files must match the reviewed commit and are promoted together, so framework conversions retain
-their matching language, dependency, and source-role declarations. Plans, profiles, planner discussions,
-journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
+An episode candidate commit contains only `kernel.py`. Scratch diagnostics, journals, and handoffs stay uncommitted and are copied into the episode archive before the isolated
 worktree is removed.
 
 Runtime state lives under `.atrex_long_horizon/` in generated campaign workspaces. Public options
 such as `--handoff-resumes`, `--verify-repeats`, `--verify-run-timeout`, and
 `--min-improvement-pct` are parsed directly by `orchestrator/optimize.py`.
 
-Each active episode also exposes ignored `memory/live.json`. It is initialized immediately and
+The controller maintains ignored `memory/live.json` for its legacy consumers, not as an Agent-writable handoff. It is initialized immediately and
 atomically refreshed after every journal append, but it never participates in version selection or
 promotion; `memory/vN.json` remains the canonical supervisor-owned record.
 
 Every canonical record carries a compact copy of all structured experiments already persisted in
 the episode journal. If the supervisor is terminated while an episode is active, the next startup
 resumes the registered episode worktree in place, including its source edits, checkpoints, journal,
-plans, profiles, and generated intermediate files. If that worktree is missing or no longer matches
+scratch files and generated intermediate state. If that worktree is missing or no longer matches
 the recorded branch and baseline, recovery falls back to archiving it and recording an
 `interrupted` `memory/vN.json`. Recovery remains idempotent across repeated termination.
 
@@ -54,8 +48,7 @@ non-duplicated invocation total while phase attribution degrades fail-closed.
 `.atrex_long_horizon/state.json` and `active_episode.json` are restart state, while each
 `episodes/eNNNN/` directory archives the prompt, journal-derived attempt, worktree snapshot,
 verification payload, and telemetry available for that episode. These files are intentionally
-excluded from campaign commits. Accepted evidence is also written to committed
-`memory/long_horizon_eNNNN.json` and the canonical `memory/v<N>.json`.
+excluded from campaign commits. Promotion evidence is private and digest-bound to its Git promotion; canonical `memory/v<N>.json` remains committed.
 
 At normal completion, Python failure, `SIGINT`, `SIGTERM`, or `SIGHUP`, the orchestrator writes an ignored
 `trace-retention-manifest.json`. It declares only the candidate sources,
@@ -73,9 +66,10 @@ manifest after forcible termination as an interrupted/incomplete run.
 
 ### Correctness validation
 
-Required multi-seed checks, independent dependency/framework review and
-correctness-passing ABBA verification use the evaluator's existing metrics and
-tolerances. Numerical review adds a bounded experiment-and-repair loop.
+Required multi-seed checks and correctness-passing ABBA remain mandatory. Production
+also uses [Supervisor-owned supplemental numerical probes](../docs/numerical-validation.md).
+The planner proposes experiments, not acceptance verdicts; only measured candidate
+failures require a Kernel repair. Invalid inputs/reference outputs go back to the planner.
 
 Correctness uses the immutable evaluator's ordinary random input generator over the
 full workload set. Native Atrex-Bench compares ordinary floating-point outputs with
@@ -85,170 +79,79 @@ the official evaluator as `--correctness-max-rel-l2 0.2`. This replaces elementw
 allclose for floating-point outputs; output shape/dtype and finite-value checks still
 apply. The transport adapter and typed sandbox requests use the same selection.
 
-V1 runs the base random case plus five additional correctness cases. Optimization
-episodes retain their required random-seed checks, and candidate promotion requires
-correctness-passing incumbent/candidate ABBA evaluation. `--multi-seed N` requests
-N additional random cases; `--correctness-only` skips timing. Ordinary validation
-uses the operator's original `input.py` generator.
+Full-contract Atrex-Bench Evaluate defaults to the base random case plus five additional
+correctness cases; targeted smoke requests retain their single-case default. The Supervisor
+enforces six-case correctness before accepting `candidate_ready`, and promotion also requires
+correctness-passing incumbent/candidate ABBA evaluation. `--multi-seed N` requests N additional
+random cases; `--correctness-only` skips timing. Inputs come directly from the operator's
+`input.py` without distribution rewriting or suite authoring. SOL uses its official full-workload
+contract rather than the Atrex-Bench seed policy.
 
-The numerical reviewer may suggest up to three targeted distributions with
-candidate and contract evidence. It has no rejection verdict. The supervisor
-executes them through the immutable evaluator in isolated GPU allocations, using
-at most three matching workloads, two seeds and all ranks per distribution. Public
-input constraints select the relevant dispatch regime without disclosing hidden
-workloads. Generators address actual tensor ABI leaves (including `lhs.0` for tuple
-members) and preserve unmentioned structural inputs. Supplemental floating-point
-outputs use the evaluator's relative L2 comparator with a fixed threshold of
-`1e-3` per output tensor (FP4 retains its benchmark threshold of `0.2`):
-`||candidate - reference||2 / max(||reference||2, 1e-12)`.
-The non-FP4 bound is an explicit supplemental accuracy policy: at most 0.1%
-normalized aggregate error on regenerated distributions. It is not mathematically
-equivalent to the ordinary allclose tolerances, so passing ordinary validation
-alone does not establish supplemental correctness. The FP4 exception preserves
-the benchmark's quantization error budget. This replaces elementwise allclose for these regenerated distributions; absolute
-and elementwise relative errors remain diagnostic. Non-finite outputs, structural
-mismatches and forbidden input mutations still fail through the evaluator.
-Supplemental receipts retain only the role labels `reference` / `candidate` for
-non-finite outputs, or `unknown` when the runtime diagnostic cannot establish the
-roles. Unknown roles require planner validation rather than kernel repair. Raw
-output names, tensors and exceptions remain private. A non-finite reference makes the probe invalid and returns its diagnostic to the
-planner to repair the input distribution or packed encoding and rerun all retained
-cases. This does not spend a kernel repair turn. Unresolved invalid plans remain
-validation blockers, subject to the planner-timeout policy below. Only candidate-only
-non-finite output with a finite reference is a measured kernel failure. Undefined
-comparison metrics are recorded as null, including the evaluator's zero placeholders. The
-supervisor records the comparison policy in feedback; reviewers and coding agents
-cannot change it. Ordinary workload validation retains its original comparator.
-Unsupported suggestions remain explicitly advisory, not invented executable tests.
+Production admission and promotion retain independent dependency/framework review.
+Numerical acceptance combines ordinary correctness with applicable supplemental probes.
+Plans and raw evidence live outside Agent workspaces. Resume rechecks the sealed candidate;
+matching GPU records are reused. This does not restore Fast Episodes or Agent-managed evaluators.
 
-Passing the requested probes closes the suggestion without another subjective
-review. A failing workload/seed with receipts for all ranks produces `needs_repair` feedback, including the
-distribution and comparison metrics. V1 gets up to two supplemental repair turns,
-independent of its ordinary bring-up recovery. Episodes receive feedback before
-terminal handoff acceptance and resume the same coding session within the configured
-handoff budget. The updated candidate reruns the same probes before normal admission
-or promotion; no failed candidate is accepted on repair-budget exhaustion.
+## Reviewer recovery and GPU reliability
 
-Probes evaluate each workload/seed independently, so an evaluator stopping on a
-counterexample cannot be mistaken for missing coverage. A pass requires every
-requested probe; a complete counterexample goes directly to the coding agent.
-Suggestions with no matching available workload remain recorded as unsupported
-advisories and do not block executable cases or promotion. They are never recorded
-as passing tests and are reconsidered when the workload set changes.
-The sandbox privacy filter retains failure receipt counts and aggregate numerical
-metrics, while withholding private workload values and raw evaluator exceptions.
+The independent production reviewer has an operator-configurable `--production-review-timeout`
+(default 600 seconds). One execution timeout permits one fresh isolated review with restored
+evidence. A second timeout blocks that evidence/configuration; restarting does not reset the count.
+Explicit top-level service errors (overloaded, rate-limited, unavailable) wait 30 minutes and retry
+without consuming another coding Episode. Successful review clears the consecutive timeout count.
+Other exits, invalid verdicts and policy violations fail without an infrastructure retry.
 
-Incomplete receipts and input-generation failures are `needs_validation`, not kernel
-correctness failures. The planner gets one bounded probe-plan repair before reporting
-a validation blocker; this does not consume a coding-agent repair. Failed experiments cannot
-be silently dropped or converted to passing evidence. Confirmed service outages use
-the infrastructure recovery policy below. Supplemental correctness probes never enter
-ABBA timing aggregates.
+Retry state is private under `<Supervisor scope>/review_timeouts/` and `infrastructure/`, keyed
+by candidate evidence, backend and timeout. Agent workspace files cannot reset these budgets.
+Reads are bounded and validate the stage, counters and deadlines. Unreadable or corrupt state
+blocks validation with an operator repair hint; it is never overwritten or treated as a fresh
+budget. The Supervisor log identifies the affected file. Restore a valid same-stage backup or
+repair its permissions before resuming; do not delete the state to bypass a consumed retry budget.
 
-Each numerical planning attempt uses `--production-review-timeout` (default: 600
-seconds), without a doubled-timeout retry. A complete, valid plan already written
-at timeout is usable only after its evidence digest and unchanged source files are
-verified. When a timed-out attempt has no usable plan, supplemental expansion is
-recorded as `skipped_planner_timeout` only if the current candidate passed standard
-correctness, all candidate/contract evidence is readable and unchanged, and no
-measured supplemental candidate failure exists. The candidate continues through
-ordinary admission gates; this skip is not a supplemental test pass. Invalid
-reference diagnostics remain in the audit record, and retained plans run again
-for subsequent candidate edits. Missing standard evidence, unreadable or changed
-files, measured candidate failures, and non-timeout planning errors remain
-`needs_validation`. Planning attempts and any written responses are recorded as
-`numerical_planning-*.json` beside the feedback.
-
-Read `verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json` for
-agent feedback and `supplemental-*/numerical_result.json` for audit records. Pending
-probe plans persist under `.atrex_numerical_advice/` in the private reference directory
-or `~/.local/state/atrex-kernel-agent/numerical_advice/`, outside the agent
-workspace. Coding-agent edits to feedback files cannot replace the retained plan.
-Restarts rerun the probes against the current candidate.
-In-process cache keys include candidate, contract, evaluator and workload contents.
-
-## Infrastructure recovery during validation
-
-Confirmed GPU transport outages and structured review-service errors pause the current validation
-step. After each failure, the supervisor waits 30 minutes before retrying the same
-step. Recovery is established by a real validation request, rather than a health
-endpoint alone. There is no retry-count limit and no episode, rejection, or stall
-increment while waiting. The candidate, journal, and handoff remain in place.
-
-Each step stores its status, failure category, retry count, and next retry time under
-`.atrex_long_horizon/infrastructure/`. Step identities include the candidate or
-contract digest, and a restarted supervisor honors the recorded retry deadline.
-An interrupted ABBA batch repeats its complete A/B/B/A schedule in one allocation;
-partial timing samples are never combined across allocations.
-
-Explicit numerical mismatches, compilation or kernel execution failures, policy
-rejections, invalid evidence, and insufficient speedup remain validation failures.
-They are not treated as transport outages. Gateway infrastructure categories remain
-visible through a fixed marker while hidden evaluator details stay private.
-
-Reviewer exits without a structured service error fail validation. A reviewer execution
-timeout gets one retry in a fresh isolated session with restored evidence for dependency
-review. Timeout counts are persisted per
-evidence digest and reviewer configuration; a second timeout blocks validation with an
-explicit reviewer-infrastructure diagnosis. Restarting cannot reset the limit. Changing
-the evidence or reviewer timeout permits a new bounded attempt. Successful completion
-clears consecutive timeout counts. Only top-level CLI service errors (`overloaded_error`,
-`rate_limit_error`, `service_unavailable_error`) enter the 30-minute retry loop.
-`--production-review-timeout` bounds the dependency reviewer (default: 600 seconds).
-
-Sandbox infrastructure errors use exit code 75 plus an exact stderr marker;
-remote command text cannot declare this category. Agate upload/nonblocking
-submission holds its admission lock for at most 600 seconds, limited further by
-the remaining wait budget. A submission deadline releases the lock and returns
-the infrastructure signal so subsequent jobs can submit.
-
-An explicit `ATREX_AGATE_EXECUTABLE` is authoritative: it must resolve to an
-executable path or command name, otherwise sandbox setup raises `FileNotFoundError`.
-Falling back could bypass a campaign wrapper's endpoint or execution policy. Leave
-it unset to use the existing adjacent-to-Python and then PATH discovery order.
-This configuration failure is not an infrastructure outage and is not retried.
+GPU execution continues to use the existing Measurement Record/job state machine, rather than
+an extra outer resubmission loop. It polls accepted job IDs, retries confirmed infrastructure
+outcomes, checkpoints ABBA batches, and refuses blind resubmission when the outcome is unknown.
+See [Measurement records](../docs/measurement-records.md).
+`ATREX_AGATE_EXECUTABLE`, when set, must resolve to an executable; an invalid override fails
+instead of silently choosing another Gateway wrapper or direct HTTP transport. The managed
+Runtime returns a non-repairable `gateway_configuration_invalid` error before dispatch;
+standalone Gateway CLI calls print a traceback-free `sandbox:` diagnostic. The operator must
+correct or unset the override and restart the Supervisor. Without an override, a missing
+default client still permits the explicit-URL HTTP fallback.
 
 ## Goal scheduling
 
-After at least 50 completed episodes and more than 3 consecutive non-promotions,
-Python schedules a `goal` episode. It persists the single `episode_mode` value in
-`active_episode.json`'s existing `mode` field and preserves it during recovery.
-The same value reaches prompts and plan reviewers through `ATREX_EPISODE_MODE`.
-Fast/full episodes retain their single-direction planning and prompt handoff rules;
-goal episodes may work through a broader operator roadmap and preserve the best
-validated checkpoint until the roadmap is complete or exhausted.
+After at least 50 completed Episodes and more than 3 consecutive non-promotions, the next Episode
+uses `mode="goal"`. Otherwise it uses `mode="episode"`. This is a broader search strategy within
+the same workflow, not a return to Fast/Full modes or a separate planning/reviewer pipeline.
 
-Goal episodes use the full-episode reviewer settings, the shared production
-validation and ABBA promotion gates, and at least 20 same-session handoff recovery
-continuations on backends that support them. Goal admission takes precedence over `--max-stall`
-once its trigger is met. For ordinary non-blocked outcomes without mandatory conversion,
-`--max-stall` from 1 to 3 can stop a campaign even after 50 completed episodes,
-because the stall counter has not yet exceeded 3. With `--max-stall >= 4`, the
-stall stop can fire before 50 completed episodes; after that, reaching the stop
-threshold also selects goal mode and bypasses the stall stop. Zero disables the
-stall stop. Episode, version and token budgets retain their existing behavior.
+Goal guidance asks the Agent to reassess the roadmap, explore materially different Directions
+sequentially within Runtime limits, and retain the best measured candidate for the final report.
+Correctness, Journal, production policy and ABBA promotion gates remain identical. Claude/Codex
+allow at least 20 same-session handoff repair continuations; other backends retain their normal
+single invocation. A persisted mode wins after restart; an older record without mode remains an
+ordinary Episode and is not widened in flight. Historical unfinished Fast Episodes are still
+rejected by the existing upgrade guard.
 
-Recovery deliberately uses one interpretation in all paths: a persisted mode wins;
-a legacy record without a mode uses its recorded episode number and the configured
-fast-episode range (fast inside that range, full outside it), including completed
-handoff verification. Missing episode numbers do not select fast mode; the existing
-worktree/recovery checks handle the incomplete record. Legacy mode inference never
-selects goal. This aligns `_recover_interrupted` and `_recover_completed_handoff`
-with `run()` admission.
+Goal admission takes precedence over `--max-stall`, but never over Episode, version or token
+budgets. Before 50 completed Episodes, the usual stall stop applies. With `--max-stall <= 3`,
+a Campaign can stop before the goal trigger; zero disables the stall stop. Promotion resets stalls.
 
-![Episode mode scheduling and recovery](../assets/episode-mode-state-machine.svg)
+```mermaid
+flowchart TD
+    R["Recover active Episode"] --> B{"Budget available?"}
+    B -->|No| X["Stop"]
+    B -->|Yes| M{"Active mode already persisted?"}
+    M -->|Yes| K["Keep mode"]
+    M -->|No| G{"Completed >= 50 and stalls > 3?"}
+    G -->|Yes| T["Goal strategy"]
+    G -->|No| N["Ordinary Episode"]
+    K --> E["Same Journal / report / correctness / ABBA gates"]
+    T --> E
+    N --> E
+    E --> O["Record outcome; reset stalls on promotion"]
+    O --> R
+```
 
-The diagram maps to `long_horizon/campaign.py`: `_episode_mode` selects or restores
-mode, `run()` checks budgets and admits episodes, `_recover_interrupted` restores or
-archives active work, `_recover_completed_handoff` rechecks terminal handoffs, and
-`_record_terminal_episode` updates counters and canonical memory. Recovery runs
-before the next admission budget check, so a completed handoff can be finalized
-before a budget stops further exploration. The [diagram source](../assets/episode-mode-state-machine.dot)
-is kept alongside the rendered SVG.
-
-Supplemental plans persist in the supervisor private-reference directory, or in
-`~/.local/state/atrex-kernel-agent/numerical_advice` when no private reference is
-configured. This state must stay outside coding-agent workspaces and writable
-mounts. Restart loads accept only structurally valid probe plans; workspace
-feedback is an audit copy, never an admission decision. As with the private
-reference corpus, deployments must protect supervisor state from agent writes.
+Scheduling lives in `LongHorizonCampaign._episode_mode`; `run` persists the mode before starting
+the Agent. The terminal and interrupted recovery paths preserve it in canonical memory and logs.

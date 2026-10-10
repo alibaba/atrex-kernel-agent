@@ -6,10 +6,10 @@ creates one temporary instrumented snapshot, and uploads only the selected skill
 
 ## Attempt layout
 
-Keep one self-contained attempt below the episode profile directory:
+Keep one self-contained attempt below `scratch/` in the Agent workspace:
 
 ```text
-profiles/episode_N/timeline/attempt-N/
+scratch/episode_N/timeline/attempt-N/
 ├── clean-source/
 ├── instrumented-source/
 ├── events.json
@@ -27,6 +27,9 @@ profiles/episode_N/timeline/attempt-N/
 
 The source entries may be files instead of directories for a single-file kernel. The harness must
 open only declared attempt files and skill resources; do not depend on an undeclared local checkout.
+Artifact descriptors must use paths relative to their containing JSON file, not remote absolute
+paths. Keep all transitive evidence in this tree so the synchronized files remain verifiable after
+the Supervisor publishes `scratch/` to the controller workspace.
 
 ## Sandbox transport
 
@@ -34,7 +37,7 @@ When the configured sandbox exposes the PPU target, upload the complete PPU skil
 harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
-ATTEMPT=profiles/episode_N/timeline/attempt-N
+ATTEMPT=scratch/episode_N/timeline/attempt-N
 python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   --input skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
@@ -55,7 +58,7 @@ The wrapper first runs capture/decode, then invokes `timeline.py measure` with a
 instrumented commands before returning:
 
 ```bash
-ATTEMPT=profiles/episode_N/timeline/attempt-N
+ATTEMPT=scratch/episode_N/timeline/attempt-N
 python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   --input skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
@@ -63,8 +66,8 @@ python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
       PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
-        --baseline-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_a.py"]' \
-        --instrumented-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_b.py"]' \
+        --baseline-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_a.py"]' \
+        --instrumented-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_b.py"]' \
         --output "$ATTEMPT/evidence/fine.perturbation-a-b.json"
 ```
 
@@ -107,6 +110,10 @@ Return the clean and instrumented snapshots, correctness evidence, raw capture, 
 dictionary, canonical events, Perfetto trace, summary, and accepted receipt
 in the attempt directory. Preserve failed attempt diagnostics under a new attempt number rather than
 overwriting prior evidence.
+
+Before `episode-report`, verify that the receipt and all referenced files were synchronized into
+the local `scratch/` tree. Report `evidence.artifact` as a workspace-relative `scratch/...` path;
+leave that tree intact for the controller's terminal revalidation.
 
 Restore the probe-free source after the attempt. ACU collection remains a separate probe-free launch
 and is not part of this remote timeline command unless a later, optional joint-analysis decision

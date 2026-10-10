@@ -1,102 +1,75 @@
-# AKA local plugins
+# Supervisor-owned plugins
 
-AKA discovers plugins automatically from immediate subdirectories of `plugins/` that contain a
-`plugin.json`. GPU Wiki ships as `plugins/gpu-wiki` and is therefore available to every campaign
-without another command-line option. A plugin may contribute tools, Skills, instructions, and
-workspace resources.
+AKA discovers operator-installed `plugins/*/plugin.json`. Plugins can declare tools, public
+Skills, instructions, and private resource dependencies. They are trusted Supervisor code,
+not Agent-installable extensions. GPU Wiki is supplied as `gpu-wiki.query`.
 
-## Design and runtime flow
+## Execution boundary
 
 ```mermaid
-flowchart TD
-    A[Campaign construction<br/>orchestrator/campaign.py] --> B[Discover plugins/*/plugin.json<br/>orchestrator/plugins.py]
-    B --> C{Manifest and files valid?<br/>plugin_runtime/registry.py}
-    C -- no --> C1[Stop: invalid_manifest]
-    C -- yes --> D[Resolve tool argv and fingerprint<br/>code, resources, Skills]
-    D --> E{Workspace lock exists?}
-    E -- no --> F[Install resource and Skill links]
-    F --> G[Write .atrex_plugins/lock.json]
-    E -- yes --> H{Lock equals discovered snapshot?}
-    H -- no --> H1[Stop: plugin_changed]
-    H -- yes --> I[Reuse installed plugin set]
-    G --> J[Inject phase instructions and environment]
-    I --> J
-    J --> K[Agent calls tools/plugin.py call plugin.tool]
-    K --> L{Input schema valid?}
-    L -- no --> L1[Return: schema_validation]
-    L -- yes --> M[Run argv with JSON stdin<br/>plugin_runtime/execution.py]
-    M --> N{Exit and JSON output valid?}
-    N -- timeout --> N1[Kill process group: tool_timeout]
-    N -- error --> N2[Return: tool_failed or invalid_output]
-    N -- yes --> O[Validate output schema and return JSON]
+flowchart LR
+    A["Agent: tools/plugin.py"] --> H["Authenticated Session HTTP request"]
+    H --> V["Supervisor: catalog + input schema"]
+    V --> W["Wiki: existing scoped executor"]
+    V --> P["Other tools: private snapshot + bounded subprocess"]
+    W --> O["Validate successful output schema"]
+    P --> O
+    O --> R["Bounded public response"]
+    R --> A
+    W --> D["Private request audit"]
+    P --> D
 ```
 
-The registry is cached for the lifetime of a campaign. Constructing it performs discovery and
-fingerprinting once; later prompt rendering, workspace linking, environment creation, and tool
-lookup reuse that snapshot. Resume checks compare the saved lock directly with the cached snapshot.
+Only the standard-library clients and explicitly declared public Skills enter the workspace.
+Plugin source, resource trees, environment variables and locks stay outside it. The client has
+no `--workspace`, executable, endpoint, resource-root or environment override. The existing
+Session capability, serialization, queue deadline, revocation and subprocess cleanup apply.
 
-Tools use a command argument array and exchange JSON through stdin and stdout. Python, Node, shell
-scripts, and compiled executables share this interface. Arguments are passed without shell
-expansion. Each invocation has a bounded timeout and runs in its own process group so a timeout can
-clean up descendants.
+`plugin_runtime/` provides manifest discovery, dependency pinning, schemas and generic subprocess
+execution for the Supervisor. `orchestrator/plugins.py` copies bounded, no-follow Skill files and
+exposes only workspace-relative Skill paths; there is no standalone resource-link installer.
+Built-in Skills cannot be replaced.
+Custom instructions are injected for `episode` and `framework_baseline`; there are no Setup or
+Fast phases. Built-in Wiki guidance comes from the Episode/conversion and Framework Baseline
+prompts plus the mounted `skills/KernelWiki/SKILL.md`. The Wiki plugin declares its existing
+Supervisor route, schemas and dependencies, without a second adapter or instruction templates.
+No `.atrex_plugins/instructions.md` is written into the Agent workspace. Plugin discovery/call guidance
+is still injected when plugins are installed, and `gpu-wiki.query` remains available through
+the HTTP client. An empty catalog adds no plugin instructions to the Prompt.
 
-Skills keep their native directory structure. AKA links each discovered Skill into
-`.claude/skills`, `.qoder/skills`, and `.agents/skills`; the selected Agent reads its `SKILL.md` in
-the usual way. Conflicting resource or Skill installation paths fail before anything is changed.
+## Agent usage
 
-## Discover and call tools
-
-From the repository or an initialized campaign workspace:
+Inside a live Session:
 
 ```bash
 python3 tools/plugin.py list
+python3 tools/plugin.py call gpu-wiki.query --input scratch/wiki_request.json
 ```
 
-The command returns separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
-`gpu-wiki.query`; each Skill has a namespaced catalog ID while retaining its native installation
-name.
-
-To query GPU Wiki, create `wiki_request.json`:
+Example request:
 
 ```json
-{
-  "request": "Target hardware B200, DSL triton. Optimize operator rmsnorm and retrieve techniques and pitfalls.",
-  "max_records": 6
-}
+{"request":"Target hardware B200, DSL triton. Optimize operator rmsnorm and retrieve techniques and pitfalls.","max_records":6,"max_bytes":20000}
 ```
 
-Then call:
+The catalog returns tool descriptions/input and output schemas, plus public Skill locations.
+`--input -` accepts JSON from stdin. The client bounds both the input and encoded HTTP envelope.
+A missing Session capability does not fall back to direct execution.
 
-```bash
-python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json
-```
+Wiki calls reuse `sandbox.py --kind wiki-query`'s scoped executor, private query audit and bounded
+projection; successful plugin responses are validated against the declared output schema before
+returning to the Agent. Malformed JSON or schema drift produces a non-repairable 503 naming the
+plugin and its output-contract failure, with details retained privately. A successful result that
+exceeds the public output limit instead produces a repairable 400 with narrowing guidance.
+Failed Wiki execution keeps its existing exit code and bounded diagnostics;
+those failure envelopes are not successful output-schema instances.
+`max_bytes` may narrow but not raise the 128 KiB query limit; `exclude` is supported.
+The response retains `query_id`, `records`, `notes` and emitted `wiki_id` values. Record material
+use with `record-experiment`, not a separate Wiki log. Direct Wiki scripts remain operator tools.
 
-`--input -` reads JSON from stdin. The response preserves the Wiki envelope: `query_id`, `records`,
-and `notes`. Canonical `wiki_id` values, payloads, and public/internal store isolation are unchanged.
-`max_bytes` and `exclude` are also supported input fields.
+## Operator manifest
 
-The standard episode request uses the deterministic Wiki parser. Other prose can invoke the Wiki's
-existing bridge agent. Mining and admission through `wiki-gate` remain separate from this query
-tool, and direct Wiki scripts remain available for maintenance and standalone use.
-
-The plugin declares the public store and optional `internal_gpu_wiki` sibling as dependencies. A
-conflicting `ATREX_WIKI_STORE_ROOT` is rejected instead of silently selecting an undeclared store.
-
-## Add a tool plugin
-
-Add a directory directly under `plugins/`:
-
-```text
-plugins/local-docs/
-├── plugin.json
-├── instructions.md
-├── query.py
-├── input.json
-├── output.json
-└── data/
-```
-
-`plugin.json`:
+A tool exchanges JSON on stdin/stdout and declares a timeout (1–3600 seconds):
 
 ```json
 {
@@ -113,95 +86,91 @@ plugins/local-docs/
     }
   },
   "instructions": {"common": "instructions.md"},
-  "resources": {"local-docs-data": "data"}
+  "resources": {"local-docs-data": {"path": "data", "mount": false}},
+  "skills": {"local-docs": {"path": "skills/local-docs"}}
 }
 ```
 
-`input.json`:
+Tools and Skills are independently optional; at least one is required. Skill directories must
+contain `SKILL.md` unless marked optional. Resource and Skill paths are relative to the plugin.
+All resources remain private in AKA, including legacy declarations with `mount: true`.
+Environment declarations apply only to the tool subprocess; they are not injected into Agent
+sessions. `{workspace}` there denotes the private request snapshot. Other named
+placeholders require explicit caller context; unresolved `{name}` placeholders after
+rendering reject the declaration before execution. Errors identify the plugin and
+environment key, not the potentially secret rendered value.
 
-```json
-{
-  "type": "object",
-  "required": ["request"],
-  "additionalProperties": false,
-  "properties": {"request": {"type": "string", "minLength": 1}}
-}
-```
+Tools declare exactly one execution mechanism. Custom tools use `command`; the built-in
+`gpu-wiki.query` instead declares `"runtime_tool": "wiki-query"`. This fixed route is not a URL or
+arbitrary handler hook; unknown Runtime tools and a simultaneous `command` are rejected during
+discovery. Calling it through the generic subprocess library fails closed; both Agent clients
+use the same scoped Wiki executor. The private snapshot pins this routing declaration as well
+as commands and resources.
 
-`output.json` can start as `{"type": "object"}`. A minimal implementation is:
+Input/output schemas support `type`, `description`, `properties`, `required`,
+`additionalProperties`, `items`, `enum`, `minLength`, `minimum` and `maximum`.
+Unknown schema keywords fail during discovery. Requests are validated before execution;
+successful output from both built-in routed and generic tools is schema-validated and bounded
+to 256 KiB. Tool implementations are responsible
+for returning public data only: schema validation is not a secret scrubber.
 
-```python
-import json
-import os
-import sys
-from pathlib import Path
+## Persistence and failures
 
-request = json.load(sys.stdin)
-root = Path(os.environ["PLUGIN_ROOT"])
-text = (root / "data" / "reference.txt").read_text()
-print(json.dumps({"source": "reference.txt", "text": text}))
-```
+A private `<Supervisor scope>/plugins/.atrex_plugins/lock.json` pins versions, source, schemas,
+instructions, resources and Skills. Existing campaigns acquire this lock on their first startup
+with plugins. Restart checks reject changed dependencies; restore the pinned version or create
+a new Campaign. Agent edits to a workspace `.atrex_plugins` directory cannot change the lock.
+Generic subprocesses load and rehash only the selected plugin, checking its identity, commands,
+source and declared resources/Skills against the Supervisor's private startup snapshot before
+dispatch. Unrelated plugins and Wiki stores are not rescanned. Selected-plugin data is still
+rehashed on every call; a cached fingerprint is not treated as proof that mutable files remain
+unchanged. Declare any file dependency as a resource so it participates in that check.
+Catalog-wide environment declarations are rendered from the Supervisor's cached manifests;
+the scoped Wiki task ID and audit path still take precedence. Full catalog validation remains
+part of Supervisor startup and restart.
 
-Populate `data/reference.txt` and describe when to use the tool in `instructions.md`. The next
-campaign discovers it automatically; no orchestrator registration or startup argument is needed.
+Fingerprint I/O is bounded for each catalog construction (including a selected-plugin reload):
+16 MiB per file, 256 MiB total, 16,384 directory entries/metadata reads, and 64 directory levels.
+Manifest/schema/instruction documents are limited to 1 MiB. Hashes stream 64 KiB chunks; file
+sizes are checked before reading and limits remain enforced if a file grows. FIFOs, sockets,
+devices and symlinks inside dependency trees are rejected. Operator-declared root aliases may
+resolve to a directory or regular file. Missing optional roots have a stable sentinel; other
+read/scan failures abort catalog construction rather than silently omitting evidence. Ignored
+Git/cache paths cannot hold declared schemas or instruction files.
 
-## Add a Skill-only plugin
+The source tree hashes its manifest, schemas and instructions once; parsing metadata is still a
+separate bounded read. All resource/Skill roots share the same budget, including repeated reads
+of overlapping declarations. Reduce/narrow a dependency if a limit is exceeded; no partial
+fingerprint is accepted. Campaign and Episode workspace linking reuse the Supervisor catalog;
+standalone `link_runtime` callers without one still construct a bounded catalog. There is no
+persistent mtime-only cache, so same-size/same-mtime content changes remain detectable. These
+limits bound local traversal and bytes, not kernel-level I/O latency on an unhealthy network
+filesystem. See [measured startup cost and reproduction](plugin-fingerprint-cost.md).
 
-```json
-{
-  "id": "document-review",
-  "version": "1.0.0",
-  "api_version": 1,
-  "skills": {
-    "review-document": {
-      "path": "skills/review-document",
-      "description": "Review a document for clarity and consistency."
-    }
-  }
-}
-```
+Input errors are repairable 400 responses. Confirmed pre-dispatch queue expiry retains the safe
+429/backoff response. Completed plugin calls have two distinct output failures:
 
-Place the original `SKILL.md` and supporting files in that directory. A Skill-only package needs no
-dummy tool or schema. Skills are required by default; `optional: true` permits an absent Skill.
-Conflicting native names fail explicitly instead of shadowing another Skill.
+- `plugin_result_too_large`: repairable 400. The call already ran; narrow the question or reduce
+  supported `max_records`/`max_bytes` before submitting an adjusted request. A mutating call may
+  already have taken effect; check its effects first. This does not mean "no job was submitted".
+- `plugin_output_invalid`: non-repairable 503 naming the tool. It completed but returned malformed
+  JSON or violated its output schema. The plugin operator must fix the contract; repeatedly
+  changing arguments or resubmitting the same call is not a remedy.
 
-## Manifest contract
+The private executor preserves these classifications across the subprocess boundary. Actual
+tool process failures, interrupted execution and unrecognized executor errors remain an
+unknown-outcome 503; private tracebacks and stderr are not returned. "Repairable" is advice to
+adjust the next request, not permission for automatic replay. Do not add client-side retries.
+Request output and status
+are recorded in the Supervisor audit. Plugins do not create Gateway measurement records or
+authorize Kernel promotion.
 
-- Plugin IDs and tool names use lowercase letters, digits, and hyphens, starting with a letter. The
-  published tool name is `<plugin-id>.<tool-name>`. Duplicate IDs fail during discovery.
-- `api_version` is the integer `1`; `version` identifies the plugin release.
-- Each tool declares a description, `command` argv array, input/output schema files, and an integer
-  timeout from 1 to 3600 seconds. `command` supports `{python}` and `{plugin_root}` placeholders.
-  The executable must exist when the plugin is discovered.
-- `instructions` maps scope names to files. `common` is included in every scope. AKA supplies
-  `setup`, `episode`, `fast_episode`, and `framework_baseline`, with template values such as
-  `{{PLATFORM}}`, `{{ARCH}}`, `{{FRAMEWORK}}`, and `{{OPERATOR}}`.
-- `resources` maps workspace names to local paths. A resource can be declared as
-  `{"path": "../optional-data", "optional": true, "mount": false}`. Missing optional paths are
-  permitted; `mount: false` fingerprints the dependency without exposing a workspace link.
-- `skills` maps native names to a directory and description. The directory must contain `SKILL.md`
-  unless the Skill is optional.
-- `environment` contributes variables to Agent sessions. Values may contain `{workspace}` and
-  `{campaign_name}`. Conflicting declarations and reserved runtime variables fail at discovery.
+Generic child tools share the Supervisor-owned process group, so request revocation and deadlines
+kill descendants. An inner tool timeout terminates the supervised group and is reported as an
+execution failure.
 
-The supported schema subset contains `type`, `description`, `properties`, `required`,
-`additionalProperties`, `items`, `enum`, `minLength`, `minimum`, and `maximum`. Types are mandatory;
-arrays require an item schema. Unknown keywords and constraints on incompatible types fail at
-discovery.
-
-## Locking and recovery
-
-Initialization writes `.atrex_plugins/lock.json` with the discovered plugin directory, resolved
-commands, versions, and SHA-256 fingerprints of plugin code, schemas, instructions, resources, and
-Skills. Git metadata and Python caches are excluded. Resume and tool invocation fail if this snapshot
-no longer matches. Restore the original plugin contents or start a new campaign.
-
-Existing campaigns created before this plugin mechanism should continue with the revision that
-created them. To roll back a new campaign, stop it, check out the previous AKA revision, and create a
-fresh workspace; campaign workspaces are isolated and the plugin installer does not mutate source
-data. The lock detects changes but does not snapshot or sandbox plugin files.
-
-Successful calls return validated JSON directly. Errors use
-`{"error":{"code":"tool_failed","message":"..."}}` with a nonzero exit code. Installed campaigns
-record tool name, plugin version, status, and duration under `.atrex_plugins/calls/`; request and
-response bodies are not logged.
+To roll back, stop the Campaign before switching revisions. Skill installation does not modify
+operator source/resources. Private locks and audits can be retained for investigation; do not
+delete a lock to bypass a changed catalog. The routed Wiki declaration and bounded tree hash
+format change existing fingerprints: restore the pinned revision or start a new Campaign with
+the new catalog. Old locks are never silently converted.

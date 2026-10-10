@@ -69,6 +69,19 @@ def token_usage_from_model_usage(model_usage: object) -> TokenUsage:
     )
 
 
+def pi_event_usage(event: Mapping[str, object]) -> TokenUsage:
+    """The billable final events shared by the Pi adapter and live capture."""
+    if event.get("type") == "message_end":
+        message = event.get("message")
+        if isinstance(message, Mapping) and message.get("role") in {"assistant", "toolResult"}:
+            return token_usage_from_mapping(message.get("usage"))
+    elif event.get("type") == "compaction_end":
+        result = event.get("result")
+        if isinstance(result, Mapping):
+            return token_usage_from_mapping(result.get("usage"))
+    return TokenUsage.unavailable()
+
+
 def toml_config_value(value: object) -> str:
     """Encode the JSON-compatible subset accepted by Codex `-c key=value`."""
     if value is None or isinstance(value, dict):
@@ -258,12 +271,12 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
         normalized: list[NormalizedAgentEvent] = []
         terminal = TokenUsage.unavailable()
         sequence = 0
-        seen_usage_message_ids: set[str] = set()
+        usage_message_positions: dict[str, int] = {}
         for event in _json_events(stdout):
             event_type = event.get("type")
             if event_type == "result":
                 terminal = token_usage_from_mapping(event.get("usage"))
-                if terminal.total_tokens is None:
+                if terminal.total_tokens is None and self.id != "claude":
                     terminal = token_usage_from_model_usage(event.get("modelUsage"))
                 if terminal.total_tokens is not None:
                     normalized.append(
@@ -279,7 +292,11 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
             message = event.get("message")
             if usage is None and isinstance(message, Mapping):
                 usage = message.get("usage")
-            parsed = token_usage_from_mapping(usage)
+            # Task progress counters are cumulative, not new model responses.
+            is_main_response = self.id != "claude" or not event.get("parent_tool_use_id")
+            parsed = token_usage_from_mapping(
+                usage if event_type == "assistant" and is_main_response else None
+            )
             message_id = (
                 message.get("id")
                 if isinstance(message, Mapping)
@@ -287,8 +304,12 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
                 else None
             )
             duplicate_usage = bool(
-                message_id and message_id in seen_usage_message_ids
+                message_id and message_id in usage_message_positions
             )
+            if parsed.total_tokens is not None and duplicate_usage:
+                # Streaming repeats update the same response, not a second bill.
+                position = usage_message_positions[message_id]
+                normalized[position] = replace(normalized[position], usage=parsed)
             if parsed.total_tokens is not None and not duplicate_usage:
                 normalized.append(
                     NormalizedAgentEvent(
@@ -299,7 +320,7 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
                 )
                 sequence += 1
                 if message_id:
-                    seen_usage_message_ids.add(message_id)
+                    usage_message_positions[message_id] = len(normalized) - 1
             for action, phase, marker_id in _phase_marker_receipts(event):
                 normalized.append(
                     NormalizedAgentEvent(
@@ -397,7 +418,6 @@ class QoderAdapter(ClaudeLikeAdapter):
             "stream-json",
             "--session-id",
             session_id,
-            "--no-session-persistence",
             "--reasoning-effort",
             reasoning_effort,
         ]
@@ -451,21 +471,16 @@ class PiAdapter(AgentBackendAdapter):
         settled = False
         for event in _json_events(stdout):
             if event.get("type") == "message_end":
-                message = event.get("message")
-                if isinstance(message, Mapping) and message.get("role") in {
-                    "assistant",
-                    "toolResult",
-                }:
-                    usage = token_usage_from_mapping(message.get("usage"))
-                    if usage.total_tokens is not None:
-                        deltas.append(usage)
-                        normalized.append(
-                            NormalizedAgentEvent(
-                                sequence=len(normalized),
-                                kind="usage_delta",
-                                usage=usage,
-                            )
+                usage = pi_event_usage(event)
+                if usage.total_tokens is not None:
+                    deltas.append(usage)
+                    normalized.append(
+                        NormalizedAgentEvent(
+                            sequence=len(normalized),
+                            kind="usage_delta",
+                            usage=usage,
                         )
+                    )
                 for action, phase, marker_id in _phase_marker_receipts(event):
                     normalized.append(
                         NormalizedAgentEvent(
@@ -477,10 +492,7 @@ class PiAdapter(AgentBackendAdapter):
                         )
                     )
             elif event.get("type") == "compaction_end":
-                result = event.get("result")
-                usage = token_usage_from_mapping(
-                    result.get("usage") if isinstance(result, Mapping) else None
-                )
+                usage = pi_event_usage(event)
                 if usage.total_tokens is not None:
                     deltas.append(usage)
                     normalized.append(

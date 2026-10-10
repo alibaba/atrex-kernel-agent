@@ -1045,6 +1045,10 @@ def merge_store_records(
 
 
 def main(argv=None) -> int:
+    from supervisor_runtime_proxy import maybe_proxy
+    proxied = maybe_proxy('query_nl', list(sys.argv[1:] if argv is None else argv))
+    if proxied is not None:
+        return proxied
     query_id = "wiki-query-%s" % uuid.uuid4().hex
     started_at = datetime.now(timezone.utc)
     started = time.perf_counter()
@@ -1067,7 +1071,7 @@ def main(argv=None) -> int:
     wiki_stores: list[dict[str, object]] = []
     retrieval_failures: list[dict[str, str]] = []
     selected_cli = os.environ.get(BRIDGE_CLI_ENV, agent_launch.DEFAULT_CLI)
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(allow_abbrev=False, description=__doc__)
     ap.add_argument("request", nargs="*")
     ap.add_argument("--file")
     ap.add_argument("--store-root", default=None)

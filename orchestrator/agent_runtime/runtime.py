@@ -41,10 +41,11 @@ SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
-def terminal_usage_from_stream(stdout: str) -> TokenUsage:
+def terminal_usage_from_stream(stdout: str, *, backend: str = "") -> TokenUsage:
     """Parse the existing cross-backend terminal contract without event attribution."""
     terminal = TokenUsage.unavailable()
     deltas: list[TokenUsage] = []
+    claude_responses: dict[str, TokenUsage] = {}
     for line in stdout.splitlines():
         line = line.strip()
         if not line or not line.startswith("{"):
@@ -57,21 +58,31 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
             continue
         if event.get("type") in {"result", "turn.completed"}:
             parsed = token_usage_from_mapping(event.get("usage"))
-            if parsed.total_tokens is None:
+            if parsed.total_tokens is None and backend != "claude":
                 parsed = token_usage_from_model_usage(event.get("modelUsage"))
-            if parsed.total_tokens is not None:
+            if parsed.total_tokens is not None or backend == "claude":
                 terminal = parsed
+            continue
+        if event.get("type") == "system":
+            # Subagent task progress is cumulative, not a response usage delta.
             continue
         usage = event.get("usage")
         message = event.get("message")
+        if backend == "claude" and (
+            event.get("type") != "assistant" or event.get("parent_tool_use_id")
+        ):
+            continue
         if usage is None and isinstance(message, Mapping):
             usage = message.get("usage")
         parsed = token_usage_from_mapping(usage)
         if parsed.total_tokens is not None:
-            deltas.append(parsed)
+            if backend == "claude" and isinstance(message, Mapping) and message.get("id"):
+                claude_responses[message["id"]] = parsed
+            else:
+                deltas.append(parsed)
     if terminal.total_tokens is not None:
         return terminal
-    fallback = sum_token_usages(deltas)
+    fallback = sum_token_usages([*deltas, *claude_responses.values()])
     return (
         replace(fallback, measurement="partial")
         if fallback.total_tokens is not None
@@ -79,9 +90,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
     )
 
 
-def token_usage_from_stream(stdout: str) -> int:
+def token_usage_from_stream(stdout: str, *, backend: str = "") -> int:
     """Preserve the terminal-token compatibility contract for legacy callers."""
-    return terminal_usage_from_stream(stdout).total_tokens or 0
+    return terminal_usage_from_stream(stdout, backend=backend).total_tokens or 0
 
 
 def build_session_environment(runtime_id: str) -> dict[str, str]:
@@ -188,6 +199,9 @@ class CliAgentRuntime:
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
+        from ..agent_home import PREPARED_ENV, prepare_agent_environment
+
+        environment = prepare_agent_environment(request.workspace, environment, session_id)
         codex_observer = None
         codex_temporary_home = None
         pre_observation_errors: tuple[str, ...] = ()
@@ -195,8 +209,13 @@ class CliAgentRuntime:
         isolated_home_ready = False
         if self.id == "codex":
             try:
-                codex_temporary_home = CodexTemporaryHome(codex_home(environment))
-                isolated_home = codex_temporary_home.open()
+                if environment.get(PREPARED_ENV):
+                    # PR2 has already created a unique, mounted Session Home.
+                    # A second /tmp Home would be hidden by bwrap's private /tmp.
+                    isolated_home = codex_home(environment)
+                else:
+                    codex_temporary_home = CodexTemporaryHome(codex_home(environment))
+                    isolated_home = codex_temporary_home.open()
                 isolated_home_ready = True
                 environment["CODEX_HOME"] = str(isolated_home)
                 codex_observer = CodexSessionLedgerObserver(isolated_home)
@@ -236,12 +255,15 @@ class CliAgentRuntime:
             # Observation parsing must not turn a completed Agent run into a failure,
             # and the existing terminal token budget must remain available.
             events = ()
-            terminal_usage = terminal_usage_from_stream(stdout)
+            terminal_usage = terminal_usage_from_stream(stdout, backend=self.id)
             observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
         capabilities = replace(
             self._adapter.capabilities,
             usage_delta_observed=any(event.kind == "usage_delta" for event in events),
         )
+        from ..session_capture import captured_observation
+
+        captured = captured_observation(stdout, events, capabilities)
         if codex_observer is not None:
             observed_session_id = codex_thread_id_from_stream(stdout)
             try:
@@ -256,13 +278,21 @@ class CliAgentRuntime:
                     capabilities,
                     ledger_errors,
                 ) = observe_codex_usage(
-                    codex_observer, observed_session_id, terminal_usage
+                    codex_observer, observed_session_id, terminal_usage, captured=captured,
                 )
                 observation_errors += ledger_errors
             except Exception as exc:
+                # Also cover failures before observe_codex_usage (thread lookup).
+                codex_observer.invalidate()
+                if captured is not None:
+                    events, terminal_usage, capabilities, capture_errors = captured[:4]
+                    observation_errors += capture_errors
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",
                 )
+        elif captured is not None:
+            events, terminal_usage, capabilities, capture_errors = captured[:4]
+            observation_errors += capture_errors
         if codex_temporary_home is not None:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:

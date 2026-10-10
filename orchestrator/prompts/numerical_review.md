@@ -41,7 +41,7 @@ planner-timeout skip, never as a passing experiment. Performance and promotion
 gates still apply.
 
 Use driver.py's declarative schema only:
-- suite: schema_version=1, world_size matching the trusted operator, two seeds
+- suite: schema_version=1, world_size copied from review_request.json, two seeds
   [1729,104729], coverage="compact", cases (one to three).
 - case: id, purpose, evidence (candidate/<file>:<location> and
   trusted/<file>:<location>), fields, optional input_constraints.

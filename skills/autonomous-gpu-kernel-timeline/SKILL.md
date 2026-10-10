@@ -29,10 +29,12 @@ answers the question.
 2. Save the current clean `kernel.py` content, then create an instrumented working snapshot in the
    same episode worktree. This snapshot is not a handoff candidate and must not enter promotion or
    stall accounting.
-3. Run representative correctness through the immutable evaluator and capture through the campaign
-   sandbox. For final evidence, pass the sandbox-owned `.atrex_long_horizon/evaluations.jsonl` as
-   `--correctness-evidence`; a model-supplied `--correctness passed` is only an exploration note and
-   cannot produce `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
+3. Run representative correctness through Gateway Evaluate and capture through `--kind dev`.
+   Keep probes and outputs under `scratch/`. Cite the saved Gateway Record in the Experiment.
+   The private evaluator log is not available in a managed Agent draft: do not fabricate it or
+   label your own log as an authoritative `--correctness-evidence` receipt. Without such a
+   Supervisor-provided receipt, omit that option and retain the timeline as diagnostic evidence,
+   not `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
    evidence. If the remote command reads backend files, pass
    `--input skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
    the attempt-specific directory.
@@ -63,9 +65,9 @@ record required for final evidence.
 
 ## Hard boundaries
 
-- Never modify `profile_driver.py`, evaluators, ground truth, or other protected paths.
+- Never modify evaluators, ground truth, or other protected paths.
 - Never hand off or promote an instrumented snapshot. Only a probe-free kernel may become the
-  episode `candidate_commit == HEAD`.
+  candidate submitted through `episode-report`; the Supervisor owns its Git commit.
 - Do not combine events from different launches into one apparent execution.
 - Construct exactly one recorder per selected owner per launch and reuse it for that owner's events;
   duplicate ownership is a capture failure, not a sampling policy.
