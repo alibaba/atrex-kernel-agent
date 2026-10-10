@@ -16,6 +16,24 @@ spec.loader.exec_module(worker)
 
 
 class LocalSandboxRunnerTests(unittest.TestCase):
+    def test_disposable_fixture_has_native_evaluator_ancestor_without_modifying_bench(self):
+        layout_spec = importlib.util.spec_from_file_location("operator_layout", worker.SOURCE_ROOT / "orchestrator/operator_layout.py")
+        layout = importlib.util.module_from_spec(layout_spec)
+        layout_spec.loader.exec_module(layout)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bench, work = root / "source-bench", root / "work"
+            (bench / "scripts").mkdir(parents=True)
+            (bench / "src/atrex_bench").mkdir(parents=True)
+            (bench / "scripts/run_eval.py").write_text("# canonical evaluator")
+            (bench / "src/atrex_bench/__init__.py").write_text("# public package")
+            before = {str(p.relative_to(bench)): p.read_bytes() for p in bench.rglob("*") if p.is_file()}
+            fixture = worker.prepare_fixture(work, bench)
+            self.assertEqual(layout.find_atrex_bench_root(fixture), work / "bench")
+            self.assertEqual((work / "bench/scripts/run_eval.py").read_bytes(), (bench / "scripts/run_eval.py").read_bytes())
+            (fixture / "metadata.json").write_text("measured reference data")
+            self.assertEqual({str(p.relative_to(bench)): p.read_bytes() for p in bench.rglob("*") if p.is_file()}, before)
+
     @mock.patch.dict(os.environ, {"PYTHONPATH": "/private", "UNRELATED_SECRET": "not-for-test", "ANTHROPIC_AUTH_TOKEN": "model-secret"}, clear=False)
     def test_gateway_environment_excludes_unrelated_and_model_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -212,6 +212,24 @@ def collect_campaign(workspace: Path, artifacts: Path) -> None:
         shutil.copy2(state, artifacts / "episode-state.json")
 
 
+def prepare_fixture(root: Path, bench: Path) -> Path:
+    # The native optimizer discovers its evaluator from the operator's ancestor
+    # directories. Preserve that public layout in a disposable view rather than
+    # adding the fixture or measured metadata to the caller's bench checkout.
+    evaluator = bench / "scripts/run_eval.py"
+    package = bench / "src/atrex_bench"
+    if not evaluator.is_file() or not package.is_dir():
+        raise RuntimeError("bench checkout must contain scripts/run_eval.py and src/atrex_bench")
+    view = root / "bench"
+    (view / "scripts").mkdir(parents=True)
+    shutil.copy2(evaluator, view / "scripts/run_eval.py")
+    shutil.copytree(package, view / "src/atrex_bench",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+    fixture = view / "operators/vector_add"
+    shutil.copytree(SUITE / "fixture", fixture)
+    return fixture
+
+
 def execute(root: Path, bench: Path, platform: str, artifacts: Path, timeout: int, fault: str = "") -> dict:
     candidate = SOURCE_ROOT
     artifacts.mkdir(exist_ok=True)
@@ -234,8 +252,7 @@ def execute(root: Path, bench: Path, platform: str, artifacts: Path, timeout: in
     # GPU imports occur only after entering the clean process environment.
     probe = run([sys.executable, "-c", "import json,torch,triton; assert torch.cuda.is_available(); assert torch.cuda.device_count()==1; x=torch.ones(1,device='cuda'); torch.cuda.synchronize(); print(json.dumps({'torch':torch.__version__,'triton':triton.__version__,'gpu':torch.cuda.get_device_name(),'hip':torch.version.hip,'cuda':torch.version.cuda}))"],
                 candidate, env, artifacts / "preflight.log", 120)
-    fixture = root / "vector_add"
-    shutil.copytree(SUITE / "fixture", fixture)
+    fixture = prepare_fixture(root, bench)
     run([sys.executable, "-c", "import atrex_bench.cli.run_eval; print('pinned public evaluator import passed')"],
         candidate, gateway_env, artifacts / "evaluator-preflight.log", 120)
     gateway_log = (artifacts / "gateway.log").open("w")
