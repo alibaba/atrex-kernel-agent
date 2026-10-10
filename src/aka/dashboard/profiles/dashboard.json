@@ -1,0 +1,5 @@
+{
+  "api_version": 1,
+  "composition": "dashboard",
+  "target": "startup"
+}

@@ -1,0 +1,13 @@
+{
+  "api_version": 1,
+  "patches": [
+    {
+      "id": "dashboard",
+      "insert": {
+        "name": "aka.dashboard.plugin",
+        "required": true,
+        "config": {"host": "127.0.0.1", "port": 8765, "refresh_ms": 2000}
+      }
+    }
+  ]
+}

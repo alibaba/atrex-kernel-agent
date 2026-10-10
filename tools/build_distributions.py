@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the four PR1 distributions; wheels are built from their sdists.
+"""Build the AKA distributions; wheels are built from their sdists.
 
 Install the `build` frontend in a build environment first. Package directories
 contain metadata, not duplicate source trees; invoke this script from any cwd.
@@ -19,15 +19,17 @@ OWNERS = {
     'atrex-aka-contracts': ('aka/contracts',),
     'atrex-aka-optimization': ('aka/legacy',),
     'atrex-aka-bootstrap': ('aka/bootstrap',),
+    'atrex-aka-dashboard': ('aka/dashboard',),
 }
 
 
 def owned(distribution: str) -> tuple[Path, ...]:
     files = []
+    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json')
     for relative in OWNERS[distribution]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else
-                     sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in ('.py', '.json')))
+                     sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in suffixes))
     return tuple(files)
 
 
@@ -53,7 +55,7 @@ def main() -> int:
     distributions = args.distributions or list(OWNERS)
     for distribution in distributions:
         if distribution not in OWNERS:
-            parser.error(f'unknown PR1 distribution: {distribution}')
+            parser.error(f'unknown distribution: {distribution}')
         build(distribution, args.output)
     return 0
 

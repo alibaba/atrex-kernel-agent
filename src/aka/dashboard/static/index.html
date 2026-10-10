@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AKA · Optimization monitor</title>
+  <link rel="preload" href="/assets/geist-sans.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/geist-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <style>
+    /* Native CSS for this static observer. DESIGN_VARIANCE: 5, MOTION_INTENSITY: 2,
+       VISUAL_DENSITY: 4. Containers use 8px radii, controls 6px, status labels 4px. */
+    @font-face { font-family: Geist; src: url("/assets/geist-sans.woff2") format("woff2"); font-style: normal; font-weight: 100 900; font-display: swap; }
+    @font-face { font-family: "Geist Mono"; src: url("/assets/geist-mono.woff2") format("woff2"); font-style: normal; font-weight: 100 900; font-display: swap; }
+    :root {
+      color-scheme: light; --bg: #f4f6f8; --panel: #fcfdfe; --sidebar: #f9fafb;
+      --fg: #18212b; --muted: #606c78; --line: #e0e5eb; --control-line: #858f9a;
+      --accent: #176b99; --soft: #e8f1f7; --ok: #26714f; --warn: #925d1b;
+      --mono: "Geist Mono", ui-monospace, "SFMono-Regular", monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark; --bg: #10151b; --panel: #171d24; --sidebar: #131920;
+        --fg: #e8edf3; --muted: #9eacba; --line: #2c3540; --control-line: #657486;
+        --accent: #82b4dc; --soft: #1c3345; --ok: #87c6a8; --warn: #d9b278;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark; --bg: #10151b; --panel: #171d24; --sidebar: #131920;
+      --fg: #e8edf3; --muted: #9eacba; --line: #2c3540; --control-line: #657486;
+      --accent: #82b4dc; --soft: #1c3345; --ok: #87c6a8; --warn: #d9b278;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100dvh; background: var(--bg); color: var(--fg); font: 13px/1.6 Geist, system-ui, sans-serif; overflow-wrap: anywhere; }
+    a { color: inherit; } button, select { font: inherit; }
+    .muted, small { color: var(--muted); } small { font-size: 11px; }
+    h1, h2, p { margin: 0; } h1 { font-size: 30px; font-weight: 600; letter-spacing: -.9px; line-height: 1.2; }
+    h2 { font-size: 14px; font-weight: 600; line-height: 1.5; }
+    .app-header { height: 64px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .header-title, .header-tools { min-width: 0; display: flex; align-items: center; gap: 18px; }
+    .brand { font: 650 20px/1 var(--mono); letter-spacing: -.8px; }
+    .app-name { border-left: 1px solid var(--line); padding-left: 18px; font-weight: 500; white-space: nowrap; }
+    #connection { min-width: 0; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    #connection[data-ok="false"] { color: var(--warn); }
+    select { color: var(--fg); background: var(--panel); border: 1px solid var(--control-line); border-radius: 6px; max-width: 100%; padding: 7px 10px; }
+    #theme { width: 84px; padding: 4px 7px; font-size: 11px; }
+    .app-layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+    .sidebar { position: sticky; top: 0; height: calc(100dvh - 64px); padding: 28px 18px 22px; border-right: 1px solid var(--line); background: var(--sidebar); display: flex; flex-direction: column; }
+    #picker { margin-bottom: 28px; display: grid; gap: 8px; min-width: 0; }
+    #picker > span { color: var(--muted); font-size: 11px; }
+    #campaigns { width: 100%; font-size: 12px; min-height: 36px; }
+    .section-nav { display: grid; gap: 4px; }
+    .section-nav a { display: block; padding: 8px 12px; border-radius: 6px; color: var(--muted); text-decoration: none; white-space: nowrap; font-size: 12px; }
+    .section-nav a:hover, .section-nav a[aria-current="location"] { color: var(--accent); background: var(--soft); }
+    .sidebar-meta { margin-top: auto; padding: 18px 12px 0; color: var(--muted); font-size: 11px; }
+    .sidebar-meta p + p { margin-top: 3px; }
+    main { width: 100%; max-width: 1296px; margin: 0 auto; padding: 28px 40px 40px; min-width: 0; }
+    .notice { padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--panel); color: var(--warn); font-size: 12px; margin-bottom: 24px; border-radius: 4px; }
+    #demo-note { border: 1px solid var(--line); color: var(--muted); padding: 8px 12px; margin-bottom: 24px; border-radius: 6px; font-size: 11px; }
+    #empty { padding: 36px 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); }
+    .heading { margin-bottom: 18px; }
+    #identity { display: block; margin-top: 8px; font: 11px/1.5 var(--mono); color: var(--muted); }
+    .activity-overview { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+    #status { padding: 3px 9px; background: var(--soft); color: var(--accent); border-radius: 4px; font-size: 11px; font-weight: 600; }
+    #activity { color: var(--muted); font-size: 12px; }
+    .latest-line { display: flex; align-items: baseline; gap: 12px; margin-top: 12px; }
+    .latest-label { color: var(--muted); font-size: 11px; flex: none; }
+    #latest { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+    details { font-size: 11px; margin-top: 14px; }
+    summary { width: fit-content; cursor: pointer; color: var(--muted); }
+    summary:hover { color: var(--accent); }
+    .activity-details { margin-top: 10px; }
+    .activity-metadata { margin-top: 12px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); }
+    .activity-metadata p + p { margin-top: 6px; }
+    .flow { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .flow [data-current="true"] { color: var(--accent); font-weight: 600; }
+    .stats { display: grid; grid-template-columns: 1.2fr 1fr 1.4fr; margin: 26px 0 28px; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
+    .stat { padding: 0 24px; border-left: 1px solid var(--line); min-width: 0; }
+    .stat:first-child { padding-left: 0; border: 0; } .stat:last-child { padding-right: 0; }
+    .stat > small:first-child { font-size: 11px; font-weight: 500; display: block; }
+    .value { font: 450 clamp(27px, 3.2vw, 40px)/1.3 var(--mono); letter-spacing: -1.6px; margin: 10px 0 8px; font-variant-numeric: tabular-nums; }
+    #performance { color: var(--accent); } #episodes-count { font-size: clamp(25px, 2.8vw, 34px); }
+    .value[data-available="false"] { font: 500 22px/1.3 Geist, system-ui, sans-serif; letter-spacing: -.4px; }
+    .stat > small:last-child { display: block; line-height: 1.6; }
+    .columns { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+    .pane { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .pane h2 { margin-bottom: 8px; }
+    #trend { display: block; width: 100%; height: 230px; margin: 16px 0 12px; }
+    #trend text { fill: var(--muted); font: 10px var(--mono); }
+    .axis { stroke: var(--line); stroke-dasharray: 3 5; }
+    .trend-line { stroke: var(--accent); stroke-width: 2.5; fill: none; stroke-linejoin: round; }
+    .trend-area { fill: var(--soft); }
+    #trend [role="button"] { cursor: pointer; fill: var(--panel); stroke: var(--accent); stroke-width: 2; }
+    #trend [role="button"]:hover, #trend [data-selected="true"] { fill: var(--accent); }
+    #trend-note { display: block; font-size: 10px; line-height: 1.7; }
+    #version-detail { margin-top: 8px; font: 10px/1.7 var(--mono); }
+    #token-quality { font-size: 10px; display: block; margin-bottom: 18px; }
+    .phase-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) 80px; gap: 10px; align-items: center; min-height: 24px; margin: 3px 0; font-size: 11px; }
+    .track { height: 5px; } .fill { height: 100%; background: var(--accent); border-radius: 2px; }
+    .number { text-align: right; font: 11px/1.6 var(--mono); font-variant-numeric: tabular-nums; }
+    .token-types { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; margin: 14px 0; }
+    dt, dd { margin: 0; } dd { font-family: var(--mono); }
+    #control-total, #reasons { margin-top: 8px; color: var(--muted); }
+    .history { margin-top: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+    .history > h2 { padding: 20px 22px 14px; }
+    .row-head, .record { display: grid; grid-template-columns: 116px 72px minmax(0, 1fr) 116px; align-items: center; gap: 14px; padding: 12px 22px; }
+    .row-head { color: var(--muted); background: var(--sidebar); border-bottom: 1px solid var(--line); font-size: 10px; }
+    .record { width: 100%; border: 0; border-bottom: 1px solid var(--line); color: var(--fg); background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
+    .record > span:first-child { font: 11px/1.6 var(--mono); } .record > span:nth-child(2) { color: var(--muted); font-size: 11px; }
+    .record[aria-pressed="true"] { background: var(--soft); box-shadow: inset 3px 0 var(--accent); }
+    .record:hover { background: var(--soft); }
+    button:active { transform: scale(.998); }
+    .ok { color: var(--ok); } .warn { color: var(--warn); }
+    #episode-detail { padding: 18px 22px 20px; }
+    #detail-title { font-weight: 600; font-size: 12px; }
+    #detail-summary, #verification { margin-top: 6px; font-size: 11px; }
+    #experiments { padding-left: 20px; } #experiments li { margin: 8px 0; }
+    #evidence { padding-left: 18px; font: 10px/1.8 var(--mono); }
+    footer { margin-top: 24px; color: var(--muted); }
+    footer details { margin: 0; } footer p { margin: 8px 0; max-width: 90ch; font-size: 11px; }
+    #workspace { font: 10px/1.8 var(--mono); }
+    :is(a, button, select, summary, #trend [role="button"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .skip-link { position: fixed; top: 12px; left: 16px; padding: 8px 14px; background: var(--panel); color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; transform: translateY(-160%); z-index: 1; }
+    .skip-link:focus { transform: none; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    [hidden] { display: none !important; }
+    [id] { scroll-margin-top: 24px; }
+    @media (max-width: 1023px) {
+      .app-layout { grid-template-columns: minmax(0, 1fr); }
+      .sidebar { position: static; height: auto; padding: 16px 24px; border-right: 0; border-bottom: 1px solid var(--line); flex-direction: row; align-items: center; gap: 24px; }
+      #picker { margin: 0; width: 230px; flex: none; gap: 6px; }
+      .section-nav { display: flex; gap: 4px; margin-left: auto; }
+      .section-nav a { padding: 8px 10px; }
+      .sidebar-meta { display: none; }
+      main { padding: 24px; }
+    }
+    @media (max-width: 767px) {
+      .app-header { padding: 0 16px; gap: 12px; } .header-title, .header-tools { gap: 12px; }
+      .app-name { padding-left: 12px; font-size: 12px; }
+      #connection { max-width: 145px; font-size: 10px; }
+      .sidebar { padding: 14px 16px; gap: 12px; }
+      #picker { width: 200px; } .section-nav a { font-size: 11px; padding: 8px; }
+      main { padding: 22px 16px 32px; }
+      h1 { font-size: 27px; }
+      .stat { padding: 0 16px; }
+      .columns { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+      .pane { padding: 20px; }
+      .row-head, .record { grid-template-columns: 90px 48px minmax(0, 1fr) 82px; gap: 10px; padding: 12px 16px; }
+      .history > h2 { padding-left: 16px; } #episode-detail { padding: 18px 16px; }
+    }
+    @media (max-width: 639px) {
+      .app-name { font-size: 11px; } #connection { max-width: 96px; }
+      .sidebar { flex-wrap: wrap; } #picker { width: 100%; }
+      .section-nav { margin: 0; width: 100%; justify-content: space-between; }
+      .section-nav a { padding: 6px 0; }
+      .stats { grid-template-columns: minmax(0, 1fr); gap: 20px; padding-bottom: 24px; }
+      .stat, .stat:first-child, .stat:last-child { border: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; align-items: center; }
+      .stat .value { grid-column: 2; grid-row: 1 / span 2; margin: 0; font-size: 28px; letter-spacing: -1px; }
+      .stat .value[data-available="false"] { font-size: 18px; letter-spacing: -.3px; }
+      .pane { padding: 16px; }
+      .row-head, .record { grid-template-columns: 68px 38px minmax(0, 1fr) 70px; gap: 6px; padding: 10px 12px; }
+      .record { font-size: 11px; } .record > span:first-child, .number { font-size: 10px; }
+      .row-head { font-size: 9px; }
+    }
+    @media (max-width: 390px) {
+      .app-header { height: auto; min-height: 64px; flex-wrap: wrap; padding: 12px 16px; row-gap: 8px; }
+      .header-title { width: 100%; } .header-tools { width: 100%; justify-content: space-between; }
+      #connection { max-width: 180px; }
+      .latest-line { display: block; } .latest-label { display: block; margin-bottom: 4px; } #latest { display: block; }
+      .activity-overview { gap: 8px; }
+    }
+    @media (pointer: coarse) { .record, #campaigns, .section-nav a, summary { min-height: 44px; } #campaigns { font-size: 16px; } }
+    @media (prefers-reduced-motion: reduce) { button:active { transform: none; } }
+  </style>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="app-header">
+  <div class="header-title"><span class="brand">AKA</span><span class="app-name">Optimization monitor</span></div>
+  <div class="header-tools"><span id="connection" role="status">Connecting…</span><label><span class="visually-hidden">Color theme</span><select id="theme" aria-label="Color theme"><option value="auto">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div>
+</header>
+<div class="app-layout">
+  <aside class="sidebar" aria-label="Dashboard navigation">
+    <label id="picker" hidden><span>Campaign</span><select id="campaigns" aria-label="Select optimization campaign"></select></label>
+    <nav id="section-nav" class="section-nav" aria-label="Page sections" hidden><a href="#overview" aria-current="location">Overview</a><a href="#performance-trend">Performance</a><a href="#episode-history">Episode history</a></nav>
+    <div class="sidebar-meta"><p>Dashboard plugin</p><p>Local observer</p></div>
+  </aside>
+  <main>
+    <p id="demo-note" class="notice" hidden>Demo mode · Sample campaign data for preview.</p>
+    <p id="empty">Reading workspace…</p>
+    <section id="content" tabindex="-1" hidden>
+      <section id="overview" aria-label="Campaign overview">
+        <div class="heading"><h1 id="title"></h1><small id="identity"></small></div>
+        <div class="activity">
+          <div class="activity-overview"><p id="status"></p><p id="activity"></p></div>
+          <p class="latest-line"><span class="latest-label">Latest experiment</span><span id="latest"></span></p>
+          <details class="activity-details"><summary>Details</summary><div class="activity-metadata">
+            <p id="campaign-name"></p><p id="episode-meta"></p><p id="observed"></p>
+            <div class="flow" aria-label="Last observed stage"><span data-stage="prepare">Prepare</span><span>→</span><span data-stage="explore">Explore</span><span>→</span><span data-stage="verify">Verify</span><span>→</span><span data-stage="record">Record</span></div>
+            <p id="latest-detail"></p><p id="terminal"></p><p id="pending"></p>
+            <p>Activity files describe the last observation; process liveness is unconfirmed.</p>
+          </div></details>
+        </div>
+        <div class="stats">
+          <div class="stat"><small>Canonical incumbent</small><div id="performance" class="value">-</div><small id="performance-note"></small></div>
+          <div class="stat"><small>Settled episodes</small><div id="episodes-count" class="value">-</div><small id="counts"></small></div>
+          <div class="stat"><small>Settled Episode Agent tokens</small><div id="tokens-total" class="value">-</div><small id="tokens-note"></small></div>
+        </div>
+      </section>
+      <div id="issues" class="notice" hidden></div>
+      <div class="columns">
+        <section id="performance-trend" class="pane"><h2>Accepted performance trend</h2><svg id="trend" role="img" aria-label="Canonical incumbent performance by version"></svg><small id="trend-note"></small><p id="version-detail" class="muted"></p></section>
+        <section class="pane"><h2 id="token-heading">Episode usage</h2><small id="token-quality"></small><div id="phases"></div>
+          <details><summary>Input, output, cache and measurement notes</summary><dl id="token-types" class="token-types"></dl><p id="control-total"></p><p id="reasons"></p></details>
+        </section>
+      </div>
+      <section id="episode-history" class="history"><h2>Episode history</h2><div class="row-head"><span>Episode / version</span><span>Mode</span><span>Outcome / verification</span><span class="number">Tokens</span></div><div id="records"></div>
+        <div id="episode-detail"><p id="detail-title"></p><p id="detail-summary" class="muted"></p><p id="verification" class="muted"></p>
+          <details><summary>Experiments and evidence</summary><p id="detail-availability"></p><ol id="experiments"></ol><ul id="evidence"></ul></details>
+        </div>
+      </section>
+      <footer><details><summary>Data notes</summary><p id="scope"></p><p id="budget"></p><p id="aggregate"></p><p id="workspace"></p><p>Page connectivity and optimizer liveness are separate. Activity files describe the last observation.</p></details></footer>
+    </section>
+  </main>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const quality = {exact: 'Exact', partial: 'Partial', unavailable: 'Unavailable'};
+  const phases = {profile: 'Profiling', research: 'Research', planning: 'Planning', implementation: 'Implementation', correctness: 'Correctness', benchmark: 'Benchmarking', recording: 'Recording', orchestration: 'Orchestration', unattributed: 'Unattributed'};
+  const statuses = {accepted: 'Accepted', rejected: 'Rejected', pivot: 'Pivoted', blocked: 'Blocked', interrupted: 'Interrupted', invalid_handoff: 'Invalid handoff', candidate_ready: 'Candidate ready', observed_active: 'Last observed'};
+  const stages = {preparing: ['Preparing', 'prepare'], exploring: ['Exploring', 'explore'], awaiting_verification: ['Awaiting verification', 'verify'], checking_fast_evaluator: ['Evaluator verification', 'verify'], verifying: ['ABBA verification', 'verify'], promoting: ['Promoting', 'record'], promoted: ['Promoted', 'record'], recording: ['Recording', 'record'], recorded: ['Recorded', 'record'], completed: ['Completed', 'record'], failed: ['Failed', null], interrupted: ['Interrupted', null], v1_interrupted: ['Baseline interrupted', 'prepare'], waiting: ['Waiting for records', 'prepare']};
+  let campaignId = null, episode = null, data = null, timer = null, busy = false, again = false, generation = 0, refreshMs = 2000, lastSuccess = null;
+  const number = n => Number.isFinite(n) ? new Intl.NumberFormat('en-US').format(n) : 'Unavailable';
+  const ep = n => Number.isInteger(n) ? `e${String(n).padStart(4, '0')}` : '-';
+  const ver = n => Number.isInteger(n) ? `v${n}` : '-';
+  const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('en-US') : 'Not recorded';
+  function text(id, value) { $(id).textContent = value ?? ''; }
+  function element(tag, value, className) { const el = document.createElement(tag); if (value != null) el.textContent = value; if (className) el.className = className; return el; }
+  function campaignName(c) {
+    let name = c.name.replace(/^kernel_opt_/, '');
+    const suffix = `_${c.framework?.toLowerCase()}`;
+    if (c.framework && name.toLowerCase().endsWith(suffix)) name = name.slice(0, -suffix.length);
+    return name.replace(/_/g, ' ').replace(/^./, first => first.toUpperCase());
+  }
+  async function get(path) {
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
+    try { const response = await fetch(path, {cache: 'no-store', signal: controller.signal}); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json(); }
+    finally { clearTimeout(timeout); }
+  }
+  function selectEpisode(n) { if (episode === n) return; episode = n; generation++; requestRefresh(); }
+  function render(c, detail, listing) {
+    data = c; $('content').hidden = false; $('empty').hidden = true; $('section-nav').hidden = false;
+    text('title', campaignName(c)); $('title').title = c.name;
+    text('identity', [c.framework, c.platform, c.arch].filter(Boolean).join(' · ') || 'Framework and hardware not recorded');
+    const p = c.progress, stage = stages[p.phase] || [p.phase, null];
+    text('status', `Observed: ${stage[0]}`);
+    text('observed', `Data updated ${time(p.updated_at || c.updated_at)}`);
+    text('campaign-name', `Campaign: ${c.name}`);
+    text('episode-meta', `${ep(p.episode)} / ${ver(p.version)} · ${p.mode || 'Mode not recorded'}`);
+    text('terminal', p.last_terminal.status ? `Last terminal record: ${p.last_terminal.status} · ${time(p.last_terminal.updated_at)}${p.last_terminal.stale ? ' (predates current activity; current run status is unconfirmed)' : ''}` : '');
+    document.querySelectorAll('[data-stage]').forEach(el => el.dataset.current = String(el.dataset.stage === stage[1]));
+    text('activity', [Number.isInteger(p.episode) ? `Episode ${p.episode}` : null, p.experiment_count == null ? null : `${number(p.experiment_count)} experiments`, p.record_updating ? 'Records updating' : null].filter(Boolean).join(' · '));
+    const latest = p.latest_experiment, result = latest?.conclusion || latest?.result || latest?.summary || latest?.evaluation?.performance;
+    text('latest', latest?.name || 'Waiting for experiment records'); $('latest').title = latest?.name || '';
+    text('latest-detail', latest?.name ? [`Latest experiment: ${latest.name}`, result].filter(Boolean).join(' · ') : 'Waiting for experiment records');
+    text('pending', c.tokens.pending ? 'Current invocation usage is pending settlement. Experiment progress continues to refresh.' : 'Usage is read from persisted settlement records.');
+    const incumbent = c.canonical.incumbent;
+    text('performance', incumbent ? `${incumbent.value.toFixed(2)}${incumbent.unit}` : '-');
+    text('performance-note', incumbent ? `${ver(incumbent.version)} · ${incumbent.unit === '×' ? 'Mean speedup across shapes' : 'Geometric mean latency'}` : 'Awaiting a verified baseline or promotion');
+    text('episodes-count', c.counts.episodes == null ? '-' : number(c.counts.episodes));
+    text('counts', `Accepted ${number(c.counts.accepted)} · Rejected ${number(c.counts.rejected)}`);
+    text('tokens-total', number(c.tokens.total)); text('tokens-note', `${quality[c.tokens.measurement]} · ${c.tokens.receipt_count} deduplicated receipts`);
+    $('tokens-total').dataset.available = String(Number.isFinite(c.tokens.total));
+    $('issues').hidden = !c.issues.length;
+    text('issues', c.issues.map(i => `${i.file}: ${i.code}`).join('; '));
+    drawTrend();
+    $('records').replaceChildren();
+    const rows = [...c.episodes];
+    if (p.episode && !rows.some(r => r.episode === p.episode)) rows.push({episode: p.episode, version: p.version, mode: p.mode, status: 'observed_active', tokens: {total: null}});
+    for (const row of rows) {
+      const button = element('button', null, 'record'); button.type = 'button'; button.setAttribute('aria-pressed', String(row.episode === episode));
+      button.append(element('span', `${ep(row.episode)} / ${ver(row.version)}`), element('span', row.mode || '-'), element('span', `${statuses[row.status] || row.status || 'Unknown'} · ${row.verification_gate || 'Verification not recorded'}`, row.accepted ? 'ok' : ''), element('span', number(row.tokens.total), 'number'));
+      button.addEventListener('click', () => selectEpisode(row.episode)); $('records').append(button);
+    }
+    if (!rows.length) $('records').append(element('p', 'No episode records yet', 'muted'));
+    renderDetail(detail);
+    text('scope', c.tokens.scope); text('budget', `Latest canonical version ${ver(c.canonical.latest_version)} · Budget not recorded; completion percentage is unavailable.`);
+    text('aggregate', listing.campaigns.length > 1 ? `All campaigns ${listing.tokens.measurement === 'exact' ? 'settled total' : 'observed subtotal'}: ${number(listing.tokens.total)} tokens${listing.tokens.measurement === 'exact' ? '' : ' (partial measurement or unavailable usage)'}` : '');
+    text('workspace', c.workspace);
+  }
+  function renderDetail(d) {
+    const t = d?.tokens;
+    const pending = d?.status === 'observed_active' && data.tokens.pending;
+    text('token-heading', d ? `${ep(d.episode)} · ${pending ? 'Usage pending settlement' : `${number(t.total)} tokens`}` : 'Select an episode to view usage');
+    text('token-quality', d ? `Total: ${quality[t.measurement]} · Phase attribution: ${quality[t.attribution_measurement] || 'Unavailable'}` : 'No usage records yet');
+    $('phases').replaceChildren();
+    const totals = (d?.phases || []).map(p => p.usage.total_tokens).filter(Number.isFinite), max = Math.max(1, ...totals);
+    for (const p of d?.phases || []) {
+      const row = element('div', null, 'phase-row'), track = element('div', null, 'track'), fill = element('div', null, 'fill');
+      fill.style.width = `${Number.isFinite(p.usage.total_tokens) ? p.usage.total_tokens / max * 100 : 0}%`; track.append(fill);
+      row.append(element('span', phases[p.phase]), track, element('span', number(p.usage.total_tokens), 'number')); row.title = quality[p.usage.measurement]; $('phases').append(row);
+    }
+    $('token-types').replaceChildren();
+    for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
+    text('control-total', d ? `Budget control count: ${number(t.control_tokens)}; structured total: ${number(t.terminal_usage.total_tokens)}` : '');
+    text('reasons', d ? (t.reason_codes.length ? t.reason_codes.join(' · ') : 'No measurement issues recorded') : '');
+    text('detail-title', d ? `${ep(d.episode)} / ${ver(d.version)} · ${d.mode || '-'} · ${d.accepted ? 'Accepted' : statuses[d.status] || d.status}` : 'No episode details yet');
+    text('detail-summary', d?.summary || d?.violation || '');
+    const v = d?.verification;
+    text('verification', v?.gate ? `${v.gate} · Candidate ${number(v.candidate_latency_us)} μs · Incumbent ${number(v.incumbent_latency_us)} μs${v.error ? ` · ${v.error}` : ''}` : '');
+    text('detail-availability', d?.detail_available ? 'Structured experiment records loaded.' : 'Experiment details are unavailable; the active worktree may have been removed.');
+    $('experiments').replaceChildren(); $('evidence').replaceChildren();
+    for (const e of d?.experiments || []) $('experiments').append(element('li', [e.name, e.hypothesis, e.change, e.result, e.conclusion, e.summary].filter(Boolean).join(' · ')));
+    if (d && !d.experiments.length && d.latest_experiment?.name) $('experiments').append(element('li', `${d.latest_experiment.name} · ${d.latest_experiment.conclusion || ''}`));
+    for (const file of d?.evidence || []) $('evidence').append(element('li', file));
+  }
+  function drawTrend() {
+    const svg = $('trend'), history = data?.canonical.history || [], width = Math.max(200, Math.round(svg.getBoundingClientRect().width));
+    svg.replaceChildren(); svg.style.height = '230px';
+    const points = history.filter(h => h.incumbent);
+    if (!points.length) { text('trend-note', 'Awaiting verified performance records.'); return; }
+    const make = (tag, attrs, label) => { const el = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v); if (label != null) el.textContent = label; svg.append(el); return el; };
+    const minVersion = Math.min(...points.map(h => h.version)), maxVersion = Math.max(minVersion + 1, ...points.map(h => h.version));
+    const x = n => 54 + (n - minVersion) / (maxVersion - minVersion) * (width - 68);
+    // Each change of objective, device or workload starts a separate series.
+    const groups = new Map(); for (const h of points) { const key = h.incumbent.series; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(h); }
+    const height = Math.max(230, groups.size * 130 + 30);
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.style.height = `${height}px`;
+    const selectedVersion = data.episodes.find(row => row.episode === episode)?.version;
+    let index = 0;
+    for (const group of groups.values()) {
+      const top = 15 + index * (height - 36) / groups.size, band = (height - 36) / groups.size - 24, values = group.map(h => h.incumbent.value), min = Math.min(...values), max = Math.max(...values), pad = (max - min || min * .1) * .15;
+      const y = n => top + band - (n - min + pad) / (max - min + pad * 2) * band;
+      for (const value of max === min ? [min] : [min, (min + max) / 2, max]) {
+        make('line', {x1: 54, y1: y(value), x2: width - 14, y2: y(value), class: 'axis'});
+        make('text', {x: 0, y: y(value) + 3}, `${value.toFixed(2)}${group[0].incumbent.unit}`);
+      }
+      const commands = group.map((h,i) => `${i ? `H ${x(h.version)} V` : 'M ' + x(h.version)} ${y(h.incumbent.value)}`).join(' ');
+      make('path', {d: `${commands} L ${x(group[group.length - 1].version)} ${top + band} L ${x(group[0].version)} ${top + band} Z`, class: 'trend-area'});
+      make('path', {d: commands, class: 'trend-line'});
+      for (const h of group) {
+        const circle = make('circle', {cx: x(h.version), cy: y(h.incumbent.value), r: 4, tabindex: '0', role: 'button', 'data-selected': String(h.version === selectedVersion), 'aria-label': `${ver(h.version)}, ${h.incumbent.value.toFixed(2)}${h.incumbent.unit}`});
+        const choose = () => { text('version-detail', `${ver(h.version)} · incumbent ${ver(h.incumbent.version)} · ${h.incumbent.value.toFixed(2)}${h.incumbent.unit} · ${h.incumbent.source}`); const row = data.episodes.find(r => r.version === h.version); if (row) selectEpisode(row.episode); };
+        circle.addEventListener('click', choose); circle.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); } });
+      }
+      index++;
+    }
+    const every = Math.max(1, Math.ceil(points.length / Math.max(2, Math.floor(width / 54))));
+    points.forEach((h, i) => { if (i % every === 0 || i === points.length - 1) make('text', {x: x(h.version), y: height - 3, 'text-anchor': 'middle'}, ver(h.version)); });
+    text('trend-note', 'Rejected episodes retain the incumbent. Different objectives, devices or workloads appear in separate segments.');
+  }
+  function requestRefresh() { clearTimeout(timer); if (busy) again = true; else refresh(); }
+  async function refresh() {
+    busy = true; again = false; const currentGeneration = generation;
+    try {
+      const listing = await get('/api/campaigns'); if (generation !== currentGeneration) return;
+      $('demo-note').hidden = !listing.demo;
+      refreshMs = listing.refresh_ms;
+      if (!listing.campaigns.some(c => c.id === campaignId)) { campaignId = listing.campaigns[0]?.id || null; episode = null; }
+      $('campaigns').replaceChildren(...listing.campaigns.map(c => { const option = element('option', [campaignName(c), c.framework, c.platform].filter(Boolean).join(' · ')); option.value = c.id; option.title = c.name; return option; }));
+      $('campaigns').value = campaignId || ''; $('picker').hidden = listing.campaigns.length < 2;
+      if (!campaignId) { $('content').hidden = true; $('section-nav').hidden = true; $('empty').hidden = false; text('empty', 'No campaigns yet. Waiting for kernel_opt_* workspaces in the observed directory.'); }
+      else {
+        const c = await get(`/api/campaigns/${campaignId}`); if (generation !== currentGeneration) return;
+        const available = c.episodes.map(r => r.episode); if (c.progress.episode && !available.includes(c.progress.episode)) available.push(c.progress.episode);
+        if (!available.includes(episode)) episode = available[available.length - 1] ?? null;
+        const detail = episode ? await get(`/api/campaigns/${campaignId}/episodes/${episode}`) : null;
+        if (generation !== currentGeneration) return; render(c, detail, listing);
+      }
+      lastSuccess = new Date().toLocaleTimeString('en-US'); text('connection', `Page connected · ${lastSuccess}`); $('connection').dataset.ok = 'true';
+    } catch (error) { text('connection', `Connection failed. Keeping previous data${lastSuccess ? ` (${lastSuccess})` : ''} · ${error.message}`); $('connection').dataset.ok = 'false'; }
+    finally { $('connection').title = $('connection').textContent; busy = false; timer = setTimeout(refresh, again || generation !== currentGeneration ? 0 : document.hidden ? Math.max(30000, refreshMs) : refreshMs); }
+  }
+  $('campaigns').addEventListener('change', () => { campaignId = $('campaigns').value; episode = null; text('version-detail', ''); generation++; requestRefresh(); });
+  $('theme').addEventListener('change', () => { if ($('theme').value === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = $('theme').value; });
+  function updateNavigation() { document.querySelectorAll('.section-nav a').forEach(link => link.setAttribute('aria-current', link.hash === (location.hash || '#overview') ? 'location' : 'false')); }
+  window.addEventListener('hashchange', updateNavigation); updateNavigation();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) requestRefresh(); });
+  new ResizeObserver(() => { if (data) drawTrend(); }).observe($('trend').parentElement);
+  refresh();
+})();
+</script>
+</body>
+</html>
