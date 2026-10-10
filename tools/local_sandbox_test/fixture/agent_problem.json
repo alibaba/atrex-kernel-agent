@@ -1,0 +1,13 @@
+{
+  "schema_version": "atrex.agent_problem.v1",
+  "objective": "Implement a self-contained Triton vector addition kernel for two CUDA float32 tensors.",
+  "evaluation": {"exact_cases": "private", "development_cases_are_evaluation_cases": false},
+  "operator_contract": {"inputs": "Two contiguous one-dimensional float32 tensors x and y of equal length n", "output": "A new float32 tensor with elementwise x + y"},
+  "shape_domain": {"n": "Positive lengths including non-power-of-two lengths and tails smaller than a block"},
+  "invariants": ["Preserve float32 addition semantics", "Never mutate inputs", "Mask all out-of-bounds loads and stores"],
+  "coverage_regimes": [{"name": "aligned"}, {"name": "tail"}],
+  "development_cases": [
+    {"name": "tiny", "init_kwargs": {}, "input_kwargs": {"n": 127}},
+    {"name": "tail", "init_kwargs": {}, "input_kwargs": {"n": 2049}}
+  ]
+}

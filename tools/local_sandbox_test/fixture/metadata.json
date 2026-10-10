@@ -1,0 +1,8 @@
+{
+  "name": "vector_add",
+  "shapes": {
+    "0": {"dtype": "float32", "frequency": 1},
+    "1": {"dtype": "float32", "frequency": 1},
+    "2": {"dtype": "float32", "frequency": 1}
+  }
+}

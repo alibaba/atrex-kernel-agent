@@ -1,0 +1,5 @@
+{
+  "0": {"init_kwargs": {}, "input_kwargs": {"n": 512}},
+  "1": {"init_kwargs": {}, "input_kwargs": {"n": 1025}},
+  "2": {"init_kwargs": {}, "input_kwargs": {"n": 4096}}
+}
