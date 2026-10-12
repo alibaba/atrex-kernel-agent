@@ -28,8 +28,8 @@ class EpisodeWorktree(CandidateHandle):
             return provider.materialize(self, incumbent_workspace)
 
     @classmethod
-    def create(cls, incumbent_workspace, episode, base_commit, root=None):
-        planned = cls.plan(incumbent_workspace, episode, base_commit, root)
+    def create(cls, incumbent_workspace, episode, base_commit, root=None, *, provider=None):
+        planned = cls.plan(incumbent_workspace, episode, base_commit, root, provider=provider)
         planned.materialize(incumbent_workspace)
         return planned
 
