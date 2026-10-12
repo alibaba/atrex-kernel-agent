@@ -14,6 +14,7 @@ def install_files(workspace, files):
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError(f"unsafe workspace path: {item.path}")
         target = workspace / item.path
+        target.parent.mkdir(parents=True, exist_ok=True)
         if item.source is not None:
             if item.copy == "cp":
                 subprocess.run(["cp", str(item.source), str(target)], check=True)
