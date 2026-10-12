@@ -8,12 +8,6 @@ from aka.contracts.content import PublicInputContent, WorkspaceFile
 from .layout import (AGENT_PROBLEM_FILENAME, is_sol_op, has_agent_problem, validate_private_shapes, validate_agent_problem, validate_generated_agent_problem, agent_visible_operator_files)
 
 
-def sol_problem_files(operator_dir: Path) -> tuple[WorkspaceFile, ...]:
-    """Project the original SOL ground truth for application-owned installation."""
-    return tuple(WorkspaceFile(name, text=(operator_dir / name).read_text(encoding="utf-8"))
-                 for name in ("definition.json", "reference.py", "workload.jsonl"))
-
-
 @dataclass
 class BenchInputs:
     operator_dir: Path

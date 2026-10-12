@@ -89,12 +89,3 @@ class LegacyProblemProvider:
         return LegacyEvaluationAdapter(problem.evaluation.directory, workspace,
                                        "production" if problem.evaluation.private_reference_dir else self.optimization_mode,
                                        str(problem.evaluation.runtime_root or ""), generated_digest, problem)
-
-    def inputs(self, operator_dir, workspace, optimization_mode, bench_root, generated_digest=""):
-        # Compatibility for standalone pre-contract callers; not part of ProblemProvider.
-        from .inputs import BenchInputs
-        return BenchInputs(operator_dir, workspace, optimization_mode, bench_root, generated_digest)
-
-    def sol_files(self, operator_dir):
-        from .inputs import sol_problem_files
-        return sol_problem_files(operator_dir)

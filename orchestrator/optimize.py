@@ -110,15 +110,6 @@ try:
         supported_frameworks,
     )
     from .trace_retention import write_trace_retention_manifest
-    from .operator_layout import (
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
-    )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
     from .plugins import PluginError, PluginRegistry
     from .session_io import check_ssh_environment, detect_arch, ensure_submodules
@@ -162,15 +153,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     )
     from orchestrator.trace_retention import (  # type: ignore[no-redef]
         write_trace_retention_manifest,
-    )
-    from orchestrator.operator_layout import (  # type: ignore[no-redef]
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
     )
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
@@ -382,12 +364,6 @@ def dispatch_framework_campaigns(
         )
         return 1
     return 0
-
-
-def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard", *, provider=None) -> dict:
-    """Resolve existing operator options through the selected Problem module."""
-    from orchestrator._bootstrap import resolve_problem
-    return resolve_problem(op_dir, optimization_mode, provider=provider)
 
 
 def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:

@@ -14,12 +14,6 @@ def task_modules():
     return problem
 
 
-def resolve_problem(directory: str, optimization_mode: str = "leaderboard", *, provider=None) -> dict:
-    task_modules()
-    from aka.legacy.application.task import resolve_operator_directory
-    return resolve_operator_directory(directory, optimization_mode, provider=provider)
-
-
 def load_problem(directory: str, optimization_mode: str = "leaderboard", *, provider=None,
                  snapshot_directory: Path | None = None):
     task_modules()

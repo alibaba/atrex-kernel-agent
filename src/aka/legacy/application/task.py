@@ -8,19 +8,6 @@ from aka.core.effects import call_sync
 from aka.legacy.task.problem.composition import compose_problem
 
 
-def resolve_operator_directory(directory: str, optimization_mode: str = "leaderboard",
-                               *, provider: ProblemProvider | None = None, **selection) -> dict:
-    loaded = load_operator_problem(directory, optimization_mode, provider=provider, **selection)
-    return {
-        "name": loaded.name,
-        "reference": str(loaded.reference),
-        "op_dir": str(loaded.directory),
-        "atrex_bench_root": str(loaded.bench_root) if loaded.bench_root else "",
-        "agent_problem": str(loaded.public_contract) if loaded.public_contract else "",
-        "agent_problem_source": loaded.public_contract_source,
-    }
-
-
 def load_operator_problem(directory: str, optimization_mode: str = "leaderboard", *,
                           provider: ProblemProvider | None = None,
                           snapshot_directory: Path | None = None, **selection) -> LoadedProblem:
