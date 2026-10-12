@@ -282,6 +282,12 @@ files and pin matching dependency versions. Distribution boundaries are installa
 requirement to package every future module separately. Build tooling stages owned files,
 builds sdists, then builds wheels from those sdists.
 
+`aka.observation` deliberately uses an implicit namespace package. Each observation
+adapter distribution owns its leaf package, such as `aka.observation.long_horizon`;
+there is no shared parent `__init__.py` for independently installed adapters to overwrite.
+The long-horizon package's discovery include and the build tool's `OWNERS` entry both
+select that leaf. Contracts remain in the separately owned `aka.contracts` package.
+
 Dashboard injects the versioned `observation_source` seam. Its default profile combines
 the viewer with the separately packaged long-horizon adapter, without importing the
 optimizer. The optimization profile does not load either plugin. See the

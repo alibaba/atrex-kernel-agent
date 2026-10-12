@@ -38,6 +38,10 @@ def obj(value):
     return value if isinstance(value, dict) else {}
 
 
+def string(value):
+    return value if isinstance(value, str) else None
+
+
 def label(value):
     value = value.replace("_", " ")
     return value[:1].upper() + value[1:]
@@ -316,7 +320,7 @@ class WorkspaceReader:
         if not associated:
             issues.append({"file": "memory/live.json", "code": "active_live_identity_mismatch"})
         matched_live = live if associated else {}
-        phase = active.get("phase") or matched_live.get("phase") or "waiting"
+        phase = string(active.get("phase")) or string(matched_live.get("phase")) or "waiting"
         episode = active.get("episode", matched_live.get("episode"))
         settled = episode in records or matched_live.get("phase") == "recorded"
         progress = {"phase": "recorded" if settled else phase, "episode": episode,
@@ -326,10 +330,9 @@ class WorkspaceReader:
                     "latest_experiment": experiment(matched_live.get("latest_experiment")),
                     "updated_at": iso(max(stamp(matched_live.get("updated_at")),
                                           self._mtime(path / RUNTIME / "active_episode.json"))),
-                    "process_status": "unknown", "record_updating": not associated,
+                    "record_updating": not associated,
                     "pending_tokens": bool(episode and not settled and
-                                           (phase in {"preparing", "exploring"} or phase not in PROGRESS_STAGES)),
-                    "v1_crash": {"status": crash.get("status"), "updated_at": crash.get("updated_at")}}
+                                           (phase in {"preparing", "exploring"} or phase not in PROGRESS_STAGES))}
         if not associated and identifier in self._previous_progress:
             progress = {**self._previous_progress[identifier], "record_updating": True}
         elif associated:
@@ -342,7 +345,7 @@ class WorkspaceReader:
         if stale_terminal:
             issues.append({"file": "trace-retention-manifest.json", "code": "older_terminal_record"})
         progress["last_terminal"] = {"status": manifest.get("status"), "updated_at": manifest.get("generated_at"),
-                                     "stale": stale_terminal, "current_run_confirmed": False}
+                                     "stale": stale_terminal}
         if not active and not live and crash.get("status") == "interrupted":
             progress["phase"] = "v1_interrupted"
         if not active and not stale_terminal and manifest.get("status") in {"completed", "failed", "interrupted"}:
@@ -372,7 +375,7 @@ class WorkspaceReader:
         canonical = self._history(path, baseline, records, issues)
         hardware = obj(manifest.get("hardware"))
         memory_time = max((self._mtime(source) for source in self._cache if source.parent == path / "memory"), default=0)
-        framework = baseline.get("framework") or hardware.get("framework")
+        framework = string(baseline.get("framework")) or string(hardware.get("framework"))
         return {"observation_version": OBSERVATION_VERSION,
                 "id": identifier, "name": path.name, "display_name": display_name(path.name, framework),
                 "workspace": str(path), "stages": stages,
@@ -381,12 +384,10 @@ class WorkspaceReader:
                 "arch": baseline.get("arch") or hardware.get("arch"),
                 "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
                 "progress": progress, "canonical": canonical,
-                "counts": {key: integer(state.get(key)) for key in
-                           ("episodes", "accepted", "rejected", "pivoted", "blocked", "interrupted", "protocol_failures")},
+                "counts": {key: integer(state.get(key)) for key in ("episodes", "accepted", "rejected")},
                 "tokens": {"total": total, "control_total": raw_tokens, "measurement": measurement,
                            "receipt_count": len(obj(state.get("usage_receipts"))), "reason_codes": reasons,
                            "pending": progress["pending_tokens"], "scope": SCOPE},
-                "budget": {"token_limit": None, "version_limit": None, "status": "not_recorded"},
                 "episodes": rows, "issues": issues}
 
     def campaigns(self) -> Campaigns:
@@ -430,9 +431,10 @@ class WorkspaceReader:
             telemetry = self._telemetry(path, number, attempt, issues)
             relative = f"{RUNTIME}/episodes/e{number:04d}/episode_runtime/journal.json"
             journal = self._read(path / relative, issues, relative, schema=1)
-            if not journal and active.get("episode") == number and active.get("worktree"):
+            worktree = string(active.get("worktree"))
+            if not journal and active.get("episode") == number and worktree:
                 # Resolve only the supervisor-registered active worktree, never an HTTP path.
-                journal = self._read(Path(active["worktree"]) / RUNTIME / "journal.json", issues,
+                journal = self._read(Path(worktree) / RUNTIME / "journal.json", issues,
                                      "active_worktree/journal.json", schema=1)
             if journal and (journal.get("episode") != number or
                             (journal.get("memory_version") is not None and

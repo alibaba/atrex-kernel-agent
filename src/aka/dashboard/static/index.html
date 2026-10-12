@@ -238,7 +238,7 @@
           <details><summary>Experiments and evidence</summary><p id="detail-availability"></p><ol id="experiments"></ol><ul id="evidence"></ul></details>
         </div>
       </section>
-      <footer><details><summary>Data notes</summary><p id="scope"></p><p id="budget"></p><p id="aggregate"></p><p id="workspace"></p><p>Page connectivity and optimizer liveness are separate. Activity files describe the last observation.</p></details></footer>
+      <footer><details><summary>Data notes</summary><p id="scope"></p><p id="canonical-note"></p><p id="aggregate"></p><p id="workspace"></p><p>Page connectivity and optimizer liveness are separate. Activity files describe the last observation.</p></details></footer>
     </section>
   </main>
 </div>
@@ -261,8 +261,8 @@
     try {
       const response = await fetch(path, {cache: 'no-store', signal: controller.signal});
       if (!response.ok) {
-        if (response.status === 409) throw new Error((await response.json()).error);
-        throw new Error(`HTTP ${response.status}`);
+        const message = response.status === 409 ? (await response.json()).error : `HTTP ${response.status}`;
+        throw Object.assign(new Error(message), {status: response.status});
       }
       const value = await response.json();
       if (value.observation_version !== 1) throw new Error(`Unsupported observation protocol ${value.observation_version}; expected 1`);
@@ -346,7 +346,7 @@
     }
     if (!rows.length) $('records').append(element('p', 'No episode records yet', 'muted'));
     renderDetail(detail);
-    text('scope', c.tokens.scope); text('budget', `Latest canonical version ${ver(c.canonical.latest_version)} · Budget not recorded; completion percentage is unavailable.`);
+    text('scope', c.tokens.scope); text('canonical-note', `Latest canonical version ${ver(c.canonical.latest_version)}`);
     text('aggregate', listing.campaigns.length > 1 ? `All campaigns ${listing.tokens.measurement === 'exact' ? 'settled total' : 'observed subtotal'}: ${number(listing.tokens.total)} tokens${listing.tokens.measurement === 'exact' ? '' : ' (partial measurement or unavailable usage)'}` : '');
     text('workspace', c.workspace);
   }
@@ -426,7 +426,17 @@
         const c = await get(`/api/campaigns/${campaignId}`); if (generation !== currentGeneration) return;
         const available = c.episodes.map(r => r.episode); if (c.progress.episode && !available.includes(c.progress.episode)) available.push(c.progress.episode);
         if (!available.includes(episode)) episode = available[available.length - 1] ?? null;
-        const detail = episode ? await get(`/api/campaigns/${campaignId}/episodes/${episode}`) : null;
+        let detail = null;
+        if (episode) {
+          try { detail = await get(`/api/campaigns/${campaignId}/episodes/${episode}`); }
+          catch (error) {
+            if (error.status !== 404) throw error;
+            if (generation !== currentGeneration) return;
+            text('connection', 'Page connected · Episode records updating. Keeping previous data.');
+            $('connection').dataset.ok = 'true';
+            return;
+          }
+        }
         if (generation !== currentGeneration) return; render(c, detail, listing);
       }
       lastSuccess = new Date().toLocaleTimeString('en-US'); text('connection', `Page connected · ${lastSuccess}`); $('connection').dataset.ok = 'true';

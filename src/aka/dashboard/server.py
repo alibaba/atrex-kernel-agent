@@ -40,7 +40,11 @@ def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: i
                 download = re.fullmatch(r"/api/campaigns/([A-Za-z0-9_-]+)/artifacts/([A-Za-z0-9_-]+)", path)
                 if download:
                     campaign, artifact_id = download.groups()
-                    payload = reader.campaign(campaign)
+                    try:
+                        payload = reader.campaign(campaign)
+                    except KeyError:
+                        self.respond_json(404, {"error": "Campaign not found"})
+                        return
                     check_observation_version(payload.get("observation_version"))
                     metadata = next((a for a in payload.get("artifacts", []) if a["id"] == artifact_id), None)
                     if metadata is None:

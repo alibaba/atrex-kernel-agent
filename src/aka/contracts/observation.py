@@ -69,7 +69,6 @@ class TerminalRecord(TypedDict):
     status: Optional[str]
     updated_at: Optional[str]
     stale: bool
-    current_run_confirmed: bool
 
 
 class _IssueDetail(TypedDict, total=False):
@@ -93,7 +92,6 @@ class Progress(TypedDict):
     experiment_count: Optional[int]
     latest_experiment: dict[str, Any]
     updated_at: Optional[str]
-    process_status: str
     record_updating: bool
     pending_tokens: bool
     last_terminal: TerminalRecord
@@ -132,12 +130,6 @@ class Canonical(TypedDict):
     latest_version: Optional[int]
     incumbent: Optional[Incumbent]
     history: list[PerformanceRecord]
-
-
-class Budget(TypedDict):
-    token_limit: Optional[int]
-    version_limit: Optional[int]
-    status: str
 
 
 class EpisodeSummary(TypedDict):
@@ -186,7 +178,6 @@ class Campaign(CampaignSummary, _CampaignArtifacts):
     arch: Optional[str]
     stages: list[Stage]
     canonical: Canonical
-    budget: Budget
     episodes: list[EpisodeSummary]
     issues: list[Issue]
 
