@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from orchestrator._bootstrap import task_modules
 from orchestrator.durable_state import durable_write_json
 
-from . import main_adapter
+task_modules()
+from aka.legacy.task.candidate_workspace.excludes import (
+    RUNTIME_DIR, VERIFY_DIR, LIVE_MEMORY_FILE,
+)
+
 from .models import SupervisorState
 from .protocol import atomic_write_json, atomic_write_text
 from .telemetry import render_episode_brief
-
-RUNTIME_DIR = ".atrex_long_horizon"
-VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
-LIVE_MEMORY_FILE = "memory/live.json"
 
 
 class CampaignStore:

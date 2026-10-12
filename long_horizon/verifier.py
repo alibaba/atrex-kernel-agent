@@ -6,14 +6,13 @@ import shutil
 import subprocess
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from threading import Event
 from typing import Any
 
 from orchestrator.infrastructure_retry import InfrastructureUnavailable, check_transport, retry_infrastructure
 
 from . import main_adapter
-from .git_episode import _git
 from .models import VerificationResult, VerificationRun
 from .protocol import atomic_write_json
 from .store import VERIFY_DIR
@@ -380,9 +379,6 @@ def score_verification_payload(
         candidate_performance_score=candidate_score,
         incumbent_performance_score=incumbent_score,
     )
-
-
-from aka.legacy.task.candidate_workspace.snapshot import _git_blob
 
 
 def _snapshot_revision(workspace, revision, changed_paths, destination, label, *, provider=None):

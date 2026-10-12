@@ -11,6 +11,7 @@ from . import agent_runtime as _agent_runtime
 from ._bootstrap import task_modules
 
 task_modules()
+from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE
 from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +57,3 @@ PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
 DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
 DEFAULT_SANDBOX_TIMEOUT = 600
 MAX_SANDBOX_TIMEOUT = 600
-
-
-STALL_STATE_FILE = ".orchestrator_state.json"
