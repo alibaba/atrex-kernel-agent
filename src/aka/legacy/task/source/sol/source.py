@@ -16,12 +16,17 @@ class SolSourceProvider:
 
     def prepare(self, request=None):
         op = Path(self.operator_dir)
-        definition = self.definition if self.definition is not None else json.loads((op / "definition.json").read_text(encoding="utf-8"))
+        def read(name):
+            if request is not None and request.initial is not None:
+                item = next(item for item in request.initial.files if item.path == name)
+                return item.source.read_text(encoding="utf-8") if item.source is not None else item.text
+            return (op / name).read_text(encoding="utf-8")
+        definition = self.definition if self.definition is not None else json.loads(read("definition.json"))
         files = (
-            WorkspaceFile("kernel.py", text=_render_kernel(definition, (op / "reference.py").read_text(encoding="utf-8"))),
+            WorkspaceFile("kernel.py", text=_render_kernel(definition, read("reference.py"))),
             WorkspaceFile("solution.json", text=json.dumps(_solution_json(definition, self.name, self.framework, self.platform), indent=2) + "\n"),
         )
-        workloads = sum(1 for line in (op / "workload.jsonl").read_text().splitlines() if line.strip())
+        workloads = sum(1 for line in read("workload.jsonl").splitlines() if line.strip())
         return SourceContent(files,
                              _readme(self.name, definition, self.framework, self.platform, self.gpu_wiki, workloads))
 

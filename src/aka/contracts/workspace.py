@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol, Any
 
 from .content import SourceContent, WorkspaceFile
+from .problem import InitialSource
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,7 @@ class SourceRequest:
     platform: str = ""
     gpu_wiki: str = ""
     definition: dict | None = None
+    initial: InitialSource | None = None
 
 
 class SourceProvider(Protocol):
