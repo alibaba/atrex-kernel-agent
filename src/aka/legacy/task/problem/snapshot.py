@@ -1,6 +1,7 @@
 """Persist explicit Problem roles; never infer roles from stored filenames."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -122,5 +123,11 @@ def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str) -> Load
         raw_manifest = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
         (staging / "manifest.json").write_bytes(raw_manifest)
         (staging / "manifest.sha256").write_text(hashlib.sha256(raw_manifest).hexdigest() + "\n")
-        staging.rename(root)
+        try:
+            staging.rename(root)
+        except OSError as exc:
+            if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                raise
+            # Another capture published first. Validate that snapshot below
+            # after discarding our staging directory.
     return restore(root, origin, mode)
