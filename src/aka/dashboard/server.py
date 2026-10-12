@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from urllib.parse import urlsplit
 
-from .reader import WorkspaceReader
+from aka.contracts.observation import ObservationReader, ObservationProtocolError, check_observation_version
 
 
 class DashboardHTTPServer(ThreadingHTTPServer):
@@ -20,7 +20,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         return connection, address
 
 
-def create_server(reader: WorkspaceReader, host: str, port: int, refresh_ms: int, *, demo=False):
+def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: int, *, demo=False):
     page = files("aka.dashboard").joinpath("static/index.html").read_bytes()
     fonts = {f"/assets/{name}": files("aka.dashboard").joinpath(f"static/fonts/{name}").read_bytes()
              for name in ("geist-sans.woff2", "geist-mono.woff2")}
@@ -38,13 +38,16 @@ def create_server(reader: WorkspaceReader, host: str, port: int, refresh_ms: int
                 if path == "/api/campaigns":
                     payload = {**reader.campaigns(), "refresh_ms": refresh_ms, "demo": demo}
                 else:
-                    match = re.fullmatch(r"/api/campaigns/([0-9a-f]{16})(?:/episodes/([1-9][0-9]*))?", path)
+                    match = re.fullmatch(r"/api/campaigns/([A-Za-z0-9_-]+)(?:/episodes/([1-9][0-9]*))?", path)
                     if match is None:
                         raise KeyError(path)
                     campaign, episode = match.groups()
                     payload = (reader.episode(campaign, int(episode)) if episode
                                else reader.campaign(campaign))
+                check_observation_version(payload.get("observation_version"))
                 self.respond_json(200, payload)
+            except ObservationProtocolError as exc:
+                self.respond_json(409, {"error": str(exc), "code": "unsupported_observation_version"})
             except KeyError:
                 self.respond_json(404, {"error": "Record not found"})
             except OSError:

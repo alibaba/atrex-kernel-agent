@@ -5,6 +5,9 @@ import json
 import socket
 import tempfile
 import unittest
+import sys
+from copy import deepcopy
+from types import ModuleType
 from threading import Event
 from pathlib import Path
 from unittest.mock import patch
@@ -15,9 +18,12 @@ from aka.bootstrap.profile import resolve_profile
 from aka.bootstrap.continuation import capture
 from aka.core.boot import boot
 from aka.core.errors import BootFailure
-from aka.dashboard.demo import create_demo_workspace
-from aka.dashboard.reader import WorkspaceReader
+from aka.observation.long_horizon.demo import create_demo_workspace
+from aka.observation.long_horizon.reader import WorkspaceReader
 from aka.dashboard.startup import DashboardStartup
+from aka.dashboard.tokens import OBSERVATION_SOURCE
+from aka.observation.long_horizon.plugin import LongHorizonSource
+from aka.contracts.observation import ObservationProtocolError
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = ROOT / "src/aka/dashboard/profiles/dashboard.json"
@@ -246,10 +252,113 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(detail["experiments"][0]["name"], "archived experiment")
         self.assertNotIn("secret", json.dumps(detail))
 
+    def test_new_usage_and_progress_stages_are_preserved(self):
+        relative = ".atrex_long_horizon/episodes/e0001/telemetry.summary.json"
+        value = json.loads((self.fixture.path / relative).read_text())
+        value["phase_tokens"]["phases"]["tuning"] = value["phase_tokens"]["phases"].pop("implementation")
+        self.fixture.write(relative, value)
+        detail = self.reader.episode(self.identifier, 1)
+        tuning = next(p for p in detail["phases"] if p["phase"] == "tuning")
+        self.assertEqual(tuning["label"], "Tuning")
+        self.assertEqual(tuning["usage"]["total_tokens"], 100)
+        self.assertEqual(sum(p["usage"]["total_tokens"] or 0 for p in detail["phases"]), 100)
+        self.fixture.write("memory/live.json", {"episode": 3, "version": "v4", "phase": "tuning"})
+        self.fixture.write(".atrex_long_horizon/active_episode.json", {"episode": 3, "memory_version": 4, "phase": "tuning"})
+        value = self.snapshot()
+        self.assertIn({"id": "tuning", "label": "Tuning"}, value["stages"])
+        self.assertEqual(value["progress"]["stage_id"], "tuning")
+        self.assertTrue(value["tokens"]["pending"])
+
+    def test_unknown_native_protocol_is_rejected_including_cached_records(self):
+        self.assertEqual(self.reader.episode(self.identifier, 1)["tokens"]["measurement"], "exact")
+        relative = ".atrex_long_horizon/episodes/e0001/telemetry.summary.json"
+        value = json.loads((self.fixture.path / relative).read_text())
+        value["schema_version"] = "atrex_long_horizon_episode_telemetry_v999"
+        value["phase_tokens"]["terminal_usage"]["total_tokens"] = 999999
+        self.fixture.write(relative, value)
+        for _ in range(2):
+            detail = self.reader.episode(self.identifier, 1)
+            self.assertEqual(detail["tokens"]["total"], 100)
+            self.assertEqual(detail["tokens"]["measurement"], "partial")
+            self.assertTrue(any(i["code"] == "unsupported_schema_version" for i in detail["issues"]))
+        value["schema_version"] = "atrex_long_horizon_episode_telemetry_v1"
+        value["phase_tokens"]["terminal_usage"]["total_tokens"] = 100
+        self.fixture.write(relative, value)
+        self.assertEqual(self.reader.episode(self.identifier, 1)["tokens"]["measurement"], "exact")
+        self.fixture.write("memory/live.json", {"schema_version": "unknown-live-v2", "episode": 3, "version": "v4", "experiment_count": 99})
+        self.fixture.write(".atrex_long_horizon/active_episode.json", {"episode": 3, "memory_version": 4, "phase": "exploring"})
+        self.fixture.write(".atrex_long_horizon/episodes/e0001/episode_runtime/journal.json", {
+            "schema_version": 2, "episode": 1, "memory_version": 2, "experiments": [{"name": "must not read"}]})
+        self.assertIsNone(self.snapshot()["progress"]["experiment_count"])
+        self.assertFalse(self.reader.episode(self.identifier, 1)["detail_available"])
+
 
 class LifecycleAndHTTPTest(unittest.TestCase):
+    def test_required_source_can_be_replaced_through_composition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = WorkspaceFixture(Path(tmp) / "kernel_opt_cuda").populated()
+            reader = WorkspaceReader(fixture.path)
+            identifier = reader.campaigns()["campaigns"][0]["id"]
+            value = reader.campaign(identifier)
+            value.update(id="custom-run", name="independent-workflow", display_name="Custom workflow",
+                         stages=[{"id": "tune", "label": "Tune"}, {"id": "publish", "label": "Publish"}])
+            value["progress"].update(phase="tune", phase_label="Tuning", stage_id="tune")
+            class CustomSource:
+                protocol_version = 1
+                def open(self, workspace):
+                    return self
+                def create_preview(self, temporary_directory):
+                    return temporary_directory
+                def campaigns(self):
+                    return {"observation_version": 1, "campaigns": [value], "tokens": value["tokens"], "empty_message": "No custom runs"}
+                def campaign(self, identifier):
+                    if identifier != "custom-run":
+                        raise KeyError(identifier)
+                    return deepcopy(value)
+                def episode(self, identifier, number):
+                    raise KeyError(number)
+            source = CustomSource()
+            module = ModuleType("custom_source")
+            module.name, module.provide = "custom-source", ("observation_source",)
+            def apply(ctx, config):
+                ctx.provide("observation_source", source)
+            module.apply = apply
+            patches = [{"id": "observation-source", "remove": True},
+                       {"id": "custom", "insert": {"name": "custom_source", "required": True}}]
+            with patch.dict(sys.modules, custom_source=module):
+                selection = resolve_profile(PROFILE, tokens=(OBSERVATION_SOURCE,), patches=patches)
+                report = boot(selection.composition, tokens=selection.tokens, required_services=selection.required_services)
+            try:
+                startup = report.service("startup")
+                self.assertIs(startup.source, source)
+                with patch.object(Path, "iterdir", side_effect=AssertionError("dashboard scanned workflow files")):
+                    url = startup.start(Path(tmp), port=0)
+                    with urlopen(url + "api/campaigns/custom-run", timeout=3) as response:
+                        observed = json.loads(response.read())
+                self.assertEqual(observed["stages"], value["stages"])
+                self.assertEqual(observed["progress"]["stage_id"], "tune")
+                for invalid in (2, "1", True, None):
+                    with self.subTest(protocol_version=invalid):
+                        source.protocol_version = invalid
+                        with self.assertRaises(ObservationProtocolError):
+                            DashboardStartup(source)
+                        value["observation_version"] = invalid
+                        with self.assertRaises(HTTPError) as error:
+                            urlopen(url + "api/campaigns/custom-run", timeout=3)
+                        self.assertEqual(error.exception.code, 409)
+                        self.assertEqual(json.loads(error.exception.read())["code"], "unsupported_observation_version")
+                        error.exception.close()
+            finally:
+                report.dispose()
+
+    def test_missing_source_fails_at_boot(self):
+        selection = resolve_profile(PROFILE, tokens=(OBSERVATION_SOURCE,),
+                                    patches=[{"id": "observation-source", "disabled": True}])
+        with self.assertRaises(BootFailure):
+            boot(selection.composition, tokens=selection.tokens, required_services=selection.required_services)
+
     def test_boot_is_lazy_and_dispose_releases_server(self):
-        selection, _ = capture(resolve_profile(PROFILE))
+        selection, _ = capture(resolve_profile(PROFILE, tokens=(OBSERVATION_SOURCE,)))
         with patch("aka.dashboard.startup.create_server") as create, patch.object(Path, "iterdir", side_effect=AssertionError("boot scanned workspace")):
             report = boot(selection.composition, tokens=selection.tokens, required_services=selection.required_services)
             startup = report.service("startup")
@@ -290,7 +399,7 @@ class LifecycleAndHTTPTest(unittest.TestCase):
     def test_demo_uses_real_reader_and_labels_sample_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = create_demo_workspace(Path(tmp))
-            startup = DashboardStartup(port=0)
+            startup = DashboardStartup(LongHorizonSource(), port=0)
             url = startup.start(workspace, demo=True)
             try:
                 with urlopen(url + "api/campaigns", timeout=3) as response:
@@ -318,7 +427,7 @@ class LifecycleAndHTTPTest(unittest.TestCase):
 
     def test_port_conflict_and_missing_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
-            first, second = DashboardStartup(port=0), DashboardStartup()
+            first, second = DashboardStartup(LongHorizonSource(), port=0), DashboardStartup(LongHorizonSource())
             first.start(Path(tmp))
             try:
                 with self.assertRaises(OSError):
@@ -330,13 +439,13 @@ class LifecycleAndHTTPTest(unittest.TestCase):
 
     def test_configuration_rejects_nonlocal_or_invalid_values(self):
         for config in ({"host": "0.0.0.0"}, {"port": -1}, {"port": 65536}, {"refresh_ms": 0}):
-            selection = resolve_profile(PROFILE, patches=[{"id": "dashboard", "config": config}])
+            selection = resolve_profile(PROFILE, tokens=(OBSERVATION_SOURCE,), patches=[{"id": "dashboard", "config": config}])
             with self.assertRaises(BootFailure):
                 boot(selection.composition, tokens=selection.tokens, required_services=selection.required_services)
 
     def test_close_releases_idle_browser_connection(self):
         with tempfile.TemporaryDirectory() as tmp:
-            startup = DashboardStartup(port=0)
+            startup = DashboardStartup(LongHorizonSource(), port=0)
             startup.start(Path(tmp))
             server = startup._server
             accepted = Event()

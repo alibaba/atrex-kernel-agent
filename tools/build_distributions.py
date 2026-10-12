@@ -20,6 +20,7 @@ OWNERS = {
     'atrex-aka-optimization': ('aka/legacy',),
     'atrex-aka-bootstrap': ('aka/bootstrap',),
     'atrex-aka-dashboard': ('aka/dashboard',),
+    'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
 }
 
 

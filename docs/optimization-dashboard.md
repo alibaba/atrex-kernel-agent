@@ -1,14 +1,14 @@
 # 优化进展展示插件设计
 
-新增可选的 `aka.dashboard` Core 插件，以独立的 `Startup` 启动一个本地只读页面，展示优化阶段、实验结果和 token 消耗。插件读取优化工作空间已有的结构化文件，一个页面可以观察同一目录下的多个框架 campaign。通过独立的 launch profile 启用，安装和运行优化器时无需加载 UI。
+可选的 `aka.dashboard` Core 插件通过独立 `Startup` 启动本地只读页面，展示优化阶段、实验结果和 token 消耗。Dashboard 注入 `observation_source` 服务，只消费统一观测契约；默认由 `aka.observation.long_horizon` 适配插件读取优化工作空间，一个页面可以观察多个框架 campaign。通过独立 launch profile 启用，安装和运行优化器时无需加载 UI。
 
-第一版已实现，采用 Python 标准库 HTTP 服务、原生 HTML/CSS/JavaScript 和两秒轮询，直接读取真实工作空间记录。运行配置、流式用量与全流程 receipt 仍属于后续扩展；当前 UI 明确展示已结算、待结算和不可用，缺失预算不生成百分比。
+采用 Python 标准库 HTTP 服务、原生 HTML/CSS/JavaScript 和两秒轮询。数据源负责原生记录的版本校验、语义转换和阶段定义，页面按契约动态展示阶段。运行配置、流式用量与全流程 receipt 仍属于后续扩展；UI 明确展示已结算、待结算和不可用，缺失预算不生成百分比。
 
 ## 现有能力
 
 当前 Core 可以组装独立插件，由 Bootstrap 调用 profile 指定的 `Startup.run(Invocation) -> int`，并在调用结束后释放组合。UI 可以使用这个入口，无需新建一套插件框架。[Core 接口](plugin-framework.md)和[启动方式](application-plugin-migration.md)规定了具体契约。
 
-仓库还有用于 Agent 工具和 Skill 的 `plugins/*/plugin.json` 与 `plugin_runtime/`。展示服务采用 Core 插件；它的服务进程、HTTP 接口和静态资源由 Core 插件生命周期管理。
+仓库还有用于 Agent 工具和 Skill 的 `plugins/*/plugin.json` 与 `plugin_runtime/`。展示服务和数据源采用 Core 插件；HTTP 服务与资源由展示插件管理，优化文件协议仅由适配插件解释。以下文件表属于默认 long-horizon 适配器，不是所有 workflow 必须实现的磁盘布局。
 
 | 已有数据 | 可以展示的内容 | 当前边界 |
 | --- | --- | --- |
@@ -30,34 +30,74 @@ flowchart LR
     OP[优化器及框架子进程] --> WS[已有工作空间记录]
     LP[dashboard launch profile] --> CORE[Core 组装和 Bootstrap 调用]
     CORE --> UI[aka.dashboard 插件]
-    WS --> READER[插件读取器与数据投影]
-    UI --> READER
-    READER --> HTTP[本地只读 HTTP 接口]
+    CORE --> SOURCE[long-horizon 适配插件]
+    WS --> SOURCE
+    SOURCE --> CONTRACT[observation_source / 观测协议 v1]
+    CONTRACT --> UI
+    UI --> HTTP[本地只读 HTTP 接口]
     HTTP --> PAGE[浏览器进度页面]
 ```
 
-优化器负责控制、验证和晋升。展示插件负责读取、汇总和呈现；它不参与 token 预算执行、canonical memory 写入、环境恢复或候选接受判断。读取器不调用会创建目录或修改 Git excludes 的 `CampaignStore` 构造函数。
+优化器负责控制、验证和晋升。适配插件负责读取、汇总与语义转换，展示插件负责呈现；两者不参与 token 预算执行、canonical memory 写入、环境恢复或候选接受判断。读取器不调用会创建目录或修改 Git excludes 的 `CampaignStore` 构造函数。
 
-`atrex-aka-dashboard` 独立打包，通过匹配版本的 Bootstrap 依赖 Core 和 Contracts，不依赖优化器包。仓库源码位于 `src/aka/dashboard/`，打包配置位于 `packages/atrex-aka-dashboard/pyproject.toml`。包内包含以下文件：
+`atrex-aka-dashboard` 依赖 Bootstrap；`atrex-aka-observation-long-horizon` 只依赖 Contracts，两者都不依赖优化器包。Dashboard 的 `long-horizon` 安装 extra 包含默认适配器。契约位于 `aka.contracts.observation`，Core token 由 Dashboard 的 `aka.tokens` entry point 注册；源码启动器显式提供同一 token。包归属相互独立：
 
 ```text
 src/aka/dashboard/
 ├── __main__.py                # 源码启动器，仍通过 Bootstrap profile
 ├── plugin.py                  # Core 声明、构造和 cleanup 注册
 ├── startup.py                 # 同步 Startup 入口和观察目录参数
-├── reader.py                  # 已有文件的只读投影与 schema 适配
 ├── server.py                  # 显式路由和本地 HTTP 服务
+├── tokens.py                  # observation_source 的 Core token
 ├── static/index.html          # 原生页面及样式、脚本
 └── profiles/
     ├── dashboard.json         # Bootstrap launch manifest
     └── compositions/dashboard.json
+src/aka/observation/long_horizon/
+├── plugin.py                  # 提供 observation_source
+├── reader.py                  # long-horizon 记录的只读投影和版本校验
+└── demo.py                    # 仅向预览临时目录写入示例记录
 ```
 
-`tools/build_distributions.py` 的 `OWNERS` 包含 dashboard 包归属，并为该包额外收集 HTML 静态资源。package data 包含静态页面及两层 profile JSON；构建器先生成 sdist，再从 sdist 构建 wheel。
+`tools/build_distributions.py` 的 `OWNERS` 分别收集两个包的源文件。Dashboard 的 package data 包含页面、本地字体和 profile JSON；构建器先生成 sdist，再从 sdist 构建 wheel。
 
-插件模块声明 `name = "dashboard"`、`provide = ("startup",)` 和同步 `apply(ctx, config)`。`apply` 只构造对象、调用 `ctx.provide("startup", startup)` 并注册 `ctx.effect(startup.close)`。HTTP 绑定和目录扫描在 `Startup.run()` 被调用后开始，导入或 boot 不启动服务。`close()` 必须幂等，释放 socket 和请求线程；`run()` 的退出清理和 Core dispose 可以安全重复调用。
+Dashboard 声明 `inject = ("observation_source",)` 和 `provide = ("startup",)`。`apply` 借用数据源构造 Startup 并注册 cleanup；数据源声明 `provide = ("observation_source",)`。HTTP 绑定和目录扫描在调用 Startup 后开始，导入或 boot 不启动服务。`close()` 幂等释放 socket 和请求线程；`run()` 的退出清理和 Core dispose 可以安全重复调用。
 
-独立 dashboard profile 的目标为 `startup`，组合只装载 dashboard 插件。它与优化 profile 使用不同 Root；父进程、框架子进程和恢复进程不会重复绑定 UI 端口。第一版启动一个观察服务即可覆盖多个 campaign。
+独立 profile 的目标为 `startup`，默认组合装载 Dashboard 和 long-horizon 数据源。它与优化 profile 使用不同 Root；跨进程以已有持久化文件为边界，不依赖同一 Root 的事件总线。数据源缺失时 boot 明确失败，不隐式创建默认读取器。
+
+## 统一观测契约
+
+`ObservationSource.protocol_version` 必须为整数 `1`。`open(workspace)` 创建线程安全的只读 `ObservationReader`，提供 `campaigns()`、`campaign(id)`、`episode(id, number)`。`create_preview(temporary_directory)` 仅向展示进程拥有的临时目录生成预览。实现不保存 Core Context/Root，Dashboard 不读取数据源的业务文件。
+
+三个查询响应都包含 `observation_version: 1`；HTTP 和浏览器分别校验。未知数据源协议在 boot 失败，未知响应版本返回 HTTP 409，页面显示明确错误并保留上次数据。campaign ID 是不含路径分隔符的 URL-safe 字符串，不要求使用 long-horizon 的 hash。
+
+| 契约字段 | 所有权与用途 |
+| --- | --- |
+| `display_name`、`empty_message` | 数据源提供用户可读名称和空状态文案；UI 不解析目录命名规则 |
+| `stages: [{id, label}]` | 数据源提供有序流程阶段，页面动态生成流程标记 |
+| `progress.stage_id`、`progress.phase_label` | 当前阶段标记与观测状态文案，保留 `phase` 作为源状态 ID |
+| `phases: [{phase, label, usage}]` | 数据源提供有序 token 归因行，新增阶段不被 UI 固定列表丢弃 |
+| `canonical.incumbent` | 携带数值、单位、指标名称及来源；数据源定义可比较的历史段 |
+| `tokens` | 已结算总量、统计范围、精确/部分/不可用状态；阶段值不再次加入总量 |
+| `issues` | 原生记录不兼容或更新中的诊断，不把不兼容格式当成等待或精确统计 |
+
+默认适配器兼容未声明版本的历史记录。已声明的 live、telemetry、journal、framework baseline、crash snapshot 和 trace manifest 必须匹配各自已支持版本；原本未版本化的 state、attempt 和 canonical memory 不接受未知版本声明。新版本返回 `unsupported_schema_version`，不使用旧 schema 解读，受影响用量按已知控制记录降为 partial 或 unavailable。畸形写入仍沿用上次有效记录；版本不兼容会明确报告。
+
+Long-horizon 适配器保留现有四个流程分组和九行 token 明细；发现额外 token 阶段时加入输出并提供名称，未知活动阶段也加入流程标记。其他 workflow 可提供完全不同的阶段列表，UI 无需修改。默认适配器仍只承诺 long-horizon 文件协议，新目录布局由新的适配插件负责。
+
+替换数据源可向当前 composition 追加以下 patch，保留 Dashboard 配置：
+
+```json
+{
+  "api_version": 1,
+  "patches": [
+    {"id": "observation-source", "remove": true},
+    {"id": "my-source", "insert": {"name": "my_workflow.observation_plugin", "required": true}}
+  ]
+}
+```
+
+新模块提供 `observation_source`，实现上述契约。插件 `name` 遵循 Core 的模块命名规则，数据源依赖与身份文件由自身声明。安装包模式使用 `aka run --patch` 加载替换 patch；源码调用 `run_profile` 时通过 `tokens=(OBSERVATION_SOURCE,)` 显式传入 `aka.dashboard.tokens.OBSERVATION_SOURCE`。
 
 ## 启用方式
 
@@ -67,7 +107,9 @@ Launch manifest `profiles/dashboard.json`：
 {
   "api_version": 1,
   "composition": "dashboard",
-  "target": "startup"
+  "target": "startup",
+  "tokens": ["observation_source"],
+  "required_services": ["observation_source"]
 }
 ```
 
@@ -77,6 +119,10 @@ Sibling composition `profiles/compositions/dashboard.json`：
 {
   "api_version": 1,
   "patches": [
+    {
+      "id": "observation-source",
+      "insert": {"name": "aka.observation.long_horizon.plugin", "required": true}
+    },
     {
       "id": "dashboard",
       "insert": {
@@ -125,9 +171,12 @@ aka run --profile /path/to/aka/src/aka/dashboard/profiles/dashboard.json -- \
 ```bash
 python -m pip install build
 python tools/build_distributions.py --output /tmp/aka-dashboard-dist \
-  atrex-aka-core atrex-aka-contracts atrex-aka-bootstrap atrex-aka-dashboard
+  atrex-aka-core atrex-aka-contracts atrex-aka-bootstrap atrex-aka-dashboard \
+  atrex-aka-observation-long-horizon
 python -m pip install /tmp/aka-dashboard-dist/*.whl
 ```
+
+使用已发布的包时，`pip install 'atrex-aka-dashboard[long-horizon]'` 安装默认数据源；使用自定义数据源只需安装 Dashboard 基础包及对应适配包。
 
 `--workspace` 接受单个 campaign，或包含 `kernel_opt_*` 的父目录。父目录只扫描直接子目录，不递归扫描 episode 私有工作树。安装包用户应使用包内 profile 的实际绝对路径；沿用现有 `aka run --profile`，第一版无需贡献新的 CLI 命令。
 
@@ -146,7 +195,7 @@ python -m pip install /tmp/aka-dashboard-dist/*.whl
 | Token 用量 | 每个 episode 用量、累计已结算用量、所选 episode 阶段分布 | 选择 episode；展开输入、输出、缓存和原因码 |
 | 轮次记录 | episode、版本、模式、接受/拒绝/pivot/blocked/interrupted、token、验证结论 | 查看同一记录的摘要、归因和证据文件名 |
 
-流程使用“准备 → 探索 → 验证 → 记录”标记当前阶段。探索可以包含多次实验，不能用阶段序号伪造完成百分比。fast 模式明确显示 evaluator 验证，full 模式明确显示 ABBA 验证。
+默认适配器使用“准备 → 探索 → 验证 → 记录”标记当前阶段，其他数据源按自己的 `stages` 列表展示。探索可以包含多次实验，不能用阶段序号伪造完成百分比。fast 模式明确显示 evaluator 验证，full 模式明确显示 ABBA 验证。
 
 存在正式配置时，额外展示“已记录版本 / 版本上限”和“预算已结算用量 / token 上限”。`--max-iters` 对应 canonical 版本上限，不等于 episode 数；`--token-budget=0` 表示无限额。第一版现有文件不完整保存这些配置，缺失时显示“预算未记录”，隐藏百分比。每个框架有独立预算，汇总页保留各任务的预算归属。
 
@@ -178,7 +227,7 @@ python -m pip install /tmp/aka-dashboard-dist/*.whl
 | Qoder 后端所有 usage 为 0 且适配器判定不可用 | 即使控制计数是 0，也显示“用量不可用” |
 | 同会话恢复语义未确认 | 保留 `same_session_resume_usage_semantics_unqualified`；不用 invocation 累加值冒充精确总量 |
 
-类型明细直接展示标准化的 input/output/cache read/cache write。总量采用 `TokenUsage.total_tokens`，避免在某些后端把已包含的缓存重复加上。阶段归因使用已有七阶段：profile、research、planning、implementation、correctness、benchmark、recording，另列 orchestration 与 unattributed。阶段缺失显示不可用，不能平均分摊；归因质量与 terminal total 质量分别展示。
+类型明细直接展示标准化的 input/output/cache read/cache write。总量采用 `TokenUsage.total_tokens`，避免在某些后端把已包含的缓存重复加上。默认适配器保留已有七阶段：profile、research、planning、implementation、correctness、benchmark、recording，另列 orchestration 与 unattributed，并保留记录中的其他阶段。阶段缺失显示不可用，不能平均分摊；归因质量与 terminal total 质量分别展示。
 
 首页明确说明统计范围。setup、V1、独立 policy/numerical reviewer 和 `gen-plan` 辅助 CLI 消耗没有统一进入 `state.tokens`；第一版不把它叫作“全流程总 tokens”。多个任务汇总时，只要有未知用量就标为“已观测小计，部分任务用量不可用”。人民币、美元或计费额度需要明确的模型、费率和计费口径，不从 tokens 推算。
 

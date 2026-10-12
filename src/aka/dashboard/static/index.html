@@ -195,7 +195,7 @@
           <p class="latest-line"><span class="latest-label">Latest experiment</span><span id="latest"></span></p>
           <details class="activity-details"><summary>Details</summary><div class="activity-metadata">
             <p id="campaign-name"></p><p id="episode-meta"></p><p id="observed"></p>
-            <div class="flow" aria-label="Last observed stage"><span data-stage="prepare">Prepare</span><span>→</span><span data-stage="explore">Explore</span><span>→</span><span data-stage="verify">Verify</span><span>→</span><span data-stage="record">Record</span></div>
+            <div id="stage-flow" class="flow" aria-label="Last observed stage"></div>
             <p id="latest-detail"></p><p id="terminal"></p><p id="pending"></p>
             <p>Activity files describe the last observation; process liveness is unconfirmed.</p>
           </div></details>
@@ -226,9 +226,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const quality = {exact: 'Exact', partial: 'Partial', unavailable: 'Unavailable'};
-  const phases = {profile: 'Profiling', research: 'Research', planning: 'Planning', implementation: 'Implementation', correctness: 'Correctness', benchmark: 'Benchmarking', recording: 'Recording', orchestration: 'Orchestration', unattributed: 'Unattributed'};
   const statuses = {accepted: 'Accepted', rejected: 'Rejected', pivot: 'Pivoted', blocked: 'Blocked', interrupted: 'Interrupted', invalid_handoff: 'Invalid handoff', candidate_ready: 'Candidate ready', observed_active: 'Last observed'};
-  const stages = {preparing: ['Preparing', 'prepare'], exploring: ['Exploring', 'explore'], awaiting_verification: ['Awaiting verification', 'verify'], checking_fast_evaluator: ['Evaluator verification', 'verify'], verifying: ['ABBA verification', 'verify'], promoting: ['Promoting', 'record'], promoted: ['Promoted', 'record'], recording: ['Recording', 'record'], recorded: ['Recorded', 'record'], completed: ['Completed', 'record'], failed: ['Failed', null], interrupted: ['Interrupted', null], v1_interrupted: ['Baseline interrupted', 'prepare'], waiting: ['Waiting for records', 'prepare']};
   let campaignId = null, episode = null, data = null, timer = null, busy = false, again = false, generation = 0, refreshMs = 2000, lastSuccess = null;
   const number = n => Number.isFinite(n) ? new Intl.NumberFormat('en-US').format(n) : 'Unavailable';
   const ep = n => Number.isInteger(n) ? `e${String(n).padStart(4, '0')}` : '-';
@@ -236,15 +234,19 @@
   const time = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('en-US') : 'Not recorded';
   function text(id, value) { $(id).textContent = value ?? ''; }
   function element(tag, value, className) { const el = document.createElement(tag); if (value != null) el.textContent = value; if (className) el.className = className; return el; }
-  function campaignName(c) {
-    let name = c.name.replace(/^kernel_opt_/, '');
-    const suffix = `_${c.framework?.toLowerCase()}`;
-    if (c.framework && name.toLowerCase().endsWith(suffix)) name = name.slice(0, -suffix.length);
-    return name.replace(/_/g, ' ').replace(/^./, first => first.toUpperCase());
-  }
+  const campaignName = c => c.display_name;
   async function get(path) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
-    try { const response = await fetch(path, {cache: 'no-store', signal: controller.signal}); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json(); }
+    try {
+      const response = await fetch(path, {cache: 'no-store', signal: controller.signal});
+      if (!response.ok) {
+        if (response.status === 409) throw new Error((await response.json()).error);
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const value = await response.json();
+      if (value.observation_version !== 1) throw new Error(`Unsupported observation protocol ${value.observation_version}; expected 1`);
+      return value;
+    }
     finally { clearTimeout(timeout); }
   }
   function selectEpisode(n) { if (episode === n) return; episode = n; generation++; requestRefresh(); }
@@ -252,13 +254,18 @@
     data = c; $('content').hidden = false; $('empty').hidden = true; $('section-nav').hidden = false;
     text('title', campaignName(c)); $('title').title = c.name;
     text('identity', [c.framework, c.platform, c.arch].filter(Boolean).join(' · ') || 'Framework and hardware not recorded');
-    const p = c.progress, stage = stages[p.phase] || [p.phase, null];
-    text('status', `Observed: ${stage[0]}`);
+    const p = c.progress;
+    text('status', `Observed: ${p.phase_label}`);
     text('observed', `Data updated ${time(p.updated_at || c.updated_at)}`);
     text('campaign-name', `Campaign: ${c.name}`);
     text('episode-meta', `${ep(p.episode)} / ${ver(p.version)} · ${p.mode || 'Mode not recorded'}`);
     text('terminal', p.last_terminal.status ? `Last terminal record: ${p.last_terminal.status} · ${time(p.last_terminal.updated_at)}${p.last_terminal.stale ? ' (predates current activity; current run status is unconfirmed)' : ''}` : '');
-    document.querySelectorAll('[data-stage]').forEach(el => el.dataset.current = String(el.dataset.stage === stage[1]));
+    $('stage-flow').replaceChildren();
+    c.stages.forEach((stage, index) => {
+      if (index) $('stage-flow').append(element('span', '→'));
+      const item = element('span', stage.label); item.dataset.current = String(stage.id === p.stage_id);
+      $('stage-flow').append(item);
+    });
     text('activity', [Number.isInteger(p.episode) ? `Episode ${p.episode}` : null, p.experiment_count == null ? null : `${number(p.experiment_count)} experiments`, p.record_updating ? 'Records updating' : null].filter(Boolean).join(' · '));
     const latest = p.latest_experiment, result = latest?.conclusion || latest?.result || latest?.summary || latest?.evaluation?.performance;
     text('latest', latest?.name || 'Waiting for experiment records'); $('latest').title = latest?.name || '';
@@ -266,13 +273,14 @@
     text('pending', c.tokens.pending ? 'Current invocation usage is pending settlement. Experiment progress continues to refresh.' : 'Usage is read from persisted settlement records.');
     const incumbent = c.canonical.incumbent;
     text('performance', incumbent ? `${incumbent.value.toFixed(2)}${incumbent.unit}` : '-');
-    text('performance-note', incumbent ? `${ver(incumbent.version)} · ${incumbent.unit === '×' ? 'Mean speedup across shapes' : 'Geometric mean latency'}` : 'Awaiting a verified baseline or promotion');
+    text('performance-note', incumbent ? `${ver(incumbent.version)} · ${incumbent.label}` : 'Awaiting a verified baseline or promotion');
     text('episodes-count', c.counts.episodes == null ? '-' : number(c.counts.episodes));
     text('counts', `Accepted ${number(c.counts.accepted)} · Rejected ${number(c.counts.rejected)}`);
     text('tokens-total', number(c.tokens.total)); text('tokens-note', `${quality[c.tokens.measurement]} · ${c.tokens.receipt_count} deduplicated receipts`);
     $('tokens-total').dataset.available = String(Number.isFinite(c.tokens.total));
-    $('issues').hidden = !c.issues.length;
-    text('issues', c.issues.map(i => `${i.file}: ${i.code}`).join('; '));
+    const issues = [...new Set([...c.issues, ...(detail?.issues || [])].map(i => `${i.file}: ${i.code}${i.code === 'unsupported_schema_version' ? ` (expected ${i.expected}; received ${i.actual})` : ''}`))];
+    $('issues').hidden = !issues.length;
+    text('issues', issues.join('; '));
     drawTrend();
     $('records').replaceChildren();
     const rows = [...c.episodes];
@@ -298,7 +306,7 @@
     for (const p of d?.phases || []) {
       const row = element('div', null, 'phase-row'), track = element('div', null, 'track'), fill = element('div', null, 'fill');
       fill.style.width = `${Number.isFinite(p.usage.total_tokens) ? p.usage.total_tokens / max * 100 : 0}%`; track.append(fill);
-      row.append(element('span', phases[p.phase]), track, element('span', number(p.usage.total_tokens), 'number')); row.title = quality[p.usage.measurement]; $('phases').append(row);
+      row.append(element('span', p.label), track, element('span', number(p.usage.total_tokens), 'number')); row.title = quality[p.usage.measurement]; $('phases').append(row);
     }
     $('token-types').replaceChildren();
     for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
@@ -359,7 +367,7 @@
       if (!listing.campaigns.some(c => c.id === campaignId)) { campaignId = listing.campaigns[0]?.id || null; episode = null; }
       $('campaigns').replaceChildren(...listing.campaigns.map(c => { const option = element('option', [campaignName(c), c.framework, c.platform].filter(Boolean).join(' · ')); option.value = c.id; option.title = c.name; return option; }));
       $('campaigns').value = campaignId || ''; $('picker').hidden = listing.campaigns.length < 2;
-      if (!campaignId) { $('content').hidden = true; $('section-nav').hidden = true; $('empty').hidden = false; text('empty', 'No campaigns yet. Waiting for kernel_opt_* workspaces in the observed directory.'); }
+      if (!campaignId) { $('content').hidden = true; $('section-nav').hidden = true; $('empty').hidden = false; text('empty', listing.empty_message); }
       else {
         const c = await get(`/api/campaigns/${campaignId}`); if (generation !== currentGeneration) return;
         const available = c.episodes.map(r => r.episode); if (c.progress.episode && !available.includes(c.progress.episode)) available.push(c.progress.episode);

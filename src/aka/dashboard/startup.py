@@ -8,13 +8,14 @@ from pathlib import Path
 from threading import Thread
 
 from aka.contracts.startup import Invocation
-from .reader import WorkspaceReader
+from aka.contracts.observation import ObservationSource, check_observation_version
 from .server import create_server
-from .demo import create_demo_workspace
 
 
 class DashboardStartup:
-    def __init__(self, host="127.0.0.1", port=8765, refresh_ms=2000):
+    def __init__(self, source: ObservationSource, host="127.0.0.1", port=8765, refresh_ms=2000):
+        check_observation_version(source.protocol_version)
+        self.source = source
         self.host, self.port, self.refresh_ms = host, port, refresh_ms
         self._server = None
         self._thread = None
@@ -26,7 +27,7 @@ class DashboardStartup:
         workspace = Path(workspace).expanduser().resolve()
         if not workspace.is_dir():
             raise ValueError(f"workspace directory does not exist: {workspace}")
-        server = create_server(WorkspaceReader(workspace), self.host,
+        server = create_server(self.source.open(workspace), self.host,
                                self.port if port is None else port, self.refresh_ms, demo=demo)
         self._server = server
         self._thread = Thread(target=server.serve_forever,
@@ -38,7 +39,7 @@ class DashboardStartup:
         parser = argparse.ArgumentParser(prog="aka dashboard", description=__doc__)
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--workspace", type=Path,
-                            help="One campaign or a parent containing kernel_opt_* directories")
+                            help="Workspace to observe using the configured source plugin")
         source.add_argument("--demo", action="store_true", help="Preview sample campaigns without running optimization")
         parser.add_argument("--port", type=int, default=self.port,
                             help="Loopback port; 0 selects an available port (default: %(default)s)")
@@ -49,7 +50,7 @@ class DashboardStartup:
         try:
             if args.demo:
                 temporary = tempfile.TemporaryDirectory(prefix="aka-dashboard-demo-")
-                workspace = create_demo_workspace(Path(temporary.name))
+                workspace = self.source.create_preview(Path(temporary.name))
             else:
                 workspace = args.workspace
             url = self.start(workspace, port=args.port, demo=args.demo)

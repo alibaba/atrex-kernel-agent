@@ -2,6 +2,7 @@
 from .startup import DashboardStartup
 
 name = "dashboard"
+inject = ("observation_source",)
 provide = ("startup",)
 Config = {
     "type": "object",
@@ -14,7 +15,7 @@ Config = {
 }
 Defaults = {"host": "127.0.0.1", "port": 8765, "refresh_ms": 2000}
 identity_files = (
-    "__init__.py", "__main__.py", "plugin.py", "startup.py", "reader.py", "server.py", "demo.py",
+    "__init__.py", "__main__.py", "plugin.py", "tokens.py", "startup.py", "server.py",
     "static/index.html", "static/fonts/geist-sans.woff2", "static/fonts/geist-mono.woff2",
     "static/fonts/Geist-LICENSE.txt", "profiles/dashboard.json",
     "profiles/compositions/dashboard.json",
@@ -23,6 +24,6 @@ identity_packages = ("aka.contracts", "aka.bootstrap")
 
 
 def apply(ctx, config):
-    startup = DashboardStartup(**config)
+    startup = DashboardStartup(ctx.observation_source, **config)
     ctx.provide("startup", startup)
     ctx.effect(startup.close)

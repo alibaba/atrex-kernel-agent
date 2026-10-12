@@ -9,14 +9,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
+from aka.contracts.observation import OBSERVATION_VERSION, Campaign, Campaigns, Episode
+
 RUNTIME = ".atrex_long_horizon"
 PHASES = ("profile", "research", "planning", "implementation", "correctness", "benchmark", "recording")
+PHASE_LABELS = {"profile": "Profiling", "research": "Research", "planning": "Planning",
+                "implementation": "Implementation", "correctness": "Correctness",
+                "benchmark": "Benchmarking", "recording": "Recording",
+                "orchestration": "Orchestration", "unattributed": "Unattributed"}
+STAGES = ({"id": "prepare", "label": "Prepare"}, {"id": "explore", "label": "Explore"},
+          {"id": "verify", "label": "Verify"}, {"id": "record", "label": "Record"})
+PROGRESS_STAGES = {
+    "preparing": ("Preparing", "prepare"), "exploring": ("Exploring", "explore"),
+    "awaiting_verification": ("Awaiting verification", "verify"),
+    "checking_fast_evaluator": ("Evaluator verification", "verify"),
+    "verifying": ("ABBA verification", "verify"), "promoting": ("Promoting", "record"),
+    "promoted": ("Promoted", "record"), "recording": ("Recording", "record"),
+    "recorded": ("Recorded", "record"), "completed": ("Completed", "record"),
+    "failed": ("Failed", None), "interrupted": ("Interrupted", None),
+    "v1_interrupted": ("Baseline interrupted", "prepare"), "waiting": ("Waiting for records", "prepare"),
+}
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
 SCOPE = "Settled Episode Agent usage. Excludes setup, V1, independent reviewers and auxiliary CLIs. Current invocation usage settles when the call returns."
 
 
 def obj(value):
     return value if isinstance(value, dict) else {}
+
+
+def label(value):
+    value = value.replace("_", " ")
+    return value[:1].upper() + value[1:]
+
+
+def display_name(name, framework):
+    name = name.removeprefix("kernel_opt_")
+    if framework and name.lower().endswith("_" + framework.lower()):
+        name = name[:-(len(framework) + 1)]
+    return label(name)
 
 
 def sequence(value):
@@ -125,26 +155,34 @@ class WorkspaceReader:
                            and p.is_dir() and not p.is_symlink())
         self._paths = {hashlib.sha256(str(p).encode()).hexdigest()[:16]: p for p in paths}
 
-    def _read(self, path, issues, label):
+    def _read(self, path, issues, label, *, schema=None):
         previous = self._cache.get(path)
         try:
             stat = path.stat()
             signature = (stat.st_mtime_ns, stat.st_size)
             if previous and previous[0] == signature:
-                return previous[1]
-            def invalid_constant(value):
-                raise ValueError(f"non-finite JSON number: {value}")
-            value = json.loads(path.read_text(encoding="utf-8"), parse_constant=invalid_constant)
-            if not isinstance(value, dict):
-                raise ValueError("expected a JSON object")
+                value = previous[1]
+            else:
+                def invalid_constant(value):
+                    raise ValueError(f"non-finite JSON number: {value}")
+                value = json.loads(path.read_text(encoding="utf-8"), parse_constant=invalid_constant)
+                if not isinstance(value, dict):
+                    raise ValueError("expected a JSON object")
+                self._cache[path] = (signature, value)
         except FileNotFoundError:
             self._cache.pop(path, None)
             return {}
         except (OSError, UnicodeError, ValueError) as exc:
             issues.append({"file": label, "code": "record_updating" if previous else "record_invalid",
                            "detail": str(exc)})
-            return previous[1] if previous else {}
-        self._cache[path] = (signature, value)
+            value = previous[1] if previous else {}
+        # Existing unversioned records use the verified legacy shape. A declared
+        # future schema must never be interpreted as that shape, even from cache.
+        actual = value.get("schema_version", schema)
+        if type(actual) is not type(schema) or actual != schema:
+            issues.append({"file": label, "code": "unsupported_schema_version",
+                           "expected": schema, "actual": actual})
+            return {}
         return value
 
     def _mtime(self, path):
@@ -169,7 +207,8 @@ class WorkspaceReader:
 
     def _telemetry(self, path, number, attempt, issues):
         relative = f"{RUNTIME}/episodes/e{number:04d}/telemetry.summary.json"
-        value = self._read(path / relative, issues, relative)
+        value = self._read(path / relative, issues, relative,
+                           schema="atrex_long_horizon_episode_telemetry_v1")
         if value and (value.get("episode") != number or
                       version(value.get("version")) != version(attempt.get("version"))):
             issues.append({"file": relative, "code": "telemetry_identity_mismatch"})
@@ -227,6 +266,7 @@ class WorkspaceReader:
                         series += 1
                     prior_key = key
                     incumbent = {"version": n, "value": value, "unit": unit,
+                                 "label": "Mean speedup across shapes" if unit == "×" else "Geometric mean latency",
                                  "objective": objective, "series": series,
                                  "source": f"memory/v{n}.json"}
                     curve_available = True
@@ -250,10 +290,13 @@ class WorkspaceReader:
             return self._read(path / relative, issues, relative)
         state = read(f"{RUNTIME}/state.json")
         active = read(f"{RUNTIME}/active_episode.json")
-        live = read("memory/live.json")
-        baseline = read("framework_baseline.json")
-        manifest = read("trace-retention-manifest.json")
-        crash = read(f"{RUNTIME}/framework_baseline/progress.json")
+        live = self._read(path / "memory/live.json", issues, "memory/live.json",
+                          schema="atrex_long_horizon_live_v1")
+        baseline = self._read(path / "framework_baseline.json", issues, "framework_baseline.json", schema=1)
+        manifest = self._read(path / "trace-retention-manifest.json", issues, "trace-retention-manifest.json",
+                              schema="atrex-trace-retention-manifest-v1")
+        crash_path = f"{RUNTIME}/framework_baseline/progress.json"
+        crash = self._read(path / crash_path, issues, crash_path, schema="atrex_framework_baseline_crash_v1")
         records = self._records(path, state, issues)
         if integer(state.get("episodes")) is not None and max(records, default=0) > state["episodes"]:
             issues.append({"file": f"{RUNTIME}/state.json", "code": "record_updating"})
@@ -283,7 +326,8 @@ class WorkspaceReader:
                     "updated_at": iso(max(stamp(matched_live.get("updated_at")),
                                           self._mtime(path / RUNTIME / "active_episode.json"))),
                     "process_status": "unknown", "record_updating": not associated,
-                    "pending_tokens": bool(episode and not settled and phase in {"preparing", "exploring"}),
+                    "pending_tokens": bool(episode and not settled and
+                                           (phase in {"preparing", "exploring"} or phase not in PROGRESS_STAGES)),
                     "v1_crash": {"status": crash.get("status"), "updated_at": crash.get("updated_at")}}
         if not associated and identifier in self._previous_progress:
             progress = {**self._previous_progress[identifier], "record_updating": True}
@@ -303,6 +347,12 @@ class WorkspaceReader:
         if not active and not stale_terminal and manifest.get("status") in {"completed", "failed", "interrupted"}:
             progress["phase"] = manifest["status"]
 
+        phase_label, stage_id = PROGRESS_STAGES.get(progress["phase"], (label(progress["phase"]), progress["phase"]))
+        progress.update(phase_label=phase_label, stage_id=stage_id)
+        stages = [dict(stage) for stage in STAGES]
+        if stage_id and not any(stage["id"] == stage_id for stage in stages):
+            stages.append({"id": stage_id, "label": phase_label})
+
         raw_tokens = integer(state.get("tokens"))
         unavailable = any(r["tokens"]["measurement"] == "unavailable" for r in rows)
         observed_sum = sum(r["tokens"]["raw_control_tokens"] or 0 for r in rows)
@@ -321,8 +371,11 @@ class WorkspaceReader:
         canonical = self._history(path, baseline, records, issues)
         hardware = obj(manifest.get("hardware"))
         memory_time = max((self._mtime(source) for source in self._cache if source.parent == path / "memory"), default=0)
-        return {"id": identifier, "name": path.name, "workspace": str(path),
-                "framework": baseline.get("framework"), "platform": baseline.get("platform") or hardware.get("platform"),
+        framework = baseline.get("framework") or hardware.get("framework")
+        return {"observation_version": OBSERVATION_VERSION,
+                "id": identifier, "name": path.name, "display_name": display_name(path.name, framework),
+                "workspace": str(path), "stages": stages,
+                "framework": framework, "platform": baseline.get("platform") or hardware.get("platform"),
                 "arch": baseline.get("arch") or hardware.get("arch"),
                 "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
                 "progress": progress, "canonical": canonical,
@@ -334,25 +387,27 @@ class WorkspaceReader:
                 "budget": {"token_limit": None, "version_limit": None, "status": "not_recorded"},
                 "episodes": rows, "issues": issues}
 
-    def campaigns(self):
+    def campaigns(self) -> Campaigns:
         with self._lock:
             self._discover()
             campaigns = []
             for identifier in self._paths:
                 value = self._snapshot(identifier)
                 campaigns.append({key: value[key] for key in
-                                  ("id", "name", "framework", "platform", "updated_at", "progress", "tokens", "counts")})
+                                  ("id", "name", "display_name", "framework", "platform", "updated_at", "progress", "tokens", "counts")})
             known = [c["tokens"]["total"] for c in campaigns if c["tokens"]["total"] is not None]
             partial = len(known) != len(campaigns) or any(c["tokens"]["measurement"] != "exact" for c in campaigns)
-            return {"campaigns": campaigns, "tokens": {"total": sum(known) if known else None,
+            return {"observation_version": OBSERVATION_VERSION, "campaigns": campaigns,
+                    "empty_message": "No campaigns yet. Waiting for kernel_opt_* workspaces in the observed directory.",
+                    "tokens": {"total": sum(known) if known else None,
                     "measurement": "partial" if partial else "exact", "scope": SCOPE}}
 
-    def campaign(self, identifier):
+    def campaign(self, identifier: str) -> Campaign:
         with self._lock:
             self._discover()
             return self._snapshot(identifier)
 
-    def episode(self, identifier, number):
+    def episode(self, identifier: str, number: int) -> Episode:
         with self._lock:
             self._discover()
             path = self._paths[identifier]
@@ -367,10 +422,11 @@ class WorkspaceReader:
             attempt = attempt or {"episode": number, "version": active.get("memory_version"), "mode": active.get("mode")}
             telemetry = self._telemetry(path, number, attempt, issues)
             relative = f"{RUNTIME}/episodes/e{number:04d}/episode_runtime/journal.json"
-            journal = self._read(path / relative, issues, relative)
+            journal = self._read(path / relative, issues, relative, schema=1)
             if not journal and active.get("episode") == number and active.get("worktree"):
                 # Resolve only the supervisor-registered active worktree, never an HTTP path.
-                journal = self._read(Path(active["worktree"]) / RUNTIME / "journal.json", issues, "active_worktree/journal.json")
+                journal = self._read(Path(active["worktree"]) / RUNTIME / "journal.json", issues,
+                                     "active_worktree/journal.json", schema=1)
             if journal and (journal.get("episode") != number or
                             (journal.get("memory_version") is not None and
                              version(journal["memory_version"]) != version(attempt.get("version"))) or
@@ -380,13 +436,18 @@ class WorkspaceReader:
                 issues.append({"file": relative, "code": "journal_identity_mismatch"})
                 journal = {}
             phases = obj(telemetry.get("phase_tokens"))
-            rows = [{"phase": key, "usage": usage(obj(obj(phases.get("phases")).get(key)).get("usage"))}
-                    for key in PHASES]
-            rows += [{"phase": key, "usage": usage(phases.get(key))} for key in ("orchestration", "unattributed")]
+            phase_values = obj(phases.get("phases"))
+            keys = dict.fromkeys((*PHASES, *phase_values))
+            rows = [{"phase": key, "label": PHASE_LABELS.get(key, label(key)),
+                     "usage": usage(obj(phase_values.get(key)).get("usage"))}
+                    for key in keys]
+            rows += [{"phase": key, "label": PHASE_LABELS[key], "usage": usage(phases.get(key))}
+                     for key in ("orchestration", "unattributed")]
             verification = obj(attempt.get("verification"))
             summary = {key: verification.get(key) for key in
                        ("gate", "candidate_latency_us", "incumbent_latency_us", "improvement_pct", "error")}
-            return {"episode": number, "version": version(attempt.get("version")), "mode": attempt.get("mode"),
+            return {"observation_version": OBSERVATION_VERSION,
+                    "episode": number, "version": version(attempt.get("version")), "mode": attempt.get("mode"),
                     "status": outcome_status(attempt) or "observed_active", "accepted": attempt.get("accepted"),
                     "summary": attempt.get("summary") or obj(journal.get("outcome")).get("summary"),
                     "violation": attempt.get("violation"), "verification": summary,

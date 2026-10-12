@@ -273,15 +273,18 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 | `atrex-aka-bootstrap` | `aka.bootstrap`, generic `aka run` command | 3.10+ |
 | `atrex-aka-optimization` | `aka.legacy`, default profiles, `aka optimize` command | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
+| `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
 Core alone has no application dependency. Bootstrap depends only on Core and Contracts;
-Optimization and the optional Dashboard depend on Bootstrap. The packages own disjoint
+Optimization and the optional Dashboard depend on Bootstrap; the long-horizon observation
+adapter depends only on Contracts. The packages own disjoint
 files and pin matching dependency versions. Distribution boundaries are installation ownership units, not a
 requirement to package every future module separately. Build tooling stages owned files,
 builds sdists, then builds wheels from those sdists.
 
-Dashboard reads existing campaign workspaces without importing the optimizer. Its own
-profile starts a loopback observer; the optimization profile does not load it. See the
+Dashboard injects the versioned `observation_source` seam. Its default profile combines
+the viewer with the separately packaged long-horizon adapter, without importing the
+optimizer. The optimization profile does not load either plugin. See the
 [dashboard guide](optimization-dashboard.md) for source and installed launch commands.
 
 The launcher and legacy adapter are migration bridges used by existing entrypoints. They

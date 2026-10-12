@@ -2,6 +2,13 @@
   "api_version": 1,
   "patches": [
     {
+      "id": "observation-source",
+      "insert": {
+        "name": "aka.observation.long_horizon.plugin",
+        "required": true
+      }
+    },
+    {
       "id": "dashboard",
       "insert": {
         "name": "aka.dashboard.plugin",

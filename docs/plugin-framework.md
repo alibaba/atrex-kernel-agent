@@ -142,4 +142,5 @@ See [the application adapter guide](application-plugin-migration.md) for invocat
 package ownership and the legacy adapter's composition and recovery limits.
 
 The optional [optimization dashboard plugin](optimization-dashboard.md) uses an independent
-Core composition and Startup to observe existing campaign progress and token records.
+Core composition and Startup. It injects a versioned observation source; the default
+long-horizon adapter owns workspace formats and provides dynamic progress and token stages.
