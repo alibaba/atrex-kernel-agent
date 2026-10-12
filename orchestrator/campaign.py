@@ -68,15 +68,7 @@ from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
 )
 from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from .operator_layout import (
-    AGENT_PROBLEM_FILENAME,
-    agent_visible_operator_files,
-    has_agent_problem,
-    is_sol_op,
-    validate_agent_problem,
-    validate_generated_agent_problem,
-    validate_private_shapes,
-)
+from .operator_layout import AGENT_PROBLEM_FILENAME
 from .optimization_policy import (
     install_workspace_policy,
     optimization_mode_directive,
@@ -214,6 +206,7 @@ class Campaign:
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
     task_dependencies: dict | None = field(default=None, repr=False, compare=False)
+    problem: "LoadedProblem | None" = field(default=None, repr=False, compare=False)
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -262,10 +255,21 @@ class Campaign:
     def private_reference_dir(self) -> Path | None:
         return self._problem_inputs().private_reference_dir
 
+    def _loaded_problem(self):
+        if self.problem is None:
+            # Historical direct Campaign construction supplied only kernel_demo.
+            # Resolve that legacy request once; all later consumers retain Problem.
+            self.problem = self.problem_provider.load(
+                Path(self.kernel_demo).resolve().parent, optimization_mode=self.optimization_mode,
+                snapshot_directory=self.workspace.parent / ".aka-problems" / self.campaign_name)
+        if self.problem.initial_source is None or self.problem.evaluation is None:
+            raise TypeError("Campaign requires explicit Problem initial source and evaluation roles")
+        self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
+        return self.problem
+
     def _problem_inputs(self):
-        return self.problem_provider.inputs(Path(self.kernel_demo).resolve().parent, self.workspace,
-                                            self.optimization_mode, self.atrex_bench_root,
-                                            self._generated_agent_problem_digest)
+        return self.problem_provider.content(self._loaded_problem(), self.workspace,
+                                             generated_digest=self._generated_agent_problem_digest)
 
     def _ensure_agent_problem(self) -> None:
         """Schedule the original authoring session when public input preparation requires it."""
@@ -439,15 +443,11 @@ class Campaign:
         private_dir = self.private_reference_dir
         if private_dir is None or memory is None:
             return ""
-        try:
-            shapes = validate_private_shapes(private_dir / "shapes.json")
-        except ValueError as exc:
-            return f"cannot read private evaluator shape ids: {type(exc).__name__}"
         performance = memory.get("performance")
         performance = performance if isinstance(performance, dict) else {}
         measured = performance.get("latency_us_by_shape")
         measured = measured if isinstance(measured, dict) else {}
-        expected_ids = {str(value) for value in shapes}
+        expected_ids = set(self._problem_inputs().evaluation.case_ids)
         measured_ids = {str(value) for value in measured}
         if measured_ids != expected_ids:
             return (
@@ -741,8 +741,7 @@ class Campaign:
                 "timing harness. `--multi-seed N` maps to N additional Atrex-Bench correctness "
                 "cases while performance remains one official run per shape."
             )
-        op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
+        if self._loaded_problem().initial_source.kind == "sol":
             return (
                 "## Evaluation route: SOL-ExecBench\n\n"
                 "Keep using the immutable SOL `test_kernel.py`, which invokes `sol-execbench` over "
@@ -810,8 +809,9 @@ class Campaign:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
         # (no baseline session) — sol_seed.py copies the ground-truth files, writes
         # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
-        op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
+        problem = self._loaded_problem()
+        op_dir = problem.evaluation.directory
+        if problem.initial_source.kind == "sol":
             self._setup_baseline_sol(op_dir)
             return
         if not WORKSPACE_INIT.exists():
@@ -821,13 +821,14 @@ class Campaign:
         from ._bootstrap import task_modules
         task_modules()
         from aka.contracts.workspace import SourceRequest
-        content = self.source_provider.prepare(SourceRequest(kernel_demo=self.kernel_demo))
+        content = self.source_provider.prepare(SourceRequest(initial=problem.initial_source))
+        initial_entry = str(problem.initial_source.entry)
         code = self.candidate_workspace.initialize_kernel(WORKSPACE_INIT.parent, str(WORKSPACE_INIT),
-            [self.campaign_name, self.kernel_demo], content=content,
+            [self.campaign_name, initial_entry], content=content,
             working_directory=self.workspace.parent)
         if code:
             raise subprocess.CalledProcessError(code,
-                ["bash", str(WORKSPACE_INIT), self.campaign_name, self.kernel_demo])
+                ["bash", str(WORKSPACE_INIT), self.campaign_name, initial_entry])
         # Production native tasks always expose a generalized public contract. Exact shapes and
         # release metadata remain in the source operator directory and are injected only at the
         # sandbox boundary. A missing public contract is authored before the baseline session.
@@ -988,7 +989,7 @@ class Campaign:
             "## Goal\n\n"
             "Maximize the arithmetic mean of per-shape speedups against Atrex-Bench metadata "
             "production performance while every evaluator case remains "
-            "correct. V0 is the verbatim PyTorch reference wrapper; optimized versions must "
+            "correct. V0 uses the Problem's selected initial implementation; optimized versions must "
             f"migrate the computation to `{self.framework}`.\n\n"
             "## Campaign\n\n"
             f"- Target platform: `{self.platform}`\n"
@@ -1116,7 +1117,7 @@ class Campaign:
             "This report was generated mechanically by the campaign supervisor.\n\n"
             "## Provenance\n\n"
             f"- Source commit: `{source_commit}`\n"
-            "- Implementation: verbatim `reference.py` copied to `kernel.py`\n"
+            "- Implementation: the Problem's selected initial source, prepared by Source\n"
             f"- Evaluator: `{evaluator}`\n"
             "- Route: remote sandbox, one base-seed full-workload run\n"
             f"- Evaluator id: `{eval_id if eval_id is not None else 'unknown'}`\n\n"
@@ -1150,7 +1151,7 @@ class Campaign:
         optimization = memory.setdefault("optimization", {})
         optimization["action_category"] = "baseline"
         optimization["action_description"] = (
-            "verbatim reference wrapper measured by the official full-workload evaluator"
+            "selected initial implementation measured by the official full-workload evaluator"
         )
         optimization["expected_impact"] = "correctness and latency reference for later versions"
         optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
@@ -1198,9 +1199,9 @@ class Campaign:
         reference_path = self.workspace / "reference.py"
         if not kernel_path.is_file() or not reference_path.is_file():
             raise RuntimeError("native V0 requires workspace kernel.py and reference.py")
-        if kernel_path.read_bytes() != reference_path.read_bytes():
+        if kernel_path.read_bytes() != self._loaded_problem().initial_source.entry.read_bytes():
             raise RuntimeError(
-                "native V0 kernel.py is not the verbatim reference wrapper; refusing "
+                "native V0 kernel.py differs from the selected initial implementation; refusing "
                 "mechanical baseline generation"
             )
         (self.workspace / "README.md").write_text(
@@ -1213,7 +1214,7 @@ class Campaign:
             "kernel.py",
             "test_kernel.py",
             "profile_driver.py",
-            *agent_visible_operator_files(op_dir, generalized=generalized),
+            *(item.path for item in self._loaded_problem().agent.files),
         ]
         source_paths = list(
             dict.fromkeys(
@@ -1243,7 +1244,7 @@ class Campaign:
         if git_path_blob(self.workspace, source_commit, "kernel.py") != git_worktree_blob(
             self.workspace, "kernel.py"
         ):
-            raise RuntimeError("native V0 source history does not match the reference wrapper")
+            raise RuntimeError("native V0 source history does not match the selected initial implementation")
 
         result = self._run_v0_evaluator_with_correctness_prefetch()
         self._finalize_v0_measurement(result, source_commit)
@@ -1287,7 +1288,7 @@ class Campaign:
             "--no-bench",
         ]
         from reference import sol_seed
-        code = sol_seed.main(cmd[2:], dependencies=self.task_dependencies)
+        code = sol_seed.main(cmd[2:], dependencies=self.task_dependencies, problem=self._loaded_problem())
         if code:
             raise subprocess.CalledProcessError(code, cmd)
         self._link_runtime()
@@ -1549,7 +1550,7 @@ class Campaign:
                 reference_blob
                 and reference_blob
                 == git_path_blob(self.workspace, baseline_commit, "kernel.py")
-            ) or is_sol_op(Path(self.kernel_demo).resolve().parent)
+            ) or self._loaded_problem().initial_source.kind == "sol"
             if known_reference_wrapper:
                 return (
                     "run",

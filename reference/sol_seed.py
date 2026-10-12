@@ -59,7 +59,6 @@ from aka.legacy.task.source.sol.render import _build_kernel, _render_kernel, _so
 from aka.legacy.application.source import source_provider
 from aka.legacy.application.workspace import candidate_workspace
 from aka.legacy.task.candidate_workspace.initial import GITIGNORE
-from aka.legacy.task.problem.inputs import sol_problem_files
 
 
 # Profiling is driven by the external `profile_driver.py` seeded next to kernel.py.
@@ -67,7 +66,7 @@ from aka.legacy.task.problem.inputs import sol_problem_files
 # in-kernel `__main__` block is silently lost the first time a session rewrites run().
 
 
-def main(argv: list[str] | None = None, *, dependencies=None) -> int:
+def main(argv: list[str] | None = None, *, dependencies=None, problem=None) -> int:
     ap = argparse.ArgumentParser(description="Seed a kernel-opt workspace from a SOL-ExecBench op dir.")
     ap.add_argument("--op-dir", required=True, help="SOL op dir (definition.json + reference.py + workload.jsonl).")
     ap.add_argument("--name", required=True, help="Workspace name -> kernel_opt_<name>/.")
@@ -82,13 +81,22 @@ def main(argv: list[str] | None = None, *, dependencies=None) -> int:
                          "for ops whose torch reference is too slow to bench within a reasonable budget.")
     args = ap.parse_args(argv)
 
-    op = Path(args.op_dir).resolve()
+    ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
+    if problem is None:
+        from aka.legacy.task.problem.legacy import LegacyProblemProvider
+        provider = dependencies["problem"] if dependencies is not None else LegacyProblemProvider()
+        # Keep the standalone CLI's missing-ground-truth diagnostics on first load.
+        if not (ws.parent / ".aka-problems" / args.name).exists():
+            for name in GROUND_TRUTH:
+                if not (Path(args.op_dir).resolve() / name).is_file():
+                    raise SystemExit(f"--op-dir is not a SOL op dir (missing {name}): {Path(args.op_dir).resolve()}")
+        problem = provider.load(Path(args.op_dir), snapshot_directory=ws.parent / ".aka-problems" / args.name)
+    op = problem.evaluation.directory
     for f in GROUND_TRUTH:
         if not (op / f).is_file():
             raise SystemExit(f"--op-dir is not a SOL op dir (missing {f}): {op}")
     defn = json.loads((op / "definition.json").read_text(encoding="utf-8"))
 
-    ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
     if args.no_bench and (ws / ".git").exists():
         history = subprocess.run(
             ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
@@ -129,18 +137,17 @@ def main(argv: list[str] | None = None, *, dependencies=None) -> int:
                 raise SystemExit("existing V0 is not the SOL reference wrapper")
             print(f"[sol_seed] reusing V0 source {source_commit}: {ws}")
             return 0
-    problem_files = (dependencies["problem"].sol_files(op) if dependencies is not None
-                     else sol_problem_files(op))
+    problem_files = problem.agent.files
     from contextlib import nullcontext
     from aka.contracts.workspace import SourceRequest
     request = SourceRequest("sol", operator_dir=str(op), name=args.name, framework=args.framework,
-                            platform=args.platform, gpu_wiki=args.gpu_wiki, definition=defn)
+                            platform=args.platform, gpu_wiki=args.gpu_wiki, initial=problem.initial_source)
     if dependencies is not None:
         content = dependencies["source"].prepare(request)
     else:
         with source_provider("sol", operator_dir=str(op), name=args.name, framework=args.framework,
                          platform=args.platform, gpu_wiki=args.gpu_wiki, definition=defn) as source:
-            content = source.prepare()
+            content = source.prepare(request)
     with (nullcontext(dependencies["workspace"]) if dependencies is not None else candidate_workspace()) as workspace:
         workspace.prepare_sol(ws, content, problem_files=problem_files, reference_dir=SCRIPT_DIR)
 

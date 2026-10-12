@@ -20,6 +20,14 @@ def resolve_problem(directory: str, optimization_mode: str = "leaderboard", *, p
     return resolve_operator_directory(directory, optimization_mode, provider=provider)
 
 
+def load_problem(directory: str, optimization_mode: str = "leaderboard", *, provider=None,
+                 snapshot_directory: Path | None = None):
+    task_modules()
+    from aka.legacy.application.task import load_operator_problem
+    return load_operator_problem(directory, optimization_mode, provider=provider,
+                                 snapshot_directory=snapshot_directory)
+
+
 def run(argv: Optional[list[str]] = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     source = repo_root / "src"

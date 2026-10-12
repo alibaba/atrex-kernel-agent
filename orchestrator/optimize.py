@@ -791,7 +791,16 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    op = _resolve_op(args.op_dir, args.optimization_mode, provider=(dependencies or {}).get("problem"))
+    from ._bootstrap import load_problem
+    import hashlib
+    snapshot_key = hashlib.sha256(
+        (str(Path(args.op_dir).resolve()) + "\0" + args.optimization_mode + "\0"
+         + (args.workspace_suffix or f"{args.framework}_{args.platform}")).encode()
+    ).hexdigest()[:24]
+    snapshot_directory = (Path(args.workspace) if args.workspace else Path.cwd()) / ".aka-problems" / snapshot_key
+    problem = load_problem(args.op_dir, args.optimization_mode,
+                           provider=(dependencies or {}).get("problem"),
+                           snapshot_directory=snapshot_directory)
     if args.sandbox_ssh:
         workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
         configure_recovery(
@@ -806,7 +815,7 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
             health_command=args.sandbox_health_command,
             poll_interval=args.environment_poll_interval,
             runtime_health_command=runtime_health_command(
-                sol=is_sol_op(Path(op["op_dir"])), framework=args.framework
+                sol=problem.initial_source.kind == "sol", framework=args.framework
             ),
         )
         raise_if_environment_blocked()
@@ -828,7 +837,7 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
             args.framework, args.platform, args.optimization_mode
         )
         base = Path(args.workspace) if args.workspace else Path.cwd()
-        arch = _recorded_workspace_arch(base / f"kernel_opt_{op['name']}_{suffix}")
+        arch = _recorded_workspace_arch(base / f"kernel_opt_{problem.name}_{suffix}")
         if arch:
             print(
                 f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
@@ -842,9 +851,9 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         else supported_frameworks(args.platform, arch)
     )
     print(
-        f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
+        f"[orchestrator] op={problem.name} agent_cli={args.agent_cli} "
         f"optimization_mode={args.optimization_mode} platform={args.platform} "
-        f"agent_problem={op.get('agent_problem_source', 'none')} "
+        f"agent_problem={problem.public_contract_source} "
         f"sandbox_hardware={sandbox_hardware} "
         "sandbox_endpoint="
         f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
@@ -879,8 +888,9 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
 
     campaign = Campaign(
         task_dependencies=dependencies,
-        name=op["name"],
-        kernel_demo=op["reference"],
+        problem=problem,
+        name=problem.name,
+        kernel_demo=str(problem.initial_source.entry),
         platform=args.platform,
         framework=args.framework,
         notes=args.notes,
@@ -893,7 +903,7 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         sandbox_ssh_gpu=args.sandbox_ssh_gpu,
         sandbox_health_command=args.sandbox_health_command,
         sandbox_timeout=args.sandbox_timeout,
-        atrex_bench_root=op.get("atrex_bench_root", ""),
+        atrex_bench_root=str(problem.evaluation.runtime_root or ""),
         agent_cli=args.agent_cli,
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
