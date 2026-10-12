@@ -1,6 +1,7 @@
 """Run from the checkout: PYTHONPATH=src:. python -m unittest discover -s packages/atrex-aka-dashboard."""
 from __future__ import annotations
 
+import io
 import json
 import socket
 import tempfile
@@ -12,7 +13,9 @@ from threading import Event
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
+from zipfile import ZipFile
 
 from aka.bootstrap.profile import resolve_profile
 from aka.bootstrap.continuation import capture
@@ -292,6 +295,52 @@ class ReaderTest(unittest.TestCase):
         self.assertIsNone(self.snapshot()["progress"]["experiment_count"])
         self.assertFalse(self.reader.episode(self.identifier, 1)["detail_available"])
 
+    def test_artifacts_export_current_files_and_public_summary_without_writes(self):
+        kernel = b"def kernel(values):\n    return sum(values)\n"
+        (self.fixture.path / "kernel.py").write_bytes(kernel)
+        manifest = self.fixture.write("solution.json", {"entry_point": "kernel.py::kernel"})
+        self.fixture.write("private-evaluator.json", {"hidden": "must-not-export"})
+        before = {p: p.read_bytes() for p in self.fixture.path.rglob("*") if p.is_file()}
+        value = self.snapshot()
+        artifacts = {a["id"]: a for a in value["artifacts"]}
+        self.assertEqual(set(artifacts), {"kernel", "solution", "summary", "bundle"})
+        self.assertEqual(artifacts["kernel"]["size_bytes"], len(kernel))
+        self.assertIn("Current workspace", value["artifact_scope"])
+        self.assertEqual(self.reader.artifact(self.identifier, "kernel"), kernel)
+        self.assertEqual(self.reader.artifact(self.identifier, "solution"), manifest.read_bytes())
+        summary = json.loads(self.reader.artifact(self.identifier, "summary"))
+        self.assertEqual(summary["observation_version"], 1)
+        self.assertEqual(summary["artifact_scope"], "current_workspace")
+        self.assertEqual(summary["tokens"]["total"], 300)
+        self.assertEqual(summary["canonical"]["incumbent"]["value"], 1.5)
+        self.assertEqual(summary["files"], ["kernel.py", "solution.json"])
+        self.assertNotIn("private-shape-id", json.dumps(summary))
+        self.assertNotIn(str(self.fixture.path), json.dumps(summary))
+        with ZipFile(io.BytesIO(self.reader.artifact(self.identifier, "bundle"))) as archive:
+            self.assertEqual(archive.namelist(), ["kernel.py", "solution.json", "result-summary.json"])
+            self.assertEqual(archive.read("kernel.py"), kernel)
+            self.assertEqual(archive.read("solution.json"), manifest.read_bytes())
+            self.assertEqual(json.loads(archive.read("result-summary.json"))["tokens"]["total"], 300)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.fixture.path.rglob("*") if p.is_file()})
+
+    def test_missing_and_symlink_artifacts_are_not_downloadable(self):
+        kernel = self.fixture.path / "kernel.py"
+        kernel.write_text("current source")
+        self.assertIn("kernel", [a["id"] for a in self.snapshot()["artifacts"]])
+        kernel.unlink()
+        with self.assertRaises(KeyError):
+            self.reader.artifact(self.identifier, "kernel")
+        outside = self.root / "private.txt"
+        outside.write_text("not an artifact")
+        kernel.symlink_to(outside)
+        self.assertEqual([a["id"] for a in self.snapshot()["artifacts"]], ["bundle", "summary"])
+        for artifact_id in ("kernel", "solution", "unknown", "../private.txt", ".atrex_long_horizon/state.json"):
+            with self.subTest(artifact_id=artifact_id), self.assertRaises(KeyError):
+                self.reader.artifact(self.identifier, artifact_id)
+        with ZipFile(io.BytesIO(self.reader.artifact(self.identifier, "bundle"))) as archive:
+            self.assertEqual(archive.namelist(), ["result-summary.json"])
+            self.assertEqual(json.loads(archive.read("result-summary.json"))["files"], [])
+
 
 class LifecycleAndHTTPTest(unittest.TestCase):
     def test_required_source_can_be_replaced_through_composition(self):
@@ -300,6 +349,9 @@ class LifecycleAndHTTPTest(unittest.TestCase):
             reader = WorkspaceReader(fixture.path)
             identifier = reader.campaigns()["campaigns"][0]["id"]
             value = reader.campaign(identifier)
+            # Existing v1 providers do not need the optional download capability.
+            value.pop("artifacts")
+            value.pop("artifact_scope")
             value.update(id="custom-run", name="independent-workflow", display_name="Custom workflow",
                          stages=[{"id": "tune", "label": "Tune"}, {"id": "publish", "label": "Publish"}])
             value["progress"].update(phase="tune", phase_label="Tuning", stage_id="tune")
@@ -337,6 +389,11 @@ class LifecycleAndHTTPTest(unittest.TestCase):
                         observed = json.loads(response.read())
                 self.assertEqual(observed["stages"], value["stages"])
                 self.assertEqual(observed["progress"]["stage_id"], "tune")
+                self.assertNotIn("artifacts", observed)
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(url + "api/campaigns/custom-run/artifacts/kernel", timeout=3)
+                self.assertEqual(error.exception.code, 404)
+                error.exception.close()
                 for invalid in (2, "1", True, None):
                     with self.subTest(protocol_version=invalid):
                         source.protocol_version = invalid
@@ -350,6 +407,77 @@ class LifecycleAndHTTPTest(unittest.TestCase):
                         error.exception.close()
             finally:
                 report.dispose()
+
+    def test_artifact_downloads_use_source_capability_and_validate_protocol(self):
+        content = b"independent plugin output\n"
+        filename = 'results \u7ed3\u679c "final".txt'
+        metadata = {"id": "output-7", "label": "Plugin output", "filename": filename,
+                    "content_type": "text/plain", "kind": "file", "size_bytes": len(content)}
+        class CustomSource:
+            protocol_version = 1
+            response_version = 1
+            downloads = []
+            def open(self, workspace):
+                return self
+            def campaign(self, identifier):
+                if identifier != "run-7":
+                    raise KeyError(identifier)
+                return {"observation_version": self.response_version, "artifacts": [metadata]}
+            def artifact(self, identifier, artifact_id):
+                self.downloads.append((identifier, artifact_id))
+                return content
+        source = CustomSource()
+        with tempfile.TemporaryDirectory() as tmp:
+            startup = DashboardStartup(source, port=0)
+            try:
+                with patch.object(Path, "iterdir", side_effect=AssertionError("dashboard scanned workflow files")):
+                    url = startup.start(Path(tmp))
+                    with urlopen(url + "api/campaigns/run-7/artifacts/output-7", timeout=3) as response:
+                        self.assertEqual(response.read(), content)
+                        self.assertEqual(response.headers["Content-Type"], "text/plain")
+                        self.assertEqual(response.headers["Content-Length"], str(len(content)))
+                        self.assertEqual(response.headers["X-AKA-Observation-Version"], "1")
+                        self.assertEqual(unquote(response.headers["Content-Disposition"]), "attachment; filename*=UTF-8''" + filename)
+                        self.assertEqual(response.headers["Cache-Control"], "no-store")
+                for route in ("run-7/artifacts/unknown", "unknown/artifacts/output-7", "run-7/artifacts/../state.json", "run-7/artifacts/%2e%2e%2fstate.json"):
+                    with self.subTest(route=route), self.assertRaises(HTTPError) as error:
+                        urlopen(url + "api/campaigns/" + route, timeout=3)
+                    self.assertEqual(error.exception.code, 404)
+                    error.exception.close()
+                source.response_version = 2
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(url + "api/campaigns/run-7/artifacts/output-7", timeout=3)
+                self.assertEqual(error.exception.code, 409)
+                error.exception.close()
+                self.assertEqual(source.downloads, [("run-7", "output-7")])
+            finally:
+                startup.close()
+
+    def test_long_horizon_download_api_handles_removed_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = WorkspaceFixture(Path(tmp) / "kernel_opt_cuda").populated()
+            kernel = fixture.path / "kernel.py"
+            kernel.write_bytes(b"current kernel source\n")
+            before = {p: p.read_bytes() for p in fixture.path.rglob("*") if p.is_file()}
+            startup = DashboardStartup(LongHorizonSource(), port=0)
+            try:
+                url = startup.start(fixture.path)
+                with urlopen(url + "api/campaigns", timeout=3) as response:
+                    identifier = json.loads(response.read())["campaigns"][0]["id"]
+                route = url + f"api/campaigns/{identifier}/artifacts/"
+                with urlopen(route + "bundle", timeout=3) as response:
+                    self.assertEqual(response.headers["Content-Type"], "application/zip")
+                    with ZipFile(io.BytesIO(response.read())) as archive:
+                        self.assertEqual(archive.read("kernel.py"), kernel.read_bytes())
+                self.assertEqual(before, {p: p.read_bytes() for p in fixture.path.rglob("*") if p.is_file()})
+                kernel.unlink()
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(route + "kernel", timeout=3)
+                self.assertEqual(error.exception.code, 404)
+                self.assertEqual(json.loads(error.exception.read())["error"], "Artifact is no longer available")
+                error.exception.close()
+            finally:
+                startup.close()
 
     def test_missing_source_fails_at_boot(self):
         selection = resolve_profile(PROFILE, tokens=(OBSERVATION_SOURCE,),
@@ -416,6 +544,9 @@ class LifecycleAndHTTPTest(unittest.TestCase):
                 self.assertEqual(campaign["progress"]["episode"], 9)
                 self.assertEqual(campaign["progress"]["experiment_count"], 5)
                 self.assertEqual(len(campaign["episodes"]), 8)
+                self.assertEqual([a["id"] for a in campaign["artifacts"]], ["bundle", "kernel", "solution", "summary"])
+                with urlopen(url + f"api/campaigns/{cuda['id']}/artifacts/kernel", timeout=3) as response:
+                    self.assertIn(b"Sample download", response.read())
                 with urlopen(url + f"api/campaigns/{cuda['id']}/episodes/7", timeout=3) as response:
                     detail = json.loads(response.read())
                 self.assertEqual(sum(p["usage"]["total_tokens"] for p in detail["phases"]), 190000)

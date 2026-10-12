@@ -106,4 +106,10 @@ def create_demo_workspace(root: Path) -> Path:
     write(triton / ".atrex_long_horizon/state.json", {"episodes": 1, "accepted": 0, "rejected": 0,
                                                      "blocked": 1, "tokens": 0, "attempts": [attempt]})
     write(triton / "memory/live.json", {"episode": 1, "version": "v2", "phase": "recorded", "updated_at": now()})
+    (cuda / "kernel.py").write_text(
+        '"""Sample download for the dashboard preview; no optimization was run."""\n\n'
+        'def sample_kernel(values):\n    return sum(values)\n', encoding="utf-8")
+    write(cuda / "solution.json", {"entry_point": "kernel.py::sample_kernel",
+                                   "sources": [{"path": "kernel.py", "language": "python"}],
+                                   "description": "Preview sample, not an optimized GPU kernel"})
     return root

@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import RLock
 
 from aka.contracts.observation import OBSERVATION_VERSION, Campaign, Campaigns, Episode
+from .artifacts import SCOPE as ARTIFACT_SCOPE, artifact_bytes, describe_artifacts
 
 RUNTIME = ".atrex_long_horizon"
 PHASES = ("profile", "research", "planning", "implementation", "correctness", "benchmark", "recording")
@@ -375,6 +376,7 @@ class WorkspaceReader:
         return {"observation_version": OBSERVATION_VERSION,
                 "id": identifier, "name": path.name, "display_name": display_name(path.name, framework),
                 "workspace": str(path), "stages": stages,
+                "artifacts": describe_artifacts(path), "artifact_scope": ARTIFACT_SCOPE,
                 "framework": framework, "platform": baseline.get("platform") or hardware.get("platform"),
                 "arch": baseline.get("arch") or hardware.get("arch"),
                 "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
@@ -406,6 +408,11 @@ class WorkspaceReader:
         with self._lock:
             self._discover()
             return self._snapshot(identifier)
+
+    def artifact(self, identifier: str, artifact_id: str) -> bytes:
+        with self._lock:
+            self._discover()
+            return artifact_bytes(self._paths[identifier], artifact_id, self._snapshot(identifier))
 
     def episode(self, identifier: str, number: int) -> Episode:
         with self._lock:

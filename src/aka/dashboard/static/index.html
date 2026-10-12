@@ -100,6 +100,19 @@
     .token-types { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; margin: 14px 0; }
     dt, dd { margin: 0; } dd { font-family: var(--mono); }
     #control-total, #reasons { margin-top: 8px; color: var(--muted); }
+    .artifacts { margin-top: 24px; }
+    .artifact-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+    .artifact-heading h2 { margin: 0; }
+    #artifact-scope, #artifact-empty { color: var(--muted); font-size: 11px; }
+    .artifact-files { margin-top: 10px; }
+    .artifact-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .artifact-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .artifact-name { font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+    .artifact-detail { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .download-action { color: var(--accent); background: var(--panel); border: 1px solid var(--control-line); border-radius: 6px; padding: 6px 12px; font-size: 11px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    .download-action:hover { background: var(--soft); }
+    .download-action:disabled { opacity: .6; cursor: wait; }
+    #artifact-error { margin-top: 12px; color: var(--warn); font-size: 11px; }
     .history { margin-top: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
     .history > h2 { padding: 20px 22px 14px; }
     .row-head, .record { display: grid; grid-template-columns: 116px 72px minmax(0, 1fr) 116px; align-items: center; gap: 14px; padding: 12px 22px; }
@@ -181,7 +194,7 @@
 <div class="app-layout">
   <aside class="sidebar" aria-label="Dashboard navigation">
     <label id="picker" hidden><span>Campaign</span><select id="campaigns" aria-label="Select optimization campaign"></select></label>
-    <nav id="section-nav" class="section-nav" aria-label="Page sections" hidden><a href="#overview" aria-current="location">Overview</a><a href="#performance-trend">Performance</a><a href="#episode-history">Episode history</a></nav>
+    <nav id="section-nav" class="section-nav" aria-label="Page sections" hidden><a href="#overview" aria-current="location">Overview</a><a href="#performance-trend">Performance</a><a href="#artifacts">Artifacts</a><a href="#episode-history">Episode history</a></nav>
     <div class="sidebar-meta"><p>Dashboard plugin</p><p>Local observer</p></div>
   </aside>
   <main>
@@ -213,6 +226,13 @@
           <details><summary>Input, output, cache and measurement notes</summary><dl id="token-types" class="token-types"></dl><p id="control-total"></p><p id="reasons"></p></details>
         </section>
       </div>
+      <section id="artifacts" class="artifacts pane" aria-labelledby="artifacts-title">
+        <div class="artifact-heading"><h2 id="artifacts-title">Artifacts</h2><button id="artifact-bundle" class="download-action" type="button" hidden>Download bundle</button></div>
+        <p id="artifact-scope"></p>
+        <div id="artifact-files" class="artifact-files" role="list" aria-label="Downloadable files"></div>
+        <p id="artifact-empty" hidden>No downloadable artifacts yet.</p>
+        <p id="artifact-error" role="status" hidden></p>
+      </section>
       <section id="episode-history" class="history"><h2>Episode history</h2><div class="row-head"><span>Episode / version</span><span>Mode</span><span>Outcome / verification</span><span class="number">Tokens</span></div><div id="records"></div>
         <div id="episode-detail"><p id="detail-title"></p><p id="detail-summary" class="muted"></p><p id="verification" class="muted"></p>
           <details><summary>Experiments and evidence</summary><p id="detail-availability"></p><ol id="experiments"></ol><ul id="evidence"></ul></details>
@@ -235,6 +255,7 @@
   function text(id, value) { $(id).textContent = value ?? ''; }
   function element(tag, value, className) { const el = document.createElement(tag); if (value != null) el.textContent = value; if (className) el.className = className; return el; }
   const campaignName = c => c.display_name;
+  const bytes = n => n == null ? '' : n < 1024 ? `${number(n)} B` : `${new Intl.NumberFormat('en-US', {maximumFractionDigits: 1}).format(n / (n < 1048576 ? 1024 : 1048576))} ${n < 1048576 ? 'KB' : 'MB'}`;
   async function get(path) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
     try {
@@ -250,6 +271,38 @@
     finally { clearTimeout(timeout); }
   }
   function selectEpisode(n) { if (episode === n) return; episode = n; generation++; requestRefresh(); }
+  async function downloadArtifact(identifier, artifact, button) {
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 30000), label = button.textContent;
+    button.disabled = true; button.textContent = 'Downloading…'; $('artifact-error').hidden = true;
+    try {
+      const response = await fetch(`/api/campaigns/${identifier}/artifacts/${artifact.id}`, {cache: 'no-store', signal: controller.signal});
+      if (!response.ok) throw new Error((await response.json()).error);
+      if (response.headers.get('X-AKA-Observation-Version') !== '1') throw new Error('Unsupported artifact protocol; expected 1');
+      const url = URL.createObjectURL(await response.blob()), link = element('a');
+      link.href = url; link.download = artifact.filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      if (campaignId === identifier) { text('artifact-error', `Download failed: ${error.message}`); $('artifact-error').hidden = false; }
+    } finally { clearTimeout(timeout); button.disabled = false; button.textContent = label; }
+  }
+  let renderedArtifacts = null;
+  function renderArtifacts(c) {
+    const artifacts = c.artifacts || [], bundle = artifacts.find(a => a.kind === 'bundle');
+    text('artifact-scope', c.artifact_scope || 'Files published by this data source.');
+    $('artifact-bundle').hidden = !bundle;
+    $('artifact-bundle').onclick = bundle ? () => downloadArtifact(c.id, bundle, $('artifact-bundle')) : null;
+    // Keep download controls and keyboard focus across progress-only refreshes.
+    const key = JSON.stringify([c.id, artifacts]);
+    if (renderedArtifacts === key) return;
+    renderedArtifacts = key;
+    $('artifact-files').replaceChildren(); $('artifact-empty').hidden = artifacts.length > 0;
+    for (const artifact of artifacts.filter(a => a !== bundle)) {
+      const row = element('div', null, 'artifact-row'), info = element('div'), button = element('button', 'Download', 'download-action');
+      row.setAttribute('role', 'listitem'); info.append(element('p', artifact.filename, 'artifact-name'), element('small', [artifact.label, bytes(artifact.size_bytes)].filter(Boolean).join(' · '), 'artifact-detail'));
+      button.type = 'button'; button.setAttribute('aria-label', `Download ${artifact.filename}`);
+      button.addEventListener('click', () => downloadArtifact(c.id, artifact, button)); row.append(info, button); $('artifact-files').append(row);
+    }
+  }
   function render(c, detail, listing) {
     data = c; $('content').hidden = false; $('empty').hidden = true; $('section-nav').hidden = false;
     text('title', campaignName(c)); $('title').title = c.name;
@@ -282,6 +335,7 @@
     $('issues').hidden = !issues.length;
     text('issues', issues.join('; '));
     drawTrend();
+    renderArtifacts(c);
     $('records').replaceChildren();
     const rows = [...c.episodes];
     if (p.episode && !rows.some(r => r.episode === p.episode)) rows.push({episode: p.episode, version: p.version, mode: p.mode, status: 'observed_active', tokens: {total: null}});
@@ -379,7 +433,7 @@
     } catch (error) { text('connection', `Connection failed. Keeping previous data${lastSuccess ? ` (${lastSuccess})` : ''} · ${error.message}`); $('connection').dataset.ok = 'false'; }
     finally { $('connection').title = $('connection').textContent; busy = false; timer = setTimeout(refresh, again || generation !== currentGeneration ? 0 : document.hidden ? Math.max(30000, refreshMs) : refreshMs); }
   }
-  $('campaigns').addEventListener('change', () => { campaignId = $('campaigns').value; episode = null; text('version-detail', ''); generation++; requestRefresh(); });
+  $('campaigns').addEventListener('change', () => { campaignId = $('campaigns').value; episode = null; text('version-detail', ''); $('artifact-error').hidden = true; generation++; requestRefresh(); });
   $('theme').addEventListener('change', () => { if ($('theme').value === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = $('theme').value; });
   function updateNavigation() { document.querySelectorAll('.section-nav a').forEach(link => link.setAttribute('aria-current', link.hash === (location.hash || '#overview') ? 'location' : 'false')); }
   window.addEventListener('hashchange', updateNavigation); updateNavigation();

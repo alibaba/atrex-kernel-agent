@@ -5,9 +5,11 @@ import json
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from urllib.parse import urlsplit
+from typing import cast
+from urllib.parse import quote, urlsplit
 
-from aka.contracts.observation import ObservationReader, ObservationProtocolError, check_observation_version
+from aka.contracts.observation import (OBSERVATION_VERSION, ArtifactReader, ObservationReader,
+                                      ObservationProtocolError, check_observation_version)
 
 
 class DashboardHTTPServer(ThreadingHTTPServer):
@@ -35,6 +37,17 @@ def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: i
                 self.respond(200, fonts[path], "font/woff2")
                 return
             try:
+                download = re.fullmatch(r"/api/campaigns/([A-Za-z0-9_-]+)/artifacts/([A-Za-z0-9_-]+)", path)
+                if download:
+                    campaign, artifact_id = download.groups()
+                    payload = reader.campaign(campaign)
+                    check_observation_version(payload.get("observation_version"))
+                    metadata = next((a for a in payload.get("artifacts", []) if a["id"] == artifact_id), None)
+                    if metadata is None:
+                        raise KeyError(artifact_id)
+                    data = cast(ArtifactReader, reader).artifact(campaign, artifact_id)
+                    self.respond(200, data, metadata["content_type"], filename=metadata["filename"])
+                    return
                 if path == "/api/campaigns":
                     payload = {**reader.campaigns(), "refresh_ms": refresh_ms, "demo": demo}
                 else:
@@ -49,7 +62,7 @@ def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: i
             except ObservationProtocolError as exc:
                 self.respond_json(409, {"error": str(exc), "code": "unsupported_observation_version"})
             except KeyError:
-                self.respond_json(404, {"error": "Record not found"})
+                self.respond_json(404, {"error": "Artifact is no longer available" if download else "Record not found"})
             except OSError:
                 self.respond_json(503, {"error": "Workspace temporarily unavailable"})
 
@@ -62,12 +75,15 @@ def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: i
             self.respond(status, json.dumps(payload, ensure_ascii=False, allow_nan=False).encode(),
                          "application/json; charset=utf-8")
 
-        def respond(self, status, payload, content_type):
+        def respond(self, status, payload, content_type, *, filename=None):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            if filename is not None:
+                self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(filename, safe=""))
+                self.send_header("X-AKA-Observation-Version", str(OBSERVATION_VERSION))
             self.end_headers()
             self.wfile.write(payload)
 

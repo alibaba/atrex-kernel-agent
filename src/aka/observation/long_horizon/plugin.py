@@ -7,7 +7,7 @@ from .demo import create_demo_workspace
 
 name = "long-horizon"
 provide = ("observation_source",)
-identity_files = ("__init__.py", "plugin.py", "reader.py", "demo.py")
+identity_files = ("__init__.py", "plugin.py", "reader.py", "artifacts.py", "demo.py")
 identity_packages = ("aka.contracts",)
 
 

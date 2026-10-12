@@ -152,6 +152,22 @@ class EpisodeSummary(TypedDict):
     tokens: EpisodeTokens
 
 
+class Artifact(TypedDict):
+    """Opaque IDs use letters, digits, underscores and hyphens; names are basenames."""
+
+    id: str
+    label: str
+    filename: str
+    content_type: str
+    kind: Literal["file", "bundle"]
+    size_bytes: Optional[int]
+
+
+class _CampaignArtifacts(TypedDict, total=False):
+    artifacts: list[Artifact]
+    artifact_scope: str
+
+
 class CampaignSummary(TypedDict):
     id: str
     name: str
@@ -164,7 +180,7 @@ class CampaignSummary(TypedDict):
     counts: Counts
 
 
-class Campaign(CampaignSummary):
+class Campaign(CampaignSummary, _CampaignArtifacts):
     observation_version: int
     workspace: str
     arch: Optional[str]
@@ -214,6 +230,18 @@ class ObservationReader(Protocol):
     def campaigns(self) -> Campaigns: ...
     def campaign(self, identifier: str) -> Campaign: ...
     def episode(self, identifier: str, number: int) -> Episode: ...
+
+
+class ArtifactReader(Protocol):
+    """Optional v1 capability for readers declaring campaign.artifacts.
+
+    Only declared IDs may be downloaded. Missing or removed outputs raise
+    KeyError; reading must not write workflow files. The source owns file access
+    and packaging. Dashboard never accepts a client-supplied filesystem path.
+    Existing v1 readers may omit artifacts and this capability entirely.
+    """
+
+    def artifact(self, identifier: str, artifact_id: str) -> bytes: ...
 
 
 class ObservationSource(Protocol):

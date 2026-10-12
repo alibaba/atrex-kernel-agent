@@ -1,6 +1,6 @@
 # 优化进展展示插件设计
 
-可选的 `aka.dashboard` Core 插件通过独立 `Startup` 启动本地只读页面，展示优化阶段、实验结果和 token 消耗。Dashboard 注入 `observation_source` 服务，只消费统一观测契约；默认由 `aka.observation.long_horizon` 适配插件读取优化工作空间，一个页面可以观察多个框架 campaign。通过独立 launch profile 启用，安装和运行优化器时无需加载 UI。
+可选的 `aka.dashboard` Core 插件通过独立 `Startup` 启动本地只读页面，展示优化阶段、实验结果和 token 消耗，并下载数据源声明的成果物。Dashboard 注入 `observation_source` 服务，只消费统一观测契约；默认由 `aka.observation.long_horizon` 适配插件读取优化工作空间，一个页面可以观察多个框架 campaign。通过独立 launch profile 启用，安装和运行优化器时无需加载 UI。
 
 采用 Python 标准库 HTTP 服务、原生 HTML/CSS/JavaScript 和两秒轮询。数据源负责原生记录的版本校验、语义转换和阶段定义，页面按契约动态展示阶段。运行配置、流式用量与全流程 receipt 仍属于后续扩展；UI 明确展示已结算、待结算和不可用，缺失预算不生成百分比。
 
@@ -56,6 +56,7 @@ src/aka/dashboard/
 src/aka/observation/long_horizon/
 ├── plugin.py                  # 提供 observation_source
 ├── reader.py                  # long-horizon 记录的只读投影和版本校验
+├── artifacts.py               # 声明可下载文件，生成结果摘要和 ZIP
 └── demo.py                    # 仅向预览临时目录写入示例记录
 ```
 
@@ -79,7 +80,10 @@ Dashboard 声明 `inject = ("observation_source",)` 和 `provide = ("startup",)`
 | `phases: [{phase, label, usage}]` | 数据源提供有序 token 归因行，新增阶段不被 UI 固定列表丢弃 |
 | `canonical.incumbent` | 携带数值、单位、指标名称及来源；数据源定义可比较的历史段 |
 | `tokens` | 已结算总量、统计范围、精确/部分/不可用状态；阶段值不再次加入总量 |
+| `artifacts`、`artifact_scope`（可选） | 数据源声明下载项与成果物范围，提供 ID、名称、文件名、内容类型、file/bundle 类型及可用大小 |
 | `issues` | 原生记录不兼容或更新中的诊断，不把不兼容格式当成等待或精确统计 |
+
+下载是协议 v1 的可选能力：声明 `campaign.artifacts` 的读取器同时实现 `ArtifactReader.artifact(campaign_id, artifact_id) -> bytes`。成果物 ID 和 campaign ID 使用字母、数字、下划线及连字符；文件名为 basename。文件定位和打包由适配插件负责，Dashboard 根据声明的 ID 请求内容，不接收浏览器传入的文件路径。文件不存在或已被移除时抛出 `KeyError`，HTTP 返回 404；下载前仍校验观测协议。原有 v1 数据源可省略这两个字段及方法，页面显示无成果物，进度和用量功能继续工作。
 
 默认适配器兼容未声明版本的历史记录。已声明的 live、telemetry、journal、framework baseline、crash snapshot 和 trace manifest 必须匹配各自已支持版本；原本未版本化的 state、attempt 和 canonical memory 不接受未知版本声明。新版本返回 `unsupported_schema_version`，不使用旧 schema 解读，受影响用量按已知控制记录降为 partial 或 unavailable。畸形写入仍沿用上次有效记录；版本不兼容会明确报告。
 
@@ -193,7 +197,10 @@ python -m pip install /tmp/aka-dashboard-dist/*.whl
 | 结果概览 | canonical 最新版本、接受数、当前 incumbent 性能、已结算 tokens | 数据不完整时显示具体状态 |
 | 性能趋势 | canonical incumbent 性能随版本变化 | 选择版本查看结果；拒绝轮保留原 incumbent |
 | Token 用量 | 每个 episode 用量、累计已结算用量、所选 episode 阶段分布 | 选择 episode；展开输入、输出、缓存和原因码 |
+| 成果物 | 数据源声明的文件名、用途、已知大小及成果物范围 | 单个文件下载或 Download bundle；下载失败显示原因 |
 | 轮次记录 | episode、版本、模式、接受/拒绝/pivot/blocked/interrupted、token、验证结论 | 查看同一记录的摘要、归因和证据文件名 |
+
+默认 long-horizon 适配器提供当前 campaign 根目录中的 `kernel.py`、`solution.json`，以及按当前观测生成的 `result-summary.json` 和 ZIP 包。源码和 manifest 缺失或为符号链接时不列出；ZIP 只包含这些可用文件及摘要，在内存中生成，不写入优化目录。摘要包含 task 级性能、进度和已结算用量，不导出原始 memory、私有 evaluator 数据或 Agent 会话。页面明确标注 Current workspace files：这些文件是下载时的当前工作空间内容，不承诺对应历史版本或已验证候选。其他数据源插件可声明自己的成果物列表和 bundle，无需修改 UI。演示模式提供明确标注的示例文件，仍不启动优化任务。
 
 默认适配器使用“准备 → 探索 → 验证 → 记录”标记当前阶段，其他数据源按自己的 `stages` 列表展示。探索可以包含多次实验，不能用阶段序号伪造完成百分比。fast 模式明确显示 evaluator 验证，full 模式明确显示 ABBA 验证。
 
@@ -241,6 +248,7 @@ python -m pip install /tmp/aka-dashboard-dist/*.whl
 | `GET /api/campaigns` | 已注册观察目录中的 campaign 列表和轻量摘要 |
 | `GET /api/campaigns/{id}` | 所选任务进度、性能历史、用量与数据质量 |
 | `GET /api/campaigns/{id}/episodes/{episode}` | 所选 episode 的摘要和 telemetry 明细 |
+| `GET /api/campaigns/{id}/artifacts/{artifact_id}` | 已声明成果物的二进制内容，附 attachment 文件名及观测协议版本 |
 
 浏览器 ID 映射到启动时允许观察的目录，不接受 HTTP 参数中的任意文件路径。未知 ID 返回 404，文本用 DOM `textContent` 呈现。接口不提供写入、执行、恢复或停止优化的动作。
 
@@ -271,6 +279,7 @@ python -m pip install /tmp/aka-dashboard-dist/*.whl
 - 核验 receipt 重放、同会话恢复、invocation 待结算、预算与观测 total 不一致、Qoder 不可用、阶段归因缺失及多任务部分统计。
 - 优化器重启、工作树移除、旧 manifest 残留和文件更新过程中，页面保留可解释状态；UI 开关不改变 canonical memory、预算与接受结果。
 - 浏览器检查 campaign 切换、episode 详情、连接失败和窄屏布局；页面刷新后仍能读到同一累计用量，离线不请求外部资源。
+- 核验单文件和 ZIP 下载、摘要统计口径、工作空间只读、缺失和符号链接文件、未知 ID 与路径穿越、下载协议校验，以及未提供下载能力的旧 v1 数据源。
 
 ## 代码依据
 
