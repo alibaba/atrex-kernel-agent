@@ -989,7 +989,7 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
 
 def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     try:
-        result = _run_main(argv) if dependencies is None else _run_main(argv, dependencies=dependencies)
+        result = _run_main(argv, dependencies=dependencies)
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
