@@ -18,7 +18,9 @@ class SolSourceProvider:
         op = Path(self.operator_dir)
         def read(name):
             if request is not None and request.initial is not None:
-                item = next(item for item in request.initial.files if item.path == name)
+                item = next((item for item in request.initial.files if item.path == name), None)
+                if item is None:
+                    raise ValueError(f"SOL initial source is missing required file: {name}")
                 return item.source.read_text(encoding="utf-8") if item.source is not None else item.text
             return (op / name).read_text(encoding="utf-8")
         definition = self.definition if self.definition is not None else json.loads(read("definition.json"))

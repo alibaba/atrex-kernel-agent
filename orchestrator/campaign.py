@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Optional
 
 from . import agent_runtime as _agent_runtime
+from ._bootstrap import task_modules
+
+task_modules()
+from aka.contracts.problem import LoadedProblem
+
 from .constants import (
     SUPPLEMENTAL_PENDING_PREFIX,
     SUPPLEMENTAL_REPAIR_PREFIX,
@@ -206,7 +211,7 @@ class Campaign:
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
     task_dependencies: dict | None = field(default=None, repr=False, compare=False)
-    problem: "LoadedProblem | None" = field(default=None, repr=False, compare=False)
+    problem: LoadedProblem | None = field(default=None, repr=False, compare=False)
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -1288,9 +1293,7 @@ class Campaign:
             "--no-bench",
         ]
         from reference import sol_seed
-        code = sol_seed.main(cmd[2:], dependencies=self.task_dependencies, problem=self._loaded_problem())
-        if code:
-            raise subprocess.CalledProcessError(code, cmd)
+        sol_seed.main(cmd[2:], dependencies=self.task_dependencies, problem=self._loaded_problem())
         self._link_runtime()
         source_commit = v0_baseline_commit(self.workspace)
         if not source_commit:
