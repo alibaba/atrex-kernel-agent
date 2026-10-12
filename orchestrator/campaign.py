@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
@@ -339,6 +340,7 @@ class Campaign:
                     timeout=min(self.setup_timeout, 1_800),
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
+                    extra_environment={"ATREX_AGENT_WORKSPACE_ROLE": "problem-generation"},
                 )
                 self._account(result, f"agent problem generation attempt {attempt + 1}")
                 generated = staging / AGENT_PROBLEM_FILENAME
@@ -423,7 +425,12 @@ class Campaign:
                 self.workspace
                 / f".atrex_long_horizon/{self.long_reviewer_session}_reviewer_session.json"
             )
-            environment[env_name] = str(state_file.resolve())
+            from .agent_launch import current_sandbox
+            if getattr(current_sandbox(), "mode", "none") == "bwrap":
+                state_file = state_file.parent / "reviewer-state" / state_file.name
+                environment[env_name] = str(state_file.absolute())
+            else:
+                environment[env_name] = str(state_file.resolve())
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         if self.sandbox_ssh:
@@ -663,6 +670,7 @@ class Campaign:
                     agent_cli=self.agent_cli,
                     reasoning_effort="high",
                     agent_plugins=False,
+                    extra_environment={"ATREX_AGENT_WORKSPACE_ROLE": "production-review"},
                 )
                 self._account(result, "independent production policy review")
                 check_review_service(result)
@@ -1163,7 +1171,7 @@ class Campaign:
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             review_future = executor.submit(
-                self._ensure_framework_baseline_correctness_guidance
+                copy_context().run, self._ensure_framework_baseline_correctness_guidance
             )
             try:
                 return self._run_v0_evaluator()
@@ -1709,6 +1717,7 @@ class Campaign:
                         agent_cli=supervisor_cli,
                         reasoning_effort="high",
                         agent_plugins=False,
+                        extra_environment={"ATREX_AGENT_WORKSPACE_ROLE": "baseline-exit-review"},
                     )
                 except Exception as exc:
                     print(
@@ -2099,6 +2108,7 @@ class Campaign:
                     agent_cli=agent_cli,
                     reasoning_effort="max",
                     agent_plugins=False,
+                    extra_environment={"ATREX_AGENT_WORKSPACE_ROLE": "baseline-correctness-review"},
                 )
                 if result.exit_status != 0 or result.timed_out:
                     detail = result.stderr_tail or result.stdout_tail
@@ -2213,7 +2223,7 @@ class Campaign:
         with ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
             futures = {
                 reviewer: executor.submit(
-                    self._run_framework_baseline_correctness_reviewer, reviewer
+                    copy_context().run, self._run_framework_baseline_correctness_reviewer, reviewer
                 )
                 for reviewer in reviewers
             }
@@ -2717,8 +2727,8 @@ class Campaign:
             flush=True,
         )
         with ThreadPoolExecutor(max_workers=2) as executor:
-            policy_future = executor.submit(self._production_kernel_violations)
-            validation_future = executor.submit(self._validate_framework_baseline, n)
+            policy_future = executor.submit(copy_context().run, self._production_kernel_violations)
+            validation_future = executor.submit(copy_context().run, self._validate_framework_baseline, n)
             try:
                 violations = policy_future.result()
             except Exception as exc:

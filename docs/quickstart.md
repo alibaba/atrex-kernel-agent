@@ -18,6 +18,11 @@ agent in this repository to translate the task into that command and start the c
 - NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
 - AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
 
+The coding Agent runs natively by default. For optional **coordinator-side** Linux
+isolation, add `--agent-sandbox bwrap`; see [Agent sandbox](agent-sandbox.md) for
+requirements, scoped resource grants and compatibility limits. This is independent
+of the GPU worker's local/Gateway/SSH execution boundary.
+
 The orchestrator verifies required submodules before starting and initializes missing ones
 automatically; the large `reference-projects/` collection remains optional. On PPU hardware the
 t-head projects in that collection are the only PPU-specific implementation references available, and

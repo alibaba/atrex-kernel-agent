@@ -1,4 +1,6 @@
 {"api_version": 1, "entries": [
+  {"id": "agent-sandbox", "name": "aka.legacy.agent_sandbox.plugin",
+   "config": {"repo_root": "${aka:repo_root}"}},
   {"id": "application", "name": "aka.legacy.application.plugin", "required": true,
    "config": {"repo_root": "${aka:repo_root}"}}
 ]}

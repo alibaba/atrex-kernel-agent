@@ -440,6 +440,12 @@ def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
 
 
 def _run_main(argv: Optional[list[str]] = None) -> int:
+    from orchestrator.agent_launch import current_sandbox, use_agent_sandbox
+    with use_agent_sandbox(current_sandbox()):
+        return _run_main_configured(argv)
+
+
+def _run_main_configured(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
@@ -466,6 +472,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Remote GPU hardware token used for all tests/profiles, e.g. REMOTE_GPU. "
         "Default: --platform; set explicitly when the executor uses a different alias.",
     )
+    ap.add_argument("--agent-sandbox", choices=("none", "bwrap"), default=None,
+                    help="Coordinator-side Agent isolation; default none (native macOS/Linux).")
+    ap.add_argument("--bwrap-executable", default=None,
+                    help="Bubblewrap executable; default bwrap or the selected plugin setting.")
+    ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
+                    help="Additional trusted read-only mount in the Agent namespace (repeatable).")
     ap.add_argument(
         "--sandbox-profile",
         choices=("pre", "prod"),
@@ -705,6 +717,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
+    from orchestrator.agent_launch import configure_agent_sandbox
+    try:
+        configure_agent_sandbox(mode=args.agent_sandbox, executable=args.bwrap_executable,
+                                read_only_paths=args.agent_read_only_path)
+    except (ValueError, OSError, RuntimeError) as exc:
+        ap.error(str(exc))
     try:
         PluginRegistry()
     except PluginError as exc:

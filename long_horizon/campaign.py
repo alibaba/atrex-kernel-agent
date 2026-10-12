@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2070,6 +2071,7 @@ class LongHorizonCampaign:
                 }
                 store.save_active(active)
                 worktree.materialize(self.workspace)
+                main_adapter.start_episode(worktree.path)
                 active.update(
                     {
                         "episode_branch": worktree.branch,
@@ -2138,7 +2140,7 @@ class LongHorizonCampaign:
                     thread_name_prefix=f"fast-policy-e{episode:04d}",
                 )
                 policy_future = policy_executor.submit(
-                    self._prewarm_fast_policy_reviews,
+                    copy_context().run, self._prewarm_fast_policy_reviews,
                     worktree,
                     require_gluon=(
                         conversion_pending

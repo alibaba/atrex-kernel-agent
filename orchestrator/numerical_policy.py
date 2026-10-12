@@ -94,6 +94,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
             result = run_session(
                 root, PROMPT.read_text(), timeout=timeout,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
+                extra_environment={"ATREX_AGENT_WORKSPACE_ROLE": "numerical-review"},
             )
             campaign._account(result, "numerical supplemental-test planning")
             response = root / "numerical_review.json"

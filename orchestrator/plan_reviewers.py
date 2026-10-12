@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from contextvars import copy_context
 import json
 import os
 import subprocess
@@ -84,25 +85,31 @@ def _probe_reviewer(
     enabled_name, reason_name = REVIEWER_ENVIRONMENT[reviewer]
     environment[enabled_name] = "1"
     environment[reason_name] = "startup availability probe"
+    from .agent_launch import prepare_agent_environment
+    environment["ATREX_AGENT_WORKSPACE_ROLE"] = "plan-review-probe"
+    environment["ATREX_AGENT_SANDBOX_BACKEND"] = matching_backend
+    environment = prepare_agent_environment(workspace, environment, f"plan-probe-{reviewer}")
+    sandboxed = environment.get("ATREX_AGENT_SANDBOX") == "bwrap"
+    input_files = None
+    if sandboxed:
+        if not draft.is_absolute() or not proposal.is_absolute():
+            raise ValueError("Plan review probe inputs must be absolute controller paths")
+        input_files = {"availability_probe.md": draft, "availability_proposal.md": proposal}
+        draft, proposal = workspace / "availability_probe.md", workspace / "availability_proposal.md"
+    command = ["bash", str(helper), "--input", str(draft), "--proposal", str(proposal),
+               "--timeout", str(timeout_s)]
     try:
-        completed = subprocess.run(
-            [
-                "bash",
-                str(helper),
-                "--input",
-                str(draft),
-                "--proposal",
-                str(proposal),
-                "--timeout",
-                str(timeout_s),
-            ],
-            cwd=str(workspace),
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_s + 15,
-        )
+        if sandboxed:
+            from .agent_runtime.process import run_bounded
+            stdout, stderr, code, timed_out = run_bounded(
+                command, workspace, timeout_s + 15, environment, auxiliary_input_files=input_files,
+            )
+            if timed_out:
+                raise subprocess.TimeoutExpired(command, timeout_s + 15)
+            completed = subprocess.CompletedProcess(command, code, stdout, stderr)
+        else:
+            completed = subprocess.run(command, cwd=str(workspace), env=environment, text=True,
+                                       capture_output=True, check=False, timeout=timeout_s + 15)
     except subprocess.TimeoutExpired:
         return {
             "available": False,
@@ -227,7 +234,7 @@ def discover_plan_reviewers(
         ) as executor:
             futures = {
                 name: executor.submit(
-                    _probe_reviewer,
+                    copy_context().run, _probe_reviewer,
                     name,
                     draft,
                     proposal,

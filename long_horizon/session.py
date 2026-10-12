@@ -128,6 +128,8 @@ class LongSessionRunner:
             environment.update(
                 {str(key): str(value) for key, value in telemetry_environment.items()}
             )
+        from orchestrator.agent_launch import prepare_agent_environment
+        environment = prepare_agent_environment(workspace, environment, session_id)
         telemetry_attempt_prefix = environment.get("ATREX_TELEMETRY_ATTEMPT_ID")
         codex_observer = None
         codex_setup_errors: tuple[str, ...] = ()

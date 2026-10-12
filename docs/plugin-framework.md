@@ -23,6 +23,10 @@ checkout dependency.
 Core imports neither the optimization application nor Execution. The existing
 `plugin_runtime/` tool/skill registry is unrelated and remains untouched.
 
+The default optimization bundle also provides an optional `agent_sandbox` launch
+service. See [coordinator-side Agent isolation](agent-sandbox.md) for its composition
+and boundary; filesystem isolation is distinct from Core's service Realms.
+
 ## Plugin declaration and lifetime
 
 A plugin module declares a stable `name` matching its module name (underscores become

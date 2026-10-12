@@ -458,22 +458,41 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None,
 ) -> tuple[str, str, int, bool]:
     """Run a guarded command, optionally without a wall-clock deadline."""
-    proc = spawn_owned_session(
-        command,
-        role="coding-agent",
-        environment=env,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    from ..agent_launch import current_sandbox, prepare_agent_environment
+    environment_values = prepare_agent_environment(
+        cwd, dict(os.environ if env is None else env),
+        (env or {}).get("ATREX_TELEMETRY_ATTEMPT_ID") or "\0".join(command),
     )
+    service = current_sandbox()
+    launch, view = (service.wrap(command, cwd, environment_values, input_files=auxiliary_input_files)
+                    if service is not None else (None, None))
+    if auxiliary_input_files and launch is None:
+        raise ValueError("Explicit auxiliary inputs require an Agent sandbox service")
+    try:
+        proc = spawn_owned_session(
+            launch.command if launch else command,
+            role="coding-agent",
+            environment=launch.environment if launch else env,
+            **({"inherited_fds": launch.pass_fds} if launch and launch.pass_fds else {}),
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except BaseException:
+        if view is not None:
+            view.close()
+        raise
+    finally:
+        if launch is not None:
+            launch.close()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
-    environment_values = os.environ if env is None else env
     environment_state_file = str(
         environment_values.get("ATREX_ENVIRONMENT_STATE_FILE", "")
     )
@@ -491,15 +510,17 @@ def run_bounded(
     )
     guard.start()
     timed_out = False
+    completed = False
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
+        completed = True
     except subprocess.TimeoutExpired:
         timed_out = True
-        process_groups = descendant_process_groups(proc.pid)
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGKILL)
         stdout, stderr = proc.communicate()
     except BaseException:
-        process_groups = descendant_process_groups(proc.pid)
+        process_groups = descendant_process_groups(proc.pid) | {proc.pid}
         signal_process_groups(process_groups, signal.SIGTERM)
         try:
             proc.communicate(timeout=5)
@@ -508,8 +529,15 @@ def run_bounded(
             proc.communicate()
         raise
     finally:
-        guard_stop.set()
-        guard.join(timeout=1)
+        try:
+            guard_stop.set()
+            guard.join(timeout=1)
+            if (view is not None and completed and not timed_out and proc.returncode == 0
+                    and not dependency_violations and not environment_failures):
+                view.publish()
+        finally:
+            if view is not None:
+                view.close()
     returncode = proc.returncode
     if dependency_violations:
         policy_message = (

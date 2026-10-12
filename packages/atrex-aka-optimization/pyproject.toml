@@ -12,6 +12,9 @@ dependencies = ["atrex-aka-bootstrap==0.1.0"]
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.application.cli:main"
 
+[project.entry-points."aka.tokens"]
+agent_sandbox = "aka.legacy.agent_sandbox.tokens:AGENT_SANDBOX"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true

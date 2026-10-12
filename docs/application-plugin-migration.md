@@ -2,8 +2,10 @@
 
 AKA supports the existing optimization script and an installed command. Both use a
 launch profile to select a Startup service through Bootstrap and Core. The legacy
-adapter calls the original optimization body. Evaluation, sandbox, tools and recovery
-continue to use their existing implementations.
+adapter calls the original optimization body. Evaluation, GPU execution, tools and
+recovery continue to use their existing implementations. Optional coordinator-side
+[Agent isolation](agent-sandbox.md) is supplied through a separate launch service;
+native execution remains the default.
 
 ## Existing checkout interface
 

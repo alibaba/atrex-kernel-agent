@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from aka.bootstrap.continuation import DIGEST_ENV, SELECTION_ENV, digest, restore
+from aka.legacy.agent_sandbox.tokens import AGENT_SANDBOX
 
 MIGRATION_FILE = "launch-migration.json"
 
@@ -30,7 +31,7 @@ def _validate(directory, record):
             != {key: value for key, value in following.items() if key not in allowed}
             or previous.get("environment_state_file") != str(directory / "failure.json")):
         raise RuntimeError("recovery migration changes the original configuration")
-    selection = restore(payload)
+    selection = restore(payload, tokens=(AGENT_SANDBOX,))
     environment = {**selection.environment, SELECTION_ENV: str(directory / "launch-selection.json"),
                    DIGEST_ENV: digest(payload)}
     if following.get("launch_environment") != environment:
@@ -57,7 +58,7 @@ def complete_migration(directory: Path, *, owner: bool, repo_root=None, environm
     if configuration is not None and any(following.get(key) != value for key, value in configuration.items()):
         raise RuntimeError("recovery migration has different resolved configuration")
     if repo_root is not None:
-        selection = restore(payload)
+        selection = restore(payload, tokens=(AGENT_SANDBOX,))
         if selection.composition.variables.get("repo_root") != str(Path(repo_root).resolve()):
             raise RuntimeError("recovery migration selected a different AKA checkout")
     if environment is not None:

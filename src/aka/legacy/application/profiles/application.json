@@ -2,6 +2,7 @@
   "api_version": 1,
   "composition": "application",
   "target": "startup",
+  "tokens": ["agent_sandbox"],
   "required_services": [],
   "resources": [
     {
@@ -54,6 +55,9 @@
     "optimizer_script": "${aka:repo_root}/orchestrator/optimize.py"
   },
   "environment": [
+    "ATREX_AGENT_SANDBOX",
+    "ATREX_BWRAP_EXECUTABLE",
+    "ATREX_AGENT_READ_ONLY_PATHS",
     "ATREX_WORKFLOW_OUTPUT_DIR",
     "ATREX_WORKFLOW_RUNTIME_CONTEXT",
     "ATREX_RUNTIME_POLICY",
