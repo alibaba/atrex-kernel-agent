@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 from aka.contracts.execution import Executor, validate_executor
+from aka.contracts.agent_resources import AgentSkill
 from aka.core.boot import boot, compose
 from aka.core.errors import BootFailure
 from aka.core.keys import ServiceKey
@@ -25,6 +26,17 @@ class ExecutionComposition:
         if self.disposed:
             raise RuntimeError("execution composition has been disposed")
         return self._executor
+
+    @property
+    def agent_skills(self) -> tuple[AgentSkill, ...]:
+        if self.disposed:
+            raise RuntimeError("execution composition has been disposed")
+        entries = self.report.root.scope.resolve("agent_skills")
+        skills = tuple(entry.value for entry in entries)
+        if any(not isinstance(skill, AgentSkill) or entry.name != skill.name
+               for entry, skill in zip(entries, skills)):
+            raise TypeError("invalid Execution Agent Skill contribution")
+        return skills
 
     def dispose(self) -> None:
         if not self.disposed:

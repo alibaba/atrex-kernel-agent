@@ -17,6 +17,7 @@ from aka.contracts.execution import (
 
 _current_executor = ContextVar("aka_application_executor", default=None)
 _current_selection = ContextVar("aka_application_execution_selection", default=None)
+_current_agent_skills = ContextVar("aka_application_agent_skills", default=None)
 _explicit_health_configuration = ContextVar("aka_explicit_health_configuration", default=None)
 SELECTION_ENV = "AKA_EXECUTION_SELECTION"
 
@@ -75,7 +76,7 @@ def execution_environment(environment):
 
 
 @contextmanager
-def application_execution(executor=None, selection=None):
+def application_execution(executor=None, selection=None, *, agent_skills=()):
     current = _current_executor.get()
     if executor is None and current is not None:
         if selection is not None and dict(selection) != selected_execution():
@@ -91,17 +92,38 @@ def application_execution(executor=None, selection=None):
     if executor is None:
         composition = compose_execution(**arguments)
         executor = composition.executor
+        try:
+            agent_skills = composition.agent_skills
+        except BaseException:
+            composition.dispose()
+            raise
     else:
         validate_executor(executor)
+    # Materialize caller resources before changing the active context.
+    skills = tuple(agent_skills)
     executor_token = _current_executor.set(executor)
     selection_token = _current_selection.set(selected)
+    skills_token = _current_agent_skills.set(skills)
     try:
         yield executor
     finally:
         _current_executor.reset(executor_token)
         _current_selection.reset(selection_token)
+        _current_agent_skills.reset(skills_token)
         if composition is not None:
             composition.dispose()
+
+
+def selected_agent_skills():
+    """Borrow the active composition; direct host callers use their selection."""
+    skills = _current_agent_skills.get()
+    if skills is not None:
+        return skills
+    arguments = dict(selected_execution())
+    if "profiles_dir" in arguments:
+        arguments["profiles_dir"] = Path(arguments["profiles_dir"]).expanduser().resolve()
+    with compose_execution(**arguments) as composition:
+        return composition.agent_skills
 
 
 class _HostExecutionControl:
