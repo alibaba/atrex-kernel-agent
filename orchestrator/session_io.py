@@ -157,16 +157,18 @@ def run_session(
     sandbox_ssh: str = "",
     sandbox_ssh_init: str = "",
     sandbox_health_command: str = "",
+    runtime: _agent_runtime.AgentRuntime | None = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
     # workspace-local skill rather than a process-level plugin.
     del agent_plugins
     session_id = str(uuid.uuid4())
-    runtime = _agent_runtime.build_agent_runtime(
-        agent_cli,
-        process_runner=_agent_runtime.run_bounded,
-    )
+    if runtime is None:
+        runtime = _agent_runtime.build_agent_runtime(
+            agent_cli,
+            process_runner=_agent_runtime.run_bounded,
+        )
     result = runtime.run(
         _agent_runtime.AgentRunRequest(
             workspace=workspace,

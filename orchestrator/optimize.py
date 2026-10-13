@@ -862,7 +862,9 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         args.framework, args.platform, args.optimization_mode
     )
 
-    campaign = Campaign(
+    factory = (dependencies or {}).get("workflow")
+    create_campaign = factory.campaign if factory is not None else Campaign
+    campaign = create_campaign(
         task_dependencies=dependencies,
         problem=problem,
         name=problem.name,
@@ -922,27 +924,8 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     for handled_signal in handled_signals:
         signal.signal(handled_signal, interrupt_campaign)
     try:
-        if latest_version(campaign.workspace) < 0:
-            campaign.setup_baseline()
-        else:
-            print(
-                f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
-                flush=True,
-            )
-            campaign._link_runtime()
-        baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
-            read_memory(campaign.workspace, 0)
-        )
-        if baseline_coverage_problem:
-            raise RuntimeError(
-                "generalized campaign baseline is incompatible with authoritative per-shape "
-                f"memory: {baseline_coverage_problem}; start a fresh workspace"
-            )
-        if args.sandbox_ssh:
-            # A recovery monitor may declare success only after operator resolution,
-            # architecture/submodule setup, campaign construction, and workspace resume.
-            signal_restart_ready()
-        campaign.ensure_framework_baseline()
+        # Workflow completes setup before the host advertises recovery readiness.
+        campaign.prepare(recovery_ready=signal_restart_ready if args.sandbox_ssh else None)
         campaign.run()
         trace_status = "completed"
         return 0
