@@ -12,11 +12,18 @@ def distributed_evaluation_world_size(metadata: object) -> int:
     """GPU count shared by Agate submission and production source-policy checks."""
     if not isinstance(metadata, dict):
         return 1
+    required = metadata.get("hardware", {}).get("required_gpus", 1)
+    if type(required) is not int or required < 1:
+        raise ValueError("hardware.required_gpus must be a positive integer")
     contract = metadata.get("benchmark_contract")
     if not isinstance(contract, dict):
+        if required > 1:
+            raise ValueError("required_gpus > 1 requires a distributed_evaluation contract")
         return 1
     evaluation = contract.get("distributed_evaluation")
     if evaluation is None:
+        if required > 1:
+            raise ValueError("required_gpus > 1 requires a distributed_evaluation contract")
         return 1
     prefix = "benchmark_contract.distributed_evaluation"
     if not isinstance(evaluation, dict):
@@ -28,8 +35,10 @@ def distributed_evaluation_world_size(metadata: object) -> int:
     count = evaluation.get("world_size")
     if isinstance(count, bool) or not isinstance(count, int):
         raise ValueError(f"{prefix}.world_size must be an integer")
-    if count < 2:
-        raise ValueError(f"{prefix}.world_size must be at least 2")
+    if not 2 <= count <= 64:
+        raise ValueError(f"{prefix}.world_size must be between 2 and 64")
+    if required != 1 and required != count:
+        raise ValueError("hardware.required_gpus differs from distributed_evaluation.world_size")
     return count
 
 

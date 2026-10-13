@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,29 @@ class MultiGpuSourcePolicyTest(unittest.TestCase):
                    return_value=["source rejected"]) as inspect_source:
             self.assertEqual(self.campaign._production_kernel_violations(), ["source rejected"])
             inspect_source.assert_called_once()
+
+    def test_required_gpu_count_must_match_launcher(self) -> None:
+        contract = metadata(4)
+        contract["hardware"] = {"required_gpus": 2}
+        with self.assertRaises(ValueError):
+            distributed_evaluation_world_size(contract)
+        with self.assertRaises(ValueError):
+            distributed_evaluation_world_size({"hardware": {"required_gpus": 4}})
+
+    def test_pinned_runtime_reaches_api_and_cli(self) -> None:
+        self.set_count(4)
+        requirements = self.root / "runtime.txt"
+        requirements.write_text("atrex-bench==0.1.1.dev1\n")
+        args = argparse.Namespace(url="", gateway_profile=None, timeout=60, env=[], hardware="test")
+        with patch.dict(os.environ, {"ATREX_SANDBOX_ATREX_BENCH_VERSION": "0.1.1.dev1",
+                                     "ATREX_SANDBOX_REQUIREMENTS_FILE": str(requirements)}):
+            request = sandbox._typed_request(self.workspace, "test", 60, [],
+                                             ["python", "test_kernel.py"], "run")
+            command = sandbox._typed_agate_command("agate", args, self.workspace, "run", request, 0)
+        self.assertEqual(request["atrex_bench_version"], "0.1.1.dev1")
+        self.assertEqual(request["requirements"], ["atrex-bench==0.1.1.dev1"])
+        self.assertEqual(command[command.index("--atrex-bench-version") + 1], "0.1.1.dev1")
+        self.assertEqual(command[command.index("--requirements") + 1], str(requirements))
 
     def test_multi_gpu_skips_static_and_independent_source_review(self) -> None:
         self.set_count(4)

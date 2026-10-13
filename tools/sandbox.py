@@ -1412,6 +1412,13 @@ def _typed_request(
         else None,
         reference.get("operator"),
     )
+    runtime_version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
+    if runtime_version:
+        request["atrex_bench_version"] = runtime_version
+    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
+    if requirements_file:
+        request["requirements"] = [line.strip() for line in Path(requirements_file).read_text().splitlines()
+                                   if line.strip() and not line.lstrip().startswith("#")]
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
@@ -3118,6 +3125,11 @@ def _typed_agate_command(
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
     if num_gpus > 1:
         command += ["--num-gpus", str(num_gpus)]
+    if request.get("atrex_bench_version"):
+        command += ["--atrex-bench-version", request["atrex_bench_version"]]
+    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
+    if requirements_file:
+        command += ["--requirements", requirements_file]
     command += [
         "--candidate",
         str(workspace / "kernel.py"),
