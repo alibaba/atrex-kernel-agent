@@ -38,6 +38,7 @@ from .environment_recovery import (
 from .hardware import hardware_vendor
 from .recovery_processes import spawn_owned_session
 from .sandbox_config import queue_wait_grace
+from .ssh_health import DEFAULT_SSH_HEALTH_COMMAND
 from .workspace_state import speedup_vs_reference
 
 
@@ -478,120 +479,34 @@ def _sandbox_command(
     private_reference_dir: Path | None = None,
     preflight: bool = False,
     cancel_event=None,
+    health_command_explicit: bool | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
-    if sum(bool(value) for value in (ssh, url, profile)) > 1:
-        raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
-    cmd = [
-        sys.executable,
-        str(SANDBOX_TOOL),
-        "--kind",
-        gateway_kind,
-        "--hardware",
-        hardware,
-        "--workspace",
-        str(workspace),
-        "--timeout",
-        str(timeout),
-    ]
-    if url:
-        cmd += ["--url", url]
-    elif profile:
-        cmd += ["--gateway-profile", profile]
-    elif ssh:
-        cmd += ["--ssh", ssh]
-    if ssh_init:
-        cmd += ["--ssh-init", ssh_init]
-    if health_command:
-        cmd += ["--health-command", health_command]
-    if sync:
-        for path in sync:
-            cmd += ["--sync", path]
-    else:
-        cmd.append("--no-sync")
-    if preflight:
-        cmd.append("--preflight")
-    else:
-        cmd += ["--", *command]
+    from orchestrator._bootstrap import execution_modules
+    execution, contracts = execution_modules()
+    if health_command_explicit is None:
+        health_command_explicit = execution.explicit_health_configuration() is True or (
+            bool(health_command) and health_command != DEFAULT_SSH_HEALTH_COMMAND
+        )
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    # The gateway wait includes GPU queueing; --timeout bounds remote execution.
-    # Keep the outer process alive for the same queue grace used by sandbox.py.
-    if wall_timeout is not None:
-        effective_timeout = wall_timeout
-    else:
-        uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
-        grace = 0 if uses_ssh else queue_wait_grace(environment)
-        effective_timeout = timeout + grace + 240
-    raise_if_environment_blocked()
-    process = spawn_owned_session(
-        cmd,
-        role="sandbox",
-        environment=environment,
-        cwd=str(workspace),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    request = contracts.SandboxRequest(
+        workspace=workspace, launcher=(sys.executable, str(SANDBOX_TOOL)),
+        hardware=hardware, profile=profile, url=url, timeout=timeout,
+        command=tuple(command), environment=execution.execution_environment(environment),
+        ssh=ssh, ssh_init=ssh_init, health_command=health_command, sync=sync,
+        wall_timeout=wall_timeout, gateway_kind=gateway_kind, preflight=preflight,
+        cancel_event=cancel_event,
+        health_command_explicit=health_command_explicit,
     )
-
-    def stop_process_group() -> tuple[str, str]:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        try:
-            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
-            # allow that 15-second cleanup window to persist a retry marker.
-            return process.communicate(timeout=20)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            return process.communicate()
-
-    deadline = time.monotonic() + effective_timeout
-    try:
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
-                raise subprocess.SubprocessError("sandbox command cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                stdout, stderr = stop_process_group()
-                raise subprocess.TimeoutExpired(
-                    cmd, effective_timeout, output=stdout, stderr=stderr
-                )
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
-            except subprocess.TimeoutExpired:
-                raise_if_environment_blocked()
-                continue
-            break
-    except BaseException:
-        # A first-run sandbox has its own session and no recovery guardian.
-        # Reap it on Ctrl-C and every exceptional exit, not just wall timeout.
-        try:
-            stop_process_group()
-        except BaseException:
-            # A second interrupt must not abandon the independently owned group
-            # or replace the original error. The normal path allows SSH cleanup.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        raise
-    result = subprocess.CompletedProcess(
-        args=cmd,
-        returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
+    hooks = contracts.ExecutionHooks(
+        spawn=spawn_owned_session, check_environment=raise_if_environment_blocked,
+        queue_wait_grace=queue_wait_grace,
     )
-    raise_if_environment_blocked()
-    return result
+    with execution.application_execution() as executor:
+        return execution.run_sandbox(executor, request, hooks=hooks)
 
 
 def check_ssh_environment(

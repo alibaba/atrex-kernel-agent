@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cached_property
@@ -1085,6 +1086,7 @@ class Campaign:
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             review_future = executor.submit(
+                copy_context().run,
                 self._ensure_framework_baseline_correctness_guidance
             )
             try:
@@ -2136,6 +2138,7 @@ class Campaign:
         with ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
             futures = {
                 reviewer: executor.submit(
+                    copy_context().run,
                     self._run_framework_baseline_correctness_reviewer, reviewer
                 )
                 for reviewer in reviewers
@@ -2620,8 +2623,8 @@ class Campaign:
             flush=True,
         )
         with ThreadPoolExecutor(max_workers=2) as executor:
-            policy_future = executor.submit(self._production_kernel_violations)
-            validation_future = executor.submit(self._validate_framework_baseline, n)
+            policy_future = executor.submit(copy_context().run, self._production_kernel_violations)
+            validation_future = executor.submit(copy_context().run, self._validate_framework_baseline, n)
             try:
                 violations = policy_future.result()
             except Exception as exc:
