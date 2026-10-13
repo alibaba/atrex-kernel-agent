@@ -10,13 +10,18 @@ from plugin_runtime.registry import STATE_DIR
 from plugin_runtime.schema import decode_json, read_json
 
 from .constants import REPO_ROOT
+from ._bootstrap import execution_modules
+
+execution, _ = execution_modules()
+from aka.legacy.application.agent_resources import AgentSkillsRegistryMixin
 
 PLUGIN_DIR = REPO_ROOT / "plugins"
 
 
-class PluginRegistry(Registry):
+class PluginRegistry(AgentSkillsRegistryMixin, Registry):
     def __init__(self):
         super().__init__(PLUGIN_DIR)
+        self.bind_agent_skills(execution.selected_agent_skills())
 
     def instructions(self, phase: str, **values: str) -> str:
         return (
