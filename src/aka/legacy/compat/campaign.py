@@ -26,15 +26,21 @@ class Campaign(WorkflowCampaign):
                 optimization_mode=options.get("optimization_mode", "leaderboard"),
             )
         )
+        configuration = dict(
+            name=name,
+            kernel_demo=kernel_demo,
+            platform=platform,
+            framework=framework,
+            **options,
+        )
+        if configuration.get("problem") is None:
+            from .problem import constructor_problem_request
+
+            configuration["problem"] = selected.load_problem(
+                constructor_problem_request(configuration)
+            )
         request = campaign_request(
-            dict(
-                name=name,
-                kernel_demo=kernel_demo,
-                platform=platform,
-                framework=framework,
-                **options,
-            ),
-            problem_provider=selected._dependencies.problem,
+            configuration,
         )
         with evaluation_settings(evaluation_configuration(options)):
             super().__init__(request, selected._dependencies)

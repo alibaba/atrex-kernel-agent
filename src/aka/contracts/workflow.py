@@ -35,6 +35,15 @@ class WorkflowSettings:
 
 
 @dataclass(frozen=True)
+class ProblemRequest:
+    """Explicit source and retained-input location; None requests an uncaptured load."""
+
+    directory: Path
+    snapshot_directory: Path | None
+    optimization_mode: str = "leaderboard"
+
+
+@dataclass(frozen=True)
 class CampaignRequest:
     problem: LoadedProblem
     workspace: Path
@@ -50,4 +59,7 @@ class Campaign(Protocol):
 
 
 class Workflow(Protocol):
+    def load_problem(self, request: ProblemRequest) -> LoadedProblem:
+        """Load or restore run inputs through the selected Problem module, without GPU work."""
+        ...
     def campaign(self, request: CampaignRequest) -> Campaign: ...

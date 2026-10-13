@@ -367,6 +367,16 @@ def dispatch_framework_campaigns(
 
 
 def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
+    if (dependencies or {}).get("workflow") is None:
+        from aka.legacy.compat.assembly import default_workflow
+
+        workflow = default_workflow(task=dependencies)
+        try:
+            return _run_main(
+                argv, dependencies={**(dependencies or {}), "workflow": workflow}
+            )
+        finally:
+            workflow.close()
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
@@ -767,16 +777,15 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    from ._bootstrap import load_problem
-    import hashlib
-    snapshot_key = hashlib.sha256(
-        (str(Path(args.op_dir).resolve()) + "\0" + args.optimization_mode + "\0"
-         + (args.workspace_suffix or f"{args.framework}_{args.platform}")).encode()
-    ).hexdigest()[:24]
-    snapshot_directory = (Path(args.workspace) if args.workspace else Path.cwd()) / ".aka-problems" / snapshot_key
-    problem = load_problem(args.op_dir, args.optimization_mode,
-                           provider=(dependencies or {}).get("problem"),
-                           snapshot_directory=snapshot_directory)
+    from aka.legacy.compat.problem import problem_request
+
+    factory = dependencies["workflow"]
+    problem = factory.load_problem(
+        problem_request(
+            args.op_dir, args.optimization_mode, workspace=args.workspace,
+            suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
+        )
+    )
     if args.sandbox_ssh:
         workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
         configure_recovery(
@@ -862,9 +871,8 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         args.framework, args.platform, args.optimization_mode
     )
 
-    factory = (dependencies or {}).get("workflow")
     from aka.legacy.compat.workflow import create_campaign as adapt_campaign
-    create_campaign = (lambda **options: adapt_campaign(factory, **options)) if factory is not None else Campaign
+    create_campaign = lambda **options: adapt_campaign(factory, **options)
     campaign = create_campaign(
         task_dependencies=dependencies,
         problem=problem,

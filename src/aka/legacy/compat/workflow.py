@@ -6,7 +6,7 @@ from aka.contracts.workflow import CampaignRequest, WorkflowSettings
 from .configuration import EvaluationSettings, evaluation_settings
 
 
-def campaign_request(configuration, *, problem_provider=None):
+def campaign_request(configuration):
     values = dict(configuration)
     name = values.pop("name")
     suffix = values.pop("workspace_suffix", "")
@@ -15,21 +15,11 @@ def campaign_request(configuration, *, problem_provider=None):
     workspace = (Path(work_dir) if work_dir else Path.cwd()) / (
         "kernel_opt_" + campaign_name
     )
-    kernel_demo = values.pop("kernel_demo", "")
+    values.pop("kernel_demo", "")
     values.pop("atrex_bench_root", "")
     problem = values.pop("problem", None)
     if problem is None:
-        if problem_provider is None:
-            from aka.legacy.task.problem.legacy import LegacyProblemProvider
-
-            problem_provider = LegacyProblemProvider(
-                values.get("optimization_mode", "leaderboard")
-            )
-        problem = problem_provider.load(
-            Path(kernel_demo).resolve().parent,
-            optimization_mode=values.get("optimization_mode", "leaderboard"),
-            snapshot_directory=workspace.parent / ".aka-problems" / campaign_name,
-        )
+        raise TypeError("load Problem through Workflow before creating CampaignRequest")
     if problem.initial_source is None or problem.evaluation is None:
         raise TypeError(
             "Campaign requires explicit Problem initial source and evaluation roles"
@@ -101,6 +91,12 @@ def evaluation_configuration(configuration):
 
 def create_campaign(workflow, **configuration):
     configuration.pop("task_dependencies", None)
+    if configuration.get("problem") is None:
+        from .problem import constructor_problem_request
+
+        configuration["problem"] = workflow.load_problem(
+            constructor_problem_request(configuration)
+        )
     settings = evaluation_configuration(configuration)
     with evaluation_settings(settings):
         return workflow.campaign(campaign_request(configuration))
