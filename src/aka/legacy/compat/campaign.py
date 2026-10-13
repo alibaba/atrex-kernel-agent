@@ -33,17 +33,15 @@ class Campaign(WorkflowCampaign):
             framework=framework,
             **options,
         )
-        if configuration.get("problem") is None:
-            from .problem import constructor_problem_request
-
-            configuration["problem"] = selected.load_problem(
-                constructor_problem_request(configuration)
-            )
         request = campaign_request(
             configuration,
         )
+        problem = configuration.get("problem")
+        if not isinstance(problem, LoadedProblem):
+            problem = selected._load_problem(request)
+        request = selected._dependencies.prepare_request(request, problem)
         with evaluation_settings(evaluation_configuration(options)):
-            super().__init__(request, selected._dependencies)
+            super().__init__(request, selected._dependencies, problem)
 
     def __getattr__(self, name):
         for prefix, policy in (

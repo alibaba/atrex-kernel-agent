@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from collections.abc import Callable
-from .problem import LoadedProblem
 
 
 @dataclass(frozen=True)
@@ -35,17 +34,16 @@ class WorkflowSettings:
 
 
 @dataclass(frozen=True)
-class ProblemRequest:
-    """Explicit source and retained-input location; None requests an uncaptured load."""
+class ProblemSource:
+    """Problem location and optional retained-input location, resolved by Workflow."""
 
     directory: Path
-    snapshot_directory: Path | None
-    optimization_mode: str = "leaderboard"
+    snapshot_directory: Path | None = None
 
 
 @dataclass(frozen=True)
 class CampaignRequest:
-    problem: LoadedProblem
+    problem: ProblemSource
     workspace: Path
     name: str
     settings: WorkflowSettings
@@ -59,7 +57,4 @@ class Campaign(Protocol):
 
 
 class Workflow(Protocol):
-    def load_problem(self, request: ProblemRequest) -> LoadedProblem:
-        """Load or restore run inputs through the selected Problem module, without GPU work."""
-        ...
     def campaign(self, request: CampaignRequest) -> Campaign: ...

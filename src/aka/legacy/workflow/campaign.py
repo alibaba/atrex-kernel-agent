@@ -157,6 +157,7 @@ from .dependencies import CampaignDependencies
 class Campaign:
     request: CampaignRequest
     dependencies: CampaignDependencies
+    problem: LoadedProblem
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -170,13 +171,12 @@ class Campaign:
 
     def __post_init__(self) -> None:
         if (
-            self.request.problem.initial_source is None
-            or self.request.problem.evaluation is None
+            self.problem.initial_source is None
+            or self.problem.evaluation is None
         ):
             raise TypeError(
                 "Campaign requires explicit Problem initial source and evaluation roles"
             )
-        self.problem = self.request.problem
         self.name = self.problem.name
         self.agent = self.dependencies.agent
         self.agent_runtime = self.agent.runtime(self.request.settings.agent_cli)

@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import Path
 
-from aka.contracts.workflow import ProblemRequest
+from aka.contracts.workflow import ProblemSource
 
 
 def problem_request(directory, optimization_mode, *, workspace="", suffix=""):
@@ -12,8 +12,8 @@ def problem_request(directory, optimization_mode, *, workspace="", suffix=""):
         (str(origin) + "\0" + optimization_mode + "\0" + suffix).encode()
     ).hexdigest()[:24]
     base = Path(workspace) if workspace else Path.cwd()
-    return ProblemRequest(
-        origin, base / ".aka-problems" / snapshot_key, optimization_mode
+    return ProblemSource(
+        origin, base / ".aka-problems" / snapshot_key
     )
 
 
@@ -23,8 +23,7 @@ def constructor_problem_request(configuration):
     campaign_name = name + ("_" + suffix if suffix else "")
     work_dir = configuration.get("work_dir", "")
     base = Path(work_dir) if work_dir else Path.cwd()
-    return ProblemRequest(
+    return ProblemSource(
         Path(configuration.get("kernel_demo", "")).resolve().parent,
         base / ".aka-problems" / campaign_name,
-        configuration.get("optimization_mode", "leaderboard"),
     )

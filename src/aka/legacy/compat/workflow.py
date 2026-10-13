@@ -3,6 +3,7 @@
 from dataclasses import fields
 from pathlib import Path
 from aka.contracts.workflow import CampaignRequest, WorkflowSettings
+from aka.contracts.problem import LoadedProblem
 from .configuration import EvaluationSettings, evaluation_settings
 
 
@@ -17,13 +18,14 @@ def campaign_request(configuration):
     )
     values.pop("kernel_demo", "")
     values.pop("atrex_bench_root", "")
-    problem = values.pop("problem", None)
-    if problem is None:
-        raise TypeError("load Problem through Workflow before creating CampaignRequest")
-    if problem.initial_source is None or problem.evaluation is None:
-        raise TypeError(
-            "Campaign requires explicit Problem initial source and evaluation roles"
-        )
+    from .problem import constructor_problem_request
+    from aka.contracts.workflow import ProblemSource
+
+    supplied = values.pop("problem", None)
+    if isinstance(supplied, LoadedProblem):
+        problem = ProblemSource(supplied.directory, None)
+    else:
+        problem = supplied or constructor_problem_request(configuration)
     for policy, prefix in (
         ("framework_baseline_reviewers", "v1"),
         ("fast_episode_reviewers", "fast_episode"),
@@ -91,15 +93,15 @@ def evaluation_configuration(configuration):
 
 def create_campaign(workflow, **configuration):
     configuration.pop("task_dependencies", None)
-    if configuration.get("problem") is None:
-        from .problem import constructor_problem_request
-
-        configuration["problem"] = workflow.load_problem(
-            constructor_problem_request(configuration)
-        )
     settings = evaluation_configuration(configuration)
     with evaluation_settings(settings):
-        return workflow.campaign(campaign_request(configuration))
+        request = campaign_request(configuration)
+        supplied = configuration.get("problem")
+        if isinstance(supplied, LoadedProblem):
+            # Historical prepared-input callers stay outside the clean Interface.
+            request = workflow._dependencies.prepare_request(request, supplied)
+            return workflow._campaign(request, supplied)
+        return workflow.campaign(request)
 
 
 class BoundEvaluation:

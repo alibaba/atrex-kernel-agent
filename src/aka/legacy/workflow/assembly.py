@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 from aka.contracts.problem import LoadedProblem
-from aka.contracts.workflow import CampaignRequest, ProblemRequest
+from aka.contracts.workflow import CampaignRequest, ProblemSource
 from .dependencies import CampaignDependencies
 
 
@@ -21,19 +21,27 @@ class LegacyWorkflow:
 
     def campaign(self, request: CampaignRequest):
         self._check_open()
+        if not isinstance(request.problem, ProblemSource):
+            raise TypeError("CampaignRequest.problem must be a ProblemSource")
+        problem = self._load_problem(request)
+        request = self._dependencies.prepare_request(request, problem)
+        return self._campaign(request, problem)
+
+    def _campaign(self, request: CampaignRequest, problem: LoadedProblem):
+        self._check_open()
         from .campaign import Campaign
 
         return Campaign(
-            request, replace(self._dependencies, workflow=self._run_campaign)
+            request, replace(self._dependencies, workflow=self._run_campaign), problem
         )
 
-    def load_problem(self, request: ProblemRequest) -> LoadedProblem:
+    def _load_problem(self, request: CampaignRequest) -> LoadedProblem:
         """Capture or restore run inputs before campaign-specific preparation."""
         self._check_open()
         problem = self._dependencies.problem.load(
-            request.directory,
-            optimization_mode=request.optimization_mode,
-            snapshot_directory=request.snapshot_directory,
+            request.problem.directory,
+            optimization_mode=request.settings.optimization_mode,
+            snapshot_directory=request.problem.snapshot_directory,
         )
         if not isinstance(problem, LoadedProblem):
             raise TypeError("ProblemProvider.load must return LoadedProblem")

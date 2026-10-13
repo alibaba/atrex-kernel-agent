@@ -7,6 +7,8 @@ from typing import Any, Protocol, Callable, TYPE_CHECKING, Optional
 from aka.contracts.agent import Agent
 from aka.contracts.problem_provider import ProblemProvider
 from aka.contracts.workspace import SourceProvider, CandidateWorkspace
+from aka.contracts.problem import LoadedProblem
+from aka.contracts.workflow import CampaignRequest
 import subprocess
 
 if TYPE_CHECKING:
@@ -133,3 +135,6 @@ class CampaignDependencies:
     evaluation: Callable[[Campaign], BaselineEvaluation]
     workflow: Callable[[Campaign], str]
     execution: Callable[[Campaign], CampaignExecution]
+    prepare_request: Callable[[CampaignRequest, LoadedProblem], CampaignRequest] = (
+        lambda request, problem: request
+    )

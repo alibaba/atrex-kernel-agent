@@ -778,146 +778,63 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
     from aka.legacy.compat.problem import problem_request
+    from aka.legacy.compat.startup import startup_preparation, FrameworkDispatchComplete
 
     factory = dependencies["workflow"]
-    problem = factory.load_problem(
-        problem_request(
-            args.op_dir, args.optimization_mode, workspace=args.workspace,
-            suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
-        )
+    source = problem_request(
+        args.op_dir, args.optimization_mode, workspace=args.workspace,
+        suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
     )
-    if args.sandbox_ssh:
-        workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
-        configure_recovery(
-            workspace_base=workspace_base,
-            raw_argv=raw_argv,
-            optimize_script=optimizer_entrypoint(),
-            sandbox_hardware=sandbox_hardware,
-            ssh_target=args.sandbox_ssh,
-            ssh_init=args.sandbox_ssh_init,
-            ssh_runtime_binds=args.sandbox_ssh_runtime_bind,
-            ssh_gpu=args.sandbox_ssh_gpu,
-            health_command=args.sandbox_health_command,
-            poll_interval=args.environment_poll_interval,
-            runtime_health_command=runtime_health_command(
-                sol=problem.initial_source.kind == "sol", framework=args.framework
-            ),
-        )
-        raise_if_environment_blocked()
-        check_ssh_environment(
-            workspace_base, sandbox_hardware, args.sandbox_ssh,
-            args.sandbox_ssh_init, args.sandbox_health_command,
-        )
-
-    arch = args.arch or detect_arch(
-        sandbox_hardware,
-        args.sandbox_profile,
-        args.sandbox_url,
-        args.sandbox_ssh,
-        args.sandbox_ssh_init,
-        args.sandbox_health_command,
-    )
-    if not arch and args.framework:
-        suffix = args.workspace_suffix or framework_workspace_suffix(
-            args.framework, args.platform, args.optimization_mode
-        )
-        base = Path(args.workspace) if args.workspace else Path.cwd()
-        arch = _recorded_workspace_arch(base / f"kernel_opt_{problem.name}_{suffix}")
-        if arch:
-            print(
-                f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
-                file=sys.stderr,
-                flush=True,
-            )
-    ensure_submodules(args.platform, arch or "")
-    frameworks = (
-        (args.framework,)
-        if args.framework
-        else supported_frameworks(args.platform, arch)
-    )
-    print(
-        f"[orchestrator] op={problem.name} agent_cli={args.agent_cli} "
-        f"optimization_mode={args.optimization_mode} platform={args.platform} "
-        f"agent_problem={problem.public_contract_source} "
-        f"sandbox_hardware={sandbox_hardware} "
-        "sandbox_endpoint="
-        f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
-        f"frameworks={','.join(frameworks)} "
-        "reviewers="
-        f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
-        f"qoder={'on' if args.v1_ask_qoder else 'off'}],"
-        f"fast[codex={'on' if args.fast_episode_ask_codex else 'off'},"
-        f"qoder={'on' if args.fast_episode_ask_qoder else 'off'}],"
-        f"full[codex={'on' if args.full_episode_ask_codex else 'off'},"
-        f"qoder={'on' if args.full_episode_ask_qoder else 'off'}] "
-        "runtime_arch="
-        f"{arch or 'UNKNOWN (detect failed)'} "
-        f"(device name / vendor-smi may be desensitized; trusting the runtime API)",
-        flush=True,
-    )
-
-    if not args.framework:
-        base = Path(args.workspace).resolve() if args.workspace else Path.cwd()
-        return dispatch_framework_campaigns(
-            raw_argv,
-            frameworks,
-            base,
-            arch,
-            args.platform,
-            args.optimization_mode,
-        )
-
-    workspace_suffix = args.workspace_suffix or framework_workspace_suffix(
-        args.framework, args.platform, args.optimization_mode
-    )
-
     from aka.legacy.compat.workflow import create_campaign as adapt_campaign
     create_campaign = lambda **options: adapt_campaign(factory, **options)
-    campaign = create_campaign(
-        task_dependencies=dependencies,
-        problem=problem,
-        name=problem.name,
-        kernel_demo=str(problem.initial_source.entry),
-        platform=args.platform,
-        framework=args.framework,
-        notes=args.notes,
-        arch=arch,
-        sandbox_hardware=sandbox_hardware,
-        sandbox_profile=args.sandbox_profile,
-        sandbox_url=args.sandbox_url,
-        sandbox_ssh=args.sandbox_ssh,
-        sandbox_ssh_init=args.sandbox_ssh_init,
-        sandbox_ssh_gpu=args.sandbox_ssh_gpu,
-        sandbox_health_command=args.sandbox_health_command,
-        sandbox_timeout=args.sandbox_timeout,
-        atrex_bench_root=str(problem.evaluation.runtime_root or ""),
-        agent_cli=args.agent_cli,
-        optimization_mode=args.optimization_mode,
-        work_dir=args.workspace,
-        workspace_suffix=workspace_suffix,
-        max_iters=args.max_iters,
-        fast_episodes=args.fast_episodes,
-        fast_trials=args.fast_trials,
-        token_budget=args.token_budget,
-        target_util=args.target_util,
-        setup_timeout=args.setup_timeout,
-        max_stall=args.max_stall,
-        framework_baseline=args.framework_baseline,
-        framework_baseline_timeout=args.framework_baseline_timeout,
-        handoff_resumes=args.handoff_resumes,
-        production_review_timeout=args.production_review_timeout,
-        verify_repeats=args.verify_repeats,
-        verify_run_timeout=args.verify_run_timeout,
-        min_improvement_pct=args.min_improvement_pct,
-        long_reviewer_session=args.long_reviewer_session,
-        v1_ask_codex=args.v1_ask_codex,
-        v1_ask_qoder=args.v1_ask_qoder,
-        fast_episode_ask_codex=args.fast_episode_ask_codex,
-        fast_episode_ask_qoder=args.fast_episode_ask_qoder,
-        full_episode_ask_codex=args.full_episode_ask_codex,
-        full_episode_ask_qoder=args.full_episode_ask_qoder,
-        convert_after=args.convert_after,
-    )
+    with startup_preparation(sys.modules[__name__], args, raw_argv) as startup:
+        try:
+            campaign = create_campaign(
+                task_dependencies=dependencies,
+                problem=source,
+                name=source.directory.name,
+                platform=args.platform,
+                framework=args.framework,
+                notes=args.notes,
+                arch=args.arch,
+                sandbox_hardware=sandbox_hardware,
+                sandbox_profile=args.sandbox_profile,
+                sandbox_url=args.sandbox_url,
+                sandbox_ssh=args.sandbox_ssh,
+                sandbox_ssh_init=args.sandbox_ssh_init,
+                sandbox_ssh_gpu=args.sandbox_ssh_gpu,
+                sandbox_health_command=args.sandbox_health_command,
+                sandbox_timeout=args.sandbox_timeout,
+                agent_cli=args.agent_cli,
+                optimization_mode=args.optimization_mode,
+                work_dir=args.workspace,
+                workspace_suffix=args.workspace_suffix,
+                max_iters=args.max_iters,
+                fast_episodes=args.fast_episodes,
+                fast_trials=args.fast_trials,
+                token_budget=args.token_budget,
+                target_util=args.target_util,
+                setup_timeout=args.setup_timeout,
+                max_stall=args.max_stall,
+                framework_baseline=args.framework_baseline,
+                framework_baseline_timeout=args.framework_baseline_timeout,
+                handoff_resumes=args.handoff_resumes,
+                production_review_timeout=args.production_review_timeout,
+                verify_repeats=args.verify_repeats,
+                verify_run_timeout=args.verify_run_timeout,
+                min_improvement_pct=args.min_improvement_pct,
+                long_reviewer_session=args.long_reviewer_session,
+                v1_ask_codex=args.v1_ask_codex,
+                v1_ask_qoder=args.v1_ask_qoder,
+                fast_episode_ask_codex=args.fast_episode_ask_codex,
+                fast_episode_ask_qoder=args.fast_episode_ask_qoder,
+                full_episode_ask_codex=args.full_episode_ask_codex,
+                full_episode_ask_qoder=args.full_episode_ask_qoder,
+                convert_after=args.convert_after,
+            )
+        except FrameworkDispatchComplete as completed:
+            return completed.exit_code
+        arch = startup.arch
     trace_status = "failed"
     handled_signals = (signal.SIGTERM, signal.SIGHUP)
     previous_handlers = {

@@ -18,6 +18,7 @@ def default_workflow(
     from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
     from aka.legacy.workflow.dependencies import CampaignDependencies
     from aka.legacy.workflow.assembly import LegacyWorkflow
+    from .startup import prepare_request
 
     owned_agent = agent is None
     agent = agent if agent is not None else LegacyAgent()
@@ -42,6 +43,7 @@ def default_workflow(
             episode_evaluation=episode_evaluation,
         ),
         lambda c: execution_adapter(c.evaluation.context),
+        prepare_request=prepare_request,
     )
 
     class AssembledWorkflow(LegacyWorkflow):
