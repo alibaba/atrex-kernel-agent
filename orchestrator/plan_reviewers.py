@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from contextvars import copy_context
 import json
 import os
 import subprocess
@@ -227,6 +228,7 @@ def discover_plan_reviewers(
         ) as executor:
             futures = {
                 name: executor.submit(
+                    copy_context().run,
                     _probe_reviewer,
                     name,
                     draft,

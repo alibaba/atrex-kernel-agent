@@ -24,6 +24,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--profile", default="application")
     parser.add_argument("--profiles-dir", type=Path, default=PROFILES_DIR)
     parser.add_argument("--patch", action="append", type=Path, default=[])
+    parser.add_argument("--execution-profile", choices=("legacy",), default=None)
+    parser.add_argument("--execution-patch", action="append", type=Path, default=[])
     options = parser.parse_args(argv[:boundary])
     if boundary == len(argv):
         parser.error("separate application arguments with -- (use -- --help for application help)")
@@ -36,11 +38,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if added:
         sys.path.insert(0, str(root))
     try:
+        execution_selection = None
+        if options.execution_profile is not None or options.execution_patch:
+            from .execution import selected_execution, read_execution_patches
+            execution_selection = dict(selected_execution())
+            if options.execution_profile is not None:
+                execution_selection["profile"] = options.execution_profile
+            if options.execution_patch:
+                execution_selection["patches"] = [*execution_selection.get("patches", ()),
+                    *read_execution_patches(options.execution_patch)]
         return run_application(
             ApplicationRequest(root, argv[boundary + 1:]),
             profile=options.profile,
             profiles_dir=options.profiles_dir.expanduser().resolve(),
             patch_files=tuple(path.expanduser().resolve() for path in options.patch),
+            **({"execution_selection": execution_selection} if execution_selection is not None else {}),
         )
     finally:
         if added:

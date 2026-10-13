@@ -11,6 +11,7 @@ dependencies = ["atrex-aka-bootstrap==0.1.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.application.cli:main"
+execution = "aka.legacy.application.execution_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -22,3 +23,5 @@ include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
 "aka.legacy.application" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]
+
+"aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from aka.core.errors import CompositionError
 from .processes import (default_recovery_profile, invocation_environment,
                         pending_recovery_directory, requires_default_recovery)
 from .recovery import complete_migration
+from .execution import SELECTION_ENV as EXECUTION_SELECTION_ENV
 
 PROFILES_DIR = Path(__file__).with_name("profiles")
 COMPOSITION_VARS = ("repo_root", "workspace", "campaign_name", "operator", "platform", "arch",
@@ -33,11 +35,11 @@ def application_variables(repo_root, values=None):
 
 
 def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR,
-                    patch_files=(), patches=(), variables=None, tokens=()):
+                    patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None):
     pending = pending_recovery_directory()
     if pending is not None:
         if (profile != "application" or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
-                or patch_files or patches or variables or tokens):
+                or patch_files or patches or variables or tokens or execution_selection is not None):
             raise CompositionError("recovery", "cannot override a pending default legacy launch migration")
         process_launch = sys.modules.get("orchestrator.process_launch")
         script = (process_launch.optimizer_entrypoint() if process_launch is not None
@@ -59,10 +61,11 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
     legacy_recovery = requires_default_recovery()
     if legacy_recovery and (payload is not None or profile != "application"
             or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
-            or patch_files or patches or variables or tokens):
+            or patch_files or patches or variables or tokens or execution_selection is not None):
         raise CompositionError("recovery", "schema 3 recovery requires the built-in default legacy profile without overrides")
     if payload is not None:
-        if profile != "application" or Path(profiles_dir) != PROFILES_DIR or patch_files or patches or variables:
+        if (profile != "application" or Path(profiles_dir) != PROFILES_DIR or patch_files
+                or patches or variables or execution_selection is not None):
             raise CompositionError("continuation", "cannot override a reconstructed launch selection")
         selection = restore(payload, tokens=tokens)
         process_launch = sys.modules.get("orchestrator.process_launch")
@@ -96,5 +99,10 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
                                 for path in bindings)
         selection = replace(selection, resources=(*selection.resources, *bound_resources, (script.parent, tuple(paths))),
                             bindings={**selection.bindings, "optimizer_script": str(script)})
+    if execution_selection is not None:
+        if not any(row.name == "aka.legacy.application.plugin" for row in selection.composition.enabled):
+            raise CompositionError("application", "execution selection requires the legacy application")
+        selection = replace(selection, environment={**selection.environment,
+            EXECUTION_SELECTION_ENV: json.dumps(dict(execution_selection), sort_keys=True)})
     with (default_recovery_profile() if legacy_recovery else nullcontext()), invocation_environment(selection.environment):
         return run_selection(selection, Invocation(request.argv))

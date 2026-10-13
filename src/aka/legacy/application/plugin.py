@@ -4,6 +4,7 @@ from pathlib import Path
 from aka.contracts.application import ApplicationRequest
 from .entrypoint import create_legacy_application
 from .processes import use_launch_environment, invocation_environment
+from .execution import application_execution
 
 name = "application"
 provide = ("startup",)
@@ -28,7 +29,7 @@ class LegacyStartup:
         expected = invocation.bindings.get("optimizer_script")
         if expected is None or Path(expected).resolve() != optimizer_entrypoint():
             raise RuntimeError("startup selected a different optimizer entrypoint")
-        with invocation_environment(invocation.environment), use_launch_environment(invocation.environment):
+        with invocation_environment(invocation.environment), use_launch_environment(invocation.environment), application_execution():
             return self._application.run(ApplicationRequest(self._repo_root, invocation.argv))
 
 

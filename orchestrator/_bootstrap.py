@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Optional
 
 
+def execution_modules():
+    source = Path(__file__).resolve().parent.parent / "src"
+    if (source / "aka" / "legacy" / "application" / "execution.py").is_file() and str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    from aka.legacy.application import execution
+    from aka.legacy.execution.legacy import runtime
+    return execution, runtime
+
+
 def run(argv: Optional[list[str]] = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     source = repo_root / "src"

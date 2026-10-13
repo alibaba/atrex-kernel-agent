@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from pathlib import Path, PurePosixPath
 from threading import Event
 from typing import Any
@@ -559,7 +560,7 @@ class GatewayABBAValidator:
                 else min(DEFAULT_SHAPE_BATCH_WORKERS, len(batch_specs))
             )
             executor = ThreadPoolExecutor(max_workers=max_workers)
-            futures = [executor.submit(run_batch, spec) for spec in batch_specs]
+            futures = [executor.submit(copy_context().run, run_batch, spec) for spec in batch_specs]
             try:
                 completed, _ = wait(futures, return_when=FIRST_EXCEPTION)
                 for future in completed:
