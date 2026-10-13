@@ -60,7 +60,6 @@ _EXPORTS = {
     "build_agent_runtime": (".runtime", "build_agent_runtime"),
     "build_session_command": (".runtime", "build_session_command"),
     "build_session_environment": (".runtime", "build_session_environment"),
-    "token_usage_from_stream": (".runtime", "token_usage_from_stream"),
 }
 __all__ = [
     "AgentBackendAdapter",
@@ -101,7 +100,6 @@ __all__ = [
     "sum_token_usages",
     "token_usage_exceeds",
     "token_usage_from_mapping",
-    "token_usage_from_stream",
     "toml_config_value",
 ]
 

@@ -5,7 +5,10 @@ from pathlib import Path
 from orchestrator import constants as _constants
 from orchestrator import workspace_state as _workspace_state
 from orchestrator.agent_runtime import process as _agent_process
-from orchestrator.campaign import Campaign
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aka.legacy.workflow.campaign import Campaign
 from orchestrator.constants import DEFAULT_CONVERT_AFTER
 from orchestrator.hardware import (
     hardware_directive,
@@ -91,7 +94,7 @@ def episode_directives(
             if fast
             else campaign._sandbox_directive()
         ),
-        "evaluator": campaign._evaluator_directive(),
+        "evaluator": campaign.evaluation.evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(
             agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
@@ -186,5 +189,10 @@ from aka.legacy.agent.native import (
     session_environment,
     session_id_from_stream,
     supports_same_session_resume,
-    tokens_from_stream,
 )
+
+
+def tokens_from_stream(stdout):
+    from aka.legacy.agent.runtime import terminal_usage_from_stream
+
+    return terminal_usage_from_stream(stdout).total_tokens or 0

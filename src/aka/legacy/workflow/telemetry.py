@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from orchestrator.agent_runtime.model import (
+from aka.contracts.agent import (
     AgentRuntimeCapabilities,
     TokenUsage,
     resequence_agent_events,

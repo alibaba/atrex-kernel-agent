@@ -9,16 +9,11 @@ from typing import Callable
 
 from orchestrator.environment_recovery import raise_if_environment_blocked
 
-from . import main_adapter
+from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
-CommandExecutor = Callable[
-    [list[str], Path, int | None, dict[str, str]], tuple[str, str, int, bool]
-]
-
-
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
 
 
@@ -63,14 +58,14 @@ def _claude_transient_api_error(stdout: str) -> str:
 class LongSessionRunner:
     def __init__(
         self,
-        executor: CommandExecutor | None = None,
-        agent_cli: str = "claude",
         *,
-        agent=None,
+        agent: Agent,
+        usage_policy: Callable[[NativeInvocation], int],
+        agent_cli: str = "claude",
     ):
-        self.executor = executor or main_adapter.run_bounded
         self.agent_cli = agent_cli
         self.agent = agent
+        self.usage_policy = usage_policy
 
     def run(
         self,
@@ -90,23 +85,11 @@ class LongSessionRunner:
         active_session_id = "" if is_codex else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
-        from aka.legacy.agent.native import NativeSession
-
-        native = (
-            self.agent.open_session(
-                self.agent_cli,
-                workspace,
-                session_id=session_id,
-                environment=telemetry_environment,
-            )
-            if self.agent is not None
-            else NativeSession(
-                self.agent_cli,
-                workspace,
-                session_id,
-                self.executor,
-                telemetry_environment,
-            )
+        native = self.agent.open_session(
+            self.agent_cli,
+            workspace,
+            session_id=session_id,
+            environment=telemetry_environment,
         )
         try:
             telemetry_attempt_prefix = native.environment.get(
@@ -166,7 +149,7 @@ class LongSessionRunner:
                 stdout_parts.append(stdout)
                 stderr_parts.append(stderr)
                 active_session_id = turn.session_id or active_session_id
-                total_tokens += turn.tokens
+                total_tokens += self.usage_policy(turn)
                 invocations.append(
                     InvocationObservation(
                         terminal_usage=turn.terminal_usage,

@@ -9,7 +9,6 @@ from .runtime import (
     build_session_command,
     build_session_environment,
     terminal_usage_from_stream,
-    token_usage_from_stream,
 )
 from .codex_ledger import (
     CodexSessionLedgerObserver,
@@ -117,10 +116,6 @@ def session_id_from_stream(
     if agent_cli != "codex":
         return requested_session_id
     return codex_thread_id_from_stream(stdout)
-
-
-def tokens_from_stream(stdout: str) -> int:
-    return token_usage_from_stream(stdout)
 
 
 def normalize_stream(
@@ -334,17 +329,10 @@ class NativeSession:
             )
         ):
             self._stdout_usage = stream_session_usage
-        tokens = (
-            terminal_usage.total_tokens
-            if terminal_usage.total_tokens is not None
-            else (0 if is_codex else tokens_from_stream(stdout))
-        )
-
         self._invoked = True
         return NativeInvocation(
             exit_status,
             timed_out,
-            tokens,
             self._session_id,
             stdout,
             stderr,

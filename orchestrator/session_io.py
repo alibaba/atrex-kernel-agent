@@ -169,29 +169,33 @@ def run_session(
             agent_cli,
             process_runner=_agent_runtime.run_bounded,
         )
+    from aka.legacy.compat.agent import invocation_request, AgentRunRequest
+
     result = runtime.run(
-        _agent_runtime.AgentRunRequest(
-            workspace=workspace,
-            prompt=prompt,
-            timeout_s=timeout,
-            reasoning_effort=reasoning_effort,
-            sandbox_hardware=sandbox_hardware,
-            sandbox_profile=sandbox_profile,
-            sandbox_url=sandbox_url,
-            sandbox_ssh=sandbox_ssh,
-            sandbox_ssh_init=sandbox_ssh_init,
-            sandbox_health_command=sandbox_health_command,
-            sandbox_timeout_s=sandbox_timeout,
-            environment_state_file=str(environment_state_file() or ""),
-            session_id=session_id,
-            extra_environment=extra_environment,
+        invocation_request(
+            AgentRunRequest(
+                workspace=workspace,
+                prompt=prompt,
+                timeout_s=timeout,
+                reasoning_effort=reasoning_effort,
+                sandbox_hardware=sandbox_hardware,
+                sandbox_profile=sandbox_profile,
+                sandbox_url=sandbox_url,
+                sandbox_ssh=sandbox_ssh,
+                sandbox_ssh_init=sandbox_ssh_init,
+                sandbox_health_command=sandbox_health_command,
+                sandbox_timeout_s=sandbox_timeout,
+                environment_state_file=str(environment_state_file() or ""),
+                session_id=session_id,
+                extra_environment=extra_environment,
+            )
         )
     )
     raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,
         timed_out=result.timed_out,
-        tokens=result.tokens,
+        tokens=result.terminal_usage.total_tokens or 0,
         stdout_tail=result.stdout_tail,
         stderr_tail=result.stderr_tail,
         session_id=result.session_id,
@@ -458,9 +462,7 @@ def fast_sandbox_directive(
     memory), so only the invariant safety boundary is injected here.
     """
     endpoint = _sandbox_endpoint(profile, url, ssh)
-    return _render(
-        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
 
 
 def _sandbox_command(
@@ -483,7 +485,9 @@ def _sandbox_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
-        raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
+        raise ValueError(
+            "ssh, url, and profile sandbox endpoints are mutually exclusive"
+        )
     cmd = [
         sys.executable,
         str(SANDBOX_TOOL),
@@ -524,7 +528,9 @@ def _sandbox_command(
     if wall_timeout is not None:
         effective_timeout = wall_timeout
     else:
-        uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
+        uses_ssh = bool(
+            ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH"))
+        )
         grace = 0 if uses_ssh else queue_wait_grace(environment)
         effective_timeout = timeout + grace + 240
     raise_if_environment_blocked()
@@ -601,8 +607,16 @@ def check_ssh_environment(
 ) -> None:
     """Fail into durable recovery before seeding, even when --arch was given."""
     result = _sandbox_command(
-        workspace, hardware, "", "", 60, [], ssh=ssh, ssh_init=ssh_init,
-        health_command=health_command, preflight=True,
+        workspace,
+        hardware,
+        "",
+        "",
+        60,
+        [],
+        ssh=ssh,
+        ssh_init=ssh_init,
+        health_command=health_command,
+        preflight=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"SSH preflight failed: {result.stderr or result.stdout}")

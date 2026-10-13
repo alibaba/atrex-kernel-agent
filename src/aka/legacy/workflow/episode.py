@@ -19,15 +19,9 @@ from orchestrator.constants import (
 )
 from orchestrator.hardware import hardware_vendor
 
-from . import main_adapter
-from .git_episode import (
-    EpisodeWorktree,
-    git_head,
-    git_text,
-    promote_candidate,
-    record_episode_outcome,
-    working_changes,
-)
+from aka.contracts.workspace import CandidateHandle
+from aka.legacy.task.git import git_head, git_text, working_changes
+from .git_episode import record_episode_outcome
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
@@ -35,9 +29,9 @@ from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_
 from .models import EpisodeHandoff, SupervisorState, VerificationResult
 from .protocol import read_handoff
 from .session import LongSessionRunner
+from .dependencies import EpisodeEvaluation, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
-from long_horizon.verifier import GatewayABBAValidator
 
 from aka.legacy.application.paths import checkout_root
 
@@ -247,21 +241,13 @@ def _memory_profile_evidence(
     }
 
 
-from long_horizon.legacy_evaluation.episode import LegacyEpisodeEvaluation
-from long_horizon.legacy_evaluation.results import (
-    _candidate_shape_latencies,
-    _conversion_parity_passes,
-    _episode_evaluation_count,
-    _iso_timestamp,
-    _latest_complete_canonical_performance,
-    _latest_complete_episode_performance,
-    _representative_candidate_result,
-)
-
-
 @dataclass
 class LongHorizonCampaign:
-    base_campaign: main_adapter.Campaign
+    base_campaign: object
+    verifier: Verifier
+    session_runner: LongSessionRunner
+    evaluation: EpisodeEvaluation
+    environment: EpisodeEnvironment
     max_episodes: int = 8
     max_version: int | None = None
     fast_episodes: int = DEFAULT_FAST_EPISODES
@@ -270,14 +256,9 @@ class LongHorizonCampaign:
     token_budget: int = 0
     handoff_resumes: int = 2
     max_stall: int = 0
-    verifier: GatewayABBAValidator | None = None
-    session_runner: LongSessionRunner | None = None
     worktree_root: Path | None = None
-    evaluation: object | None = None
 
     def __post_init__(self) -> None:
-        if self.evaluation is None:
-            self.evaluation = LegacyEpisodeEvaluation()
         if self.fast_episodes < 0:
             raise ValueError("fast_episodes must be non-negative")
         if self.fast_trials < 1:
@@ -330,7 +311,7 @@ class LongHorizonCampaign:
 
     def _review_fast_candidate_snapshot(
         self,
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         candidate_commit: str,
         *,
         require_gluon: bool,
@@ -374,7 +355,7 @@ class LongHorizonCampaign:
             )
             # The campaign reviewer caches by the exact bounded candidate digest. The
             # final call on the live worktree therefore only persists/reuses this verdict.
-            main_adapter.candidate_policy_violations(
+            self.environment.candidate_policy_violations(
                 self.base_campaign,
                 snapshot,
                 require_gluon=require_gluon,
@@ -382,7 +363,7 @@ class LongHorizonCampaign:
 
     def _prewarm_fast_policy_reviews(
         self,
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         *,
         require_gluon: bool,
         stop_event: Event,
@@ -427,7 +408,7 @@ class LongHorizonCampaign:
         *,
         episode: int,
         version: int,
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         journal_path: Path,
         handoff_path: Path,
         live_memory_path: Path,
@@ -436,7 +417,7 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
         resumed: bool = False,
     ) -> str:
-        directives = main_adapter.episode_directives(
+        directives = self.environment.episode_directives(
             self.base_campaign, version, fast=episode_mode == "fast"
         )
         fast_trial_count = fast_trials or self.fast_trials
@@ -477,7 +458,9 @@ class LongHorizonCampaign:
                 "JOURNAL_COMMAND": journal_command,
                 "FAST_TRIALS": fast_trial_count,
                 "FAST_TRIAL_PLAN_PATHS": fast_trial_plan_paths,
-                "FAST_EVALUATOR_COMMAND": self._fast_evaluator_command(version),
+                "FAST_EVALUATOR_COMMAND": self.evaluation.fast_evaluator_command(
+                    version
+                ),
                 "RESUME_DIRECTIVE": (
                     "This episode is resuming after a supervisor restart. Keep and reuse the "
                     "existing worktree, checkpoints, journal, plans, profiles, generated files, "
@@ -490,7 +473,7 @@ class LongHorizonCampaign:
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
                     "submit another Triton kernel. A candidate must be a committed Gluon kernel, "
-                    f"pass correctness, and stay within {main_adapter.CONVERT_PERF_TOL:.0%} of "
+                    f"pass correctness, and stay within {self.environment.CONVERT_PERF_TOL:.0%} of "
                     "the incumbent latency."
                     if conversion_pending
                     else "No mandatory framework conversion is currently latched."
@@ -500,7 +483,7 @@ class LongHorizonCampaign:
 
     def _require_canonical_memory(self, version: int) -> None:
         """Fail closed unless this episode's memory is valid and committed at HEAD."""
-        memory = main_adapter.read_memory(self.workspace, version)
+        memory = self.environment.read_memory(self.workspace, version)
         if not isinstance(memory, dict) or memory.get("version") != f"v{version}":
             raise RuntimeError(
                 f"episode did not write valid canonical memory/v{version}.json"
@@ -524,7 +507,7 @@ class LongHorizonCampaign:
 
     def _completion_check(
         self,
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         journal_path: Path,
         handoff: EpisodeHandoff,
         *,
@@ -557,7 +540,7 @@ class LongHorizonCampaign:
                     f"fast episode requires {required_fast_trials} recorded trial experiments; "
                     f"found {experiment_count}"
                 )
-            evaluation_count = _episode_evaluation_count(worktree.path)
+            evaluation_count = self.evaluation.episode_evaluation_count(worktree.path)
             if evaluation_count < required_fast_trials:
                 return (
                     f"fast episode requires {required_fast_trials} evaluator results; "
@@ -565,12 +548,14 @@ class LongHorizonCampaign:
                 )
         if handoff.status != "candidate_ready":
             return ""
-        violation, _ = worktree.validate_candidate(candidate)
+        violation, _ = self.base_campaign.candidate_workspace.validate_candidate(
+            worktree, candidate
+        )
         if violation:
             return violation
         try:
             journal = load_journal(journal_path)
-            finalized_at = _iso_timestamp(str(journal["finalized_at"]))
+            finalized_at = self.evaluation.iso_timestamp(str(journal["finalized_at"]))
             committed_at = float(
                 git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
             )
@@ -582,10 +567,12 @@ class LongHorizonCampaign:
             )
         # Run while the coding session is still resumable. A measured probe
         # failure becomes focused repair feedback, not a terminal rejection.
-        return self.base_campaign._supplemental_numerical_feedback(worktree.path)
+        return self.base_campaign.evaluation.supplemental_numerical_feedback(
+            worktree.path
+        )
 
     def _copy_runtime_artifacts(
-        self, worktree: EpisodeWorktree, episode_dir: Path
+        self, worktree: CandidateHandle, episode_dir: Path
     ) -> None:
         source = worktree.path / RUNTIME_DIR
         if source.is_dir():
@@ -612,9 +599,11 @@ class LongHorizonCampaign:
         fast_trials: int | None = None,
     ) -> dict[str, Any]:
         fast_trial_count = fast_trials or self.fast_trials
-        representative = _representative_candidate_result(verification)
-        by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
-        expected_shapes = self._expected_shape_ids()
+        representative = self.evaluation.representative_candidate_result(verification)
+        by_shape, shape_measurement_repeats = self.evaluation.candidate_shape_latencies(
+            verification
+        )
+        expected_shapes = self.evaluation.expected_shape_ids()
         if expected_shapes is not None:
             measured_shapes = set(by_shape) if isinstance(by_shape, dict) else set()
             if measured_shapes != expected_shapes:
@@ -767,8 +756,10 @@ class LongHorizonCampaign:
         failure = (
             violation or verification_failure or str(outcome.get("summary", status))
         )
-        representative = _representative_candidate_result(verification)
-        by_shape, shape_measurement_repeats = _candidate_shape_latencies(verification)
+        representative = self.evaluation.representative_candidate_result(verification)
+        by_shape, shape_measurement_repeats = self.evaluation.candidate_shape_latencies(
+            verification
+        )
         expected_shape_ids: set[str] | None = None
         if self.base_campaign.private_reference_dir is not None:
             expected_shape_ids = set(
@@ -800,7 +791,7 @@ class LongHorizonCampaign:
         carried: tuple[dict[str, Any], int] | None = None
         if not measurement_complete:
             episode_performance = (
-                _latest_complete_episode_performance(
+                self.evaluation.latest_complete_episode_performance(
                     episode_workspace,
                     expected_shape_ids=expected_shape_ids,
                     required_performance_objective="shape_speedup_arithmetic_mean",
@@ -817,7 +808,7 @@ class LongHorizonCampaign:
                 measurement_subject = "episode_head"
                 measurement_source = "episode_evaluator_result"
             else:
-                carried = _latest_complete_canonical_performance(
+                carried = self.evaluation.latest_complete_canonical_performance(
                     self.workspace,
                     before_version=version,
                     expected_shape_ids=expected_shape_ids,
@@ -886,7 +877,7 @@ class LongHorizonCampaign:
                     None
                     if representative.get("performance_objective")
                     == "shape_speedup_arithmetic_mean"
-                    else main_adapter.speedup_vs_reference(
+                    else self.environment.speedup_vs_reference(
                         self.workspace,
                         representative.get("latency_us_geomean"),
                         representative.get("speedup_vs_ref_geomean"),
@@ -954,33 +945,35 @@ class LongHorizonCampaign:
         self,
         store: CampaignStore,
         active: dict[str, Any],
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         handoff: EpisodeHandoff,
         *,
         memory_version: int,
         episode_mode: str,
         conversion_pending: bool,
-        verifier: GatewayABBAValidator,
+        verifier: Verifier,
     ) -> tuple[str, list[str], VerificationResult | None, bool]:
         """Apply the authoritative candidate gates to one terminal handoff."""
         if handoff.status != "candidate_ready":
             return "", [], None, False
 
         candidate_commit = handoff.candidate_commit
-        violation, paths = worktree.validate_candidate(candidate_commit)
+        violation, paths = self.base_campaign.candidate_workspace.validate_candidate(
+            worktree, candidate_commit
+        )
         if (
             not violation
             and conversion_pending
-            and not main_adapter.candidate_is_gluon(worktree.path)
+            and not self.environment.candidate_is_gluon(worktree.path)
         ):
             violation = "mandatory conversion candidate is not a committed Gluon kernel"
         if not violation:
-            policy_violations = main_adapter.candidate_policy_violations(
+            policy_violations = self.environment.candidate_policy_violations(
                 self.base_campaign,
                 worktree.path,
                 require_gluon=(
                     conversion_pending
-                    or main_adapter.candidate_is_gluon(self.workspace)
+                    or self.environment.candidate_is_gluon(self.workspace)
                 ),
             )
             if policy_violations:
@@ -989,7 +982,7 @@ class LongHorizonCampaign:
                 )
         if not violation:
             # Normally cached by _completion_check; also covers recovered handoffs.
-            violation = self.base_campaign._supplemental_numerical_feedback(
+            violation = self.base_campaign.evaluation.supplemental_numerical_feedback(
                 worktree.path
             )
         verification: VerificationResult | None = None
@@ -1000,7 +993,7 @@ class LongHorizonCampaign:
             )
             store.save_active(active)
             if episode_mode == "fast":
-                verification = self._fast_verification_result(
+                verification = self.evaluation.fast_verification_result(
                     worktree.path,
                     memory_version=memory_version,
                 )
@@ -1016,7 +1009,7 @@ class LongHorizonCampaign:
             if (
                 conversion_pending
                 and not verification.passed
-                and _conversion_parity_passes(verification)
+                and self.evaluation.conversion_parity_passes(verification)
             ):
                 verification = VerificationResult(
                     "PASS",
@@ -1040,7 +1033,7 @@ class LongHorizonCampaign:
         store: CampaignStore,
         state: SupervisorState,
         active: dict[str, Any],
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         *,
         memory_version: int,
         episode_mode: str,
@@ -1070,7 +1063,9 @@ class LongHorizonCampaign:
         )
 
         episode_dir = store.episode_dir(episode)
-        worktree.archive(episode_dir / "archive", "HEAD")
+        self.base_campaign.candidate_workspace.archive(
+            worktree, episode_dir / "archive", "HEAD"
+        )
         self._copy_runtime_artifacts(worktree, episode_dir)
         try:
             journal = load_journal(journal_path)
@@ -1152,9 +1147,8 @@ class LongHorizonCampaign:
                 episode_mode=episode_mode,
                 fast_trials=fast_trial_count,
             )
-            promotion_commit = promote_candidate(
+            promotion_commit = self.base_campaign.candidate_workspace.promote(
                 self.workspace,
-                provider=self.base_campaign.candidate_workspace,
                 base_commit=base_commit,
                 candidate_commit=candidate_commit,
                 episode=episode,
@@ -1165,7 +1159,7 @@ class LongHorizonCampaign:
             attempt["promotion_commit"] = promotion_commit
             state.accepted += 1
             state.consecutive_without_promotion = 0
-            main_adapter.save_stall(self.workspace, 0)
+            self.environment.save_stall(self.workspace, 0)
             active["phase"] = "promoted"
             active["promotion_commit"] = promotion_commit
             store.save_active(active)
@@ -1194,7 +1188,9 @@ class LongHorizonCampaign:
             )
             attempt["outcome_commit"] = outcome_commit
             state.consecutive_without_promotion += 1
-            main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
+            self.environment.save_stall(
+                self.workspace, state.consecutive_without_promotion
+            )
             if status == "pivot" and not violation:
                 state.pivoted += 1
             elif status == "blocked" and not violation:
@@ -1223,7 +1219,7 @@ class LongHorizonCampaign:
         store.archive_attempt(episode, attempt)
         state.attempts.append(attempt)
         store.save_state(state)
-        worktree.remove(self.workspace)
+        self.base_campaign.candidate_workspace.remove(worktree, self.workspace)
         store.clear_active()
         recovery_label = (
             " recovered=true" if recovered_after_supervisor_interruption else ""
@@ -1259,9 +1255,9 @@ class LongHorizonCampaign:
         store: CampaignStore,
         state: SupervisorState,
         active: dict[str, Any],
-        worktree: EpisodeWorktree,
+        worktree: CandidateHandle,
         *,
-        verifier: GatewayABBAValidator,
+        verifier: Verifier,
     ) -> bool:
         """Finish a terminal handoff that arrived after the supervisor exited."""
         runtime = worktree.path / RUNTIME_DIR
@@ -1288,7 +1284,7 @@ class LongHorizonCampaign:
         memory_version = int(active.get("memory_version", 0) or 0)
         if memory_version <= 0:
             raise RuntimeError("interrupted episode has no canonical memory version")
-        conversion_pending = main_adapter.conversion_required(
+        conversion_pending = self.environment.conversion_required(
             self.base_campaign,
             state.consecutive_without_promotion,
             self.workspace,
@@ -1326,8 +1322,8 @@ class LongHorizonCampaign:
         store: CampaignStore,
         state: SupervisorState,
         *,
-        verifier: GatewayABBAValidator,
-    ) -> tuple[EpisodeWorktree, dict[str, Any]] | None:
+        verifier: Verifier,
+    ) -> tuple[CandidateHandle, dict[str, Any]] | None:
         active = store.load_active()
         if active is None:
             return None
@@ -1403,12 +1399,11 @@ class LongHorizonCampaign:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            worktree = EpisodeWorktree(
+            worktree = CandidateHandle(
                 episode,
                 base_commit,
                 branch,
                 worktree_path,
-                provider=self.base_campaign.candidate_workspace,
             )
             CampaignStore.ensure_excluded(worktree.path)
             if self._recover_completed_handoff(
@@ -1522,12 +1517,11 @@ class LongHorizonCampaign:
                 and worktree_path in registered
                 and branch
             ):
-                worktree = EpisodeWorktree(
+                worktree = CandidateHandle(
                     episode,
                     base_commit,
                     branch,
                     worktree_path,
-                    provider=self.base_campaign.candidate_workspace,
                 )
                 if self._recover_completed_handoff(
                     store,
@@ -1539,7 +1533,9 @@ class LongHorizonCampaign:
                     return
                 episode_dir = store.episode_dir(episode)
                 if not already_recorded:
-                    worktree.archive(episode_dir / "interrupted_archive")
+                    self.base_campaign.candidate_workspace.archive(
+                        worktree, episode_dir / "interrupted_archive"
+                    )
                     self._copy_runtime_artifacts(worktree, episode_dir)
             if memory_version <= 0:
                 raise RuntimeError(
@@ -1620,51 +1616,40 @@ class LongHorizonCampaign:
                 pass
         if worktree_path is not None and worktree_path != self.workspace.resolve():
             if worktree_path in registered:
-                EpisodeWorktree(
-                    episode,
-                    base_commit,
-                    branch or "atrex/recovery",
-                    worktree_path,
-                    provider=self.base_campaign.candidate_workspace,
-                ).remove(self.workspace)
-        main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
+                self.base_campaign.candidate_workspace.remove(
+                    CandidateHandle(
+                        episode,
+                        base_commit,
+                        branch or "atrex/recovery",
+                        worktree_path,
+                    ),
+                    self.workspace,
+                )
+        self.environment.save_stall(self.workspace, state.consecutive_without_promotion)
         store.save_state(state)
         store.clear_active()
         return None
 
     def run(self) -> str:
-        main_adapter.prepare_campaign(self.base_campaign)
+        self.environment.prepare_campaign(self.base_campaign)
         store = CampaignStore(self.workspace)
         state = store.load_state()
         if state.episodes == 0 and state.consecutive_without_promotion == 0:
-            state.consecutive_without_promotion = main_adapter.restored_stall(
+            state.consecutive_without_promotion = self.environment.restored_stall(
                 self.workspace
             )
-        verifier = self.verifier or GatewayABBAValidator(
-            workspace_provider=self.base_campaign.candidate_workspace,
-            hardware=self.base_campaign.sandbox_hardware,
-            profile=self.base_campaign.sandbox_profile,
-            url=self.base_campaign.sandbox_url,
-            ssh=self.base_campaign.sandbox_ssh,
-            ssh_init=self.base_campaign.sandbox_ssh_init,
-            health_command=self.base_campaign.sandbox_health_command,
-            timeout=self.base_campaign.sandbox_timeout,
-            private_reference_dir=self.base_campaign.private_reference_dir,
-        )
+        verifier = self.verifier
         recovered_episode = self._recover_interrupted(store, state, verifier=verifier)
-        runner = self.session_runner or LongSessionRunner(
-            agent_cli=getattr(self.base_campaign, "agent_cli", "claude"),
-            agent=getattr(self.base_campaign, "agent", None),
-        )
+        runner = self.session_runner
         starting_episodes = state.episodes
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
-            conversion_pending = main_adapter.conversion_required(
+            conversion_pending = self.environment.conversion_required(
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
             if self.max_version is not None:
-                if main_adapter.latest_version(self.workspace) >= self.max_version:
+                if self.environment.latest_version(self.workspace) >= self.max_version:
                     if conversion_pending:
                         raise RuntimeError(
                             "mandatory Triton->Gluon conversion did not succeed before max-iters"
@@ -1709,16 +1694,17 @@ class LongHorizonCampaign:
                     "fast_trials", self.fast_trials if episode_mode == "fast" else None
                 )
                 if active.get("resumed_from_phase") == "preparing":
-                    main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
+                    self.environment.link_episode_runtime(
+                        self.base_campaign, worktree.path
+                    )
             else:
-                memory_version = main_adapter.latest_version(self.workspace) + 1
+                memory_version = self.environment.latest_version(self.workspace) + 1
                 base_commit = git_head(self.workspace)
-                worktree = EpisodeWorktree.plan(
+                worktree = self.base_campaign.candidate_workspace.plan(
                     self.workspace,
                     episode,
                     base_commit,
                     root=self.worktree_root,
-                    provider=self.base_campaign.candidate_workspace,
                 )
                 active = {
                     "episode": episode,
@@ -1731,7 +1717,9 @@ class LongHorizonCampaign:
                     "phase": "preparing",
                 }
                 store.save_active(active)
-                worktree.materialize(self.workspace)
+                self.base_campaign.candidate_workspace.materialize(
+                    worktree, self.workspace
+                )
                 active.update(
                     {
                         "episode_branch": worktree.branch,
@@ -1740,7 +1728,7 @@ class LongHorizonCampaign:
                     }
                 )
                 store.save_active(active)
-                main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
+                self.environment.link_episode_runtime(self.base_campaign, worktree.path)
                 unexpected = working_changes(worktree.path)
                 if unexpected:
                     raise RuntimeError(
@@ -1803,7 +1791,7 @@ class LongHorizonCampaign:
                     worktree,
                     require_gluon=(
                         conversion_pending
-                        or main_adapter.candidate_is_gluon(self.workspace)
+                        or self.environment.candidate_is_gluon(self.workspace)
                     ),
                     stop_event=policy_stop,
                 )
@@ -1901,9 +1889,12 @@ class LongHorizonCampaign:
             )
             if accepted and memory is not None:
                 target_util = float(getattr(self.base_campaign, "target_util", 0.0))
-                if target_util > 0.0 and main_adapter.peak_util(memory) >= target_util:
+                if (
+                    target_util > 0.0
+                    and self.environment.peak_util(memory) >= target_util
+                ):
                     reason = (
-                        f"success: peak_util {main_adapter.peak_util(memory):.1f}% "
+                        f"success: peak_util {self.environment.peak_util(memory):.1f}% "
                         f">= {target_util:.0f}%"
                     )
                     break
@@ -1918,7 +1909,7 @@ class LongHorizonCampaign:
                 self.max_stall
                 and self._episode_mode(state) != "goal"
                 and state.consecutive_without_promotion >= self.max_stall
-                and not main_adapter.conversion_required(
+                and not self.environment.conversion_required(
                     self.base_campaign,
                     state.consecutive_without_promotion,
                     self.workspace,
@@ -1934,16 +1925,3 @@ class LongHorizonCampaign:
             flush=True,
         )
         return reason
-
-    def _expected_shape_ids(self) -> set[str] | None:
-        return self.evaluation.expected_shape_ids(self)
-
-    def _fast_evaluator_command(self, version: int) -> str:
-        return self.evaluation.fast_evaluator_command(self, version)
-
-    def _fast_verification_result(
-        self, episode_workspace: Path, *, memory_version: int
-    ) -> VerificationResult:
-        return self.evaluation.fast_verification_result(
-            self, episode_workspace, memory_version=memory_version
-        )

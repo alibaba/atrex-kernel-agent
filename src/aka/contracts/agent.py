@@ -145,16 +145,8 @@ class AgentRunRequest:
     prompt: str
     timeout_s: int
     reasoning_effort: str = "max"
-    sandbox_hardware: str = ""
-    sandbox_profile: str = ""
-    sandbox_url: str = ""
-    sandbox_timeout_s: int = 600
     session_id: str | None = None
-    extra_environment: Mapping[str, str] | None = None
-    sandbox_ssh: str = ""
-    sandbox_ssh_init: str = ""
-    sandbox_health_command: str = ""
-    environment_state_file: str = ""
+    environment: Mapping[str, str | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -169,11 +161,6 @@ class AgentRunResult:
     stdout_tail: str
     stderr_tail: str
     session_id: str = ""
-
-    @property
-    def tokens(self) -> int:
-        """Compatibility total used by existing campaign token budgets."""
-        return self.terminal_usage.total_tokens or 0
 
 
 class AgentRuntime(Protocol):
@@ -202,7 +189,6 @@ class Agent(Protocol):
 class NativeInvocation:
     exit_status: int
     timed_out: bool
-    tokens: int
     session_id: str
     stdout: str
     stderr: str

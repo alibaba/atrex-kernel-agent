@@ -1,7 +1,6 @@
-"""Compatibility entry for the extracted Workflow implementation."""
+"""Historical import routed through the external compatibility adapter."""
 from orchestrator._bootstrap import task_modules
 task_modules()
 import importlib
 import sys
-_implementation = importlib.import_module("aka.legacy.workflow.git_episode")
-sys.modules[__name__] = _implementation
+sys.modules[__name__] = importlib.import_module('aka.legacy.compat.git_episode')

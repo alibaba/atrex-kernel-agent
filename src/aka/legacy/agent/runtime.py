@@ -85,11 +85,6 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
     )
 
 
-def token_usage_from_stream(stdout: str) -> int:
-    """Preserve the terminal-token compatibility contract for legacy callers."""
-    return terminal_usage_from_stream(stdout).total_tokens or 0
-
-
 def build_session_environment(runtime_id: str) -> dict[str, str]:
     """Build the current guarded environment for one coding-agent session."""
     environment = os.environ.copy()
@@ -163,34 +158,12 @@ class CliAgentRuntime:
         )
         environment = build_session_environment(self.id)
         environment["IS_SANDBOX"] = "1"
-        if request.extra_environment:
-            environment.update(
-                {
-                    str(key): str(value)
-                    for key, value in request.extra_environment.items()
-                }
-            )
-        if request.sandbox_hardware:
-            environment["ATREX_SANDBOX_GPU"] = request.sandbox_hardware
-        if request.sandbox_ssh:
-            environment["ATREX_SANDBOX_SSH"] = request.sandbox_ssh
-            environment.pop("ATREX_SANDBOX_URL", None)
-            environment.pop("ATREX_SANDBOX_PROFILE", None)
-        elif request.sandbox_url:
-            environment["ATREX_SANDBOX_URL"] = request.sandbox_url
-            environment.pop("ATREX_SANDBOX_SSH", None)
-            environment.pop("ATREX_SANDBOX_PROFILE", None)
-        elif request.sandbox_profile:
-            environment["ATREX_SANDBOX_PROFILE"] = request.sandbox_profile
-            environment.pop("ATREX_SANDBOX_SSH", None)
-            environment.pop("ATREX_SANDBOX_URL", None)
-        if request.sandbox_ssh_init:
-            environment["ATREX_SANDBOX_SSH_INIT"] = request.sandbox_ssh_init
-        if request.sandbox_health_command:
-            environment["ATREX_SANDBOX_HEALTH_COMMAND"] = request.sandbox_health_command
-        if request.environment_state_file:
-            environment["ATREX_ENVIRONMENT_STATE_FILE"] = request.environment_state_file
-        environment["ATREX_SANDBOX_TIMEOUT"] = str(request.sandbox_timeout_s)
+        if request.environment:
+            for key, value in request.environment.items():
+                if value is None:
+                    environment.pop(key, None)
+                else:
+                    environment[key] = value
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id

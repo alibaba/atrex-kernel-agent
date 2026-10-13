@@ -863,7 +863,8 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     )
 
     factory = (dependencies or {}).get("workflow")
-    create_campaign = factory.campaign if factory is not None else Campaign
+    from aka.legacy.compat.workflow import create_campaign as adapt_campaign
+    create_campaign = (lambda **options: adapt_campaign(factory, **options)) if factory is not None else Campaign
     campaign = create_campaign(
         task_dependencies=dependencies,
         problem=problem,

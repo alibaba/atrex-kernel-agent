@@ -10,17 +10,17 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
-from orchestrator import agent_runtime as _agent_runtime
 from orchestrator._bootstrap import task_modules
 
 task_modules()
 from aka.contracts.problem import LoadedProblem
+from aka.legacy.agent.runtime import auth_hint
 
 from orchestrator.constants import (
     SUPPLEMENTAL_PENDING_PREFIX,
@@ -88,9 +88,6 @@ from orchestrator.session_io import (
     _record_local_test_result,
     _render,
     _validate_production_review,
-    fast_sandbox_directive,
-    run_session,
-    sandbox_directive,
 )
 from orchestrator.workspace_runtime import (
     _agent_runtime_directive,
@@ -152,63 +149,14 @@ _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS = {
 }
 
 
-from long_horizon.legacy_evaluation.baseline import LegacyBaselineEvaluation
+from aka.contracts.workflow import CampaignRequest
+from .dependencies import CampaignDependencies
 
 
 @dataclass
 class Campaign:
-    name: str
-    kernel_demo: str
-    platform: str
-    framework: str
-    notes: str = "none"
-    arch: str = ""  # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
-    work_dir: str = ""  # explicit working directory; "" = Path.cwd() (backward compat)
-    workspace_suffix: str = ""  # internal auto-dispatch suffix, e.g. triton_h20
-    max_iters: int = 20
-    token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
-    target_util: float = 90.0
-    setup_timeout: int = 7200  # 120 min for the baseline session
-    max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
-    fast_episodes: int = DEFAULT_FAST_EPISODES  # first N post-baseline episodes
-    fast_trials: int = DEFAULT_FAST_TRIALS  # trials per fast episode
-    convert_after: int = (
-        DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
-    )
-    sandbox_hardware: str = (
-        ""  # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
-    )
-    sandbox_profile: str = ""  # pre/prod; empty preserves normal agate URL resolution
-    sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
-    sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
-    atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
-    agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
-    optimization_mode: str = (
-        "leaderboard"  # permissive contest flow or strict production gate
-    )
-    framework_baseline: str = (
-        "auto"  # auto = production only; always | never override it
-    )
-    framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
-    handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
-    production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
-    verify_repeats: int = DEFAULT_VERIFY_REPEATS
-    verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
-    min_improvement_pct: float = 0.0
-    long_reviewer_session: str = ""
-    v1_ask_codex: bool = False
-    v1_ask_qoder: bool = False
-    fast_episode_ask_codex: bool = False
-    fast_episode_ask_qoder: bool = False
-    full_episode_ask_codex: bool = False
-    full_episode_ask_qoder: bool = False
-    sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
-    sandbox_ssh_init: str = ""  # remote environment activation command
-    sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
-    sandbox_health_command: str = ""  # remote GPU readiness probe
-    workflow: object | None = field(default=None, repr=False, compare=False)
-    task_dependencies: dict | None = field(default=None, repr=False, compare=False)
-    problem: LoadedProblem | None = field(default=None, repr=False, compare=False)
+    request: CampaignRequest
+    dependencies: CampaignDependencies
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -221,44 +169,29 @@ class Campaign:
     )
 
     def __post_init__(self) -> None:
-        if self.workflow is None:
-            from .assembly import default_workflow
-
-            self.workflow = default_workflow()
-        self.evaluation = (
-            self.workflow.baseline_evaluation or LegacyBaselineEvaluation()
-        )
-        self.agent = self.workflow.agent
-        self.agent_runtime = self.agent.runtime(self.agent_cli)
-        if self.task_dependencies is None:
-            from orchestrator._bootstrap import task_modules
-
-            task_modules()
-            from aka.legacy.task.problem.legacy import LegacyProblemProvider
-            from aka.legacy.task.source.legacy import LegacySourceProvider
-            from aka.legacy.task.candidate_workspace.provider import (
-                GitCandidateWorkspace,
-            )
-
-            self.task_dependencies = dict(
-                problem=LegacyProblemProvider(self.optimization_mode),
-                source=LegacySourceProvider(),
-                workspace=GitCandidateWorkspace(),
-            )
-        self.problem_provider = self.task_dependencies["problem"]
-        self.source_provider = self.task_dependencies["source"]
-        self.candidate_workspace = self.task_dependencies["workspace"]
-        self.plugin_registry.check_lock(self.workspace)
         if (
-            sum(
-                bool(value)
-                for value in (self.sandbox_ssh, self.sandbox_url, self.sandbox_profile)
-            )
-            > 1
+            self.request.problem.initial_source is None
+            or self.request.problem.evaluation is None
         ):
-            raise ValueError(
-                "sandbox_ssh, sandbox_url, and sandbox_profile are mutually exclusive"
+            raise TypeError(
+                "Campaign requires explicit Problem initial source and evaluation roles"
             )
+        self.problem = self.request.problem
+        self.name = self.problem.name
+        self.agent = self.dependencies.agent
+        self.agent_runtime = self.agent.runtime(self.request.settings.agent_cli)
+        self.problem_provider = self.dependencies.problem
+        self.source_provider = self.dependencies.source
+        self.candidate_workspace = self.dependencies.candidate
+        self.workflow = self.dependencies.workflow
+        for definition in fields(self.request.settings):
+            setattr(
+                self, definition.name, getattr(self.request.settings, definition.name)
+            )
+        self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
+        self.evaluation = self.dependencies.evaluation(self)
+        self.execution = self.dependencies.execution(self)
+        self.plugin_registry.check_lock(self.workspace)
         if self.long_reviewer_session and self.long_reviewer_session not in (
             _LONG_REVIEWER_SESSION_ENV
         ):
@@ -269,29 +202,13 @@ class Campaign:
 
     @property
     def campaign_name(self) -> str:
-        suffix = f"_{self.workspace_suffix}" if self.workspace_suffix else ""
-        return f"{self.name}{suffix}"
+        return self.request.name
 
     @property
     def private_reference_dir(self) -> Path | None:
         return self._problem_inputs().private_reference_dir
 
     def _loaded_problem(self):
-        if self.problem is None:
-            # Historical direct Campaign construction supplied only kernel_demo.
-            # Resolve that legacy request once; all later consumers retain Problem.
-            self.problem = self.problem_provider.load(
-                Path(self.kernel_demo).resolve().parent,
-                optimization_mode=self.optimization_mode,
-                snapshot_directory=self.workspace.parent
-                / ".aka-problems"
-                / self.campaign_name,
-            )
-        if self.problem.initial_source is None or self.problem.evaluation is None:
-            raise TypeError(
-                "Campaign requires explicit Problem initial source and evaluation roles"
-            )
-        self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
         return self.problem
 
     def _problem_inputs(self):
@@ -387,15 +304,15 @@ class Campaign:
         return tuple(
             reviewer
             for reviewer in ("codex", "qoder")
-            if getattr(self, f"{episode_mode}_episode_ask_{reviewer}")
+            if reviewer in getattr(self, f"{episode_mode}_episode_reviewers")
         )
 
     def _framework_baseline_correctness_reviewers(self) -> tuple[str, ...]:
         return tuple(
             reviewer
             for reviewer, enabled in (
-                ("codex", self.v1_ask_codex),
-                ("qodercli", self.v1_ask_qoder),
+                ("codex", "codex" in self.framework_baseline_reviewers),
+                ("qodercli", "qoder" in self.framework_baseline_reviewers),
             )
             if enabled
         )
@@ -423,17 +340,7 @@ class Campaign:
             environment[env_name] = str(state_file.resolve())
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
-        if self.sandbox_ssh:
-            environment["ATREX_SANDBOX_SSH"] = self.sandbox_ssh
-            environment["ATREX_SANDBOX_SSH_INIT"] = self.sandbox_ssh_init
-            if self.sandbox_ssh_gpu is not None:
-                environment["ATREX_SANDBOX_SSH_GPU"] = str(self.sandbox_ssh_gpu)
-            environment.pop("ATREX_SANDBOX_URL", None)
-            environment.pop("ATREX_SANDBOX_PROFILE", None)
-            if self.sandbox_health_command:
-                environment["ATREX_SANDBOX_HEALTH_COMMAND"] = (
-                    self.sandbox_health_command
-                )
+        environment.update(self.execution.environment())
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
@@ -502,8 +409,7 @@ class Campaign:
 
     @property
     def workspace(self) -> Path:
-        base = Path(self.work_dir) if self.work_dir else Path.cwd()
-        return base / f"kernel_opt_{self.campaign_name}"
+        return self.request.workspace
 
     def _account(self, res: SessionResult, label: str) -> None:
         self.tokens_spent += res.tokens
@@ -740,20 +646,10 @@ class Campaign:
         )
 
     def _sandbox_directive(self) -> str:
-        return sandbox_directive(
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_ssh,
-        )
+        return self.execution.directive()
 
     def _fast_sandbox_directive(self) -> str:
-        return fast_sandbox_directive(
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_ssh,
-        )
+        return self.execution.directive(fast=True)
 
     def _mode_directive(self) -> str:
         return optimization_mode_directive(self.optimization_mode, self.framework)
@@ -765,7 +661,7 @@ class Campaign:
         problem = self._loaded_problem()
         op_dir = problem.evaluation.directory
         if problem.initial_source.kind == "sol":
-            self._setup_baseline_sol(op_dir)
+            self.evaluation.setup_baseline_sol(op_dir)
             return
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
@@ -807,8 +703,8 @@ class Campaign:
                 check=True,
             )
         self._link_runtime()
-        self._install_native_evaluator()
-        self._install_profile_driver()
+        self.evaluation.install_native_evaluator()
+        self.evaluation.install_profile_driver()
         # A native Atrex-Bench V0 is already materialized as the verbatim reference
         # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
         # Agent session adds no implementation value here.  Commit the sources, run the
@@ -816,7 +712,7 @@ class Campaign:
         # derived legacy boundary below retains the Agent fallback because its harness
         # and input layout are not canonical enough to synthesize safely.
         if self.atrex_bench_root:
-            self._setup_baseline_native(op_dir, generalized=generalized)
+            self.evaluation.setup_baseline_native(op_dir, generalized=generalized)
             return
         prompt = _render(
             PROMPTS_DIR / "setup.md",
@@ -833,7 +729,7 @@ class Campaign:
             BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
-            EVALUATOR=self._evaluator_directive(),
+            EVALUATOR=self.evaluation.evaluator_directive(),
             MODE_POLICY=self._mode_directive(),
         )
         res = self._run_session(
@@ -841,15 +737,9 @@ class Campaign:
             prompt,
             timeout=self.setup_timeout,
             agent_cli=self.agent_cli,
-            sandbox_hardware=self.sandbox_hardware,
-            sandbox_profile=self.sandbox_profile,
-            sandbox_url=self.sandbox_url,
-            sandbox_ssh=self.sandbox_ssh,
-            sandbox_ssh_init=self.sandbox_ssh_init,
-            sandbox_health_command=self.sandbox_health_command,
-            sandbox_timeout=self.sandbox_timeout,
             reasoning_effort="high",
-            extra_environment=self.agent_environment(),
+            environment=self.agent_environment(),
+            remote=True,
         )
         self._assert_generalized_inputs_are_private()
         self._account(res, "setup")
@@ -857,7 +747,7 @@ class Campaign:
             raise RuntimeError(
                 f"setup session failed immediately (exit={res.exit_status}, tokens=0) — "
                 "this is likely an API key / authentication issue. "
-                f"{_agent_runtime.auth_hint(self.agent_cli)}."
+                f"{auth_hint(self.agent_cli)}."
             )
         baseline_memory = read_memory(self.workspace, 0)
         baseline_problem = "missing memory/v0.json" if baseline_memory is None else ""
@@ -889,7 +779,7 @@ class Campaign:
                 "with `--no-memory`; do not run `--multi-seed` for V0. Parse its "
                 "`[test_kernel] RESULT_JSON=...`, write local `memory/v0.json` and `baseline_report.md`, "
                 "then Git commit `V0: baseline kernel`. Do not enter optimization iterations.\n\n"
-                + self._evaluator_directive()
+                + self.evaluation.evaluator_directive()
                 + "\n\n"
                 + self._sandbox_directive()
             )
@@ -898,22 +788,16 @@ class Campaign:
                 recovery_prompt,
                 timeout=self.setup_timeout,
                 agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_ssh=self.sandbox_ssh,
-                sandbox_ssh_init=self.sandbox_ssh_init,
-                sandbox_health_command=self.sandbox_health_command,
-                sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="high",
-                extra_environment=self.agent_environment(),
+                environment=self.agent_environment(),
+                remote=True,
             )
             self._assert_generalized_inputs_are_private()
             self._account(recovery, "setup recovery")
             if recovery.exit_status != 0 and recovery.tokens == 0:
                 raise RuntimeError(
                     f"setup recovery failed immediately (exit={recovery.exit_status}, tokens=0) — "
-                    f"{_agent_runtime.auth_hint(self.agent_cli)}."
+                    f"{auth_hint(self.agent_cli)}."
                 )
             recovered_memory = read_memory(self.workspace, 0)
             recovery_problem = (
@@ -945,7 +829,7 @@ class Campaign:
         entry point validates the cache and retries synchronously when necessary.
         """
         if not self._framework_baseline_correctness_reviewers():
-            return self._run_v0_evaluator()
+            return self.evaluation.run_v0_evaluator()
         print(
             "[orchestrator] V0 evaluator: prefetching V1 correctness review in parallel",
             flush=True,
@@ -955,7 +839,7 @@ class Campaign:
                 self._ensure_framework_baseline_correctness_guidance
             )
             try:
-                return self._run_v0_evaluator()
+                return self.evaluation.run_v0_evaluator()
             finally:
                 try:
                     review_future.result()
@@ -994,7 +878,7 @@ class Campaign:
         baseline_commit = self._v0_baseline_commit()
         v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
         pre_head = git_head(self.workspace)
-        self._ensure_framework_baseline_solution_manifest()
+        self.evaluation.ensure_framework_baseline_solution_manifest()
 
         if action == "run":
             self._link_runtime()
@@ -1017,7 +901,7 @@ class Campaign:
                     f"inspect {framework_baseline_progress_path(self.workspace)}"
                 )
             recovery_used = False
-            problem = self._framework_baseline_problem(
+            problem = self.evaluation.framework_baseline_problem(
                 v0_blob, baseline_commit, include_policy_review=False
             )
             if problem:
@@ -1026,19 +910,19 @@ class Campaign:
                 )
                 recovery_used = True
                 self._warn_restored_baseline_paths(baseline_commit)
-                problem = self._framework_baseline_problem(
+                problem = self.evaluation.framework_baseline_problem(
                     v0_blob, baseline_commit, include_policy_review=False
                 )
         else:  # adopt: our own interrupted run already committed the kernel
             recovery_used = False
             self._sync_framework_baseline_live(phase="framework_baseline")
             self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(
+            problem = self.evaluation.framework_baseline_problem(
                 v0_blob, baseline_commit, include_policy_review=False
             )
         result: Optional[dict] = None
         if not problem:
-            result, problem = self._framework_baseline_external_gates(n)
+            result, problem = self.evaluation.framework_baseline_external_gates(n)
         numerical_repairs = 0
         while (
             problem
@@ -1061,11 +945,11 @@ class Campaign:
             )
             recovery_used = True
             self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(
+            problem = self.evaluation.framework_baseline_problem(
                 v0_blob, baseline_commit, include_policy_review=False
             )
             if not problem:
-                result, problem = self._framework_baseline_external_gates(n)
+                result, problem = self.evaluation.framework_baseline_external_gates(n)
         if problem:
             # Undo any session-authored commits while retaining every worktree file.  A hard reset
             # here used to erase the exact candidate and debugging experience needed by a restart.
@@ -1990,15 +1874,9 @@ class Campaign:
                 prompt,
                 timeout=self.framework_baseline_timeout,
                 agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_ssh=self.sandbox_ssh,
-                sandbox_ssh_init=self.sandbox_ssh_init,
-                sandbox_health_command=self.sandbox_health_command,
-                sandbox_timeout=self.sandbox_timeout,
                 reasoning_effort="max",
-                extra_environment=self.agent_environment(),
+                environment=self.agent_environment(),
+                remote=True,
             )
         except EnvironmentUnavailable:
             capture_framework_baseline_exit(
@@ -2075,31 +1953,10 @@ class Campaign:
             )
 
     def _framework_baseline_sandbox_directive(self) -> str:
-        """Concise V1-specific boundary without generic repeated full-evaluator examples."""
-        endpoint = (
-            self.sandbox_ssh
-            or self.sandbox_url
-            or self.sandbox_profile
-            or "agate configuration"
-        )
-        hardware = self.sandbox_hardware or "the configured remote GPU"
-        return (
-            "## V1 GPU sandbox boundary\n\n"
-            f"- Target `{hardware}` through `{endpoint}`. Every GPU import, compile, smoke, "
-            "correctness check, and timer must cross `tools/sandbox.py`; never execute "
-            "`kernel.py`, `test_kernel.py`, a profiler, or a JIT-capable GPU import on the host.\n"
-            "- Use only the bounded smoke command below during the ordinary V1 turn. Do not "
-            "run a full-workload evaluator, `--multi-seed`, a separate benchmark, or profiling.\n"
-            "- Keep `--no-memory`: the supervisor parses evaluator output and owns canonical "
-            "memory. Sandbox uploads are allowlist-only; declare inputs for any custom smoke "
-            "helper, and never upload optimizer memory or private evaluator inputs.\n"
-            "- The remote executor is supervisor-owned infrastructure. Do not start, stop, "
-            "restart, signal, reconfigure, or cancel its jobs. Report an infrastructure "
-            "failure and exit.\n"
-        )
+        return self.execution.framework_baseline_directive()
 
     def _framework_baseline_prompt(self, n: int) -> str:
-        smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
+        smoke_command, smoke_scope = self.evaluation.framework_baseline_smoke_command(n)
         return _render(
             PROMPTS_DIR / "framework_baseline.md",
             PLUGINS=self.plugin_directive("framework_baseline"),
@@ -2116,7 +1973,7 @@ class Campaign:
             ),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),
-            EVALUATOR=self._evaluator_directive(),
+            EVALUATOR=self.evaluation.evaluator_directive(),
             CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
             SMOKE_COMMAND=smoke_command,
             SMOKE_SCOPE=smoke_scope,
@@ -2124,7 +1981,7 @@ class Campaign:
         )
 
     def _warn_restored_baseline_paths(self, baseline_commit: str) -> None:
-        restored = self._restore_immutable_baseline_paths(baseline_commit)
+        restored = self.evaluation.restore_immutable_baseline_paths(baseline_commit)
         if restored:
             print(
                 "[orchestrator] framework baseline session edited immutable ground truth; "
@@ -2344,7 +2201,7 @@ class Campaign:
             if agent_cli == self.agent_cli
             else self.agent.runtime(agent_cli)
         )
-        return run_session(
+        return self.execution.run_session(
             workspace, prompt, timeout, agent_cli=agent_cli, runtime=runtime, **options
         )
 
@@ -2370,7 +2227,7 @@ class Campaign:
         self.ensure_framework_baseline()
 
     def run(self) -> str:
-        return self.workflow.run(self)
+        return self.workflow(self)
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
@@ -2414,75 +2271,3 @@ class Campaign:
             except OSError:
                 pass
         return reason
-
-    def _evaluator_directive(self) -> str:
-        return self.evaluation.evaluator_directive(self)
-
-    def _install_native_evaluator(self) -> None:
-        return self.evaluation.install_native_evaluator(self)
-
-    def _install_profile_driver(self) -> None:
-        return self.evaluation.install_profile_driver(self)
-
-    def _native_v0_readme(self, *, generalized: bool) -> str:
-        return self.evaluation.native_v0_readme(self, generalized=generalized)
-
-    @staticmethod
-    def _print_v0_evaluator_output(test):
-        return LegacyBaselineEvaluation.print_v0_evaluator_output(test)
-
-    def _run_v0_evaluator(self) -> dict:
-        return self.evaluation.run_v0_evaluator(self)
-
-    def _write_v0_baseline_report(self, result: dict, source_commit: str) -> Path:
-        return self.evaluation.write_v0_baseline_report(self, result, source_commit)
-
-    def _finalize_v0_measurement(
-        self, result: dict, source_commit: str, *, extra_paths: tuple[str, ...] = ()
-    ) -> None:
-        return self.evaluation.finalize_v0_measurement(
-            self, result, source_commit, extra_paths=extra_paths
-        )
-
-    def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
-        return self.evaluation.setup_baseline_native(
-            self, op_dir, generalized=generalized
-        )
-
-    def _setup_baseline_sol(self, op_dir: Path) -> None:
-        return self.evaluation.setup_baseline_sol(self, op_dir)
-
-    def _framework_baseline_smoke_shape_ids(self, *, limit: int = 3) -> list[str]:
-        return self.evaluation.framework_baseline_smoke_shape_ids(self, limit=limit)
-
-    def _ensure_framework_baseline_solution_manifest(self) -> None:
-        return self.evaluation.ensure_framework_baseline_solution_manifest(self)
-
-    def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
-        return self.evaluation.framework_baseline_smoke_command(self, n)
-
-    def _restore_immutable_baseline_paths(self, baseline_commit: str) -> list[str]:
-        return self.evaluation.restore_immutable_baseline_paths(self, baseline_commit)
-
-    def _framework_baseline_problem(
-        self, v0_blob: str, baseline_commit: str, *, include_policy_review: bool = True
-    ) -> str:
-        return self.evaluation.framework_baseline_problem(
-            self, v0_blob, baseline_commit, include_policy_review=include_policy_review
-        )
-
-    def _framework_baseline_external_gates(self, n: int) -> tuple[Optional[dict], str]:
-        return self.evaluation.framework_baseline_external_gates(self, n)
-
-    def _supplemental_numerical_feedback(
-        self,
-        workspace: Path | None = None,
-        *,
-        standard_correctness_passed: bool = False,
-    ) -> str:
-        return self.evaluation.supplemental_numerical_feedback(
-            self, workspace, standard_correctness_passed=standard_correctness_passed
-        )
-
-    def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
-        return self.evaluation.validate_framework_baseline(self, n)
