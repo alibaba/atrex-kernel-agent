@@ -43,6 +43,7 @@ AKA supports:
 
 ## News
 
+- [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.
 - [2026-09] We released **Atrex Kernel Agent v0.3.0** with resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
@@ -70,6 +71,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 | [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
+| [Optimization dashboard](docs/optimization-dashboard.md) | Optional Core plugin for local progress, performance history and settled token usage |
 | [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 
 Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.

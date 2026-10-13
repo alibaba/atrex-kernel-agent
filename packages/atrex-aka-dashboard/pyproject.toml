@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-dashboard"
+version = "0.1.0"
+description = "Optional read-only AKA optimization progress dashboard"
+requires-python = ">=3.10"
+dependencies = ["atrex-aka-framework==0.1.0"]
+
+[project.optional-dependencies]
+long-horizon = ["atrex-aka-observation-long-horizon==0.1.0"]
+
+[project.entry-points."aka.tokens"]
+observation_source = "aka.dashboard.tokens:OBSERVATION_SOURCE"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka.dashboard", "aka.dashboard.*"]
+
+[tool.setuptools.package-data]
+"aka.dashboard" = ["static/*.html", "static/fonts/*", "profiles/*.json", "profiles/compositions/*.json"]

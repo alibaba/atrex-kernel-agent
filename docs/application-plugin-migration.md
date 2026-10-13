@@ -272,12 +272,26 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 | `atrex-aka-contracts` | `aka.contracts` | 3.9+ |
 | `atrex-aka-bootstrap` | `aka.bootstrap`, generic `aka run` command | 3.10+ |
 | `atrex-aka-optimization` | `aka.legacy`, default profiles, `aka optimize` command | 3.10+ |
+| `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
+| `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
 Core alone has no application dependency. Bootstrap depends only on Core and Contracts;
-Optimization depends on Bootstrap. The four packages own disjoint files and pin matching
-dependency versions. Distribution boundaries are installation ownership units, not a
+Optimization and the optional Dashboard depend on Bootstrap; the long-horizon observation
+adapter depends only on Contracts. The packages own disjoint
+files and pin matching dependency versions. Distribution boundaries are installation ownership units, not a
 requirement to package every future module separately. Build tooling stages owned files,
 builds sdists, then builds wheels from those sdists.
+
+`aka.observation` deliberately uses an implicit namespace package. Each observation
+adapter distribution owns its leaf package, such as `aka.observation.long_horizon`;
+there is no shared parent `__init__.py` for independently installed adapters to overwrite.
+The long-horizon package's discovery include and the build tool's `OWNERS` entry both
+select that leaf. Contracts remain in the separately owned `aka.contracts` package.
+
+Dashboard injects the versioned `observation_source` seam. Its default profile combines
+the viewer with the separately packaged long-horizon adapter, without importing the
+optimizer. The optimization profile does not load either plugin. See the
+[dashboard guide](optimization-dashboard.md) for source and installed launch commands.
 
 The launcher and legacy adapter are migration bridges used by existing entrypoints. They
 can be removed when the application implementation and its runtime resources are

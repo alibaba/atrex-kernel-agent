@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-observation-long-horizon"
+version = "0.1.0"
+description = "Read-only long-horizon adapter for the AKA observation contract"
+requires-python = ">=3.10"
+dependencies = ["atrex-aka-framework==0.1.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka.observation.long_horizon", "aka.observation.long_horizon.*"]
