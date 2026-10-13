@@ -41,6 +41,15 @@ AKA supports:
 - production-mode numerical probes and mode-specific performance verification;
 - resumable, Git-isolated optimization with canonical measurement history.
 
+For Agate evaluations requesting two or more GPUs, production source-policy inspection is
+disabled automatically. The GPU count comes from the evaluator's
+`benchmark_contract.distributed_evaluation` (`torchrun`, `nccl`, `world_size >= 2`), the same
+contract used to submit Agate's `num_gpus`. These campaigns can reuse communication libraries
+and the validated V0 without a self-authored framework conversion. Correctness, numerical
+probes, performance checks and immutable evaluation inputs remain enforced. Single-GPU and
+SSH campaigns retain source-policy inspection. Invalid distributed contracts are errors;
+operator names and candidate dependency declarations do not enable this exception.
+
 ## News
 
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.

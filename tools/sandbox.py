@@ -89,6 +89,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
 from orchestrator.sandbox_config import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
+from orchestrator.sandbox_config import (  # noqa: E402
+    distributed_evaluation_world_size as _distributed_evaluation_world_size,
+)
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
@@ -1036,38 +1039,6 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return value
-
-
-def _distributed_evaluation_world_size(metadata: object) -> int:
-    """Return the GPU count declared by a single-node evaluator contract."""
-    if not isinstance(metadata, dict):
-        return 1
-    benchmark_contract = metadata.get("benchmark_contract")
-    if not isinstance(benchmark_contract, dict):
-        return 1
-    evaluation = benchmark_contract.get("distributed_evaluation")
-    if evaluation is None:
-        return 1
-    if not isinstance(evaluation, dict):
-        raise ValueError("benchmark_contract.distributed_evaluation must be an object")
-    if evaluation.get("launcher") != "torchrun":
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.launcher must be 'torchrun'"
-        )
-    if evaluation.get("backend") != "nccl":
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.backend must be 'nccl'"
-        )
-    world_size = evaluation.get("world_size")
-    if isinstance(world_size, bool) or not isinstance(world_size, int):
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.world_size must be an integer"
-        )
-    if world_size != 2:
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.world_size must be 2"
-        )
-    return world_size
 
 
 def _workspace_num_gpus(workspace: Path) -> int:

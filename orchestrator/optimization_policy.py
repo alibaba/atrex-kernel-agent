@@ -66,7 +66,9 @@ def source_uses_gluon(source: str) -> bool:
     return False
 
 
-def optimization_mode_directive(mode: str, framework: str) -> str:
+def optimization_mode_directive(
+    mode: str, framework: str, *, source_checks_enabled: bool = True
+) -> str:
     """Self-contained policy block injected into every coding-agent prompt."""
     if mode == "leaderboard":
         return (
@@ -78,6 +80,19 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
         )
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
+    if not source_checks_enabled:
+        return (
+            "## Optimization mode: production (multi-GPU Agate)\n\n"
+            "This generated policy overrides conflicting source/framework restrictions elsewhere "
+            "in the workspace. The evaluator requests at least two GPUs from Agate. Production "
+            "source inspection and independent source-policy review are disabled for this campaign; "
+            "communication libraries, PyTorch distributed operations and alternate implementations "
+            "are allowed. No self-authored framework baseline or Triton-to-Gluon conversion is required.\n"
+            "Correctness, numerical probes, performance validation and promotion requirements remain "
+            "unchanged. Use the immutable evaluator, full workload and required random seeds; preserve "
+            "input/output semantics and include all per-call communication and synchronization in "
+            "the measured work. Never modify trusted inputs, tolerances or evaluation records.\n"
+        )
     if _framework_key(framework) == "triton":
         framework_rule = (
             "- The initial implementation framework is exactly **Triton**. After the orchestrator "
@@ -123,8 +138,12 @@ def optimization_mode_directive(mode: str, framework: str) -> str:
     )
 
 
-def workspace_policy_block(mode: str, framework: str) -> str:
-    directive = optimization_mode_directive(mode, framework).rstrip()
+def workspace_policy_block(
+    mode: str, framework: str, *, source_checks_enabled: bool = True
+) -> str:
+    directive = optimization_mode_directive(
+        mode, framework, source_checks_enabled=source_checks_enabled
+    ).rstrip()
     return f"{POLICY_BEGIN}\n\n{directive}\n\n{POLICY_END}\n"
 
 
@@ -135,6 +154,7 @@ def install_workspace_policy(
     *,
     agent_runtime: str | None = None,
     update_tracked_files: bool = True,
+    source_checks_enabled: bool = True,
 ) -> None:
     """Persist immutable mode, framework, and optional campaign runtime identity.
 
@@ -182,6 +202,9 @@ def install_workspace_policy(
             state["agent_runtime"] = requested_runtime
         state_changed = True
 
+    if state.get("source_checks_enabled") != source_checks_enabled:
+        state["source_checks_enabled"] = source_checks_enabled
+        state_changed = True
     if state_changed:
         state_path.write_text(
             json.dumps(state, indent=2) + "\n",
@@ -195,7 +218,9 @@ def install_workspace_policy(
 
     claude_path = workspace / "CLAUDE.md"
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
-    generated = workspace_policy_block(mode, framework)
+    generated = workspace_policy_block(
+        mode, framework, source_checks_enabled=source_checks_enabled
+    )
     if POLICY_BEGIN in current and POLICY_END in current:
         before, remainder = current.split(POLICY_BEGIN, 1)
         _, after = remainder.split(POLICY_END, 1)
