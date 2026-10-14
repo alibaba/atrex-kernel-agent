@@ -12,7 +12,7 @@ inject = ("problem", "source", "candidate", "workflow")
 Config = {"type": "object", "properties": {"repo_root": {"type": "string", "minLength": 1}},
           "required": ["repo_root"], "additionalProperties": False}
 interpolate = ("repo_root",)
-identity_packages = ("aka.legacy.application", "aka.contracts", "aka.bootstrap")
+identity_packages = ("aka.legacy.application", "aka.legacy.execution", "aka.contracts", "aka.bootstrap")
 
 
 class LegacyStartup:
