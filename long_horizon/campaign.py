@@ -1507,7 +1507,7 @@ class LongHorizonCampaign:
                 fast_trials=fast_trial_count,
             )
             promotion_commit = promote_candidate(
-                self.workspace,
+                self.workspace, provider=self.base_campaign.candidate_workspace,
                 base_commit=base_commit,
                 candidate_commit=candidate_commit,
                 episode=episode,
@@ -1757,7 +1757,8 @@ class LongHorizonCampaign:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path)
+            worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path,
+                                       provider=self.base_campaign.candidate_workspace)
             CampaignStore.ensure_excluded(worktree.path)
             if self._recover_completed_handoff(
                 store,
@@ -1868,7 +1869,8 @@ class LongHorizonCampaign:
                 and worktree_path in registered
                 and branch
             ):
-                worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path)
+                worktree = EpisodeWorktree(episode, base_commit, branch, worktree_path,
+                                       provider=self.base_campaign.candidate_workspace)
                 if self._recover_completed_handoff(
                     store,
                     state,
@@ -1959,7 +1961,8 @@ class LongHorizonCampaign:
         if worktree_path is not None and worktree_path != self.workspace.resolve():
             if worktree_path in registered:
                 EpisodeWorktree(
-                    episode, base_commit, branch or "atrex/recovery", worktree_path
+                    episode, base_commit, branch or "atrex/recovery", worktree_path,
+                    provider=self.base_campaign.candidate_workspace
                 ).remove(self.workspace)
         main_adapter.save_stall(self.workspace, state.consecutive_without_promotion)
         store.save_state(state)
@@ -1975,6 +1978,7 @@ class LongHorizonCampaign:
                 self.workspace
             )
         verifier = self.verifier or GatewayABBAValidator(
+            workspace_provider=self.base_campaign.candidate_workspace,
             hardware=self.base_campaign.sandbox_hardware,
             profile=self.base_campaign.sandbox_profile,
             url=self.base_campaign.sandbox_url,
@@ -2056,7 +2060,8 @@ class LongHorizonCampaign:
                 memory_version = main_adapter.latest_version(self.workspace) + 1
                 base_commit = git_head(self.workspace)
                 worktree = EpisodeWorktree.plan(
-                    self.workspace, episode, base_commit, root=self.worktree_root
+                    self.workspace, episode, base_commit, root=self.worktree_root,
+                    provider=self.base_campaign.candidate_workspace
                 )
                 active = {
                     "episode": episode,

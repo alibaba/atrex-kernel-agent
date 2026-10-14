@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .constants import FRAMEWORK_BASELINE_FILE, STALL_STATE_FILE
+from aka.legacy.task.git import git_path_blob, git_worktree_blob
 
 
 def latest_version(workspace: Path) -> int:
@@ -94,39 +95,9 @@ def git_head(workspace: Path) -> str:
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def git_path_blob(workspace: Path, ref: str, path: str) -> str:
-    """Committed blob id of one path at one ref, or '' when it is absent there."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", f"{ref}:{path}"],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def git_kernel_blob(workspace: Path) -> str:
     """Committed kernel.py blob id, stable across metadata-only commits."""
     return git_path_blob(workspace, "HEAD", "kernel.py")
-
-
-def git_worktree_blob(workspace: Path, path: str) -> str:
-    """Blob id of the on-disk file, or '' when it is missing."""
-    if not (workspace / path).is_file():
-        return ""
-    try:
-        result = subprocess.run(
-            ["git", "hash-object", "--", path],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def v0_baseline_commit(workspace: Path) -> str:

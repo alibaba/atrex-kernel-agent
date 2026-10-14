@@ -7,7 +7,7 @@ name = "atrex-aka-dashboard"
 version = "0.1.0"
 description = "Optional read-only AKA optimization progress dashboard"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-bootstrap==0.1.0"]
+dependencies = ["atrex-aka-framework==0.1.0"]
 
 [project.optional-dependencies]
 long-horizon = ["atrex-aka-observation-long-horizon==0.1.0"]

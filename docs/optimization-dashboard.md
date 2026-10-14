@@ -37,8 +37,12 @@ flowchart LR
 | HTTP boundary | [`server.py`](../src/aka/dashboard/server.py) | Explicit routes, response-version checks and download headers |
 | Browser | [`index.html`](../src/aka/dashboard/static/index.html) | Render source-defined stages, history, usage, artifacts and connection state |
 
-The dashboard package depends on Bootstrap; the long-horizon adapter depends only on
-Contracts. Neither imports the optimizer. Plugin import and Core assembly construct
+Both optional distributions depend on `atrex-aka-framework`, which packages Core,
+Contracts, Bootstrap and the generic CLI. The long-horizon adapter imports only
+Contracts interfaces, but installing it brings in the full Framework distribution.
+This larger install footprint follows from the Framework/Legacy consolidation;
+neither optional distribution requires Legacy or imports the optimizer.
+Plugin import and Core assembly construct
 services without scanning workspaces or opening a port. `Startup.start()` opens the
 reader and binds HTTP; `close()` releases sockets and request threads, including idle
 browser preconnections. `run()` cleanup and Core disposal may both call `close()`.
@@ -282,7 +286,7 @@ Build the viewer and default adapter with their dependencies:
 ```sh
 python -m pip install build
 python tools/build_distributions.py --output /tmp/aka-dashboard-dist \
-  atrex-aka-core atrex-aka-contracts atrex-aka-bootstrap atrex-aka-dashboard \
+  atrex-aka-framework atrex-aka-dashboard \
   atrex-aka-observation-long-horizon
 python -m pip install /tmp/aka-dashboard-dist/*.whl
 ```

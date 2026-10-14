@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -51,35 +50,15 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent          # <repo>/reference
 GROUND_TRUTH = ("definition.json", "reference.py", "workload.jsonl")
 
-
-def _build_kernel(defn: dict) -> str:
-    """V0 kernel: inline the reference (rename run->_ref) + a DPS wrapper.
-
-    Staging copies only solution.sources, so kernel.py must be self-contained
-    (it cannot `import reference`). Args are definition.inputs then
-    definition.outputs (DPS order); the wrapper writes outputs in place.
-    """
-    inputs = list(defn["inputs"].keys())
-    outputs = list(defn["outputs"].keys())
-    params = ", ".join(inputs + outputs)
-    call = ", ".join(inputs)
-    if len(outputs) == 1:
-        assign = f"    {outputs[0]}[:] = _out\n"
-    else:
-        assign = "    if not isinstance(_out, (tuple, list)):\n        _out = (_out,)\n"
-        for i, o in enumerate(outputs):
-            assign += f"    {o}[:] = _out[{i}]\n"
-    header = (
-        "# V0 baseline: self-contained destination-passing-style (DPS) wrapper around the\n"
-        "# verbatim SOL reference logic. Correct + directly submittable. The optimization\n"
-        "# loop rewrites the body of run() toward the target framework; keep it DPS and keep\n"
-        "# the argument names/order = definition.inputs then definition.outputs.\n"
-        "{REF}\n\n"
-        f"def run({params}):\n"
-        f"    _out = _ref({call})\n"
-        f"{assign}"
-    )
-    return header
+_repo_root = SCRIPT_DIR.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+from orchestrator._bootstrap import task_modules
+task_modules()
+from aka.legacy.task.source.sol.render import _build_kernel, _render_kernel, _solution_json, _readme
+from aka.legacy.application.source import source_provider
+from aka.legacy.application.workspace import candidate_workspace
+from aka.legacy.task.candidate_workspace.initial import GITIGNORE
 
 
 # Profiling is driven by the external `profile_driver.py` seeded next to kernel.py.
@@ -87,84 +66,7 @@ def _build_kernel(defn: dict) -> str:
 # in-kernel `__main__` block is silently lost the first time a session rewrites run().
 
 
-def _render_kernel(defn: dict, reference_src: str) -> str:
-    ref = re.sub(r"(?m)^def run\(", "def _ref(", reference_src)
-    return _build_kernel(defn).replace("{REF}", ref)
-
-
-def _solution_json(defn: dict, name: str, framework: str, platform: str) -> dict:
-    hw = []
-    # SOL-ExecBench's schema only accepts B200 or LOCAL here.  The optimizer's
-    # logical platform may be an inventory alias (for example pro5000); actual
-    # remote scheduling is selected independently by --sandbox-hardware.
-    if platform.upper() == "B200":
-        hw.append("B200")
-    hw.append("LOCAL")
-    # V0 is always a pure-PyTorch wrapper (guaranteed correct + submittable).
-    # The loop migrates the body to `framework` and updates languages/dependencies then.
-    return {
-        "name": f"{name}_v0_pytorch",
-        "definition": defn["name"],
-        "author": "atrex-aka",
-        "description": f"V0 baseline (DPS PyTorch wrapper around the reference); target framework: {framework}",
-        "spec": {
-            "languages": ["pytorch"],
-            "target_hardware": hw,
-            "entry_point": "kernel.py::run",
-            "dependencies": ["torch"],
-            "destination_passing_style": True,
-        },
-        # No inline content: the evaluator reads the live kernel.py from disk, so
-        # kernel.py stays the single source of truth across iterations.
-        "sources": [{"path": "kernel.py"}],
-    }
-
-
-def _readme(name: str, defn: dict, framework: str, platform: str, gpu_wiki: str, n_workloads: int) -> str:
-    return (
-        f"# kernel_opt_{name}\n\n"
-        f"Profile-driven optimization of SOL-ExecBench op **{defn['name']}**.\n\n"
-        f"{defn.get('description', '').strip()}\n\n"
-        "## Goal\n\n"
-        "**Minimize the GEOMEAN of per-workload kernel latency** "
-        "(`performance.latency_us` in `memory/v<N>.json`), while keeping ALL workloads "
-        "correct under their own SOL tolerances. A version that passes `test_kernel.py` "
-        "is directly submittable to SOL-ExecBench.\n\n"
-        "## Config\n\n"
-        f"- Target platform: `{platform}`\n"
-        f"- Target framework: `{framework}` (V0 starts as PyTorch; migrate the body of `run()` in `kernel.py`)\n"
-        f"- gpu_wiki_path: `{gpu_wiki}`\n"
-        f"- Workloads (shape set): {n_workloads} in `workload.jsonl` (ground truth — do NOT edit)\n\n"
-        "## Ground truth (immutable)\n\n"
-        "- `definition.json`, `reference.py`, `workload.jsonl` — copied verbatim from the op dir.\n"
-        "- `test_kernel.py` — the SOL evaluator harness (immutable methodology).\n\n"
-        "## Workflow\n\n"
-        "- Edit `kernel.py` only (DPS `run()`; args = definition.inputs then definition.outputs).\n"
-        "- When migrating framework, also update `solution.json` `spec.languages` / `dependencies`.\n"
-        "- Validate + bench every iteration with `python test_kernel.py --version v<N>`.\n"
-    )
-
-
-GITIGNORE = """__pycache__/
-*.pyc
-traces.jsonl
-.finalize_traces.jsonl
-submission.json
-*.ncu-rep
-profiles/*/att/*.att
-profiles/*/att/*.out
-profiles/*/att/*.pftrace
-profiles/*/att/*.otf2
-# orchestrator runtime symlinks (not part of the workspace)
-/tools
-/reference
-/skills
-/reference-projects
-/gpu-wiki
-"""
-
-
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, dependencies=None, problem=None) -> int:
     ap = argparse.ArgumentParser(description="Seed a kernel-opt workspace from a SOL-ExecBench op dir.")
     ap.add_argument("--op-dir", required=True, help="SOL op dir (definition.json + reference.py + workload.jsonl).")
     ap.add_argument("--name", required=True, help="Workspace name -> kernel_opt_<name>/.")
@@ -179,13 +81,22 @@ def main(argv: list[str] | None = None) -> int:
                          "for ops whose torch reference is too slow to bench within a reasonable budget.")
     args = ap.parse_args(argv)
 
-    op = Path(args.op_dir).resolve()
+    ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
+    if problem is None:
+        from aka.legacy.task.problem.legacy import LegacyProblemProvider
+        provider = dependencies["problem"] if dependencies is not None else LegacyProblemProvider()
+        # Keep the standalone CLI's missing-ground-truth diagnostics on first load.
+        if not (ws.parent / ".aka-problems" / args.name).exists():
+            for name in GROUND_TRUTH:
+                if not (Path(args.op_dir).resolve() / name).is_file():
+                    raise SystemExit(f"--op-dir is not a SOL op dir (missing {name}): {Path(args.op_dir).resolve()}")
+        problem = provider.load(Path(args.op_dir), snapshot_directory=ws.parent / ".aka-problems" / args.name)
+    op = problem.evaluation.directory
     for f in GROUND_TRUTH:
         if not (op / f).is_file():
             raise SystemExit(f"--op-dir is not a SOL op dir (missing {f}): {op}")
     defn = json.loads((op / "definition.json").read_text(encoding="utf-8"))
 
-    ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
     if args.no_bench and (ws / ".git").exists():
         history = subprocess.run(
             ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
@@ -226,36 +137,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("existing V0 is not the SOL reference wrapper")
             print(f"[sol_seed] reusing V0 source {source_commit}: {ws}")
             return 0
-    for sub in ("memory", "plans", "profiles"):
-        (ws / sub).mkdir(parents=True, exist_ok=True)
-
-    # 1) ground truth, verbatim
-    for f in GROUND_TRUTH:
-        (ws / f).write_text((op / f).read_text(encoding="utf-8"), encoding="utf-8")
-
-    # 2) pinned eval config (matches a submission; stable across versions)
-    (ws / "config.json").write_text(
-        json.dumps({"seed": 200, "warmup_runs": 10, "iterations": 50, "benchmark_reference": True}, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    # 3) V0 kernel + solution
-    (ws / "kernel.py").write_text(_render_kernel(defn, (op / "reference.py").read_text(encoding="utf-8")), encoding="utf-8")
-    (ws / "solution.json").write_text(
-        json.dumps(_solution_json(defn, args.name, args.framework, args.platform), indent=2) + "\n", encoding="utf-8"
-    )
-
-    # 4) harness + constraints + docs (copied from reference/)
-    (ws / "test_kernel.py").write_text((SCRIPT_DIR / "test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
-    (ws / "profile_driver.py").write_text(
-        (SCRIPT_DIR / "profile_driver.py").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    claude = SCRIPT_DIR / "CLAUDE.md"
-    if claude.exists():
-        (ws / "CLAUDE.md").write_text(claude.read_text(encoding="utf-8"), encoding="utf-8")
-    n_wl = sum(1 for line in (op / "workload.jsonl").read_text().splitlines() if line.strip())
-    (ws / "README.md").write_text(_readme(args.name, defn, args.framework, args.platform, args.gpu_wiki, n_wl), encoding="utf-8")
-    (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+    problem_files = problem.agent.files
+    from contextlib import nullcontext
+    from aka.contracts.workspace import SourceRequest
+    request = SourceRequest("sol", operator_dir=str(op), name=args.name, framework=args.framework,
+                            platform=args.platform, gpu_wiki=args.gpu_wiki, initial=problem.initial_source)
+    if dependencies is not None:
+        content = dependencies["source"].prepare(request)
+    else:
+        with source_provider("sol", operator_dir=str(op), name=args.name, framework=args.framework,
+                         platform=args.platform, gpu_wiki=args.gpu_wiki, definition=defn) as source:
+            content = source.prepare(request)
+    with (nullcontext(dependencies["workspace"]) if dependencies is not None else candidate_workspace()) as workspace:
+        workspace.prepare_sol(ws, content, problem_files=problem_files, reference_dir=SCRIPT_DIR)
 
     # 5) V0 baseline metrics (real evaluator)
     pre_existing_v0 = (ws / "memory" / "v0.json").exists() and args.skip_bench_if_v0_exists
@@ -268,43 +162,8 @@ def main(argv: list[str] | None = None) -> int:
             print("[sol_seed] WARNING: V0 baseline did not pass all workloads — check solution.json / reference.",
                   file=sys.stderr)
 
-    # 6) Git source commit. Keep memory out of this commit so its stable SHA can
-    # be recorded without an impossible self-referential amend loop.
-    if not (ws / ".git").exists():
-        subprocess.run(["git", "init"], cwd=str(ws), check=True, stdout=subprocess.DEVNULL)
-        subprocess.run(["git", "config", "user.email", "gpu-kernel-optimizer@local"], cwd=str(ws), check=True)
-        subprocess.run(["git", "config", "user.name", "GPU Kernel Optimizer"], cwd=str(ws), check=True)
-    source_paths = [
-        *GROUND_TRUTH,
-        "config.json",
-        "kernel.py",
-        "solution.json",
-        "test_kernel.py",
-        "profile_driver.py",
-        "README.md",
-        ".gitignore",
-    ]
-    if (ws / "CLAUDE.md").is_file():
-        source_paths.append("CLAUDE.md")
-    subprocess.run(["git", "add", *source_paths], cwd=str(ws), check=True)
-    subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
-                   stdout=subprocess.DEVNULL)
-    # 7) Record measurement metadata in a second commit. This deliberately leaves
-    # kernel.py untouched, so memory can point at the immutable source commit.
-    v0 = ws / "memory" / "v0.json"
-    if v0.exists():
-        h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws), capture_output=True, text=True).stdout.strip()
-        mem = json.loads(v0.read_text(encoding="utf-8"))
-        mem["git_commit_hash"] = h
-        mem.setdefault("optimization", {})["action_category"] = "baseline"
-        v0.write_text(json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        subprocess.run(["git", "add", "memory/v0.json"], cwd=str(ws), check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "V0: record baseline measurement"],
-            cwd=str(ws),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+    with (nullcontext(dependencies["workspace"]) if dependencies is not None else candidate_workspace()) as workspace:
+        workspace.commit_sol(ws)
 
     print(f"[sol_seed] workspace ready: {ws}")
     return 0

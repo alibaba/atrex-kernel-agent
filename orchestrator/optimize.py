@@ -110,15 +110,6 @@ try:
         supported_frameworks,
     )
     from .trace_retention import write_trace_retention_manifest
-    from .operator_layout import (
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
-    )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
     from .plugins import PluginError, PluginRegistry
     from .session_io import check_ssh_environment, detect_arch, ensure_submodules
@@ -162,15 +153,6 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     )
     from orchestrator.trace_retention import (  # type: ignore[no-redef]
         write_trace_retention_manifest,
-    )
-    from orchestrator.operator_layout import (  # type: ignore[no-redef]
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
     )
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
@@ -384,62 +366,7 @@ def dispatch_framework_campaigns(
     return 0
 
 
-def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
-    """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
-    --op-dir (+ the non-deducible --platform).
-    """
-    d = Path(op_dir).resolve()
-    if not d.is_dir():
-        raise SystemExit(f"--op-dir not found: {d}")
-    ref = d / "reference.py"
-    if not ref.is_file():
-        raise SystemExit(f"--op-dir has no reference.py: {d}")
-    atrex_bench_root = ""
-    provided_problem = has_agent_problem(d)
-    shapes_path = d / "shapes.json"
-    generalized = should_use_generalized_problem(d, optimization_mode)
-    if generalized and provided_problem:
-        if not shapes_path.is_file():
-            raise SystemExit(
-                "generalized Atrex-Bench operator requires private evaluator shapes.json: "
-                f"{d}"
-            )
-        try:
-            validate_agent_problem(
-                d / AGENT_PROBLEM_FILENAME,
-                private_shapes_path=shapes_path,
-            )
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-    if not is_sol_op(d) and shapes_path.is_file():
-        try:
-            validate_private_shapes(shapes_path)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        native_root = find_atrex_bench_root(d)
-        if native_root is None:
-            raise SystemExit(
-                "native Atrex-Bench operator requires its canonical scripts/run_eval.py and "
-                f"src/atrex_bench runtime in an ancestor directory: {d}"
-            )
-        atrex_bench_root = str(native_root)
-    return {
-        "name": d.name,
-        "reference": str(ref),
-        "op_dir": str(d),
-        "atrex_bench_root": atrex_bench_root,
-        "agent_problem": (
-            str(d / AGENT_PROBLEM_FILENAME) if generalized and provided_problem else ""
-        ),
-        "agent_problem_source": (
-            "provided"
-            if generalized and provided_problem
-            else ("auto" if generalized else "none")
-        ),
-    }
-
-
-def _run_main(argv: Optional[list[str]] = None) -> int:
+def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
@@ -840,7 +767,16 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    op = _resolve_op(args.op_dir, args.optimization_mode)
+    from ._bootstrap import load_problem
+    import hashlib
+    snapshot_key = hashlib.sha256(
+        (str(Path(args.op_dir).resolve()) + "\0" + args.optimization_mode + "\0"
+         + (args.workspace_suffix or f"{args.framework}_{args.platform}")).encode()
+    ).hexdigest()[:24]
+    snapshot_directory = (Path(args.workspace) if args.workspace else Path.cwd()) / ".aka-problems" / snapshot_key
+    problem = load_problem(args.op_dir, args.optimization_mode,
+                           provider=(dependencies or {}).get("problem"),
+                           snapshot_directory=snapshot_directory)
     if args.sandbox_ssh:
         workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
         configure_recovery(
@@ -855,7 +791,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             health_command=args.sandbox_health_command,
             poll_interval=args.environment_poll_interval,
             runtime_health_command=runtime_health_command(
-                sol=is_sol_op(Path(op["op_dir"])), framework=args.framework
+                sol=problem.initial_source.kind == "sol", framework=args.framework
             ),
         )
         raise_if_environment_blocked()
@@ -877,7 +813,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             args.framework, args.platform, args.optimization_mode
         )
         base = Path(args.workspace) if args.workspace else Path.cwd()
-        arch = _recorded_workspace_arch(base / f"kernel_opt_{op['name']}_{suffix}")
+        arch = _recorded_workspace_arch(base / f"kernel_opt_{problem.name}_{suffix}")
         if arch:
             print(
                 f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
@@ -891,9 +827,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         else supported_frameworks(args.platform, arch)
     )
     print(
-        f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
+        f"[orchestrator] op={problem.name} agent_cli={args.agent_cli} "
         f"optimization_mode={args.optimization_mode} platform={args.platform} "
-        f"agent_problem={op.get('agent_problem_source', 'none')} "
+        f"agent_problem={problem.public_contract_source} "
         f"sandbox_hardware={sandbox_hardware} "
         "sandbox_endpoint="
         f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
@@ -927,8 +863,10 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     )
 
     campaign = Campaign(
-        name=op["name"],
-        kernel_demo=op["reference"],
+        task_dependencies=dependencies,
+        problem=problem,
+        name=problem.name,
+        kernel_demo=str(problem.initial_source.entry),
         platform=args.platform,
         framework=args.framework,
         notes=args.notes,
@@ -941,7 +879,7 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         sandbox_ssh_gpu=args.sandbox_ssh_gpu,
         sandbox_health_command=args.sandbox_health_command,
         sandbox_timeout=args.sandbox_timeout,
-        atrex_bench_root=op.get("atrex_bench_root", ""),
+        atrex_bench_root=str(problem.evaluation.runtime_root or ""),
         agent_cli=args.agent_cli,
         optimization_mode=args.optimization_mode,
         work_dir=args.workspace,
@@ -1025,9 +963,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             signal.signal(handled_signal, previous_handler)
 
 
-def _run_application(argv: Optional[list[str]] = None) -> int:
+def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     try:
-        result = _run_main(argv)
+        result = _run_main(argv, dependencies=dependencies)
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():

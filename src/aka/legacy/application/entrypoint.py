@@ -9,8 +9,9 @@ from pathlib import Path
 from .application import LegacyApplication
 
 class LegacyEntrypoint:
-    def __init__(self, repo_root: Path) -> None:
+    def __init__(self, repo_root: Path, dependencies=None) -> None:
         self._repo_root = Path(repo_root).resolve()
+        self._dependencies = dependencies
 
     def __call__(self, argv: list[str] | None) -> int:
         expected = self._repo_root / "orchestrator" / "optimize.py"
@@ -32,9 +33,18 @@ class LegacyEntrypoint:
             raise RuntimeError("checkout lacks the non-dispatching application entry; use a matching revision")
         # Never call public main: it will become the Core dispatcher. The internal
         # entry retains the full recovery wrapper, not just _run_main's campaign loop.
-        return entry(argv)
+        if self._dependencies is None:
+            return entry(argv)
+        from .workspace import candidate_workspace
+        with candidate_workspace(self._dependencies["workspace"]):
+            return entry(argv, dependencies=self._dependencies)
 
 
-def create_legacy_application(repo_root: Path) -> LegacyApplication:
+def create_legacy_application(repo_root: Path, *, problem=None, source=None, workspace=None) -> LegacyApplication:
     """Construct with a concrete lazy entry; leave composition ownership here."""
-    return LegacyApplication(repo_root=repo_root, entry=LegacyEntrypoint(repo_root))
+    dependencies = None
+    if any(value is not None for value in (problem, source, workspace)):
+        if any(value is None for value in (problem, source, workspace)):
+            raise ValueError("legacy application requires Problem, Source and Workspace together")
+        dependencies = dict(problem=problem, source=source, workspace=workspace)
+    return LegacyApplication(repo_root=repo_root, entry=LegacyEntrypoint(repo_root, dependencies))

@@ -1,8 +1,17 @@
 {
-  "api_version": 1,
+  "api_version": 2,
+  "token_definitions": {
+    "problem": "aka.legacy.task.problem.plugin:PROBLEM",
+    "source": "aka.legacy.task.source.plugin:SOURCE",
+    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
+  },
   "composition": "application",
   "target": "startup",
-  "required_services": [],
+  "required_services": [
+    "problem",
+    "source",
+    "candidate"
+  ],
   "resources": [
     {
       "root": "${aka:repo_root}",
@@ -61,5 +70,10 @@
     "ATREX_EVAL_SHAPE_BATCH_SIZE",
     "ATREX_ENGINE_CONTRACT_CHILD",
     "ATREX_INTERNAL_SANDBOX_WRAPPER"
+  ],
+  "tokens": [
+    "problem",
+    "source",
+    "candidate"
   ]
 }

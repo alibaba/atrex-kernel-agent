@@ -3,14 +3,17 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "atrex-aka-core"
+name = "atrex-aka-framework"
 version = "0.1.0"
-description = "AKA plugin framework: core"
-requires-python = ">=3.9"
+description = "AKA plugin framework, contracts and profile-selected startup"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
 aka = "aka.cli:main"
+
+[project.entry-points."aka.commands"]
+run = "aka.bootstrap.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -18,7 +21,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*"]
 
 [tool.setuptools.package-data]
 "aka.core" = ["profiles/*.json"]

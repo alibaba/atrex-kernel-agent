@@ -8,6 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import agent_runtime as _agent_runtime
+from ._bootstrap import task_modules
+
+task_modules()
+from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE
+from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -43,22 +48,6 @@ DEPENDENCY_REVIEW_TIMEOUT_S = 600
 DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
 AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
-IMMUTABLE_BASELINE_PATHS = (
-    "test_kernel.py",
-    "reference.py",
-    "input.py",
-    "agent_problem.json",
-    "shapes.json",
-    "metadata.json",
-    "roofline.json",
-    "workload.jsonl",
-    "definition.json",
-    "valid.py",
-    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
-    # remove the ability to profile; it is ground truth like the evaluator harness.
-    "profile_driver.py",
-    "memory/v0.json",
-)
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
@@ -68,6 +57,3 @@ PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
 DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
 DEFAULT_SANDBOX_TIMEOUT = 600
 MAX_SANDBOX_TIMEOUT = 600
-
-
-STALL_STATE_FILE = ".orchestrator_state.json"

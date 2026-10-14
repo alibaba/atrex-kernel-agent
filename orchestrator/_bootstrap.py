@@ -6,6 +6,22 @@ from pathlib import Path
 from typing import Optional
 
 
+def task_modules():
+    source = Path(__file__).resolve().parent.parent / "src"
+    if (source / "aka" / "legacy" / "task" / "problem").is_dir() and str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    from aka.legacy.task import problem
+    return problem
+
+
+def load_problem(directory: str, optimization_mode: str = "leaderboard", *, provider=None,
+                 snapshot_directory: Path | None = None):
+    task_modules()
+    from aka.legacy.application.task import load_operator_problem
+    return load_operator_problem(directory, optimization_mode, provider=provider,
+                                 snapshot_directory=snapshot_directory)
+
+
 def run(argv: Optional[list[str]] = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     source = repo_root / "src"

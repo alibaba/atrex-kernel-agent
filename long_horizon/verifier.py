@@ -6,14 +6,13 @@ import shutil
 import subprocess
 import uuid
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from threading import Event
 from typing import Any
 
 from orchestrator.infrastructure_retry import InfrastructureUnavailable, check_transport, retry_infrastructure
 
 from . import main_adapter
-from .git_episode import _git
 from .models import VerificationResult, VerificationRun
 from .protocol import atomic_write_json
 from .store import VERIFY_DIR
@@ -382,33 +381,10 @@ def score_verification_payload(
     )
 
 
-def _git_blob(workspace: Path, revision: str, relative: str) -> bytes | None:
-    result = _git(workspace, "show", f"{revision}:{relative}", check=False, binary=True)
-    return result.stdout if result.returncode == 0 else None
-
-
-def _snapshot_revision(
-    workspace: Path,
-    revision: str,
-    changed_paths: list[str],
-    destination: Path,
-    label: str,
-) -> dict[str, str | None]:
-    manifest: dict[str, str | None] = {}
-    for index, relative in enumerate(changed_paths):
-        path = PurePosixPath(relative)
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"unsafe candidate path: {relative}")
-        content = _git_blob(workspace, revision, relative)
-        if content is None:
-            manifest[relative] = None
-            continue
-        snapshot_relative = f"snapshots/{label}/{index:04d}.bin"
-        target = destination / snapshot_relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        manifest[relative] = snapshot_relative
-    return manifest
+def _snapshot_revision(workspace, revision, changed_paths, destination, label, *, provider=None):
+    from aka.legacy.application.workspace import candidate_workspace
+    with candidate_workspace(provider=provider) as provider:
+        return provider.write_revision(workspace, revision, changed_paths, destination, label)
 
 
 class GatewayABBAValidator:
@@ -428,7 +404,9 @@ class GatewayABBAValidator:
         queue_wait_grace: int = 14_400,
         private_reference_dir: Path | None = None,
         shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE,
+        workspace_provider=None,
     ):
+        self.workspace_provider = workspace_provider
         self.hardware = hardware
         self.profile = profile
         self.url = url
@@ -474,10 +452,10 @@ class GatewayABBAValidator:
         shutil.copy2(Path(__file__).with_name("remote_abba.py"), driver)
         manifests = {
             "incumbent": _snapshot_revision(
-                workspace, base_commit, changed_paths, directory, "incumbent"
+                workspace, base_commit, changed_paths, directory, "incumbent", provider=self.workspace_provider
             ),
             "candidate": _snapshot_revision(
-                workspace, candidate_commit, changed_paths, directory, "candidate"
+                workspace, candidate_commit, changed_paths, directory, "candidate", provider=self.workspace_provider
             ),
         }
         batch_specs = []

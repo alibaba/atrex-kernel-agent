@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Optional
 
 from . import agent_runtime as _agent_runtime
+from ._bootstrap import task_modules
+
+task_modules()
+from aka.contracts.problem import LoadedProblem
+
 from .constants import (
     SUPPLEMENTAL_PENDING_PREFIX,
     SUPPLEMENTAL_REPAIR_PREFIX,
@@ -39,7 +44,6 @@ from .constants import (
     FRAMEWORK_BASELINE_FILE,
     FRAMEWORK_BASELINE_TIMEOUT_S,
     FRAMEWORK_BASELINE_VERSION,
-    IMMUTABLE_BASELINE_PATHS,
     PROFILE_DRIVER,
     PROMPTS_DIR,
     REPO_ROOT,
@@ -69,15 +73,7 @@ from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
 )
 from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from .operator_layout import (
-    AGENT_PROBLEM_FILENAME,
-    agent_visible_operator_files,
-    has_agent_problem,
-    is_sol_op,
-    validate_agent_problem,
-    validate_generated_agent_problem,
-    validate_private_shapes,
-)
+from .operator_layout import AGENT_PROBLEM_FILENAME
 from .optimization_policy import (
     install_workspace_policy,
     optimization_mode_directive,
@@ -214,6 +210,8 @@ class Campaign:
     sandbox_ssh_init: str = ""  # remote environment activation command
     sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
+    task_dependencies: dict | None = field(default=None, repr=False, compare=False)
+    problem: LoadedProblem | None = field(default=None, repr=False, compare=False)
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
@@ -226,6 +224,17 @@ class Campaign:
     )
 
     def __post_init__(self) -> None:
+        if self.task_dependencies is None:
+            from ._bootstrap import task_modules
+            task_modules()
+            from aka.legacy.task.problem.legacy import LegacyProblemProvider
+            from aka.legacy.task.source.legacy import LegacySourceProvider
+            from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
+            self.task_dependencies = dict(problem=LegacyProblemProvider(self.optimization_mode),
+                                          source=LegacySourceProvider(), workspace=GitCandidateWorkspace())
+        self.problem_provider = self.task_dependencies["problem"]
+        self.source_provider = self.task_dependencies["source"]
+        self.candidate_workspace = self.task_dependencies["workspace"]
         self.plugin_registry.check_lock(self.workspace)
         if sum(
             bool(value)
@@ -249,65 +258,33 @@ class Campaign:
 
     @property
     def private_reference_dir(self) -> Path | None:
-        """Return evaluator-only native inputs behind a generalized public problem."""
-        op_dir = Path(self.kernel_demo).resolve().parent
-        use_generalized = (
-            self.optimization_mode == "production"
-            and not is_sol_op(op_dir)
-            and (op_dir / "shapes.json").is_file()
-        )
-        if not self.atrex_bench_root or not use_generalized:
-            return None
-        shapes_path = op_dir / "shapes.json"
-        validate_private_shapes(shapes_path)
-        if has_agent_problem(op_dir):
-            validate_agent_problem(
-                op_dir / AGENT_PROBLEM_FILENAME,
-                private_shapes_path=shapes_path,
-            )
-        return op_dir
+        return self._problem_inputs().private_reference_dir
+
+    def _loaded_problem(self):
+        if self.problem is None:
+            # Historical direct Campaign construction supplied only kernel_demo.
+            # Resolve that legacy request once; all later consumers retain Problem.
+            self.problem = self.problem_provider.load(
+                Path(self.kernel_demo).resolve().parent, optimization_mode=self.optimization_mode,
+                snapshot_directory=self.workspace.parent / ".aka-problems" / self.campaign_name)
+        if self.problem.initial_source is None or self.problem.evaluation is None:
+            raise TypeError("Campaign requires explicit Problem initial source and evaluation roles")
+        self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
+        return self.problem
+
+    def _problem_inputs(self):
+        return self.problem_provider.content(self._loaded_problem(), self.workspace,
+                                             generated_digest=self._generated_agent_problem_digest)
 
     def _ensure_agent_problem(self) -> None:
-        """Materialize the public contract before any production optimization session.
-
-        A user-authored contract is copied verbatim. When production receives only detailed
-        evaluator shapes, a dedicated clean AKA session derives the public contract in a temporary
-        directory; the later baseline/optimization sessions never receive ``shapes.json``.
-        """
-        private_dir = self.private_reference_dir
-        if private_dir is None:
+        """Schedule the original authoring session when public input preparation requires it."""
+        inputs = self._problem_inputs()
+        public = inputs.prepare_public()
+        self.candidate_workspace.install_files(self.workspace, public.files)
+        if public.ready:
+            self._generated_agent_problem_digest = inputs.generated_digest
             return
         destination = self.workspace / AGENT_PROBLEM_FILENAME
-        shapes_path = private_dir / "shapes.json"
-        provided = private_dir / AGENT_PROBLEM_FILENAME
-        if provided.is_file():
-            validate_agent_problem(provided, private_shapes_path=shapes_path)
-            shutil.copy2(provided, destination)
-            print(
-                f"[orchestrator] generalized problem: using user-provided {provided}",
-                flush=True,
-            )
-            return
-        if destination.is_file():
-            validate_generated_agent_problem(
-                destination,
-                private_shapes_path=shapes_path,
-            )
-            self._generated_agent_problem_digest = hashlib.sha256(
-                destination.read_bytes()
-            ).hexdigest()
-            print(
-                "[orchestrator] generalized problem: reusing workspace-generated "
-                f"{destination}",
-                flush=True,
-            )
-            return
-        if self.optimization_mode != "production":
-            raise RuntimeError(
-                "a generalized non-production campaign requires a user-provided "
-                f"{AGENT_PROBLEM_FILENAME}"
-            )
-
         print(
             "[orchestrator] generalized problem: production received detailed shapes only; "
             "starting AKA problem-authoring session",
@@ -318,10 +295,7 @@ class Campaign:
             prefix="aka-generalize-problem-"
         ) as raw_staging:
             staging = Path(raw_staging)
-            for name in ("reference.py", "input.py", "shapes.json", "metadata.json"):
-                source = private_dir / name
-                if source.is_file():
-                    shutil.copy2(source, staging / name)
+            self.candidate_workspace.install_files(staging, inputs.authoring_assets())
             for attempt in range(2):
                 repair_context = (
                     "The current agent_problem.json failed orchestrator validation. Replace it "
@@ -343,10 +317,7 @@ class Campaign:
                 self._account(result, f"agent problem generation attempt {attempt + 1}")
                 generated = staging / AGENT_PROBLEM_FILENAME
                 try:
-                    validate_generated_agent_problem(
-                        generated,
-                        private_shapes_path=shapes_path,
-                    )
+                    inputs.validate_generated(generated)
                 except ValueError as exc:
                     validation_error = str(exc)
                     if attempt == 0:
@@ -357,10 +328,9 @@ class Campaign:
                         f"two attempts: {validation_error}"
                         + (f"; agent output: {detail}" if detail else "")
                     ) from exc
-                shutil.copy2(generated, destination)
-                self._generated_agent_problem_digest = hashlib.sha256(
-                    destination.read_bytes()
-                ).hexdigest()
+                self.candidate_workspace.install_files(self.workspace, (inputs.generated_file(generated),))
+                inputs.record_generated()
+                self._generated_agent_problem_digest = inputs.generated_digest
                 print(
                     f"[orchestrator] generalized problem: generated {destination}",
                     flush=True,
@@ -478,15 +448,11 @@ class Campaign:
         private_dir = self.private_reference_dir
         if private_dir is None or memory is None:
             return ""
-        try:
-            shapes = validate_private_shapes(private_dir / "shapes.json")
-        except ValueError as exc:
-            return f"cannot read private evaluator shape ids: {type(exc).__name__}"
         performance = memory.get("performance")
         performance = performance if isinstance(performance, dict) else {}
         measured = performance.get("latency_us_by_shape")
         measured = measured if isinstance(measured, dict) else {}
-        expected_ids = {str(value) for value in shapes}
+        expected_ids = set(self._problem_inputs().evaluation.case_ids)
         measured_ids = {str(value) for value in measured}
         if measured_ids != expected_ids:
             return (
@@ -505,56 +471,7 @@ class Campaign:
         return ""
 
     def _assert_generalized_inputs_are_private(self) -> None:
-        """Fail closed if exact evaluator artifacts appear in the agent workspace."""
-        private_dir = self.private_reference_dir
-        if private_dir is None:
-            return
-        public_problem = self.workspace / AGENT_PROBLEM_FILENAME
-        if not public_problem.is_file():
-            raise RuntimeError(
-                "generalized Atrex-Bench workspace is missing agent_problem.json; "
-                "start a fresh workspace"
-            )
-        try:
-            provided_problem = private_dir / AGENT_PROBLEM_FILENAME
-            if provided_problem.is_file():
-                validate_agent_problem(
-                    public_problem,
-                    private_shapes_path=private_dir / "shapes.json",
-                )
-                if public_problem.read_bytes() != provided_problem.read_bytes():
-                    raise ValueError(
-                        "workspace agent_problem.json differs from the user-provided contract"
-                    )
-            else:
-                validate_generated_agent_problem(
-                    public_problem,
-                    private_shapes_path=private_dir / "shapes.json",
-                )
-                if (
-                    self._generated_agent_problem_digest
-                    and hashlib.sha256(public_problem.read_bytes()).hexdigest()
-                    != self._generated_agent_problem_digest
-                ):
-                    raise ValueError(
-                        "workspace agent_problem.json was modified after automatic generation"
-                    )
-        except ValueError as exc:
-            raise RuntimeError(
-                f"generalized Atrex-Bench workspace has an invalid public problem: {exc}; "
-                "start a fresh workspace"
-            ) from exc
-        leaked = [
-            name
-            for name in ("shapes.json", "metadata.json", "roofline.json", "valid.py")
-            if (self.workspace / name).exists()
-        ]
-        if leaked:
-            raise RuntimeError(
-                "generalized Atrex-Bench workspace exposes evaluator-only files: "
-                + ", ".join(leaked)
-                + "; start a fresh workspace"
-            )
+        self._problem_inputs().assert_private()
 
     @property
     def workspace(self) -> Path:
@@ -784,6 +701,7 @@ class Campaign:
             self.workspace,
             native_root,
             plugin_registry=self.plugin_registry,
+            provider=self.candidate_workspace,
             is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
         )
         install_workspace_policy(
@@ -828,8 +746,7 @@ class Campaign:
                 "timing harness. `--multi-seed N` maps to N additional Atrex-Bench correctness "
                 "cases while performance remains one official run per shape."
             )
-        op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
+        if self._loaded_problem().initial_source.kind == "sol":
             return (
                 "## Evaluation route: SOL-ExecBench\n\n"
                 "Keep using the immutable SOL `test_kernel.py`, which invokes `sol-execbench` over "
@@ -897,27 +814,32 @@ class Campaign:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
         # (no baseline session) — sol_seed.py copies the ground-truth files, writes
         # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
-        op_dir = Path(self.kernel_demo).resolve().parent
-        if is_sol_op(op_dir):
+        problem = self._loaded_problem()
+        op_dir = problem.evaluation.directory
+        if problem.initial_source.kind == "sol":
             self._setup_baseline_sol(op_dir)
             return
         if not WORKSPACE_INIT.exists():
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
         # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
         # so cwd must be the work_dir (or the process cwd when --workspace is absent).
-        subprocess.run(
-            ["bash", str(WORKSPACE_INIT), self.campaign_name, self.kernel_demo],
-            cwd=str(self.workspace.parent),
-            check=True,
-        )
+        from ._bootstrap import task_modules
+        task_modules()
+        from aka.contracts.workspace import SourceRequest
+        content = self.source_provider.prepare(SourceRequest(initial=problem.initial_source))
+        initial_entry = str(problem.initial_source.entry)
+        code = self.candidate_workspace.initialize_kernel(WORKSPACE_INIT.parent, str(WORKSPACE_INIT),
+            [self.campaign_name, initial_entry], content=content,
+            working_directory=self.workspace.parent)
+        if code:
+            raise subprocess.CalledProcessError(code,
+                ["bash", str(WORKSPACE_INIT), self.campaign_name, initial_entry])
         # Production native tasks always expose a generalized public contract. Exact shapes and
         # release metadata remain in the source operator directory and are injected only at the
         # sandbox boundary. A missing public contract is authored before the baseline session.
-        generalized = self.private_reference_dir is not None
-        for name in agent_visible_operator_files(op_dir, generalized=generalized):
-            source = op_dir / name
-            if source.is_file():
-                shutil.copy2(source, self.workspace / name)
+        inputs = self._problem_inputs()
+        generalized = inputs.private_reference_dir is not None
+        self.candidate_workspace.install_files(self.workspace, inputs.operator_files())
         self._ensure_agent_problem()
         if generalized:
             # Seed the immutable public contract into the eventual V0 commit even when the
@@ -1072,7 +994,7 @@ class Campaign:
             "## Goal\n\n"
             "Maximize the arithmetic mean of per-shape speedups against Atrex-Bench metadata "
             "production performance while every evaluator case remains "
-            "correct. V0 is the verbatim PyTorch reference wrapper; optimized versions must "
+            "correct. V0 uses the Problem's selected initial implementation; optimized versions must "
             f"migrate the computation to `{self.framework}`.\n\n"
             "## Campaign\n\n"
             f"- Target platform: `{self.platform}`\n"
@@ -1200,7 +1122,7 @@ class Campaign:
             "This report was generated mechanically by the campaign supervisor.\n\n"
             "## Provenance\n\n"
             f"- Source commit: `{source_commit}`\n"
-            "- Implementation: verbatim `reference.py` copied to `kernel.py`\n"
+            "- Implementation: the Problem's selected initial source, prepared by Source\n"
             f"- Evaluator: `{evaluator}`\n"
             "- Route: remote sandbox, one base-seed full-workload run\n"
             f"- Evaluator id: `{eval_id if eval_id is not None else 'unknown'}`\n\n"
@@ -1234,7 +1156,7 @@ class Campaign:
         optimization = memory.setdefault("optimization", {})
         optimization["action_category"] = "baseline"
         optimization["action_description"] = (
-            "verbatim reference wrapper measured by the official full-workload evaluator"
+            "selected initial implementation measured by the official full-workload evaluator"
         )
         optimization["expected_impact"] = "correctness and latency reference for later versions"
         optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
@@ -1282,9 +1204,9 @@ class Campaign:
         reference_path = self.workspace / "reference.py"
         if not kernel_path.is_file() or not reference_path.is_file():
             raise RuntimeError("native V0 requires workspace kernel.py and reference.py")
-        if kernel_path.read_bytes() != reference_path.read_bytes():
+        if kernel_path.read_bytes() != self._loaded_problem().initial_source.entry.read_bytes():
             raise RuntimeError(
-                "native V0 kernel.py is not the verbatim reference wrapper; refusing "
+                "native V0 kernel.py differs from the selected initial implementation; refusing "
                 "mechanical baseline generation"
             )
         (self.workspace / "README.md").write_text(
@@ -1297,7 +1219,7 @@ class Campaign:
             "kernel.py",
             "test_kernel.py",
             "profile_driver.py",
-            *agent_visible_operator_files(op_dir, generalized=generalized),
+            *(item.path for item in self._loaded_problem().agent.files),
         ]
         source_paths = list(
             dict.fromkeys(
@@ -1327,7 +1249,7 @@ class Campaign:
         if git_path_blob(self.workspace, source_commit, "kernel.py") != git_worktree_blob(
             self.workspace, "kernel.py"
         ):
-            raise RuntimeError("native V0 source history does not match the reference wrapper")
+            raise RuntimeError("native V0 source history does not match the selected initial implementation")
 
         result = self._run_v0_evaluator_with_correctness_prefetch()
         self._finalize_v0_measurement(result, source_commit)
@@ -1370,7 +1292,8 @@ class Campaign:
             # correctness/performance is run below in the remote sandbox.
             "--no-bench",
         ]
-        subprocess.run(cmd, check=True)
+        from reference import sol_seed
+        sol_seed.main(cmd[2:], dependencies=self.task_dependencies, problem=self._loaded_problem())
         self._link_runtime()
         source_commit = v0_baseline_commit(self.workspace)
         if not source_commit:
@@ -1630,7 +1553,7 @@ class Campaign:
                 reference_blob
                 and reference_blob
                 == git_path_blob(self.workspace, baseline_commit, "kernel.py")
-            ) or is_sol_op(Path(self.kernel_demo).resolve().parent)
+            ) or self._loaded_problem().initial_source.kind == "sol"
             if known_reference_wrapper:
                 return (
                     "run",
@@ -2650,21 +2573,7 @@ class Campaign:
         mechanically repairable one — discarding its kernel over it would throw away hours of
         work for nothing. Acceptance is decided by the kernel itself.
         """
-        restored: list[str] = []
-        for path in IMMUTABLE_BASELINE_PATHS:
-            original = git_path_blob(self.workspace, baseline_commit, path)
-            if not original or original == git_worktree_blob(self.workspace, path):
-                continue
-            checkout = subprocess.run(
-                ["git", "checkout", baseline_commit, "--", path],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if checkout.returncode == 0:
-                restored.append(path)
-        return restored
+        return self.candidate_workspace.restore_baseline(self.workspace, baseline_commit)
 
     def _framework_baseline_problem(
         self,
@@ -2696,13 +2605,7 @@ class Campaign:
         ):
             # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
             return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
-        mutated = [
-            path
-            for path in IMMUTABLE_BASELINE_PATHS
-            if git_path_blob(self.workspace, baseline_commit, path)
-            and git_path_blob(self.workspace, baseline_commit, path)
-            != git_worktree_blob(self.workspace, path)
-        ]
+        mutated = self.candidate_workspace.baseline_changes(self.workspace, baseline_commit)
         if mutated:
             return "the session modified immutable ground truth: " + ", ".join(mutated)
         return ""
@@ -3042,6 +2945,7 @@ class Campaign:
         CampaignStore.ensure_excluded(self.workspace)
 
         verifier = GatewayABBAValidator(
+            workspace_provider=self.candidate_workspace,
             hardware=self.sandbox_hardware,
             profile=self.sandbox_profile,
             url=self.sandbox_url,

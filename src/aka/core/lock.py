@@ -215,7 +215,7 @@ def snapshot(
     aka_root = package_dir("aka")
     framework["aka"] = _files("aka", ("__init__.py",)) if aka_root else {}
     try:
-        version = importlib.metadata.version("atrex-aka-core")
+        version = importlib.metadata.version("atrex-aka-framework")
     except importlib.metadata.PackageNotFoundError:
         version = "source"
     return {

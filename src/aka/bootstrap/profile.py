@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
@@ -24,6 +25,33 @@ class Selection:
     submodules: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     bindings: Mapping[str, str] = field(default_factory=dict)
     environment: Mapping[str, str | None] = field(default_factory=dict)
+    token_definitions: Mapping[str, str] = field(default_factory=dict)
+    continuation_version: int = 1
+
+
+def load_token_definitions(definitions: Mapping[str, str]) -> dict[str, ServiceKey]:
+    """Load declared token objects without applying their plugins."""
+    if not isinstance(definitions, dict):
+        raise ValueError("token_definitions must map service names to module:attribute references")
+    references = {}
+    for name, reference in definitions.items():
+        if not isinstance(name, str) or not isinstance(reference, str):
+            raise ValueError("token_definitions must map service names to module:attribute references")
+        module, separator, attribute = reference.partition(":")
+        if (not separator or not attribute.isidentifier() or not module
+                or any(not part.isidentifier() for part in module.split("."))):
+            raise ValueError(f"invalid token definition reference: {reference}")
+        references[name] = (module, attribute)
+    result = {}
+    for name, (module, attribute) in references.items():
+        try:
+            token = getattr(importlib.import_module(module), attribute)
+        except (ImportError, AttributeError) as exc:
+            raise ValueError(f"token definition {name} is unavailable: {module}:{attribute}") from exc
+        if not isinstance(token, ServiceKey) or token.name != name:
+            raise ValueError(f"token definition {name} must reference a ServiceKey with the same name")
+        result[name] = token
+    return result
 
 
 def registered_tokens(extra: Sequence[ServiceKey] = ()) -> dict[str, ServiceKey]:
@@ -54,8 +82,11 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
     except (OSError, ValueError) as exc:
         raise CompositionError(str(profile), f"cannot read launch profile: {exc}") from exc
     fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "bindings", "environment", "doc"}
-    if (not isinstance(value, dict) or type(value.get("api_version")) is not int
-            or value["api_version"] != 1 or set(value) - fields):
+    version = value.get("api_version") if isinstance(value, dict) else None
+    if version == 2:
+        fields.add("token_definitions")
+    if (type(version) is not int or version not in (1, 2) or set(value) - fields
+            or (version == 2 and "token_definitions" not in value)):
         raise CompositionError(str(profile), "invalid launch profile fields or version")
     composition_name = value.get("composition")
     if (not isinstance(composition_name, str) or not composition_name
@@ -65,8 +96,6 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
     if not isinstance(target, str):
         raise CompositionError(str(profile), "target must name a Startup service")
     startup = startup_token(target)
-    registry = registered_tokens(tokens)
-    registry = token_table((*registry.values(), startup))
     def names(key):
         items = value.get(key, [])
         if (not isinstance(items, list) or any(not isinstance(x, str) or not x for x in items)
@@ -75,6 +104,19 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
         return tuple(items)
     selected = names("tokens")
     required = tuple(dict.fromkeys((target, *names("required_services"))))
+    definitions = value.get("token_definitions", {})
+    try:
+        if version == 2:
+            if not isinstance(definitions, dict) or set(definitions) != set(selected) - {target}:
+                raise ValueError("token_definitions must cover exactly the selected non-startup tokens")
+            registry = load_token_definitions(definitions)
+            if set(token_table(tokens)) - set(selected) - {target}:
+                raise ValueError("explicit tokens must be selected by a version 2 profile")
+            registry = token_table((*registry.values(), *tokens, startup))
+        else:
+            registry = token_table((*registered_tokens(tokens).values(), startup))
+    except ValueError as exc:
+        raise CompositionError(str(profile), str(exc)) from exc
     unknown = sorted((set(selected) | set(required)) - set(registry))
     if unknown:
         raise CompositionError(str(profile), f"unregistered tokens: {', '.join(unknown)}")
@@ -113,4 +155,5 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
     if any("=" in name or "\0" in name or name.startswith("AKA_LAUNCH_") for name in environment_names):
         raise CompositionError(str(profile), "invalid environment binding name")
     environment = {key: os.environ.get(key) for key in environment_names}
-    return Selection(composition, target, tuple(seams.values()), required, tuple(resolved), pinned, bindings, environment)
+    return Selection(composition, target, tuple(seams.values()), required, tuple(resolved), pinned, bindings, environment,
+                     dict(definitions), version)

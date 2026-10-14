@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-legacy"
+version = "0.1.0"
+description = "AKA legacy application and task implementations"
+requires-python = ">=3.10"
+dependencies = ["atrex-aka-framework==0.1.0"]
+
+[project.entry-points."aka.commands"]
+optimize = "aka.legacy.application.cli:main"
+
+[project.entry-points."aka.tokens"]
+problem = "aka.legacy.task.problem.plugin:PROBLEM"
+source = "aka.legacy.task.source.plugin:SOURCE"
+candidate = "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka.legacy", "aka.legacy.*"]
+
+[tool.setuptools.package-data]
+"aka.legacy.application" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]
+"aka.legacy.task.problem" = ["profiles/*.json", "profiles/bundles/*.json"]
+"aka.legacy.task.source" = ["profiles/*.json", "profiles/bundles/*.json"]
+"aka.legacy.task.candidate_workspace" = ["profiles/*.json", "profiles/bundles/*.json", "*.sh"]

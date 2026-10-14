@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from orchestrator._bootstrap import task_modules
 from orchestrator.durable_state import durable_write_json
 
-from . import main_adapter
+task_modules()
+from aka.legacy.task.candidate_workspace.excludes import (
+    RUNTIME_DIR, VERIFY_DIR, LIVE_MEMORY_FILE,
+)
+
 from .models import SupervisorState
 from .protocol import atomic_write_json, atomic_write_text
 from .telemetry import render_episode_brief
-
-RUNTIME_DIR = ".atrex_long_horizon"
-VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
-LIVE_MEMORY_FILE = "memory/live.json"
 
 
 class CampaignStore:
@@ -26,45 +26,10 @@ class CampaignStore:
 
     @staticmethod
     def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
-        """Install supervisor excludes, or only the early Wiki trace subset.
-
-        Workspace setup happens before the framework baseline commit.  At that
-        point only consumer-owned Wiki telemetry may be excluded; installing
-        the complete supervisor set would also hide baseline plans.
-        """
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-path", "info/exclude"],
-            cwd=str(workspace), capture_output=True, text=True,
-        )
-        if result.returncode:
-            raise RuntimeError(f"cannot locate git exclude file: {result.stderr.strip()}")
-        path = Path(result.stdout.strip())
-        if not path.is_absolute():
-            path = workspace / path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
-        wiki_trace_rules = (
-            "/.gpu_wiki_profile/",
-            "/trace-retention-manifest.json",
-        )
-        supervisor_rules = (
-            f"/{RUNTIME_DIR}/",
-            f"/{VERIFY_DIR}/",
-            f"/{main_adapter.STALL_STATE_FILE}",
-            f"/{LIVE_MEMORY_FILE}",
-            *wiki_trace_rules,
-            # Episode evidence is archived by the supervisor and must never
-            # become part of the candidate commit.
-            "/plans/",
-            "/profiles/",
-            "/.humanize/",
-        )
-        rules = wiki_trace_rules if wiki_trace_only else supervisor_rules
-        missing = [rule for rule in rules if rule not in text.splitlines()]
-        if missing:
-            suffix = ("" if not text or text.endswith("\n") else "\n") + "\n".join(missing) + "\n"
-            with path.open("a", encoding="utf-8") as stream:
-                stream.write(suffix)
+        from orchestrator._bootstrap import task_modules
+        task_modules()
+        from aka.legacy.task.candidate_workspace.excludes import ensure_excluded
+        ensure_excluded(workspace, wiki_trace_only=wiki_trace_only)
 
     @property
     def state_path(self) -> Path:

@@ -15,10 +15,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
-    'atrex-aka-core': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core'),
-    'atrex-aka-contracts': ('aka/contracts',),
-    'atrex-aka-optimization': ('aka/legacy',),
-    'atrex-aka-bootstrap': ('aka/bootstrap',),
+    'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap'),
+    'atrex-aka-legacy': ('aka/legacy',),
     'atrex-aka-dashboard': ('aka/dashboard',),
     'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
 }
@@ -26,7 +24,7 @@ OWNERS = {
 
 def owned(distribution: str) -> tuple[Path, ...]:
     files = []
-    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json')
+    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh')
     for relative in OWNERS[distribution]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else

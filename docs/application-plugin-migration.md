@@ -268,25 +268,31 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 
 | Distribution | Ownership | Python |
 | --- | --- | --- |
-| `atrex-aka-core` | `aka`, neutral dispatcher, `aka.core` | 3.9+ |
-| `atrex-aka-contracts` | `aka.contracts` | 3.9+ |
-| `atrex-aka-bootstrap` | `aka.bootstrap`, generic `aka run` command | 3.10+ |
-| `atrex-aka-optimization` | `aka.legacy`, default profiles, `aka optimize` command | 3.10+ |
+| `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
+| `atrex-aka-legacy` | `aka.legacy`, Application and Task implementations, default profiles, `aka optimize` command | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
 | `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
-Core alone has no application dependency. Bootstrap depends only on Core and Contracts;
-Optimization and the optional Dashboard depend on Bootstrap; the long-horizon observation
-adapter depends only on Contracts. The packages own disjoint
-files and pin matching dependency versions. Distribution boundaries are installation ownership units, not a
-requirement to package every future module separately. Build tooling stages owned files,
-builds sdists, then builds wheels from those sdists.
+Framework has no runtime package dependencies. Legacy and both optional distributions
+depend on `atrex-aka-framework==0.1.0`; Dashboard's `long-horizon` extra adds
+`atrex-aka-observation-long-horizon==0.1.0`. Neither optional distribution requires
+Legacy. Although the observation adapter imports only Contracts interfaces, its
+installation includes the full Framework distribution, including Core, Bootstrap and
+the CLI. This larger install footprint is a consequence of consolidating the base
+packages into Framework and Legacy; module interfaces remain separate within them.
+
+The consolidated packages replace the old Core, Contracts, Bootstrap and Optimization
+distributions. Remove the old distributions before installing their replacements to
+avoid overlapping files. The four current distributions own disjoint files and pin
+matching dependency versions. Distribution boundaries define installation ownership;
+they do not require a separate distribution for every future module. Build tooling
+stages owned files, builds sdists, then builds wheels from those sdists.
 
 `aka.observation` deliberately uses an implicit namespace package. Each observation
 adapter distribution owns its leaf package, such as `aka.observation.long_horizon`;
 there is no shared parent `__init__.py` for independently installed adapters to overwrite.
 The long-horizon package's discovery include and the build tool's `OWNERS` entry both
-select that leaf. Contracts remain in the separately owned `aka.contracts` package.
+select that leaf. The `aka.contracts` module package belongs to the Framework distribution.
 
 Dashboard injects the versioned `observation_source` seam. Its default profile combines
 the viewer with the separately packaged long-horizon adapter, without importing the
