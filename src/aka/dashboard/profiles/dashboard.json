@@ -1,0 +1,7 @@
+{
+  "api_version": 1,
+  "composition": "dashboard",
+  "target": "startup",
+  "tokens": ["observation_source"],
+  "required_services": ["observation_source"]
+}

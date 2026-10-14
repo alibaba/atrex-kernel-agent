@@ -258,9 +258,8 @@ def result_from_eval(
                     if metric in output:
                         value = _finite_number(output[metric])
                         if value is None:
-                            # Absent key = no observation; null = an observed
-                            # non-finite/invalid value. Keep null sticky so a
-                            # later finite case cannot hide an invalid maximum.
+                            # The official checker owns NaN/Inf semantics. Expose an
+                            # unavailable metric instead of inventing a finite error.
                             numerical_metrics[metric] = None
                         elif numerical_metrics.get(metric, 0.0) is not None:
                             numerical_metrics[metric] = max(numerical_metrics.get(metric, 0.0), value)
@@ -361,14 +360,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", default="v0")
     parser.add_argument("--no-memory", action="store_true")
-    parser.add_argument("--correctness-only", action="store_true", help="Validate without timing")
+    parser.add_argument("--correctness-only", action="store_true", help="Validate without any timing, including with a single seed")
     parser.add_argument(
         "--multi-seed",
         type=int,
-        default=None,
+        default=0,
         help=(
-            "Additional correctness cases (default: 5, or 0 for targeted Shape smoke). "
-            "Explicit multi-seed v2+ requests retain their correctness-only behavior."
+            "Additional correctness cases; v2+ runs skip performance while the "
+            "combined v1 framework-baseline gate still measures it"
         ),
     )
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
@@ -385,14 +384,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    explicit_multi_seed = args.multi_seed is not None
-    if not explicit_multi_seed:
-        args.multi_seed = 0 if args.shape_ids else 5
     if args.multi_seed < 0:
         raise SystemExit("--multi-seed must be non-negative")
-    correctness_only = args.correctness_only or (
-        explicit_multi_seed and args.multi_seed > 0 and args.version not in {"v0", "v1"}
-    )
+    correctness_only = args.correctness_only or (args.multi_seed > 0 and args.version not in {"v0", "v1"})
 
     workspace = Path(__file__).resolve().parent
     runtime_root = workspace / ATREX_BENCH_DIR

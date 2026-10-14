@@ -539,7 +539,6 @@ def spawn_owned_session(
     *,
     role: str,
     environment: Mapping[str, str] | None = None,
-    inherited_fds: tuple[int, ...] = (),
     finalize_handoff: bool = False,
     registered_callback: Callable[[subprocess.Popen[Any]], None] | None = None,
     **popen_options: Any,
@@ -554,11 +553,6 @@ def spawn_owned_session(
     argv = [os.fspath(item) for item in command]
     if not argv:
         raise ValueError("owned session command must not be empty")
-    for descriptor in inherited_fds:
-        if isinstance(descriptor, bool) or not isinstance(descriptor, int) or descriptor <= 2:
-            raise ValueError("inherited session descriptors must be open non-stdio FDs")
-        os.fstat(descriptor)
-    inherited_fds = tuple(dict.fromkeys(inherited_fds))
     values = _values(environment)
     handoff_id = values.get(HANDOFF_ID_ENV, "")
     if not handoff_id:
@@ -567,7 +561,6 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
-            pass_fds=inherited_fds,
             **popen_options,
         )
     if _HANDOFF_ID_PATTERN.fullmatch(handoff_id) is None:
@@ -586,7 +579,6 @@ def spawn_owned_session(
         str(start_read),
         "1" if finalize_handoff else "0",
         role,
-        ",".join(map(str, inherited_fds)),
         "--",
         *argv,
     ]
@@ -597,7 +589,7 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
-            pass_fds=(*handoff_fds, start_read, *inherited_fds),
+            pass_fds=(*handoff_fds, start_read),
             **popen_options,
         )
         _register_session_owner(process.pid, role, values)
@@ -917,21 +909,16 @@ def _cleanup_guardian_entry(argv: list[str]) -> int:
 
 
 def _owned_session_entry(argv: list[str]) -> int:
-    if len(argv) < 7 or argv[0] != "--owned-session" or argv[5] != "--":
+    if len(argv) < 6 or argv[0] != "--owned-session" or argv[4] != "--":
         print("invalid recovery owner invocation", file=sys.stderr, flush=True)
         return 125
     try:
         start_fd = int(argv[1])
-        inherited_fds = tuple(int(value) for value in argv[4].split(",") if value)
-        for descriptor in inherited_fds:
-            if descriptor <= 2 or descriptor == start_fd:
-                return 125
-            os.fstat(descriptor)
-    except (ValueError, OSError):
+    except ValueError:
         return 125
     finalize_handoff = argv[2] == "1"
     role = argv[3]
-    command = argv[6:]
+    command = argv[5:]
     if start_fd <= 2 or not command:
         return 125
     try:
@@ -1032,7 +1019,7 @@ def _owned_session_entry(argv: list[str]) -> int:
         child = subprocess.Popen(
             primary_command,
             close_fds=True,
-            pass_fds=(*recovery_pass_fds(), primary_read, *inherited_fds),
+            pass_fds=(*recovery_pass_fds(), primary_read),
         )
         _register_session_primary(child.pid, f"{role}-primary", os.getpid())
         state_dir = _root_state_dir()
@@ -1063,8 +1050,6 @@ def _owned_session_entry(argv: list[str]) -> int:
     finally:
         os.close(primary_read)
         os.close(primary_write)
-        for descriptor in inherited_fds:
-            os.close(descriptor)
 
     forwarded_signal = 0
     termination_deadline: float | None = None

@@ -1,0 +1,38 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "problem",
+      "name": "aka.legacy.task.problem.plugin",
+      "required": true
+    },
+    {
+      "id": "source",
+      "name": "aka.legacy.task.source.plugin",
+      "required": true
+    },
+    {
+      "id": "candidate",
+      "name": "aka.legacy.task.candidate_workspace.plugin",
+      "required": true
+    },
+    {
+      "id": "agent",
+      "name": "aka.legacy.agent.plugin",
+      "required": true
+    },
+    {
+      "id": "workflow",
+      "name": "aka.legacy.workflow.plugin",
+      "required": true
+    },
+    {
+      "id": "application",
+      "name": "aka.legacy.application.plugin",
+      "required": true,
+      "config": {
+        "repo_root": "${aka:repo_root}"
+      }
+    }
+  ]
+}

@@ -8,15 +8,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import agent_runtime as _agent_runtime
+from ._bootstrap import task_modules
+
+task_modules()
+from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE
+from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
-SOL_HARNESS = REPO_ROOT / "reference" / "test_kernel.py"
 PROFILE_DRIVER = REPO_ROOT / "reference" / "profile_driver.py"
-SANDBOX_TOOL = REPO_ROOT / "supervisor" / "gateway.py"
+SANDBOX_TOOL = REPO_ROOT / "tools" / "sandbox.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
 CONVERT_PERF_TOL = (
@@ -28,6 +32,8 @@ DEFAULT_CONVERT_AFTER = (
 SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
 SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
 DEFAULT_HANDOFF_RESUMES = 2
+DEFAULT_FAST_EPISODES = 2
+DEFAULT_FAST_TRIALS = 5
 DEFAULT_VERIFY_REPEATS = 2
 DEFAULT_VERIFY_RUN_TIMEOUT = 120
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
@@ -41,25 +47,7 @@ DEPENDENCY_REVIEW_SCHEMA_VERSION = 2
 DEPENDENCY_REVIEW_TIMEOUT_S = 600
 DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
 AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"
-MAX_PROBLEM_GENERATION_TIMEOUT_S = 1_800
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
-IMMUTABLE_BASELINE_PATHS = (
-    "test_kernel.py",
-    "config.json",
-    "reference.py",
-    "input.py",
-    "agent_problem.json",
-    "shapes.json",
-    "metadata.json",
-    "roofline.json",
-    "workload.jsonl",
-    "definition.json",
-    "valid.py",
-    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
-    # remove the ability to profile; it is ground truth like the evaluator harness.
-    "profile_driver.py",
-    "memory/v0.json",
-)
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
@@ -69,6 +57,3 @@ PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
 DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
 DEFAULT_SANDBOX_TIMEOUT = 600
 MAX_SANDBOX_TIMEOUT = 600
-
-
-STALL_STATE_FILE = ".orchestrator_state.json"

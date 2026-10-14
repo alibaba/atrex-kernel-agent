@@ -72,10 +72,6 @@ MAX_SOURCE_BYTES = 24 * 1024 * 1024
 MAX_PROFILE_COUNTERS = 256
 PROFILE_LEVELS = frozenset({"survey", "sol", "deep"})
 PROFILE_TOOLS = frozenset({"ncu", "rocprofv3"})
-INFRASTRUCTURE_REASONS = frozenset({
-    "scheduler_stopped", "scheduler_restarted", "execution_error", "invalid_eval_result",
-    "evaluator_failed", "invalid_diagnostic_result", "diagnostic_failed",
-})
 
 
 def _json_dumps(value: Any) -> str:
@@ -89,13 +85,8 @@ def _json_loads(value: str | None) -> Any:
 
 
 def _error(reason: str, message: str, trace_id: str | None = None, **details: Any) -> dict[str, Any]:
-    infrastructure = reason in INFRASTRUCTURE_REASONS
-    if infrastructure:
-        details = {**details, "failure_origin": "infrastructure"}
-    elif reason == "command_timeout":
-        details = {**details, "failure_origin": "unknown"}
     return {
-        "error_class": "infra" if infrastructure else "local_gateway",
+        "error_class": "local_gateway",
         "reason": reason,
         "message": message,
         "details": details,
@@ -1046,7 +1037,9 @@ class LocalScheduler:
                 # The active interpreter and its sibling tools must make that same
                 # toolchain the default for worker commands.  Invoking an
                 # interpreter by absolute path does not otherwise update PATH.
-                python_bin = str(Path(sys.executable).resolve().parent)
+                # A venv's Python commonly symlinks to the system binary.
+                # Resolving it discards the venv and its installed packages.
+                python_bin = str(Path(sys.executable).absolute().parent)
                 path_parts = [
                     part for part in env.get("PATH", "").split(os.pathsep)
                     if part and part != python_bin

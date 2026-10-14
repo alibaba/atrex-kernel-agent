@@ -1,10 +1,51 @@
 #!/usr/bin/env python3
-"""Run a kernel optimization Campaign with Supervisor-owned measurement and acceptance.
+"""Long-horizon episode orchestrator for atrex-kernel-agent.
 
-V0 is measured deterministically; an optional Framework Baseline supplies the first
-self-contained DSL implementation. Each subsequent Episode explores Directions and
-submits a Runtime Journal report. The Supervisor seals candidates, verifies them
-with recorded ABBA comparisons, and promotes only accepted improvements.
+Owns the OUTER optimization loop so termination no longer depends on the model's
+in-session judgment (the old Stage-6 "is README's Stop Conditions met?" self-call).
+
+Each optimization version is a long-horizon engineering episode in an isolated Git worktree.
+By default the first two post-baseline episodes use five fast plan/implement/evaluator
+trials per episode;
+later episodes use the full profile/research/repair loop. The supervisor squash-promotes only a
+strict, correctness-passing improvement, using canonical-memory comparison in fast mode and a
+same-allocation ABBA schedule in full mode.
+
+Termination policy
+------------------
+- Outer loop (this file):  HARD budget break = max versions/episodes OR token budget,
+  plus a mechanical target short-circuit (peak utilization >= --target-util on a
+  committed, correctness-PASS version). No convergence judge.
+- Inner loop (one episode): a persistent engineering direction with structured journal and
+  bounded handoff recovery, isolated from the incumbent branch.
+
+Episode reasoning stays in the self-contained prompt under ``prompts/``;
+this file only does mechanism: spawn, time-bound, token-account, read state, decide stop.
+
+SOL and Atrex-Bench operators run the same loop over their complete workload set.
+
+Usage
+-----
+    # single operator with an explicit framework:
+    python orchestrator/optimize.py \
+        --op-dir /path/to/operator \
+        --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
+        --agent-cli qodercli \
+        --max-iters 20 --token-budget 8000000 --target-util 90
+
+    # omit --framework to launch one independent campaign per supported framework:
+    #   NVIDIA -> Triton, CuteDSL, Cuda, TileLang
+    #   AMD    -> Triton, FlyDSL, TileLang
+    #   PPU    -> Triton, Cuda, TileLang
+    #   other  -> Triton, TileLang
+    python orchestrator/optimize.py \
+        --op-dir /path/to/op --platform H20 --workspace /path/to/runs
+
+    # production: exact framework, independently reviewed external dependencies:
+    python orchestrator/optimize.py \
+        --op-dir /path/to/op --platform H20 --framework Triton \
+        --optimization-mode production
+
 """
 
 from __future__ import annotations
@@ -33,21 +74,23 @@ if __name__ == "__main__":
     sys.modules["orchestrator.optimize"] = sys.modules[__name__]
     setattr(_orchestrator_package, "optimize", sys.modules[__name__])
 
+from orchestrator.process_launch import optimizer_entrypoint
+
 try:
     from . import agent_runtime as _agent_runtime
     from .campaign import Campaign
     from .constants import (
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
+        DEFAULT_FAST_EPISODES,
+        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
-        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
-        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from .environment_recovery import (
@@ -67,16 +110,8 @@ try:
         supported_frameworks,
     )
     from .trace_retention import write_trace_retention_manifest
-    from .operator_layout import (
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
-    )
     from .optimization_policy import OPTIMIZATION_MODE_CHOICES
+    from .plugins import PluginError, PluginRegistry
     from .session_io import check_ssh_environment, detect_arch, ensure_submodules
     from .ssh_health import runtime_health_command
     from .workspace_state import (
@@ -89,15 +124,15 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.constants import (  # type: ignore[no-redef]
         AGENT_CLI_CHOICES,
         DEFAULT_CONVERT_AFTER,
+        DEFAULT_FAST_EPISODES,
+        DEFAULT_FAST_TRIALS,
         DEFAULT_HANDOFF_RESUMES,
         DEFAULT_SANDBOX_TIMEOUT,
         DEFAULT_VERIFY_REPEATS,
         DEFAULT_VERIFY_RUN_TIMEOUT,
-        DEPENDENCY_REVIEW_TIMEOUT_S,
         FRAMEWORK_BASELINE_FILE,
         FRAMEWORK_BASELINE_MODES,
         FRAMEWORK_BASELINE_TIMEOUT_S,
-        MAX_PROBLEM_GENERATION_TIMEOUT_S,
         MAX_SANDBOX_TIMEOUT,
     )
     from orchestrator.environment_recovery import (  # type: ignore[no-redef]
@@ -119,18 +154,10 @@ except ImportError:  # direct script execution: python orchestrator/optimize.py
     from orchestrator.trace_retention import (  # type: ignore[no-redef]
         write_trace_retention_manifest,
     )
-    from orchestrator.operator_layout import (  # type: ignore[no-redef]
-        AGENT_PROBLEM_FILENAME,
-        find_atrex_bench_root,
-        has_agent_problem,
-        is_sol_op,
-        should_use_generalized_problem,
-        validate_agent_problem,
-        validate_private_shapes,
-    )
     from orchestrator.optimization_policy import (  # type: ignore[no-redef]
         OPTIMIZATION_MODE_CHOICES,
     )
+    from orchestrator.plugins import PluginError, PluginRegistry
     from orchestrator.session_io import (  # type: ignore[no-redef]
         check_ssh_environment,
         detect_arch,
@@ -263,7 +290,7 @@ def dispatch_framework_campaigns(
             )
             cmd = [
                 sys.executable,
-                str(Path(__file__).resolve()),
+                str(optimizer_entrypoint()),
                 *common_argv,
                 "--framework",
                 framework,
@@ -274,7 +301,13 @@ def dispatch_framework_campaigns(
             ]
             if arch:
                 cmd += ["--arch", arch]
+            from aka.legacy.application.processes import child_environment as launch_environment
             child_environment = os.environ.copy()
+            for name, value in launch_environment().items():
+                if value is None:
+                    child_environment.pop(name, None)
+                else:
+                    child_environment[name] = value
             child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
             proc = subprocess.Popen(
                 cmd,
@@ -333,62 +366,17 @@ def dispatch_framework_campaigns(
     return 0
 
 
-def _resolve_op(op_dir: str, optimization_mode: str = "leaderboard") -> dict:
-    """Derive everything op-specific from the atrex-bench native op dir, so the CLI needs only
-    --op-dir (+ the non-deducible --platform).
-    """
-    d = Path(op_dir).resolve()
-    if not d.is_dir():
-        raise SystemExit(f"--op-dir not found: {d}")
-    ref = d / "reference.py"
-    if not ref.is_file():
-        raise SystemExit(f"--op-dir has no reference.py: {d}")
-    atrex_bench_root = ""
-    provided_problem = has_agent_problem(d)
-    shapes_path = d / "shapes.json"
-    generalized = should_use_generalized_problem(d, optimization_mode)
-    if generalized and provided_problem:
-        if not shapes_path.is_file():
-            raise SystemExit(
-                "generalized Atrex-Bench operator requires private evaluator shapes.json: "
-                f"{d}"
-            )
-        try:
-            validate_agent_problem(
-                d / AGENT_PROBLEM_FILENAME,
-                private_shapes_path=shapes_path,
-            )
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-    if not is_sol_op(d) and shapes_path.is_file():
-        try:
-            validate_private_shapes(shapes_path)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        native_root = find_atrex_bench_root(d)
-        if native_root is None:
-            raise SystemExit(
-                "native Atrex-Bench operator requires its canonical scripts/run_eval.py and "
-                f"src/atrex_bench runtime in an ancestor directory: {d}"
-            )
-        atrex_bench_root = str(native_root)
-    return {
-        "name": d.name,
-        "reference": str(ref),
-        "op_dir": str(d),
-        "atrex_bench_root": atrex_bench_root,
-        "agent_problem": (
-            str(d / AGENT_PROBLEM_FILENAME) if generalized and provided_problem else ""
-        ),
-        "agent_problem_source": (
-            "provided"
-            if generalized and provided_problem
-            else ("auto" if generalized else "none")
-        ),
-    }
+def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
+    if (dependencies or {}).get("workflow") is None:
+        from aka.legacy.compat.assembly import default_workflow
 
-
-def _run_main(argv: Optional[list[str]] = None) -> int:
+        workflow = default_workflow(task=dependencies)
+        try:
+            return _run_main(
+                argv, dependencies={**(dependencies or {}), "workflow": workflow}
+            )
+        finally:
+            workflow.close()
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
@@ -409,12 +397,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Target hardware, e.g. B200 / H20 / MI308X "
         "(cannot be deduced from the op dir).",
     )
-    ap.add_argument("--agent-sandbox", choices=("none", "bwrap"),
-                    default=os.environ.get("ATREX_AGENT_SANDBOX", "none"),
-                    help="Coordinator-side Agent isolation; none (default) uses native macOS/Linux execution without filesystem isolation. Opt in to bwrap on Linux; isolation failures never silently fall back.")
-    ap.add_argument("--bwrap-executable", default=os.environ.get("ATREX_BWRAP_EXECUTABLE", "bwrap"))
-    ap.add_argument("--agent-read-only-path", action="append", default=None, metavar="PATH",
-                    help="Explicit extra read-only host path granted at the same path inside the Agent sandbox (repeatable).")
     ap.add_argument(
         "--sandbox-hardware",
         default="",
@@ -500,18 +482,26 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Coding CLI used for optimization episodes: claude, qodercli, codex, or pi "
         "(default: claude).",
     )
+    ap.add_argument(
+        "--long-reviewer-session",
+        choices=("codex", "qoder", "claude"),
+        default="",
+        metavar="REVIEWER",
+        help="Reuse one reviewer session across episodes (implemented for codex and qoder).",
+    )
     for stage, stage_label in (
         ("v1", "V1 framework-baseline"),
+        ("fast-episode", "fast episodes"),
+        ("full-episode", "full episodes"),
     ):
-        default_enabled = False
         for reviewer in ("codex", "qoder"):
             ap.add_argument(
                 f"--{stage}-ask-{reviewer}",
                 action=argparse.BooleanOptionalAction,
-                default=default_enabled,
+                default=False,
                 help=(
                     f"Configure ask-{reviewer} for {stage_label} "
-                    f"(default: {'on' if default_enabled else 'off'})."
+                    "(default: off)."
                 ),
             )
     ap.add_argument(
@@ -541,6 +531,24 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Hard cap on canonical optimization versions/episodes.",
     )
     ap.add_argument(
+        "--fast-episodes",
+        type=int,
+        default=DEFAULT_FAST_EPISODES,
+        help=(
+            "Use the lightweight fast path for the first N optimization episodes after "
+            "baseline (default: 2; 0 disables)."
+        ),
+    )
+    ap.add_argument(
+        "--fast-trials",
+        type=int,
+        default=DEFAULT_FAST_TRIALS,
+        help=(
+            "Number of reviewed plan->implement->evaluator trials in each fast episode "
+            "(default: 5)."
+        ),
+    )
+    ap.add_argument(
         "--token-budget",
         type=int,
         default=0,
@@ -553,14 +561,17 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         help="Peak-utilization %% short-circuit (default stop condition).",
     )
     ap.add_argument(
-        "--problem-generation-timeout", type=int, default=MAX_PROBLEM_GENERATION_TIMEOUT_S,
-        help=f"Public contract authoring timeout per attempt (s; default and hard cap: {MAX_PROBLEM_GENERATION_TIMEOUT_S}).",
+        "--setup-timeout", type=int, default=7200, help="Baseline session timeout (s)."
     )
     ap.add_argument(
         "--handoff-resumes",
         type=int,
         default=DEFAULT_HANDOFF_RESUMES,
         help="Same-session recovery turns after an incomplete episode handoff (default: 2).",
+    )
+    ap.add_argument(
+        "--production-review-timeout", type=int, default=600,
+        help="Independent production dependency review timeout in seconds (default: 600).",
     )
     ap.add_argument(
         "--verify-repeats",
@@ -602,8 +613,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "--max-stall",
         type=int,
         default=0,
-        help="Stop after N non-promotions (0 = disabled). After 50 completed Episodes, "
-        "more than 3 stalls enable goal strategy, which takes precedence over this stop.",
+        help="Optional: stop after N consecutive unpromoted episodes (0 = disabled). "
+        "After 50 completed episodes, more than 3 stalls instead enable goal mode; "
+        "goal mode takes precedence over this stop condition.",
     )
     ap.add_argument(
         "--convert-after",
@@ -628,29 +640,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         "directory. Default: current working directory.",
     )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
-    ap.add_argument("--production-review-timeout", type=int, default=DEPENDENCY_REVIEW_TIMEOUT_S,
-                    help="Independent production reviewer timeout in seconds (default: %(default)s)")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
-    from orchestrator.agent_sandbox import sandbox_executable
-    from orchestrator.plugins import PluginRegistry, PluginError
-
     try:
-        sandbox_executable({"ATREX_AGENT_SANDBOX": args.agent_sandbox,
-                            "ATREX_BWRAP_EXECUTABLE": args.bwrap_executable,
-                            "PATH": os.environ.get("PATH", "")})
-        args.agent_read_only_path = [str(Path(path).expanduser().resolve(strict=True))
-                                     for path in (args.agent_read_only_path or [])]
-        PluginRegistry()  # Fail before workspace/V0 side effects on malformed manifests.
-    except (RuntimeError, ValueError, OSError, PluginError) as error:
-        ap.error(str(error))
-    if args.agent_sandbox == "none":
-        print(
-            "[orchestrator] WARNING: native Agent execution is same-UID cooperative mode. "
-            "Private measurement records and promotion evidence are not protected from a "
-            "deliberately adversarial Agent; use --agent-sandbox bwrap on Linux for isolation.",
-            file=sys.stderr, flush=True,
-        )
+        PluginRegistry()
+    except PluginError as exc:
+        ap.error(str(exc))
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
         args.workspace_suffix
     ):
@@ -662,10 +657,12 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             "--sandbox-timeout must be in the gateway-supported range "
             f"1..{MAX_SANDBOX_TIMEOUT}"
         )
-    if args.problem_generation_timeout <= 0:
-        ap.error("--problem-generation-timeout must be positive")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
+    if args.fast_episodes < 0:
+        ap.error("--fast-episodes must be non-negative")
+    if args.fast_trials <= 0:
+        ap.error("--fast-trials must be positive")
     if args.handoff_resumes < 0:
         ap.error("--handoff-resumes must be non-negative")
     if args.verify_repeats <= 0:
@@ -780,127 +777,64 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         args.workspace = str(Path(args.workspace).expanduser().resolve())
         Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    op = _resolve_op(args.op_dir, args.optimization_mode)
-    if args.sandbox_ssh:
-        workspace_base = Path(args.workspace) if args.workspace else Path.cwd()
-        configure_recovery(
-            workspace_base=workspace_base,
-            raw_argv=raw_argv,
-            optimize_script=Path(__file__),
-            sandbox_hardware=sandbox_hardware,
-            ssh_target=args.sandbox_ssh,
-            ssh_init=args.sandbox_ssh_init,
-            ssh_runtime_binds=args.sandbox_ssh_runtime_bind,
-            ssh_gpu=args.sandbox_ssh_gpu,
-            health_command=args.sandbox_health_command,
-            poll_interval=args.environment_poll_interval,
-            runtime_health_command=runtime_health_command(
-                sol=is_sol_op(Path(op["op_dir"])), framework=args.framework
-            ),
-        )
-        raise_if_environment_blocked()
-        check_ssh_environment(
-            workspace_base, sandbox_hardware, args.sandbox_ssh,
-            args.sandbox_ssh_init, args.sandbox_health_command,
-        )
+    from aka.legacy.compat.problem import problem_request
+    from aka.legacy.compat.startup import startup_preparation, FrameworkDispatchComplete
 
-    arch = args.arch or detect_arch(
-        sandbox_hardware,
-        args.sandbox_profile,
-        args.sandbox_url,
-        args.sandbox_ssh,
-        args.sandbox_ssh_init,
-        args.sandbox_health_command,
+    factory = dependencies["workflow"]
+    source = problem_request(
+        args.op_dir, args.optimization_mode, workspace=args.workspace,
+        suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
     )
-    if not arch and args.framework:
-        suffix = args.workspace_suffix or framework_workspace_suffix(
-            args.framework, args.platform, args.optimization_mode
-        )
-        base = Path(args.workspace) if args.workspace else Path.cwd()
-        arch = _recorded_workspace_arch(base / f"kernel_opt_{op['name']}_{suffix}")
-        if arch:
-            print(
-                f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
-                file=sys.stderr,
-                flush=True,
+    from aka.legacy.compat.workflow import create_campaign as adapt_campaign
+    create_campaign = lambda **options: adapt_campaign(factory, **options)
+    with startup_preparation(sys.modules[__name__], args, raw_argv) as startup:
+        try:
+            campaign = create_campaign(
+                task_dependencies=dependencies,
+                problem=source,
+                name=source.directory.name,
+                platform=args.platform,
+                framework=args.framework,
+                notes=args.notes,
+                arch=args.arch,
+                sandbox_hardware=sandbox_hardware,
+                sandbox_profile=args.sandbox_profile,
+                sandbox_url=args.sandbox_url,
+                sandbox_ssh=args.sandbox_ssh,
+                sandbox_ssh_init=args.sandbox_ssh_init,
+                sandbox_ssh_gpu=args.sandbox_ssh_gpu,
+                sandbox_health_command=args.sandbox_health_command,
+                sandbox_timeout=args.sandbox_timeout,
+                agent_cli=args.agent_cli,
+                optimization_mode=args.optimization_mode,
+                work_dir=args.workspace,
+                workspace_suffix=args.workspace_suffix,
+                max_iters=args.max_iters,
+                fast_episodes=args.fast_episodes,
+                fast_trials=args.fast_trials,
+                token_budget=args.token_budget,
+                target_util=args.target_util,
+                setup_timeout=args.setup_timeout,
+                max_stall=args.max_stall,
+                framework_baseline=args.framework_baseline,
+                framework_baseline_timeout=args.framework_baseline_timeout,
+                handoff_resumes=args.handoff_resumes,
+                production_review_timeout=args.production_review_timeout,
+                verify_repeats=args.verify_repeats,
+                verify_run_timeout=args.verify_run_timeout,
+                min_improvement_pct=args.min_improvement_pct,
+                long_reviewer_session=args.long_reviewer_session,
+                v1_ask_codex=args.v1_ask_codex,
+                v1_ask_qoder=args.v1_ask_qoder,
+                fast_episode_ask_codex=args.fast_episode_ask_codex,
+                fast_episode_ask_qoder=args.fast_episode_ask_qoder,
+                full_episode_ask_codex=args.full_episode_ask_codex,
+                full_episode_ask_qoder=args.full_episode_ask_qoder,
+                convert_after=args.convert_after,
             )
-    ensure_submodules(args.platform, arch or "")
-    frameworks = (
-        (args.framework,)
-        if args.framework
-        else supported_frameworks(args.platform, arch)
-    )
-    print(
-        f"[orchestrator] op={op['name']} agent_cli={args.agent_cli} "
-        f"optimization_mode={args.optimization_mode} platform={args.platform} "
-        f"agent_problem={op.get('agent_problem_source', 'none')} "
-        f"sandbox_hardware={sandbox_hardware} "
-        "sandbox_endpoint="
-        f"{args.sandbox_ssh or args.sandbox_url or args.sandbox_profile or 'agate-config'} "
-        f"frameworks={','.join(frameworks)} "
-        "reviewers="
-        f"v1[codex={'on' if args.v1_ask_codex else 'off'},"
-        f"qoder={'on' if args.v1_ask_qoder else 'off'}],"
-        "runtime_arch="
-        f"{arch or 'UNKNOWN (detect failed)'} "
-        f"(device name / vendor-smi may be desensitized; trusting the runtime API)",
-        flush=True,
-    )
-
-    if not args.framework:
-        base = Path(args.workspace).resolve() if args.workspace else Path.cwd()
-        return dispatch_framework_campaigns(
-            raw_argv,
-            frameworks,
-            base,
-            arch,
-            args.platform,
-            args.optimization_mode,
-        )
-
-    workspace_suffix = args.workspace_suffix or framework_workspace_suffix(
-        args.framework, args.platform, args.optimization_mode
-    )
-
-    campaign = Campaign(
-        name=op["name"],
-        kernel_demo=op["reference"],
-        platform=args.platform,
-        framework=args.framework,
-        notes=args.notes,
-        arch=arch,
-        sandbox_hardware=sandbox_hardware,
-        sandbox_profile=args.sandbox_profile,
-        sandbox_url=args.sandbox_url,
-        sandbox_ssh=args.sandbox_ssh,
-        sandbox_ssh_init=args.sandbox_ssh_init,
-        sandbox_ssh_gpu=args.sandbox_ssh_gpu,
-        sandbox_health_command=args.sandbox_health_command,
-        sandbox_timeout=args.sandbox_timeout,
-        atrex_bench_root=op.get("atrex_bench_root", ""),
-        agent_cli=args.agent_cli,
-        agent_sandbox=args.agent_sandbox,
-        bwrap_executable=args.bwrap_executable,
-        agent_read_only_paths=tuple(args.agent_read_only_path),
-        optimization_mode=args.optimization_mode,
-        work_dir=args.workspace,
-        workspace_suffix=workspace_suffix,
-        max_iters=args.max_iters,
-        token_budget=args.token_budget,
-        target_util=args.target_util,
-        problem_generation_timeout=args.problem_generation_timeout,
-        max_stall=args.max_stall,
-        framework_baseline=args.framework_baseline,
-        framework_baseline_timeout=args.framework_baseline_timeout,
-        handoff_resumes=args.handoff_resumes,
-        production_review_timeout=args.production_review_timeout,
-        verify_repeats=args.verify_repeats,
-        verify_run_timeout=args.verify_run_timeout,
-        min_improvement_pct=args.min_improvement_pct,
-        v1_ask_codex=args.v1_ask_codex,
-        v1_ask_qoder=args.v1_ask_qoder,
-        convert_after=args.convert_after,
-    )
+        except FrameworkDispatchComplete as completed:
+            return completed.exit_code
+        arch = startup.arch
     trace_status = "failed"
     handled_signals = (signal.SIGTERM, signal.SIGHUP)
     previous_handlers = {
@@ -916,27 +850,8 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
     for handled_signal in handled_signals:
         signal.signal(handled_signal, interrupt_campaign)
     try:
-        if latest_version(campaign.workspace) < 0:
-            campaign.setup_baseline()
-        else:
-            print(
-                f"[orchestrator] resuming workspace at v{latest_version(campaign.workspace)}",
-                flush=True,
-            )
-            campaign._link_runtime()
-        baseline_coverage_problem = campaign._generalized_memory_coverage_problem(
-            read_memory(campaign.workspace, 0)
-        )
-        if baseline_coverage_problem:
-            raise RuntimeError(
-                "generalized campaign baseline is incompatible with authoritative per-shape "
-                f"memory: {baseline_coverage_problem}; start a fresh workspace"
-            )
-        if args.sandbox_ssh:
-            # A recovery monitor may declare success only after operator resolution,
-            # architecture/submodule setup, campaign construction, and workspace resume.
-            signal_restart_ready()
-        campaign.ensure_framework_baseline()
+        # Workflow completes setup before the host advertises recovery readiness.
+        campaign.prepare(recovery_ready=signal_restart_ready if args.sandbox_ssh else None)
         campaign.run()
         trace_status = "completed"
         return 0
@@ -944,7 +859,6 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
         trace_status = "interrupted"
         raise
     finally:
-        campaign.close_runtime()
         write_trace_retention_manifest(
             campaign.workspace,
             trace_status,
@@ -958,9 +872,9 @@ def _run_main(argv: Optional[list[str]] = None) -> int:
             signal.signal(handled_signal, previous_handler)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     try:
-        result = _run_main(argv)
+        result = _run_main(argv, dependencies=dependencies)
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
@@ -980,6 +894,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         return ENVIRONMENT_TEMPFAIL
     return result
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    from orchestrator._bootstrap import run
+
+    return run(argv)
 
 
 if __name__ == "__main__":

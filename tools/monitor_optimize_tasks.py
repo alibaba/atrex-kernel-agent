@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -64,6 +65,11 @@ class RecoveryCleanupUnverified(RuntimeError):
 
 
 def _load_restart(state_dir: Path) -> dict[str, Any]:
+    source = _REPO_ROOT / "src"
+    if (source / "aka/legacy/application/recovery.py").is_file() and str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    from aka.legacy.application.recovery import complete_migration, has_selection
+    complete_migration(state_dir, owner=True)
     path = state_dir / "restart.json"
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -103,6 +109,26 @@ def _load_restart(state_dir: Path) -> dict[str, Any]:
         or not 0 <= ssh_gpu <= 31
     ):
         raise RuntimeError("restart metadata has invalid ssh_gpu")
+    launch = value.get("launch_environment")
+    selection_path = state_dir / "launch-selection.json"
+    if (value.get("schema_version") == 3 and "launch_environment" not in value
+            and has_selection(selection_path)):
+        raise RuntimeError("schema 3 recovery has an unreferenced launch selection")
+    if "launch_environment" in value and launch is None:
+        raise RuntimeError("restart metadata has invalid launch_environment")
+    if value.get("schema_version") == 4 and launch is None:
+        raise RuntimeError("restart metadata lacks launch selection")
+    if launch is not None:
+        if (not isinstance(launch, dict) or not {"AKA_LAUNCH_SELECTION", "AKA_LAUNCH_DIGEST"} <= set(launch)
+                or any(not isinstance(key, str) or (item is not None and not isinstance(item, str)) for key, item in launch.items())
+                or not launch["AKA_LAUNCH_SELECTION"] or not launch["AKA_LAUNCH_DIGEST"]):
+            raise RuntimeError("restart metadata has invalid launch_environment")
+        try:
+            payload = Path(launch["AKA_LAUNCH_SELECTION"]).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(f"restart launch selection is unavailable: {exc}") from exc
+        if hashlib.sha256(payload.encode()).hexdigest() != launch["AKA_LAUNCH_DIGEST"]:
+            raise RuntimeError("restart launch selection digest mismatch")
     return value
 
 
@@ -790,6 +816,16 @@ def _restart(metadata: dict[str, Any], state_dir: Path) -> int:
     started_at = time.time()
 
     environment = os.environ.copy()
+    # A fresh monitor must use the durable selection, never unrelated ambient
+    # launcher variables. Selection-free schema 3 resolves the built-in legacy
+    # default, which only the validated owner may persist as schema 4.
+    environment.pop("AKA_LAUNCH_SELECTION", None)
+    environment.pop("AKA_LAUNCH_DIGEST", None)
+    for name, value in metadata.get("launch_environment", {}).items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
     environment["ATREX_ENVIRONMENT_STATE_FILE"] = metadata[
         "environment_state_file"
     ]

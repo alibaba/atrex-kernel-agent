@@ -18,6 +18,10 @@ __pycache__/
 # Local and temporary test scripts
 tests/
 
+# Distribution build artifacts
+build/
+dist/
+
 # Optional local AMD ATT decoder checkout
 tools/rocprof-trace-decoder/
 

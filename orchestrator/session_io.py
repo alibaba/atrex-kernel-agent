@@ -86,15 +86,18 @@ def _render(template_path: Path, **kw: str) -> str:
 def ensure_submodules(platform: str = "", arch: str = "") -> None:
     """Initialize submodules required by the optimization pipeline.
 
-    The historical ncu-report-skill submodule is optional: profiling helpers
-    used by Campaigns are vendored under tools/ncu_helpers/. KernelWiki's
-    Agent-facing skill and the GPU Wiki JSON stores are repository-native.
+    Covers 3rdparty/ncu-report-skill. Optional plugin skills are installed when available.
     PPU campaigns also require their vendor reference projects: without those
     working trees the framework-baseline catalog silently contains no usable
     PPU implementation sources.
     Idempotent: already-initialized submodules are untouched.
     """
-    needed = []
+    needed = [
+        (
+            "3rdparty/ncu-report-skill",
+            REPO_ROOT / "3rdparty" / "ncu-report-skill" / "SKILL.md",
+        ),
+    ]
     if hardware_vendor(platform, arch) == "ppu":
         needed.extend(
             (path, REPO_ROOT / path / "README.md")
@@ -154,39 +157,45 @@ def run_session(
     sandbox_ssh: str = "",
     sandbox_ssh_init: str = "",
     sandbox_health_command: str = "",
+    runtime: _agent_runtime.AgentRuntime | None = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
     # workspace-local skill rather than a process-level plugin.
     del agent_plugins
     session_id = str(uuid.uuid4())
-    runtime = _agent_runtime.build_agent_runtime(
-        agent_cli,
-        process_runner=_agent_runtime.run_bounded,
-    )
+    if runtime is None:
+        runtime = _agent_runtime.build_agent_runtime(
+            agent_cli,
+            process_runner=_agent_runtime.run_bounded,
+        )
+    from aka.legacy.compat.agent import invocation_request, AgentRunRequest
+
     result = runtime.run(
-        _agent_runtime.AgentRunRequest(
-            workspace=workspace,
-            prompt=prompt,
-            timeout_s=timeout,
-            reasoning_effort=reasoning_effort,
-            sandbox_hardware=sandbox_hardware,
-            sandbox_profile=sandbox_profile,
-            sandbox_url=sandbox_url,
-            sandbox_ssh=sandbox_ssh,
-            sandbox_ssh_init=sandbox_ssh_init,
-            sandbox_health_command=sandbox_health_command,
-            sandbox_timeout_s=sandbox_timeout,
-            environment_state_file=str(environment_state_file() or ""),
-            session_id=session_id,
-            extra_environment=extra_environment,
+        invocation_request(
+            AgentRunRequest(
+                workspace=workspace,
+                prompt=prompt,
+                timeout_s=timeout,
+                reasoning_effort=reasoning_effort,
+                sandbox_hardware=sandbox_hardware,
+                sandbox_profile=sandbox_profile,
+                sandbox_url=sandbox_url,
+                sandbox_ssh=sandbox_ssh,
+                sandbox_ssh_init=sandbox_ssh_init,
+                sandbox_health_command=sandbox_health_command,
+                sandbox_timeout_s=sandbox_timeout,
+                environment_state_file=str(environment_state_file() or ""),
+                session_id=session_id,
+                extra_environment=extra_environment,
+            )
         )
     )
     raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,
         timed_out=result.timed_out,
-        tokens=result.tokens,
+        tokens=result.terminal_usage.total_tokens or 0,
         stdout_tail=result.stdout_tail,
         stderr_tail=result.stderr_tail,
         session_id=result.session_id,
@@ -429,7 +438,7 @@ def sandbox_directive(
     url: str = "",
     ssh: str = "",
 ) -> str:
-    """Execution boundary and GPU measurement guidance for optimization Episodes."""
+    """Mandatory safety boundary plus full-mode workflow for full episodes."""
     endpoint = _sandbox_endpoint(profile, url, ssh)
     safety = _render(
         SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
@@ -440,10 +449,20 @@ def sandbox_directive(
     return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
 
 
-def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", ssh: str = "") -> str:
-    """Execution boundary without optimization guidance, for baseline sessions."""
-    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware,
-                   ENDPOINT=_sandbox_endpoint(profile, url, ssh))
+def fast_sandbox_directive(
+    hardware: str,
+    profile: str = "",
+    url: str = "",
+    ssh: str = "",
+) -> str:
+    """Mandatory safety boundary for fast episodes.
+
+    The fast episode prompt already describes the fast-specific execution
+    contract (single evaluator, no multi-seed, no profile, supervisor-owned
+    memory), so only the invariant safety boundary is injected here.
+    """
+    endpoint = _sandbox_endpoint(profile, url, ssh)
+    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
 
 
 def _sandbox_command(
@@ -462,10 +481,13 @@ def _sandbox_command(
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
     preflight: bool = False,
+    cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the private GPU executor for trusted Supervisor verification."""
+    """Run one command through tools/sandbox.py and capture its user-visible output."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
-        raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
+        raise ValueError(
+            "ssh, url, and profile sandbox endpoints are mutually exclusive"
+        )
     cmd = [
         sys.executable,
         str(SANDBOX_TOOL),
@@ -506,7 +528,9 @@ def _sandbox_command(
     if wall_timeout is not None:
         effective_timeout = wall_timeout
     else:
-        uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
+        uses_ssh = bool(
+            ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH"))
+        )
         grace = 0 if uses_ssh else queue_wait_grace(environment)
         effective_timeout = timeout + grace + 240
     raise_if_environment_blocked()
@@ -527,7 +551,7 @@ def _sandbox_command(
             except ProcessLookupError:
                 pass
         try:
-            # The private executor handles SIGTERM with bounded SSH cleanup;
+            # tools/sandbox.py handles SIGTERM by running its bounded SSH cleanup;
             # allow that 15-second cleanup window to persist a retry marker.
             return process.communicate(timeout=20)
         except subprocess.TimeoutExpired:
@@ -540,6 +564,8 @@ def _sandbox_command(
     deadline = time.monotonic() + effective_timeout
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise subprocess.SubprocessError("sandbox command cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 stdout, stderr = stop_process_group()
@@ -581,8 +607,16 @@ def check_ssh_environment(
 ) -> None:
     """Fail into durable recovery before seeding, even when --arch was given."""
     result = _sandbox_command(
-        workspace, hardware, "", "", 60, [], ssh=ssh, ssh_init=ssh_init,
-        health_command=health_command, preflight=True,
+        workspace,
+        hardware,
+        "",
+        "",
+        60,
+        [],
+        ssh=ssh,
+        ssh_init=ssh_init,
+        health_command=health_command,
+        preflight=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"SSH preflight failed: {result.stderr or result.stdout}")
