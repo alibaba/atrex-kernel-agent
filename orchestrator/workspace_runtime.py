@@ -98,12 +98,12 @@ def link_runtime(
     is_ppu: bool = False,
     plugin_registry: PluginRegistry | None = None,
     provider=None,
-) -> None:
+):
     from ._bootstrap import task_modules
     task_modules()
     from aka.legacy.application.workspace import candidate_workspace
     with candidate_workspace(provider=provider) as provider:
-        provider.install_runtime(workspace, atrex_bench_root,
+        return provider.install_runtime(workspace, atrex_bench_root,
                                  is_ppu=is_ppu,
                                  plugin_registry=plugin_registry or PluginRegistry(),
                                  repo_root=REPO_ROOT, stall_state_file=STALL_STATE_FILE)

@@ -30,11 +30,16 @@ def owned(distribution: str) -> tuple[Path, ...]:
         files.extend([path] if path.is_file() else
                      sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in suffixes))
     if distribution == 'atrex-aka-legacy':
-        # Execution owns this runtime Skill and its reference files. Installation
-        # into an optimization Agent's workspace is handled by the application.
-        skills = ROOT / 'src' / 'aka' / 'legacy' / 'execution' / 'skills'
-        files.extend(sorted(p for p in skills.rglob('*.md') if p.is_file()))
-    return tuple(files)
+        # Include each module's entire Skill tree, including nested/binary
+        # attachments. Generated caches are not runtime resources.
+        for skills in (ROOT / 'src' / 'aka' / 'legacy').rglob('skills'):
+            if not skills.is_dir():
+                continue
+            files.extend(sorted(p for p in skills.rglob('*') if p.is_file()
+                and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
+                and p.suffix not in {'.pyc', '.pyo'}))
+    return tuple(dict.fromkeys(files))
+
 
 
 def build(distribution: str, output: Path) -> None:

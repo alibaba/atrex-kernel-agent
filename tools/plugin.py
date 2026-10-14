@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         registry = PluginRegistry()
         registry.check_lock(workspace)
         if args.command == "list":
-            result = {"tools": registry.catalog(), "skills": registry.skill_catalog()}
+            from aka.legacy.agent.resources import discover_resources
+            result = discover_resources(registry.resource_result(workspace))
         else:
             request = (
                 decode_json(sys.stdin.read())

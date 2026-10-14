@@ -56,4 +56,4 @@ class GitCandidateWorkspace(GitSnapshots):
 
     def install_runtime(self, workspace, atrex_bench_root=None, **options):
         from .runtime import link_runtime
-        link_runtime(workspace, atrex_bench_root, **options)
+        return link_runtime(workspace, atrex_bench_root, **options)
