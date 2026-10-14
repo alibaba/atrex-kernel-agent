@@ -158,39 +158,45 @@ def run_session(
     sandbox_ssh: str = "",
     sandbox_ssh_init: str = "",
     sandbox_health_command: str = "",
+    runtime: _agent_runtime.AgentRuntime | None = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
     # workspace-local skill rather than a process-level plugin.
     del agent_plugins
     session_id = str(uuid.uuid4())
-    runtime = _agent_runtime.build_agent_runtime(
-        agent_cli,
-        process_runner=_agent_runtime.run_bounded,
-    )
+    if runtime is None:
+        runtime = _agent_runtime.build_agent_runtime(
+            agent_cli,
+            process_runner=_agent_runtime.run_bounded,
+        )
+    from aka.legacy.compat.agent import invocation_request, AgentRunRequest
+
     result = runtime.run(
-        _agent_runtime.AgentRunRequest(
-            workspace=workspace,
-            prompt=prompt,
-            timeout_s=timeout,
-            reasoning_effort=reasoning_effort,
-            sandbox_hardware=sandbox_hardware,
-            sandbox_profile=sandbox_profile,
-            sandbox_url=sandbox_url,
-            sandbox_ssh=sandbox_ssh,
-            sandbox_ssh_init=sandbox_ssh_init,
-            sandbox_health_command=sandbox_health_command,
-            sandbox_timeout_s=sandbox_timeout,
-            environment_state_file=str(environment_state_file() or ""),
-            session_id=session_id,
-            extra_environment=extra_environment,
+        invocation_request(
+            AgentRunRequest(
+                workspace=workspace,
+                prompt=prompt,
+                timeout_s=timeout,
+                reasoning_effort=reasoning_effort,
+                sandbox_hardware=sandbox_hardware,
+                sandbox_profile=sandbox_profile,
+                sandbox_url=sandbox_url,
+                sandbox_ssh=sandbox_ssh,
+                sandbox_ssh_init=sandbox_ssh_init,
+                sandbox_health_command=sandbox_health_command,
+                sandbox_timeout_s=sandbox_timeout,
+                environment_state_file=str(environment_state_file() or ""),
+                session_id=session_id,
+                extra_environment=extra_environment,
+            )
         )
     )
     raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,
         timed_out=result.timed_out,
-        tokens=result.tokens,
+        tokens=result.terminal_usage.total_tokens or 0,
         stdout_tail=result.stdout_tail,
         stderr_tail=result.stderr_tail,
         session_id=result.session_id,
@@ -457,9 +463,7 @@ def fast_sandbox_directive(
     memory), so only the invariant safety boundary is injected here.
     """
     endpoint = _sandbox_endpoint(profile, url, ssh)
-    return _render(
-        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
+    return _render(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
 
 
 def _sandbox_command(
@@ -514,8 +518,16 @@ def check_ssh_environment(
 ) -> None:
     """Fail into durable recovery before seeding, even when --arch was given."""
     result = _sandbox_command(
-        workspace, hardware, "", "", 60, [], ssh=ssh, ssh_init=ssh_init,
-        health_command=health_command, preflight=True,
+        workspace,
+        hardware,
+        "",
+        "",
+        60,
+        [],
+        ssh=ssh,
+        ssh_init=ssh_init,
+        health_command=health_command,
+        preflight=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"SSH preflight failed: {result.stderr or result.stdout}")

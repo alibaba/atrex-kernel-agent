@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("provide a command after -- or use --preflight")
     for name, module in tuple(sys.modules.items()):
         if name == "orchestrator" or name.startswith("orchestrator."):
+            # Historical orchestrator entries can alias installed legacy modules.
+            # Those implementations belong to the wheel, while real checkout
+            # modules still have to come from the requested repository.
+            if getattr(module, "__name__", "").startswith("aka.legacy."):
+                continue
             location = getattr(module, "__file__", None)
             if location is not None and not Path(location).resolve().is_relative_to(root):
                 parser.error("a different AKA checkout is already loaded")

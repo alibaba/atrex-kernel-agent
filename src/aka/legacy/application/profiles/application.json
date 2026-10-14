@@ -3,14 +3,18 @@
   "token_definitions": {
     "problem": "aka.legacy.task.problem.plugin:PROBLEM",
     "source": "aka.legacy.task.source.plugin:SOURCE",
-    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
+    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
+    "agent": "aka.legacy.agent.plugin:AGENT",
+    "workflow": "aka.legacy.workflow.plugin:WORKFLOW"
   },
   "composition": "application",
   "target": "startup",
   "required_services": [
     "problem",
     "source",
-    "candidate"
+    "candidate",
+    "agent",
+    "workflow"
   ],
   "resources": [
     {
@@ -75,6 +79,8 @@
   "tokens": [
     "problem",
     "source",
-    "candidate"
+    "candidate",
+    "agent",
+    "workflow"
   ]
 }
