@@ -10,7 +10,8 @@ def default_workflow(
     optimization_mode="leaderboard",
     evaluator_factory=None,
     baseline_evaluation=None,
-    episode_evaluation=None
+    episode_evaluation=None,
+    acceptance_policy=None,
 ):
     from aka.legacy.agent.selection import LegacyAgent
     from aka.legacy.task.problem.legacy import LegacyProblemProvider
@@ -41,6 +42,7 @@ def default_workflow(
             c,
             evaluator_factory=evaluator_factory,
             episode_evaluation=episode_evaluation,
+            acceptance_policy=acceptance_policy,
         ),
         lambda c: execution_adapter(c.evaluation.context),
         prepare_request=prepare_request,
@@ -67,13 +69,17 @@ def execution_adapter(context):
     return CampaignExecution(context)
 
 
-def run_campaign(campaign, *, evaluator_factory=None, episode_evaluation=None):
+def run_campaign(
+    campaign, *, evaluator_factory=None, episode_evaluation=None, acceptance_policy=None
+):
     from aka.legacy.workflow.episode import LongHorizonCampaign
     from aka.legacy.workflow.session import LongSessionRunner
     from aka.legacy.workflow.store import CampaignStore
     from long_horizon.verifier import GatewayABBAValidator
-    from long_horizon.legacy_evaluation.episode import LegacyEpisodeEvaluation
     from .session import legacy_budget_tokens
+
+    from aka.legacy.acceptance import LegacyAcceptancePolicy
+    from .evaluation import episode_adapter
 
     context = campaign.evaluation.context
     CampaignStore.ensure_excluded(campaign.workspace)
@@ -101,6 +107,11 @@ def run_campaign(campaign, *, evaluator_factory=None, episode_evaluation=None):
             usage_policy=lambda turn: legacy_budget_tokens(turn, campaign.agent_cli),
         ),
         evaluation=None,
+        acceptance=(
+            acceptance_policy
+            if acceptance_policy is not None
+            else LegacyAcceptancePolicy()
+        ),
         environment=CampaignEnvironment(context),
         max_version=campaign.max_iters,
         fast_episodes=campaign.fast_episodes,
@@ -109,8 +120,8 @@ def run_campaign(campaign, *, evaluator_factory=None, episode_evaluation=None):
         handoff_resumes=campaign.handoff_resumes,
         max_stall=campaign.max_stall,
     )
-    engine.evaluation = bind_evaluation(
-        episode_evaluation or LegacyEpisodeEvaluation(),
+    engine.evaluation = episode_adapter(
+        episode_evaluation,
         engine,
         settings=context.settings,
         base=context,

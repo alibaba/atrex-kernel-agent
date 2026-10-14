@@ -16,6 +16,7 @@ class LongHorizonCampaign(EpisodeCampaign):
         verifier=None,
         session_runner=None,
         evaluation=None,
+        acceptance_policy=None,
         **options
     ):
         from long_horizon.verifier import GatewayABBAValidator
@@ -49,6 +50,12 @@ class LongHorizonCampaign(EpisodeCampaign):
                 agent_cli=getattr(base_campaign, "agent_cli", "claude"),
                 agent=getattr(base_campaign, "agent", None),
             )
+        from aka.legacy.acceptance import LegacyAcceptancePolicy
+        from .evaluation import episode_adapter
+
+        options["acceptance"] = (
+            options.get("acceptance") or acceptance_policy or LegacyAcceptancePolicy()
+        )
         super().__init__(
             base_campaign,
             verifier,
@@ -57,8 +64,8 @@ class LongHorizonCampaign(EpisodeCampaign):
             CampaignEnvironment(base_context),
             **options
         )
-        self.evaluation = bind_evaluation(
-            evaluation or LegacyEpisodeEvaluation(),
+        self.evaluation = episode_adapter(
+            evaluation,
             self,
             settings=getattr(base_context, "settings", None),
             base=base_context,
