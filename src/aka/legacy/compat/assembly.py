@@ -21,7 +21,11 @@ def default_workflow(
     from aka.legacy.workflow.assembly import LegacyWorkflow
     from .startup import prepare_request
     from .configuration import current_settings
-    from aka.legacy.application.workflow_services import WorkflowServices
+
+    def services(campaign):
+        from aka.legacy.application.workflow_services import WorkflowServices
+
+        return WorkflowServices(current_settings(), campaign)
 
     owned_agent = agent is None
     agent = agent if agent is not None else LegacyAgent()
@@ -47,7 +51,7 @@ def default_workflow(
             acceptance_policy=acceptance_policy,
         ),
         lambda c: execution_adapter(c.services.settings),
-        services=lambda c: WorkflowServices(current_settings(), c),
+        services=services,
         prepare_request=prepare_request,
     )
 
