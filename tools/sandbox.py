@@ -77,7 +77,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
@@ -3393,12 +3392,12 @@ def _run_typed_gateway(
                     file=sys.stderr,
                     flush=True,
                 )
-                with ThreadPoolExecutor(
-                    max_workers=min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))
-                ) as executor:
-                    processes = list(executor.map(run_batch, batch_items))
-            else:
-                processes = [run_batch(batch_items[0])]
+            from orchestrator._bootstrap import task_modules
+            task_modules()
+            from aka.legacy.experiment.batches import run_batches
+            processes = run_batches(
+                batch_items, run_batch, max_workers=DEFAULT_EVAL_BATCH_WORKERS,
+            )
     except GatewayHTTPError as exc:
         if _typed_fallback_allowed(exc):
             print(

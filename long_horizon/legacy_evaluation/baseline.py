@@ -23,9 +23,10 @@ from orchestrator.operator_layout import AGENT_PROBLEM_FILENAME
 from orchestrator.optimization_policy import production_structure_violations
 from orchestrator.session_io import (
     _record_local_test_result,
-    _sandbox_command,
     _test_result_from_stdout,
 )
+from aka.legacy.compat.experiment import baseline_command
+
 from orchestrator.workspace_state import (
     git_path_blob,
     git_worktree_blob,
@@ -92,7 +93,7 @@ class LegacyBaselineEvaluation:
         """Run the sole V0 evaluator and persist its local transport record."""
         failed_memory_path = self.workspace / "memory" / "v0.failed.json"
         failed_memory_path.unlink(missing_ok=True)
-        test = _sandbox_command(
+        test = baseline_command(
             self.workspace,
             self.sandbox_hardware,
             self.sandbox_profile,
@@ -460,7 +461,7 @@ class LegacyBaselineEvaluation:
         )
         command = list(prepared.steps[0].command)
         try:
-            test = _sandbox_command(
+            test = baseline_command(
                 self.workspace,
                 self.sandbox_hardware,
                 self.sandbox_profile,
