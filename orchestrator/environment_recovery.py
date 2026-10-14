@@ -321,7 +321,7 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
     monitor = Path(__file__).resolve().parents[1] / "tools" / "monitor_optimize_tasks.py"
     log_path = context.directory / "monitor.log"
     from orchestrator._bootstrap import execution_modules
-    execution, _contracts = execution_modules()
+    execution, _runtime = execution_modules()
     environment = execution.execution_environment(os.environ)
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(

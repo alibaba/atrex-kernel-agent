@@ -483,7 +483,7 @@ def _sandbox_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
     from orchestrator._bootstrap import execution_modules
-    execution, contracts = execution_modules()
+    execution, runtime = execution_modules()
     if health_command_explicit is None:
         health_command_explicit = execution.explicit_health_configuration() is True or (
             bool(health_command) and health_command != DEFAULT_SSH_HEALTH_COMMAND
@@ -492,7 +492,7 @@ def _sandbox_command(
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    request = contracts.SandboxRequest(
+    request = runtime.SandboxRequest(
         workspace=workspace, launcher=(sys.executable, str(SANDBOX_TOOL)),
         hardware=hardware, profile=profile, url=url, timeout=timeout,
         command=tuple(command), environment=execution.execution_environment(environment),
@@ -501,7 +501,7 @@ def _sandbox_command(
         cancel_event=cancel_event,
         health_command_explicit=health_command_explicit,
     )
-    hooks = contracts.ExecutionHooks(
+    hooks = runtime.ExecutionHooks(
         spawn=spawn_owned_session, check_environment=raise_if_environment_blocked,
         queue_wait_grace=queue_wait_grace,
     )

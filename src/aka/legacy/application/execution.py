@@ -175,7 +175,6 @@ def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedPr
         timeout=request.timeout, environment=request.environment, hardware=request.hardware,
         artifacts=request.sync, operation="preflight" if request.preflight else request.gateway_kind,
         cancel_event=request.cancel_event)
-    executor.capabilities.require(command)
     if isinstance(executor, LegacyExecutor):
         with sandbox_invocation(request, hooks) as invocation:
             result = executor.run(command)
@@ -188,6 +187,7 @@ def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedPr
                 ):
                     return original
             return _completed_process(command, result)
+    executor.capabilities.require(command)
     explicit_health = request.health_command_explicit
     if explicit_health is None:
         explicit_health = bool(request.health_command) or "ATREX_SANDBOX_HEALTH_COMMAND" in request.environment

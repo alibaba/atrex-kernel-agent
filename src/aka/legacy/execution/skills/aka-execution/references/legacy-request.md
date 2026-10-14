@@ -1,10 +1,9 @@
 # Legacy Execution requests
 
-This guide describes the local AKA `codex/execution-main` candidate based on
-`2023112`. The selected Execution module contributes this Skill to the
-optimization Agent's workspace through the application's resource installer.
-Only `legacy` is bundled; separate SSH, Agate, and direct Local plugins are not
-implemented yet.
+The `legacy` Execution provider runs the existing sandbox launcher. It supports
+SSH, Agate Gateway, and direct HTTP transport through one provider. The selected
+Execution module contributes this Skill to the optimization Agent's workspace
+through the application's resource installer.
 Inspect the actual installed `aka execution --help` before preparing a request.
 
 ## Standalone entry point
@@ -37,8 +36,7 @@ aka execution --repo-root /path/to/matching-checkout \
 | argv after `--` | Prepared worker command; optional for preflight |
 
 `AKA_EXECUTION_SELECTION` can carry profile, profiles_dir, and patches.
-The removed agate Execution profile differs from the retained Agate transport;
-invalid inherited selections fail rather than silently changing providers.
+Invalid inherited selections fail rather than silently changing providers.
 The CLI does not add arbitrary worker environment flags. The original launcher
 and caller determine worker injection; host `os.environ` is not forwarded in full.
 
@@ -47,7 +45,7 @@ and caller determine worker injection; host `os.environ` is not forwarded in ful
 **Gateway:** Use the selected profile / URL and existing Agate authentication.
 Typed run / profile mappings and necessary dev fallbacks remain inside the
 original sandbox. An explicit URL with no installed Agate client can use its
-direct HTTP path; this is not another Execution profile.
+direct HTTP path.
 
 **SSH:** Use `--ssh`, any required `--ssh-init`, and a valid `--health-command`.
 The matching launcher reads existing `ATREX_SANDBOX_SSH_GPU` and
@@ -75,5 +73,5 @@ active in the compatibility path.
 When results match, the application adapter preserves the original
 CompletedProcess. The CLI writes its stdout / stderr and returns its returncode.
 JobResult alone omits original args and a separately parsed remote exit code;
-it is not the proposed complete result contract. Preserve the caller's existing
-full result and artifacts without claiming a new normalized return is implemented.
+the application adapter supplies the original launcher args. Preserve the caller's
+existing full result and artifacts when reporting execution outcomes.

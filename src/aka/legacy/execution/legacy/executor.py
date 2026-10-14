@@ -27,10 +27,9 @@ class LegacyExecutor:
         invocation = current_invocation()
         request = replace(invocation.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=command.environment, hardware=command.hardware,
-            sync=command.artifacts, gateway_kind="auto" if command.operation == "preflight" else command.operation,
+            sync=command.artifacts,
+            gateway_kind=invocation.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event)
-        if command.operation == "preflight":
-            request = replace(request, gateway_kind=invocation.request.gateway_kind)
         result = self._run_sandbox(request, hooks=invocation.hooks)
         invocation.result = result
         return JobResult(result.returncode, result.stdout, result.stderr, resource=self.resource_identity)
