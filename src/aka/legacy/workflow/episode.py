@@ -7,7 +7,7 @@ import tempfile
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
@@ -28,6 +28,7 @@ from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
 from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_terminal
 from .models import EpisodeHandoff, SupervisorState, VerificationResult
+from aka.contracts.acceptance import AcceptancePolicy, AcceptanceRequirements
 from .protocol import read_handoff
 from .session import LongSessionRunner
 from .dependencies import EpisodeEvaluation, EpisodeEnvironment, Verifier
@@ -258,6 +259,8 @@ class LongHorizonCampaign:
     handoff_resumes: int = 2
     max_stall: int = 0
     worktree_root: Path | None = None
+
+    acceptance: AcceptancePolicy = field(kw_only=True)
 
     def __post_init__(self) -> None:
         if self.fast_episodes < 0:
@@ -1007,26 +1010,13 @@ class LongHorizonCampaign:
                         path for path in paths if not path.startswith(EVIDENCE_PREFIXES)
                     ],
                 )
-            if (
-                conversion_pending
-                and not verification.passed
-                and self.evaluation.conversion_parity_passes(verification)
-            ):
-                verification = VerificationResult(
-                    "PASS",
-                    verification.candidate_latency_us,
-                    verification.incumbent_latency_us,
-                    verification.improvement_pct,
-                    runs=verification.runs,
-                    artifact=verification.artifact,
-                    candidate_performance_score=(
-                        verification.candidate_performance_score
-                    ),
-                    incumbent_performance_score=(
-                        verification.incumbent_performance_score
-                    ),
-                )
-            accepted = verification.passed
+            decision = self.acceptance.decide(
+                verification,
+                AcceptanceRequirements(
+                    mode="accepted", conversion_pending=conversion_pending
+                ),
+            )
+            verification, accepted = decision.verification, decision.accepted
         return violation, paths, verification, accepted
 
     def _record_terminal_episode(

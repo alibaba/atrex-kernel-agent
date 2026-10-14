@@ -10,6 +10,10 @@ identity_packages = (
     "aka.legacy.workflow",
     "aka.contracts.workflow",
     "aka.legacy.compat",
+    "aka.contracts.evaluation",
+    "aka.contracts.acceptance",
+    "aka.legacy.evaluation",
+    "aka.legacy.acceptance",
 )
 Config = {"type": "object", "properties": {}, "additionalProperties": False}
 

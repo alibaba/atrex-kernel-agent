@@ -48,86 +48,29 @@ class LegacyEpisodeEvaluation:
         return shlex.join(command)
 
     @staticmethod
-    def fast_verification_result(
-        self, episode_workspace: Path, *, memory_version: int
-    ) -> VerificationResult:
-        """Score the final recorded evaluator result without launching ABBA.
+    def fast_verification_result(self, episode_workspace, *, memory_version):
+        from aka.contracts.acceptance import AcceptanceRequirements
+        from aka.contracts.evaluation import EvaluationRequest
+        from aka.legacy.acceptance import LegacyAcceptancePolicy
+        from aka.legacy.evaluation import LegacyEvaluator
 
-        ``tools/sandbox.py`` fingerprints ``kernel.py`` and ``solution.json`` in
-        every episode result. The reader below selects a complete passing trial result whose fingerprint matches
-        the final selected candidate, then compares that measurement with canonical
-        incumbent memory.  This deliberately trades statistical rigor for turnaround.
-        """
-        artifact = str(episode_workspace / EPISODE_EVALUATIONS_PATH)
-        expected_shape_ids = self._expected_shape_ids()
-        candidate_result = _latest_complete_episode_performance(
+        evaluator = LegacyEvaluator()
+        expected = self._expected_shape_ids()
+        request = EvaluationRequest(
             episode_workspace,
-            expected_shape_ids=expected_shape_ids,
-            required_performance_objective="shape_speedup_arithmetic_mean",
+            mode="fast",
+            memory_version=memory_version,
+            canonical_workspace=self.workspace,
+            expected_shape_ids=frozenset(expected) if expected is not None else None,
         )
-        if candidate_result is None:
-            return VerificationResult(
-                "FAIL",
-                None,
-                None,
-                None,
-                error=(
-                    "fast mode requires one complete passing evaluator result for the "
-                    "final kernel.py and solution.json pair"
+        result = evaluator.interpret(evaluator.prepare(request), ())
+        return (
+            LegacyAcceptancePolicy()
+            .decide(
+                result,
+                AcceptanceRequirements(
+                    float(self.base_campaign.min_improvement_pct), mode="fast"
                 ),
-                artifact=artifact,
             )
-        candidate_latency = float(candidate_result["latency_us_geomean"])
-        candidate_score = float(candidate_result["performance_score"])
-        run = VerificationRun(
-            revision="candidate",
-            repeat=0,
-            exit_code=0,
-            result=candidate_result,
-        )
-        incumbent = _latest_complete_canonical_performance(
-            self.workspace,
-            before_version=memory_version,
-            expected_shape_ids=expected_shape_ids,
-            required_performance_objective="shape_speedup_arithmetic_mean",
-        )
-        if incumbent is None:
-            return VerificationResult(
-                "FAIL",
-                candidate_latency,
-                None,
-                None,
-                runs=[run],
-                error="fast mode could not find complete canonical incumbent performance",
-                artifact=artifact,
-            )
-        incumbent_performance, _incumbent_version = incumbent
-        incumbent_latency = float(incumbent_performance["latency_us_geomean"])
-        incumbent_score = float(incumbent_performance["performance_score"])
-        improvement = (candidate_score / incumbent_score - 1.0) * 100.0
-        threshold = float(self.base_campaign.min_improvement_pct)
-        if improvement <= threshold:
-            return VerificationResult(
-                "FAIL",
-                candidate_latency,
-                incumbent_latency,
-                improvement,
-                runs=[run],
-                error=(
-                    "fast evaluator performance-score improvement "
-                    f"{improvement:.6f}% did not exceed {threshold:.3f}%"
-                ),
-                artifact=artifact,
-                candidate_performance_score=candidate_score,
-                incumbent_performance_score=incumbent_score,
-            )
-        return VerificationResult(
-            "PASS",
-            candidate_latency,
-            incumbent_latency,
-            improvement,
-            runs=[run],
-            artifact=artifact,
-            candidate_performance_score=candidate_score,
-            incumbent_performance_score=incumbent_score,
+            .verification
         )
