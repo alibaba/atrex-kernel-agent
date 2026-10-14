@@ -1041,6 +1041,18 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
+def _runtime_requirements(path: str) -> list[str]:
+    """Read an explicit runtime pin with actionable, platform-independent errors."""
+    try:
+        contents = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read runtime requirements file {path}: {exc}") from exc
+    return [
+        line.strip() for line in contents.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def _workspace_num_gpus(workspace: Path) -> int:
     metadata = _json_object(
         _evaluator_input_path(workspace, "metadata.json", required=False)
@@ -1417,8 +1429,7 @@ def _typed_request(
         request["atrex_bench_version"] = runtime_version
     requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
-        request["requirements"] = [line.strip() for line in Path(requirements_file).read_text().splitlines()
-                                   if line.strip() and not line.lstrip().startswith("#")]
+        request["requirements"] = _runtime_requirements(requirements_file)
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
@@ -3129,7 +3140,17 @@ def _typed_agate_command(
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
     requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
+        # CLI submission reloads this file; refuse to silently change the runtime
+        # captured in a persisted typed request (the direct API uses that snapshot).
+        if _runtime_requirements(requirements_file) != request.get("requirements"):
+            raise ValueError(
+                f"runtime requirements file {requirements_file} differs from the typed request"
+            )
         command += ["--requirements", requirements_file]
+    elif "requirements" in request:
+        raise ValueError(
+            "ATREX_SANDBOX_REQUIREMENTS_FILE is required to replay the typed request's runtime pins"
+        )
     command += [
         "--candidate",
         str(workspace / "kernel.py"),

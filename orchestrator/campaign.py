@@ -90,7 +90,7 @@ from .plan_reviewers import (
     plan_reviewer_environment,
 )
 from .plugins import PluginRegistry
-from .sandbox_config import evaluator_num_gpus
+from .sandbox_config import distributed_evaluation_world_size, evaluator_num_gpus
 from .session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -777,14 +777,34 @@ class Campaign:
             production_reviewer=self._review_production_candidate,
         )
 
-    @property
+    @cached_property
     def source_checks_enabled(self) -> bool:
-        # Match the evaluator's Agate request, including private-case routing.
-        # SSH is a different transport and does not opt into this exception.
+        """Freeze policy from trusted inputs, never candidate worktree metadata."""
         if self.sandbox_ssh:
             return True
-        reference = self.private_reference_dir or self.workspace
-        return evaluator_num_gpus(reference) < 2
+        reference = self.private_reference_dir
+        if reference is not None:
+            return evaluator_num_gpus(reference) < 2
+        baseline = v0_baseline_commit(self.workspace) if self.workspace.is_dir() else ""
+        if baseline:
+            # Resume from the immutable V0, including the absence of metadata.
+            # Reading HEAD or the live file would let a candidate disable its gate.
+            if not git_path_blob(self.workspace, baseline, "metadata.json"):
+                return True
+            result = subprocess.run(
+                ["git", "show", f"{baseline}:metadata.json"],
+                cwd=str(self.workspace), capture_output=True, encoding="utf-8",
+                check=True,
+            )
+            try:
+                metadata = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid JSON in V0 metadata.json") from exc
+            if not isinstance(metadata, dict):
+                raise ValueError("V0 metadata.json must contain a JSON object")
+            return distributed_evaluation_world_size(metadata) < 2
+        # Before V0 exists, only the original operator source is authoritative.
+        return evaluator_num_gpus(Path(self.kernel_demo).resolve().parent) < 2
 
     def _link_runtime(self) -> None:
         from long_horizon.store import CampaignStore
