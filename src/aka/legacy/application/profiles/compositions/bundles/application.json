@@ -17,6 +17,16 @@
       "required": true
     },
     {
+      "id": "agent",
+      "name": "aka.legacy.agent.plugin",
+      "required": true
+    },
+    {
+      "id": "workflow",
+      "name": "aka.legacy.workflow.plugin",
+      "required": true
+    },
+    {
       "id": "application",
       "name": "aka.legacy.application.plugin",
       "required": true,

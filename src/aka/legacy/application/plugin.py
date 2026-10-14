@@ -7,7 +7,7 @@ from .processes import use_launch_environment, invocation_environment
 
 name = "application"
 provide = ("startup",)
-inject = ("problem", "source", "candidate")
+inject = ("problem", "source", "candidate", "workflow")
 Config = {"type": "object", "properties": {"repo_root": {"type": "string", "minLength": 1}},
           "required": ["repo_root"], "additionalProperties": False}
 interpolate = ("repo_root",)
@@ -35,4 +35,4 @@ class LegacyStartup:
 
 def apply(ctx, config):
     root = Path(config["repo_root"]).resolve()
-    ctx.provide("startup", LegacyStartup(create_legacy_application(root, problem=ctx.problem, source=ctx.source, workspace=ctx.candidate), root))
+    ctx.provide("startup", LegacyStartup(create_legacy_application(root, problem=ctx.problem, source=ctx.source, workspace=ctx.candidate, workflow=ctx.workflow), root))

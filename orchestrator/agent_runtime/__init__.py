@@ -1,91 +1,26 @@
-from .adapter import (
-    DEFAULT_BACKEND_REGISTRY,
-    AgentBackendAdapter,
-    BackendAdapterRegistry,
-    ClaudeAdapter,
-    CodexAdapter,
-    PiAdapter,
-    QoderAdapter,
-    codex_settings_args,
-    pi_settings_args,
-    token_usage_from_mapping,
-    toml_config_value,
-)
-from .model import (
-    AgentRunRequest,
-    AgentRunResult,
-    AgentRuntime,
-    AgentRuntimeCapabilities,
-    NormalizedAgentEvent,
-    TokenUsage,
-    subtract_token_usage,
-    sum_token_usages,
-    token_usage_exceeds,
-)
-from .process import (
-    DEFAULT_PROTECTED_GATEWAY_SCREEN,
-    DEFAULT_PROTECTED_GATEWAY_STATE_NAME,
-    ProcessRunner,
-    descendant_process_commands,
-    dependency_process_violation,
-    protected_gateway_identity,
-    python_import_roots,
-    run_bounded,
-)
-from .runtime import (
-    PYPI_MIRROR,
-    SESSION_SHELL_GUARD,
-    SUPPORTED_RUNTIME_IDS,
-    ClaudeRuntime,
-    CodexRuntime,
-    PiRuntime,
-    QoderRuntime,
-    auth_hint,
-    build_agent_runtime,
-    build_session_command,
-    build_session_environment,
-    token_usage_from_stream,
-)
+"""Compatibility import for the extracted legacy implementation."""
 
-__all__ = [
-    "AgentBackendAdapter",
-    "AgentRunRequest",
-    "AgentRunResult",
-    "AgentRuntime",
-    "AgentRuntimeCapabilities",
-    "BackendAdapterRegistry",
-    "ClaudeAdapter",
-    "ClaudeRuntime",
-    "CodexAdapter",
-    "CodexRuntime",
-    "DEFAULT_BACKEND_REGISTRY",
-    "DEFAULT_PROTECTED_GATEWAY_SCREEN",
-    "DEFAULT_PROTECTED_GATEWAY_STATE_NAME",
-    "NormalizedAgentEvent",
-    "PYPI_MIRROR",
-    "PiAdapter",
-    "PiRuntime",
-    "ProcessRunner",
-    "QoderAdapter",
-    "QoderRuntime",
-    "SESSION_SHELL_GUARD",
-    "SUPPORTED_RUNTIME_IDS",
-    "TokenUsage",
-    "auth_hint",
-    "build_agent_runtime",
-    "build_session_command",
-    "build_session_environment",
-    "codex_settings_args",
-    "descendant_process_commands",
-    "dependency_process_violation",
-    "pi_settings_args",
-    "protected_gateway_identity",
-    "python_import_roots",
-    "run_bounded",
-    "subtract_token_usage",
-    "sum_token_usages",
-    "token_usage_exceeds",
-    "token_usage_from_mapping",
-    "token_usage_from_stream",
-    "toml_config_value",
-]
+from orchestrator._bootstrap import task_modules
+
+task_modules()
+from aka.legacy.agent import __all__ as _exports
+
+__all__ = [*_exports, "token_usage_from_stream"]
+
+
+def __getattr__(name):
+    from aka.legacy import agent
+
+    if name in {"ClaudeRuntime", "CodexRuntime", "QoderRuntime", "PiRuntime"}:
+        from aka.legacy.compat import agent_runtime
+
+        return getattr(agent_runtime, name)
+    if name == "token_usage_from_stream":
+        from aka.legacy.compat.agent_runtime import token_usage_from_stream
+
+        return token_usage_from_stream
+    if name in {"AgentRunRequest", "AgentRunResult", "build_agent_runtime"}:
+        from aka.legacy.compat import agent as compatibility
+
+        return getattr(compatibility, name)
+    return getattr(agent, name)
