@@ -29,7 +29,6 @@ class SandboxRequest:
     gateway_kind: str = "auto"
     preflight: bool = False
     cancel_event: Cancellation | None = None
-    health_command_explicit: bool | None = None
 
 
 @dataclass(frozen=True)

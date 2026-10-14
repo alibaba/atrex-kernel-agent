@@ -369,14 +369,6 @@ def dispatch_framework_campaigns(
     return 0
 
 
-class _ExplicitHealthCommand(argparse.Action):
-    def __call__(self, parser, namespace, values, option_string=None):
-        setattr(namespace, self.dest, values)
-        from orchestrator._bootstrap import execution_modules
-        execution, _runtime = execution_modules()
-        execution.record_explicit_health_configuration()
-
-
 def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     if (dependencies or {}).get("workflow") is None:
         from aka.legacy.compat.assembly import default_workflow
@@ -464,7 +456,6 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     )
     ap.add_argument(
         "--sandbox-health-command",
-        action=_ExplicitHealthCommand,
         default=os.environ.get(
             "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
         ),
@@ -885,12 +876,8 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
 
 
 def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
-    from orchestrator._bootstrap import execution_modules
-    execution, _runtime = execution_modules()
-    explicit_health = "ATREX_SANDBOX_HEALTH_COMMAND" in os.environ
     try:
-        with execution.application_transport_options(health_command_explicit=explicit_health):
-            result = _run_main(argv, dependencies=dependencies)
+        result = _run_main(argv, dependencies=dependencies)
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():

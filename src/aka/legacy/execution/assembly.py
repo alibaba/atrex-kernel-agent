@@ -1,9 +1,8 @@
 """Own selected provider scopes; injected executors retain caller ownership."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from aka.contracts.execution import Executor, validate_executor
 from aka.contracts.agent_resources import AgentSkill
@@ -66,15 +65,3 @@ def compose_execution(*, profile: str = "legacy", profiles_dir: Path = PROFILES_
         report.dispose()
         raise
     return ExecutionComposition(report, executor)
-
-
-@contextmanager
-def execution_scope(executor: Executor | None = None, **selection) -> Iterator[Executor]:
-    if executor is not None:
-        if selection:
-            raise ValueError("an injected executor cannot also select a provider")
-        validate_executor(executor)
-        yield executor
-    else:
-        with compose_execution(**selection) as composition:
-            yield composition.executor

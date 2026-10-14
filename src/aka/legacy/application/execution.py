@@ -1,24 +1,21 @@
 """Application binding and explicit inheritance of the selected Executor."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import replace
 import json
 import os
 from pathlib import Path
 import subprocess
-import time
 
 from aka.legacy.execution.assembly import compose_execution
 from aka.legacy.execution.legacy.executor import LegacyExecutor
 from aka.legacy.execution.legacy.runtime import sandbox_invocation
 from aka.contracts.execution import (
-    CommandSpec, ExecutionBudget, Executor, JobResult, UnsupportedExecution, validate_executor,
+    CommandSpec, Executor, JobResult, UnsupportedExecution, validate_executor,
 )
 
 _current_executor = ContextVar("aka_application_executor", default=None)
 _current_selection = ContextVar("aka_application_execution_selection", default=None)
 _current_agent_skills = ContextVar("aka_application_agent_skills", default=None)
-_explicit_health_configuration = ContextVar("aka_explicit_health_configuration", default=None)
 SELECTION_ENV = "AKA_EXECUTION_SELECTION"
 
 
@@ -31,24 +28,6 @@ def read_execution_patches(paths):
             raise ValueError("execution patch must contain api_version 1 and a patches list")
         patches.extend(value["patches"])
     return patches
-
-
-def explicit_health_configuration():
-    return _explicit_health_configuration.get()
-
-
-def record_explicit_health_configuration():
-    if _explicit_health_configuration.get() is not None:
-        _explicit_health_configuration.set(True)
-
-
-@contextmanager
-def application_transport_options(*, health_command_explicit):
-    token = _explicit_health_configuration.set(health_command_explicit)
-    try:
-        yield
-    finally:
-        _explicit_health_configuration.reset(token)
 
 
 def selected_execution():
@@ -126,30 +105,6 @@ def selected_agent_skills():
         return composition.agent_skills
 
 
-class _HostExecutionControl:
-    def __init__(self, command, hooks, budget):
-        self.command = command
-        self.hooks = hooks
-        self.budget = budget
-        self.deadline = time.monotonic() + budget.wall_timeout
-        self.failure = None
-        self.checkpoints = 0
-
-    def checkpoint(self):
-        self.checkpoints += 1
-        if self.failure is not None:
-            raise self.failure
-        try:
-            self.hooks.check_environment()
-            if self.command.cancel_event is not None and self.command.cancel_event.is_set():
-                raise subprocess.SubprocessError("sandbox command cancelled")
-            if time.monotonic() >= self.deadline:
-                raise subprocess.TimeoutExpired(list(self.command.command), self.budget.wall_timeout)
-        except BaseException as error:
-            self.failure = error
-            raise
-
-
 def _completed_process(command, result):
     if not isinstance(result, JobResult):
         raise TypeError("Executor.run must return JobResult")
@@ -175,48 +130,16 @@ def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedPr
         timeout=request.timeout, environment=request.environment, hardware=request.hardware,
         artifacts=request.sync, operation="preflight" if request.preflight else request.gateway_kind,
         cancel_event=request.cancel_event)
-    if isinstance(executor, LegacyExecutor):
-        with sandbox_invocation(request, hooks) as invocation:
-            result = executor.run(command)
-            if not isinstance(result, JobResult):
-                raise TypeError("Executor.run must return JobResult")
-            if invocation.result is not None:
-                original = invocation.result
-                if (original.returncode, original.stdout, original.stderr) == (
-                    result.transport_returncode, result.stdout, result.stderr
-                ):
-                    return original
-            return _completed_process(command, result)
-    executor.capabilities.require(command)
-    explicit_health = request.health_command_explicit
-    if explicit_health is None:
-        explicit_health = bool(request.health_command) or "ATREX_SANDBOX_HEALTH_COMMAND" in request.environment
-    elif not explicit_health and "ATREX_SANDBOX_HEALTH_COMMAND" in request.environment:
-        # A host-generated default is implicit; an effective per-call override is not.
-        explicit_health = request.environment["ATREX_SANDBOX_HEALTH_COMMAND"] != request.health_command
-    environment = request.environment
-    endpoint = request.ssh or request.profile or request.url
-    inherited_endpoint = not endpoint and any(environment.get(name) for name in (
-        "ATREX_SANDBOX_SSH", "ATREX_SANDBOX_PROFILE", "ATREX_SANDBOX_URL"))
-    if (endpoint or inherited_endpoint or request.ssh_init
-            or environment.get("ATREX_SANDBOX_SSH_INIT") or explicit_health):
-        raise UnsupportedExecution("legacy launcher settings require a legacy-compatible execution provider")
-    wall_timeout = request.wall_timeout
-    if wall_timeout is None:
-        wall_timeout = request.timeout + hooks.queue_wait_grace(request.environment) + 240
-    budget = ExecutionBudget(wall_timeout)
-    control = _HostExecutionControl(command, hooks, budget)
-    command = replace(command, budget=budget, control=control)
-    executor.capabilities.require(command)
-    control.checkpoint()
-    initial_checkpoints = control.checkpoints
-    try:
+    if not isinstance(executor, LegacyExecutor):
+        raise UnsupportedExecution("sandbox host binding requires the legacy execution provider")
+    with sandbox_invocation(request, hooks) as invocation:
         result = executor.run(command)
-    except BaseException:
-        if control.failure is not None:
-            raise control.failure
-        raise
-    if control.checkpoints == initial_checkpoints:
-        raise TypeError("executor advertised host controls but did not checkpoint")
-    control.checkpoint()
-    return _completed_process(command, result)
+        if not isinstance(result, JobResult):
+            raise TypeError("Executor.run must return JobResult")
+        if invocation.result is not None:
+            original = invocation.result
+            if (original.returncode, original.stdout, original.stderr) == (
+                result.transport_returncode, result.stdout, result.stderr
+            ):
+                return original
+        return _completed_process(command, result)

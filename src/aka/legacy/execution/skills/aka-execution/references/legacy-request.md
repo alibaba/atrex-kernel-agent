@@ -62,13 +62,14 @@ automatic consequence of reading the Skill.
 
 The public interface is `Executor.run(CommandSpec) -> JobResult`. CommandSpec
 contains workspace, command, timeout, environment, hardware, artifacts,
-operation, and optional cancellation / control. Legacy requires an application
+operation, and optional cooperative cancellation. Legacy requires an application
 adapter's private runtime binding; use the CLI or existing application entry
 point rather than calling an unbound LegacyExecutor directly.
 
-Legacy implements no DurableExecutor methods and rejects neutral budget / control
-requests. Original wall timeout, host hooks, and cooperative cancellation remain
-active in the compatibility path.
+The sandbox host adapter supports the Legacy provider. Original wall timeout,
+host hooks, and cooperative cancellation remain active inside that implementation.
+Other synchronous Executors can be injected into consumers using their own
+binding; the sandbox adapter does not supply supervision for them.
 
 When results match, the application adapter preserves the original
 CompletedProcess. The CLI writes its stdout / stderr and returns its returncode.

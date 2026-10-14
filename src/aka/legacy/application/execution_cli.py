@@ -75,8 +75,6 @@ def main(argv: list[str] | None = None) -> int:
                     else os.environ.get("ATREX_SANDBOX_HEALTH_COMMAND", "")),
                 sync=tuple(arguments.sync), wall_timeout=arguments.wall_timeout, gateway_kind=arguments.kind,
                 preflight=arguments.preflight,
-                health_command_explicit=(arguments.health_command is not None
-                    or "ATREX_SANDBOX_HEALTH_COMMAND" in os.environ),
             )
             result = run_sandbox(executor, request, hooks=hooks)
         sys.stdout.write(result.stdout or "")

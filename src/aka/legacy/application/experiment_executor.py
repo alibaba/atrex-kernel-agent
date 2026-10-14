@@ -2,10 +2,9 @@
 from dataclasses import replace
 from contextvars import ContextVar
 
-from aka.contracts.execution import CommandSpec, Executor, JobResult
+from aka.contracts.execution import CommandSpec, Executor, JobResult, UnsupportedExecution
 from aka.legacy.execution.legacy.executor import LegacyExecutor
 from aka.legacy.execution.legacy.runtime import sandbox_invocation
-from .execution import run_sandbox
 
 
 class SandboxExecutor:
@@ -38,35 +37,19 @@ class SandboxExecutor:
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event,
         )
-        if isinstance(self.executor, LegacyExecutor):
-            bound = replace(command, environment=request.environment, hardware=request.hardware)
-            with sandbox_invocation(request, self.hooks) as invocation:
-                result = self.executor.run(bound)
-                original = invocation.result
-                if original is not None and isinstance(result, JobResult) and (
-                    original.returncode, original.stdout, original.stderr
-                ) == (result.transport_returncode, result.stdout, result.stderr):
-                    self._completed_process.set(original)
-            if not isinstance(result, JobResult):
-                raise TypeError("Executor.run must return JobResult")
-            return result
-
-        # Reuse the existing host-control checks without converting the returned
-        # execution facts through CompletedProcess and losing unknown values.
-        underlying = self.executor
-
-        class Capture:
-            capabilities = underlying.capabilities
-            resource_identity = underlying.resource_identity
-            result = None
-
-            def run(self, bound):
-                self.result = underlying.run(bound)
-                return self.result
-
-        capture = Capture()
-        run_sandbox(capture, request, hooks=self.hooks)
-        return capture.result
+        if not isinstance(self.executor, LegacyExecutor):
+            raise UnsupportedExecution("sandbox host binding requires the legacy execution provider")
+        bound = replace(command, environment=request.environment, hardware=request.hardware)
+        with sandbox_invocation(request, self.hooks) as invocation:
+            result = self.executor.run(bound)
+            original = invocation.result
+            if original is not None and isinstance(result, JobResult) and (
+                original.returncode, original.stdout, original.stderr
+            ) == (result.transport_returncode, result.stdout, result.stderr):
+                self._completed_process.set(original)
+        if not isinstance(result, JobResult):
+            raise TypeError("Executor.run must return JobResult")
+        return result
 
 
 def sandbox_executor(executor: Executor, *, hardware="", profile="", url="",
@@ -81,9 +64,8 @@ def sandbox_executor(executor: Executor, *, hardware="", profile="", url="",
     from orchestrator.environment_recovery import raise_if_environment_blocked
     from orchestrator.recovery_processes import spawn_owned_session
     from orchestrator.sandbox_config import queue_wait_grace
-    from orchestrator.ssh_health import DEFAULT_SSH_HEALTH_COMMAND
     from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
-    from .execution import execution_environment, explicit_health_configuration
+    from .execution import execution_environment
 
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
@@ -94,9 +76,6 @@ def sandbox_executor(executor: Executor, *, hardware="", profile="", url="",
         hardware=hardware, profile=profile, url=url, timeout=600, command=(),
         environment=execution_environment(environment), ssh=ssh, ssh_init=ssh_init,
         health_command=health_command, wall_timeout=wall_timeout,
-        health_command_explicit=explicit_health_configuration() is True or (
-            bool(health_command) and health_command != DEFAULT_SSH_HEALTH_COMMAND
-        ),
     )
     hooks = ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)
     return SandboxExecutor(executor, request, hooks)
