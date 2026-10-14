@@ -9,11 +9,12 @@ from orchestrator.session_io import (
 
 
 class CampaignExecution:
-    def __init__(self, context):
-        self.context = context
-
-    def __getattr__(self, name):
-        return getattr(self.context, name)
+    def __init__(self, settings):
+        settings = getattr(settings, "settings", settings)
+        self.settings = settings
+        for name in ("hardware", "profile", "url", "ssh", "ssh_init", "ssh_gpu", "health_command"):
+            setattr(self, "sandbox_" + name, getattr(settings, name))
+        self.sandbox_timeout = settings.timeout
 
     def environment(self):
         environment = {}

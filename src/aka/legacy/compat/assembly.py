@@ -20,6 +20,8 @@ def default_workflow(
     from aka.legacy.workflow.dependencies import CampaignDependencies
     from aka.legacy.workflow.assembly import LegacyWorkflow
     from .startup import prepare_request
+    from .configuration import current_settings
+    from aka.legacy.application.workflow_services import WorkflowServices
 
     owned_agent = agent is None
     agent = agent if agent is not None else LegacyAgent()
@@ -44,7 +46,8 @@ def default_workflow(
             episode_evaluation=episode_evaluation,
             acceptance_policy=acceptance_policy,
         ),
-        lambda c: execution_adapter(c.evaluation.context),
+        lambda c: execution_adapter(c.services.settings),
+        services=lambda c: WorkflowServices(current_settings(), c),
         prepare_request=prepare_request,
     )
 
@@ -58,9 +61,9 @@ def default_workflow(
 
 
 def baseline_adapter(campaign, implementation=None):
-    from long_horizon.legacy_evaluation.baseline import LegacyBaselineEvaluation
-
-    return bind_evaluation(implementation or LegacyBaselineEvaluation(), campaign)
+    if implementation is None:
+        return campaign.services.baseline()
+    return bind_evaluation(implementation, campaign)
 
 
 def execution_adapter(context):
@@ -75,29 +78,26 @@ def run_campaign(
     from aka.legacy.workflow.episode import LongHorizonCampaign
     from aka.legacy.workflow.session import LongSessionRunner
     from aka.legacy.workflow.store import CampaignStore
-    from long_horizon.verifier import GatewayABBAValidator
     from .session import legacy_budget_tokens
 
-    from aka.legacy.acceptance import LegacyAcceptancePolicy
     from .evaluation import episode_adapter
 
-    context = campaign.evaluation.context
+    from aka.legacy.workflow.evaluation import FormalVerification, EpisodeMeasurements
+    services = campaign.services
+    context = services.settings
     CampaignStore.ensure_excluded(campaign.workspace)
-    factory = evaluator_factory or GatewayABBAValidator
-    verifier = factory(
-        workspace_provider=campaign.candidate_workspace,
-        hardware=context.sandbox_hardware,
-        profile=context.sandbox_profile,
-        url=context.sandbox_url,
-        ssh=context.sandbox_ssh,
-        ssh_init=context.sandbox_ssh_init,
-        health_command=context.sandbox_health_command,
-        timeout=context.sandbox_timeout,
-        repeats=context.verify_repeats,
-        per_run_timeout=context.verify_run_timeout,
-        min_improvement_pct=context.min_improvement_pct,
-        private_reference_dir=campaign.private_reference_dir,
-    )
+    policy = acceptance_policy if acceptance_policy is not None else services.acceptance
+    if evaluator_factory is not None:
+        verifier = evaluator_factory(
+            workspace_provider=campaign.candidate_workspace, hardware=context.hardware,
+            profile=context.profile, url=context.url, ssh=context.ssh, ssh_init=context.ssh_init,
+            health_command=context.health_command, timeout=context.timeout,
+            repeats=context.verify_repeats, per_run_timeout=context.verify_run_timeout,
+            min_improvement_pct=context.min_improvement_pct,
+            private_reference_dir=campaign.private_reference_dir,
+        )
+    else:
+        verifier = FormalVerification(services.formal_experiment, policy, context.min_improvement_pct)
     engine = LongHorizonCampaign(
         campaign,
         verifier=verifier,
@@ -107,12 +107,8 @@ def run_campaign(
             usage_policy=lambda turn: legacy_budget_tokens(turn, campaign.agent_cli),
         ),
         evaluation=None,
-        acceptance=(
-            acceptance_policy
-            if acceptance_policy is not None
-            else LegacyAcceptancePolicy()
-        ),
-        environment=CampaignEnvironment(context),
+        acceptance=policy,
+        environment=CampaignEnvironment(campaign),
         max_version=campaign.max_iters,
         fast_episodes=campaign.fast_episodes,
         fast_trials=campaign.fast_trials,
@@ -120,12 +116,13 @@ def run_campaign(
         handoff_resumes=campaign.handoff_resumes,
         max_stall=campaign.max_stall,
     )
-    engine.evaluation = episode_adapter(
-        episode_evaluation,
-        engine,
-        settings=context.settings,
-        base=context,
-    )
+    if episode_evaluation is not None:
+        engine.evaluation = episode_adapter(episode_evaluation, engine,
+            settings=context, base=campaign)
+    else:
+        engine.evaluation = EpisodeMeasurements(campaign.workspace, campaign.private_reference_dir,
+            context.min_improvement_pct, evaluator=services.evaluator, acceptance=policy,
+            records=services.records, command=services.sandbox_command)
     return campaign._finish(engine.run())
 
 

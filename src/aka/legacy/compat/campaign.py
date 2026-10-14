@@ -52,10 +52,12 @@ class Campaign(WorkflowCampaign):
             if name in (prefix + "_ask_codex", prefix + "_ask_qoder"):
                 return name.rsplit("_", 1)[1] in getattr(self, policy, ())
         evaluation = self.__dict__.get("evaluation")
-        if evaluation is not None and hasattr(evaluation, "context"):
-            key = name.removeprefix("sandbox_") if name.startswith("sandbox_") else name
-            if hasattr(evaluation.context.settings, key):
-                return getattr(evaluation.context.settings, key)
+        settings = self.services.settings if self.__dict__.get("services") is not None else None
+        if settings is None and evaluation is not None and hasattr(evaluation, "context"):
+            settings = evaluation.context.settings
+        key = name.removeprefix("sandbox_") if name.startswith("sandbox_") else name
+        if settings is not None and hasattr(settings, key):
+            return getattr(settings, key)
         raise AttributeError(name)
 
     @property
@@ -79,6 +81,9 @@ class Campaign(WorkflowCampaign):
         from .workflow import BoundEvaluation, bind_evaluation
 
         evaluation = self.evaluation
+        from aka.legacy.workflow.baseline import WorkflowBaseline
+        if isinstance(evaluation, WorkflowBaseline):
+            return evaluation
         return (
             evaluation
             if isinstance(evaluation, BoundEvaluation)
@@ -130,12 +135,15 @@ class Campaign(WorkflowCampaign):
         )
 
     def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
-        return self._bound_evaluation().setup_baseline_native(
+        # Explicit historical private entry preserves overridden callback hooks.
+        from .workflow import bind_evaluation
+        return bind_evaluation(LegacyBaselineEvaluation(), self).setup_baseline_native(
             op_dir, generalized=generalized
         )
 
     def _setup_baseline_sol(self, op_dir: Path) -> None:
-        return self._bound_evaluation().setup_baseline_sol(op_dir)
+        from .workflow import bind_evaluation
+        return bind_evaluation(LegacyBaselineEvaluation(), self).setup_baseline_sol(op_dir)
 
     def _framework_baseline_smoke_shape_ids(self, *, limit: int = 3) -> list[str]:
         return self._bound_evaluation().framework_baseline_smoke_shape_ids(limit=limit)

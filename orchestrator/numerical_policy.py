@@ -114,7 +114,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
     return retry_infrastructure(workspace, stage, review_once)
 
 
-def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
+def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None):
     from .session_io import _sandbox_command
 
     shapes = json.loads(shapes_path.read_text())
@@ -138,15 +138,21 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
             "max_rel_l2": _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2,
         })
 
-        def execute():
-            process = _sandbox_command(
-                workspace, campaign.sandbox_hardware, campaign.sandbox_profile,
-                campaign.sandbox_url, 600,
-                ["python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))],
-                ssh=campaign.sandbox_ssh, ssh_init=campaign.sandbox_ssh_init,
-                health_command=campaign.sandbox_health_command, gateway_kind="dev",
-                private_reference_dir=campaign.private_reference_dir,
-            )
+        def probe_once():
+            if execute is None:
+                process = _sandbox_command(
+                    workspace, campaign.sandbox_hardware, campaign.sandbox_profile,
+                    campaign.sandbox_url, 600,
+                    ["python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))],
+                    ssh=campaign.sandbox_ssh, ssh_init=campaign.sandbox_ssh_init,
+                    health_command=campaign.sandbox_health_command, gateway_kind="dev",
+                    private_reference_dir=campaign.private_reference_dir,
+                )
+            else:
+                from aka.contracts.execution import CommandSpec
+                process = execute(CommandSpec(workspace,
+                    ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
+                    timeout=600, operation="dev"))
             check_transport(process)
             for line in process.stdout.splitlines():
                 if line.startswith(PREFIX):
@@ -156,7 +162,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
                     return batch
             raise ValueError(f"numerical probe produced no receipt (exit={process.returncode})")
 
-        batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", execute)
+        batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once)
         status = _probe_status(batch, plan, suite, shapes)
         # Preserve comparison metrics and actual input-generation diagnostics, but
         # never surface private workload kwargs or raw evaluator output to the agent.
@@ -191,7 +197,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory):
     return {"status": status, "probes": results}
 
 
-def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False):
+def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
@@ -247,7 +253,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 trial = directory / f"probe-{attempt}"
                 trial.mkdir()
                 try:
-                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial)
+                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial, execute=execute)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
                     evaluation = {"status": "needs_validation", "diagnosis": str(exc)}
                 record.setdefault("evaluations", []).append(evaluation)

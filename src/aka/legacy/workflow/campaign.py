@@ -190,6 +190,9 @@ class Campaign:
                 self, definition.name, getattr(self.request.settings, definition.name)
             )
         self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
+        self.services = (
+            self.dependencies.services(self) if self.dependencies.services is not None else None
+        )
         self.evaluation = self.dependencies.evaluation(self)
         self.execution = self.dependencies.execution(self)
         self.plugin_registry.check_lock(self.workspace)
@@ -2197,6 +2200,9 @@ class Campaign:
             )
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
+
+    def numerical_feedback(self, workspace, *, standard_correctness_passed=False):
+        return self.services.numerical_feedback(workspace, standard_correctness_passed=standard_correctness_passed)
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
         runtime = (

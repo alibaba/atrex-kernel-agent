@@ -31,7 +31,7 @@ from .models import EpisodeHandoff, SupervisorState, VerificationResult
 from aka.contracts.acceptance import AcceptancePolicy, AcceptanceRequirements
 from .protocol import read_handoff
 from .session import LongSessionRunner
-from .dependencies import EpisodeEvaluation, EpisodeEnvironment, Verifier
+from .dependencies import EpisodeMeasurements, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 
@@ -248,7 +248,7 @@ class LongHorizonCampaign:
     base_campaign: object
     verifier: Verifier
     session_runner: LongSessionRunner
-    evaluation: EpisodeEvaluation
+    evaluation: EpisodeMeasurements
     environment: EpisodeEnvironment
     max_episodes: int = 8
     max_version: int | None = None

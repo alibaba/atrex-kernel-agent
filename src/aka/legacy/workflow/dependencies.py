@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .campaign import Campaign
 
 
-class BaselineEvaluation(Protocol):
+class BaselineOperations(Protocol):
     def evaluator_directive(self) -> str: ...
     def install_native_evaluator(self) -> None: ...
     def install_profile_driver(self) -> None: ...
@@ -50,7 +50,7 @@ class BaselineEvaluation(Protocol):
     def validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]: ...
 
 
-class EpisodeEvaluation(Protocol):
+class EpisodeMeasurements(Protocol):
     def expected_shape_ids(self) -> set[str] | None: ...
     def fast_evaluator_command(self, version: int) -> str: ...
     def fast_verification_result(
@@ -132,9 +132,15 @@ class CampaignDependencies:
     problem: ProblemProvider
     source: SourceProvider
     candidate: CandidateWorkspace
-    evaluation: Callable[[Campaign], BaselineEvaluation]
+    evaluation: Callable[[Campaign], BaselineOperations]
     workflow: Callable[[Campaign], str]
     execution: Callable[[Campaign], CampaignExecution]
     prepare_request: Callable[[CampaignRequest, LoadedProblem], CampaignRequest] = (
         lambda request, problem: request
     )
+    services: Callable[[Campaign], Any] | None = None
+
+
+# Keep historical private imports usable during downstream migration.
+BaselineEvaluation = BaselineOperations
+EpisodeEvaluation = EpisodeMeasurements
