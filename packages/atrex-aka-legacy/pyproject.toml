@@ -11,6 +11,7 @@ dependencies = ["atrex-aka-framework==0.1.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.application.cli:main"
+execution = "aka.legacy.application.execution_cli:main"
 
 [project.entry-points."aka.tokens"]
 agent = "aka.legacy.agent.plugin:AGENT"
@@ -32,3 +33,5 @@ include = ["aka.legacy", "aka.legacy.*"]
 "aka.legacy.task.problem" = ["profiles/*.json", "profiles/bundles/*.json"]
 "aka.legacy.task.source" = ["profiles/*.json", "profiles/bundles/*.json"]
 "aka.legacy.task.candidate_workspace" = ["profiles/*.json", "profiles/bundles/*.json", "*.sh"]
+
+"aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json", "skills/*/SKILL.md", "skills/*/references/*.md"]

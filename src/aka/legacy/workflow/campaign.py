@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextvars import copy_context
+
 import hashlib
 import json
 import re
@@ -836,6 +838,7 @@ class Campaign:
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             review_future = executor.submit(
+                    copy_context().run,
                 self._ensure_framework_baseline_correctness_guidance
             )
             try:
@@ -1700,6 +1703,7 @@ class Campaign:
         with ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
             futures = {
                 reviewer: executor.submit(
+                    copy_context().run,
                     self._run_framework_baseline_correctness_reviewer, reviewer
                 )
                 for reviewer in reviewers

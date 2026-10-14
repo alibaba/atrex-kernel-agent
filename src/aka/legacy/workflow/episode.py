@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextvars import copy_context
+
 import json
 import shutil
 import subprocess
@@ -1787,6 +1789,7 @@ class LongHorizonCampaign:
                     thread_name_prefix=f"fast-policy-e{episode:04d}",
                 )
                 policy_future = policy_executor.submit(
+                    copy_context().run,
                     self._prewarm_fast_policy_reviews,
                     worktree,
                     require_gluon=(

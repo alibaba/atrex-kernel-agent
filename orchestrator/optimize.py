@@ -308,6 +308,9 @@ def dispatch_framework_campaigns(
                     child_environment.pop(name, None)
                 else:
                     child_environment[name] = value
+            from orchestrator._bootstrap import execution_modules
+            execution, _runtime = execution_modules()
+            child_environment = execution.execution_environment(child_environment)
             child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
             proc = subprocess.Popen(
                 cmd,
@@ -364,6 +367,14 @@ def dispatch_framework_campaigns(
         )
         return 1
     return 0
+
+
+class _ExplicitHealthCommand(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        from orchestrator._bootstrap import execution_modules
+        execution, _runtime = execution_modules()
+        execution.record_explicit_health_configuration()
 
 
 def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
@@ -453,6 +464,7 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
     )
     ap.add_argument(
         "--sandbox-health-command",
+        action=_ExplicitHealthCommand,
         default=os.environ.get(
             "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
         ),
@@ -873,8 +885,12 @@ def _run_main(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
 
 
 def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> int:
+    from orchestrator._bootstrap import execution_modules
+    execution, _runtime = execution_modules()
+    explicit_health = "ATREX_SANDBOX_HEALTH_COMMAND" in os.environ
     try:
-        result = _run_main(argv, dependencies=dependencies)
+        with execution.application_transport_options(health_command_explicit=explicit_health):
+            result = _run_main(argv, dependencies=dependencies)
     except EnvironmentUnavailable:
         result = ENVIRONMENT_TEMPFAIL
     if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
