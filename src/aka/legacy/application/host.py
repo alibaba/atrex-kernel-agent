@@ -35,7 +35,7 @@ def application_variables(repo_root, values=None):
 
 
 def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR,
-                    patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None, canonical=False):
+                    patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None, canonical=False, launch_environment=None):
     pending = pending_recovery_directory()
     if pending is not None:
         if (profile != "application" or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
@@ -65,7 +65,7 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         raise CompositionError("recovery", "schema 3 recovery requires the built-in default legacy profile without overrides")
     if payload is not None:
         if (profile != "application" or Path(profiles_dir) != PROFILES_DIR or patch_files
-                or patches or variables or execution_selection is not None):
+                or patches or variables or execution_selection is not None or launch_environment):
             raise CompositionError("continuation", "cannot override a reconstructed launch selection")
         selection = restore(payload, tokens=tokens)
         process_launch = sys.modules.get("orchestrator.process_launch")
@@ -82,6 +82,11 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         selection = resolve_profile(Path(profiles_dir) / f"{profile}.json",
             patch_files=patch_files, patches=patches, tokens=tokens,
             variables=application_variables(request.repo_root, variables))
+        if launch_environment:
+            if any(key.startswith("AKA_LAUNCH_") or "=" in key or "\0" in key
+                   for key in launch_environment):
+                raise CompositionError("environment", "invalid launch environment binding")
+            selection = replace(selection, environment={**selection.environment, **launch_environment})
         # A selected internal launcher is an explicit process dependency. Avoid
         # importing the optimizer during assembly or modifying its module identity.
         process_launch = sys.modules.get("orchestrator.process_launch")
