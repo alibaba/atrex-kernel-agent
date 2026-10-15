@@ -55,7 +55,7 @@ class WorkflowStartup:
             values["AKA_EXECUTION_SELECTION"] = json.dumps(selected, sort_keys=True)
         # Freeze the effective request for children; child dispatch uses canonical arguments.
         launch = replace(launch, child_arguments=(), child_bindings=())
-        if not invocation.bindings.get("optimizer_script"):
+        if Path(script).resolve() == Path(__file__).with_name("entry.py").resolve():
             launch = replace(launch, restart_arguments=encode_launch(replace(launch, restart_arguments=())))
         self._notify("run_started", launch)
         result, error = 1, ""
