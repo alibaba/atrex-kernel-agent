@@ -89,6 +89,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from orchestrator.durable_state import durable_write_json  # noqa: E402
 from orchestrator.sandbox_config import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
+from orchestrator.sandbox_config import (  # noqa: E402
+    distributed_evaluation_world_size as _distributed_evaluation_world_size,
+)
 from orchestrator.ssh_health import (  # noqa: E402
     DEFAULT_SSH_HEALTH_COMMAND,
     combined_health_command,
@@ -1038,36 +1041,16 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
-def _distributed_evaluation_world_size(metadata: object) -> int:
-    """Return the GPU count declared by a single-node evaluator contract."""
-    if not isinstance(metadata, dict):
-        return 1
-    benchmark_contract = metadata.get("benchmark_contract")
-    if not isinstance(benchmark_contract, dict):
-        return 1
-    evaluation = benchmark_contract.get("distributed_evaluation")
-    if evaluation is None:
-        return 1
-    if not isinstance(evaluation, dict):
-        raise ValueError("benchmark_contract.distributed_evaluation must be an object")
-    if evaluation.get("launcher") != "torchrun":
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.launcher must be 'torchrun'"
-        )
-    if evaluation.get("backend") != "nccl":
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.backend must be 'nccl'"
-        )
-    world_size = evaluation.get("world_size")
-    if isinstance(world_size, bool) or not isinstance(world_size, int):
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.world_size must be an integer"
-        )
-    if world_size != 2:
-        raise ValueError(
-            "benchmark_contract.distributed_evaluation.world_size must be 2"
-        )
-    return world_size
+def _runtime_requirements(path: str) -> list[str]:
+    """Read an explicit runtime pin with actionable, platform-independent errors."""
+    try:
+        contents = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read runtime requirements file {path}: {exc}") from exc
+    return [
+        line.strip() for line in contents.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
 
 
 def _workspace_num_gpus(workspace: Path) -> int:
@@ -1441,6 +1424,12 @@ def _typed_request(
         else None,
         reference.get("operator"),
     )
+    runtime_version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
+    if runtime_version:
+        request["atrex_bench_version"] = runtime_version
+    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
+    if requirements_file:
+        request["requirements"] = _runtime_requirements(requirements_file)
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
@@ -3147,6 +3136,21 @@ def _typed_agate_command(
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
     if num_gpus > 1:
         command += ["--num-gpus", str(num_gpus)]
+    if request.get("atrex_bench_version"):
+        command += ["--atrex-bench-version", request["atrex_bench_version"]]
+    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
+    if requirements_file:
+        # CLI submission reloads this file; refuse to silently change the runtime
+        # captured in a persisted typed request (the direct API uses that snapshot).
+        if _runtime_requirements(requirements_file) != request.get("requirements"):
+            raise ValueError(
+                f"runtime requirements file {requirements_file} differs from the typed request"
+            )
+        command += ["--requirements", requirements_file]
+    elif "requirements" in request:
+        raise ValueError(
+            "ATREX_SANDBOX_REQUIREMENTS_FILE is required to replay the typed request's runtime pins"
+        )
     command += [
         "--candidate",
         str(workspace / "kernel.py"),

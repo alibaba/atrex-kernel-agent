@@ -92,6 +92,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     install_workspace_policy(
         workspace, campaign.optimization_mode, campaign.framework,
         update_tracked_files=False,
+        source_checks_enabled=campaign.source_checks_enabled,
     )
 
 
@@ -285,6 +286,8 @@ def candidate_policy_violations(
 
 
 def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:
+    if not campaign.source_checks_enabled:
+        return False
     return should_convert_to_gluon(
         campaign.framework,
         stall,

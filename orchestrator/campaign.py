@@ -86,6 +86,7 @@ from .plan_reviewers import (
     plan_reviewer_environment,
 )
 from .plugins import PluginRegistry
+from .sandbox_config import distributed_evaluation_world_size, evaluator_num_gpus
 from .session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -684,12 +685,43 @@ class Campaign:
         *,
         require_gluon: bool = False,
     ) -> list[str]:
+        if not self.source_checks_enabled:
+            return []
         return production_kernel_violations(
             workspace or self.workspace,
             self.framework,
             require_gluon=require_gluon,
             production_reviewer=self._review_production_candidate,
         )
+
+    @cached_property
+    def source_checks_enabled(self) -> bool:
+        """Freeze policy from trusted inputs, never candidate worktree metadata."""
+        if self.sandbox_ssh:
+            return True
+        reference = self.private_reference_dir
+        if reference is not None:
+            return evaluator_num_gpus(reference) < 2
+        baseline = v0_baseline_commit(self.workspace) if self.workspace.is_dir() else ""
+        if baseline:
+            # Resume from the immutable V0, including the absence of metadata.
+            # Reading HEAD or the live file would let a candidate disable its gate.
+            if not git_path_blob(self.workspace, baseline, "metadata.json"):
+                return True
+            result = subprocess.run(
+                ["git", "show", f"{baseline}:metadata.json"],
+                cwd=str(self.workspace), capture_output=True, encoding="utf-8",
+                check=True,
+            )
+            try:
+                metadata = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid JSON in V0 metadata.json") from exc
+            if not isinstance(metadata, dict):
+                raise ValueError("V0 metadata.json must contain a JSON object")
+            return distributed_evaluation_world_size(metadata) < 2
+        # Before V0 exists, only the original operator source is authoritative.
+        return evaluator_num_gpus(Path(self.kernel_demo).resolve().parent) < 2
 
     def _link_runtime(self) -> None:
         from long_horizon.store import CampaignStore
@@ -709,6 +741,7 @@ class Campaign:
             self.optimization_mode,
             self.framework,
             agent_runtime=self.agent_cli,
+            source_checks_enabled=self.source_checks_enabled,
         )
 
     def _evaluator_directive(self) -> str:
@@ -808,7 +841,10 @@ class Campaign:
         )
 
     def _mode_directive(self) -> str:
-        return optimization_mode_directive(self.optimization_mode, self.framework)
+        return optimization_mode_directive(
+            self.optimization_mode, self.framework,
+            source_checks_enabled=self.source_checks_enabled,
+        )
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
@@ -1537,6 +1573,8 @@ class Campaign:
                 "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
             )
         if not progressed:
+            if not self.source_checks_enabled:
+                return "pin", "multi-GPU Agate source checks are disabled; retain the validated V0"
             structural = production_structure_violations(
                 self.workspace, self.framework
             )
@@ -2590,7 +2628,7 @@ class Campaign:
         candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = (
+        violations = [] if not self.source_checks_enabled else (
             self._production_kernel_violations()
             if include_policy_review
             else production_structure_violations(self.workspace, self.framework)
@@ -2600,9 +2638,9 @@ class Campaign:
                 f"the candidate is not a self-contained {self.framework} implementation: "
                 + "; ".join(violations)
             )
-        if self.framework.lower() in {"triton", "gluon"} and kernel_is_gluon(
-            self.workspace
-        ):
+        if (self.source_checks_enabled
+                and self.framework.lower() in {"triton", "gluon"}
+                and kernel_is_gluon(self.workspace)):
             # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
             return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
         mutated = self.candidate_workspace.baseline_changes(self.workspace, baseline_commit)
@@ -2614,11 +2652,11 @@ class Campaign:
         self, n: int
     ) -> tuple[Optional[dict], str]:
         """Run policy review and the sole authoritative V1 evaluator concurrently."""
-        print(
-            "[orchestrator] framework baseline: running policy review and combined "
-            "correctness/performance validation in parallel",
-            flush=True,
-        )
+        if self.source_checks_enabled:
+            message = "running policy review and combined correctness/performance validation in parallel"
+        else:
+            message = "multi-GPU Agate source review skipped; running correctness/performance validation"
+        print(f"[orchestrator] framework baseline: {message}", flush=True)
         with ThreadPoolExecutor(max_workers=2) as executor:
             policy_future = executor.submit(self._production_kernel_violations)
             validation_future = executor.submit(self._validate_framework_baseline, n)
