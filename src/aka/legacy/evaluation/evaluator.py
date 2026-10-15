@@ -67,6 +67,7 @@ class EvaluationConfiguration:
     max_parallelism: int = 4
     private_reference_dir: Path | None = None
     native: bool = False
+    abba_driver: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -129,7 +130,7 @@ class LegacyEvaluator:
         relative_dir = f"{VERIFY_DIR}/{uuid.uuid4().hex}"
         directory = request.workspace / relative_dir
         directory.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(Path(remote_abba.__file__), directory / "test_kernel.py")
+        shutil.copy2(config.abba_driver or Path(remote_abba.__file__), directory / "test_kernel.py")
         manifests = {
             "incumbent": self.candidate_workspace.write_revision(
                 request.workspace,
