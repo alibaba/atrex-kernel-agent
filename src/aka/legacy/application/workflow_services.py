@@ -99,7 +99,7 @@ class WorkflowServices:
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
         )
-        self.evaluator = LegacyEvaluator()
+        self.evaluator = LegacyEvaluator(EvaluationConfiguration(shape_batch_size=settings.shape_batch_size))
         self.records = records
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
@@ -148,6 +148,7 @@ class WorkflowServices:
                     timeout=s.timeout,
                     repeats=s.verify_repeats,
                     per_run_timeout=s.verify_run_timeout,
+                    shape_batch_size=s.shape_batch_size,
                     max_parallelism=1 if s.ssh else 4,
                     private_reference_dir=self.campaign.private_reference_dir,
                     native=bool(self.campaign.atrex_bench_root),
@@ -160,7 +161,7 @@ class WorkflowServices:
                     evaluator,
                     retry=retry_infrastructure,
                     check_result=check_abba_result,
-                    stage=abba_stage(s.verify_repeats, 4),
+                    stage=abba_stage(s.verify_repeats, s.shape_batch_size),
                 )
             else:
                 yield BaselineExperiment(bound, BaselineEvaluator(evaluator, bound))

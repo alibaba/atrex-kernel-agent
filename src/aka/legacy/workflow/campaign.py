@@ -1090,8 +1090,12 @@ class Campaign:
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
         # interrupted V1 worktree and needs validation/recovery first.
         if restart_journal:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming the unexpected-exit V1 handoff"
         if not progressed and dirty_candidate:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming preserved framework-baseline work"
 
         if self.framework_baseline == "auto" and self.optimization_mode != "production":
@@ -1133,6 +1137,8 @@ class Campaign:
             return "run", f"V0 is not a self-contained {self.framework} kernel"
         if latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION:
             return "adopt", "an interrupted framework baseline is already committed"
+        if self.resume_framework_candidate:
+            return "adopt", "validate the retained framework candidate"
         return "skip", (
             "HEAD has progressed beyond V0 without a framework-baseline pin; "
             "leaving this campaign on its existing baseline"

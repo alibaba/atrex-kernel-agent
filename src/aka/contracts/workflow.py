@@ -31,6 +31,7 @@ class WorkflowSettings:
     framework_baseline_reviewers: tuple[str, ...] = ()
     fast_episode_reviewers: tuple[str, ...] = ()
     full_episode_reviewers: tuple[str, ...] = ()
+    resume_framework_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,11 @@ class CampaignRuntimeSettings:
     ssh_init: str = ""
     ssh_gpu: int | None = None
     health_command: str = ""
+    shape_batch_size: int = 4
+
+    def __post_init__(self):
+        if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
+            raise ValueError("shape_batch_size must be a positive integer")
 
 
 

@@ -20,6 +20,10 @@ def parse_arguments(argv):
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
+    ap.add_argument("--resume-framework-candidate", action="store_true",
+                    help="Validate a retained framework candidate before generating another implementation")
+    ap.add_argument("--verify-shape-batch-size", dest="shape_batch_size", type=int, default=4,
+                    help="Maximum workload shapes in one verification allocation")
     ap.add_argument(
         "--op-dir",
         required=True,
@@ -307,6 +311,8 @@ def parse_arguments(argv):
         ap.error("--handoff-resumes must be non-negative")
     if args.verify_repeats <= 0:
         ap.error("--verify-repeats must be positive")
+    if args.shape_batch_size <= 0:
+        ap.error("--verify-shape-batch-size must be positive")
     if args.verify_run_timeout <= 0:
         ap.error("--verify-run-timeout must be positive")
     if not 0.0 <= args.min_improvement_pct < 100.0:

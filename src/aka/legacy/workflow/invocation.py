@@ -34,12 +34,15 @@ class WorkflowLaunch:
             if not isinstance(getattr(runtime, name), str):
                 raise TypeError(f"{name} must be a string")
         for name, value in (("timeout", runtime.timeout), ("verify_repeats", runtime.verify_repeats),
+                            ("shape_batch_size", runtime.shape_batch_size),
                             ("verify_run_timeout", runtime.verify_run_timeout),
                             ("environment_poll_interval", self.environment_poll_interval),
                             ("fast_trials", settings.fast_trials),
                             ("framework_baseline_timeout", settings.framework_baseline_timeout)):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if type(settings.resume_framework_candidate) is not bool:
+            raise TypeError("resume_framework_candidate must be a boolean")
         if runtime.timeout > 600 or 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:
             raise ValueError("ABBA verification must fit one allocation of at most 600 seconds")
         if not 0 <= runtime.min_improvement_pct < 100:
