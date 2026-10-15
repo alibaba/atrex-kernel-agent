@@ -88,13 +88,13 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         script = (process_launch.optimizer_entrypoint() if process_launch is not None
                   else request.repo_root / "orchestrator/optimize.py")
         script = Path(script).resolve()
+        bindings = process_launch.optimizer_resources() if process_launch is not None else ()
         paths = [script.name]
-        if script != request.repo_root / "orchestrator/optimize.py":
-            # Hash static internal adapters and selected wiki; generated runtime
-            # views and trace records are outputs, not implementation identity.
+        if script != request.repo_root / "orchestrator/optimize.py" and not bindings:
+            # Historical callers without explicit resource ownership retain their
+            # compatibility identity. Independent launchers declare resources.
             paths.extend(name for name in ("scripts", "gpu-wiki", "skills", "runtime_contract")
                          if (script.parent / name).exists())
-        bindings = process_launch.optimizer_resources() if process_launch is not None else ()
         bound_resources = tuple((path.parent, (path.name,)) if path.is_file() else (path, (".",))
                                 for path in bindings)
         selection = replace(selection, resources=(*selection.resources, *bound_resources, (script.parent, tuple(paths))),
