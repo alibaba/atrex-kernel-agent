@@ -178,4 +178,3 @@ def dispatch_framework_campaigns(
         )
         return 1
     return 0
-

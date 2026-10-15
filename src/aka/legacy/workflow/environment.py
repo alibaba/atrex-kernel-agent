@@ -43,7 +43,7 @@ def prepare_campaign(campaign: Campaign) -> None:
             f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",
             flush=True,
         )
-        campaign._link_runtime() 
+        campaign._link_runtime()
     campaign.ensure_framework_baseline()
     if (
         campaign.optimization_mode == "production"

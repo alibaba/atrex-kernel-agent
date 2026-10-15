@@ -461,5 +461,3 @@ def without_options(argv: list[str], option_names: tuple[str, ...]) -> list[str]
             continue
         cleaned.append(arg)
     return cleaned
-
-
