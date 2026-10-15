@@ -36,6 +36,11 @@ class BackendCapabilities:
             raise UnsupportedExecution("executor does not support in-flight cancellation")
 
 
+class ExecutionUnavailable(RuntimeError):
+    """Explicit service outage; retry the same command without a candidate verdict."""
+    pass
+
+
 class UnsupportedExecution(ValueError):
     pass
 

@@ -3,7 +3,7 @@
 import json
 
 from aka.contracts.acceptance import AcceptanceRequirements
-from aka.contracts.evaluation import EvaluationRequest, VerificationResult
+from aka.contracts.evaluation import EvaluationRequest, VerificationResult, EvaluationUnavailable
 from aka.contracts.experiment import ExperimentExecutionError
 
 
@@ -22,6 +22,8 @@ class FormalVerification:
         )
         try:
             measurement = self.experiment.run(request)
+        except EvaluationUnavailable as exc:
+            return VerificationResult("ERROR", None, None, None, error=str(exc), failure=exc.failure)
         except ExperimentExecutionError as exc:
             return VerificationResult(
                 "ERROR",

@@ -12,12 +12,15 @@ def default_workflow(
     baseline_evaluation=None,
     episode_evaluation=None,
     acceptance_policy=None,
+    workflow_policy=None,
+    workflow_observer=None,
 ):
     from aka.legacy.workflow.composition import compose_workflow
     from .startup import prepare_request
 
     return compose_workflow(
         agent=agent, task=task, optimization_mode=optimization_mode,
+        workflow_policy=workflow_policy, workflow_observer=workflow_observer,
         prepare_request=prepare_request,
         baseline_factory=lambda campaign: baseline_adapter(campaign, baseline_evaluation),
         campaign_runner=lambda campaign: run_campaign(
@@ -74,6 +77,7 @@ def run_campaign(
         ),
         evaluation=None,
         acceptance=policy,
+        policy=services.workflow_policy,
         environment=CampaignEnvironment(campaign),
         max_version=campaign.max_iters,
         fast_episodes=campaign.fast_episodes,

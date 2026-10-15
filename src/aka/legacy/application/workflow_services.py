@@ -186,7 +186,11 @@ class WorkflowServices:
             )
             evaluator = self.create_evaluator()
             if not isinstance(evaluator, LegacyEvaluator):
-                yield LegacyExperiment(bound, evaluator)
+                if formal:
+                    from aka.legacy.experiment.runner import evaluation_stage
+                    yield LegacyExperiment(bound, evaluator, retry=retry_infrastructure, stage=evaluation_stage)
+                else:
+                    yield LegacyExperiment(bound, evaluator)
             elif formal:
                 yield LegacyExperiment(
                     ABBAExecutor(bound),

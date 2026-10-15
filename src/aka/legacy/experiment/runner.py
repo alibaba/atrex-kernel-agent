@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Callable
 
 from aka.contracts.execution import CommandSpec, Executor, JobResult
 from aka.contracts.experiment import ExperimentExecutionError
+from aka.contracts.evaluation import EvaluationUnavailable
 
 if TYPE_CHECKING:
     from aka.contracts.evaluation import EvaluationRequest, Evaluator, VerificationResult
@@ -71,6 +72,8 @@ class LegacyExperiment:
             cancel.set()
             for future in futures:
                 future.cancel()
+            if isinstance(error, EvaluationUnavailable):
+                raise
             if isinstance(error, (subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError)):
                 raise ExperimentExecutionError(str(error)) from error
             raise
@@ -78,6 +81,8 @@ class LegacyExperiment:
             pool.shutdown(wait=True, cancel_futures=True)
         try:
             return self.evaluator.interpret(prepared, results)
+        except EvaluationUnavailable:
+            raise
         except (subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError) as error:
             raise ExperimentExecutionError(str(error)) from error
 
@@ -90,3 +95,14 @@ def abba_stage(repeats: int, shape_batch_size: int):
             f"{max(1, repeats)}:{shape_batch_size}:{Path(command.command[-2]).name}"
         )
     return stage
+
+
+def evaluation_stage(request, index, command):
+    """Stable retry identity for an arbitrary selected Evaluator command."""
+    import hashlib
+    import json
+    digest = hashlib.sha256(json.dumps({
+        "command": command.command, "hardware": command.hardware, "operation": command.operation,
+        "timeout": command.timeout, "artifacts": command.artifacts,
+    }, sort_keys=True).encode()).hexdigest()
+    return f"evaluation:{request.mode}:{request.base_commit}:{request.candidate_commit}:{index}:{digest}"

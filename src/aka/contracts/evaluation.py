@@ -66,7 +66,7 @@ class EvaluationFailure:
 
 
 class EvaluationUnavailable(RuntimeError):
-    """Validation produced no candidate verdict; retain it for a later attempt."""
+    """Validation produced no candidate verdict; baseline callers must stop before repair."""
     def __init__(self, failure: EvaluationFailure):
         self.failure = failure
         super().__init__(failure.message)

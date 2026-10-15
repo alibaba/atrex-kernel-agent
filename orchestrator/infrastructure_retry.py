@@ -16,8 +16,9 @@ INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
 INFRASTRUCTURE_EXIT_CODE = 75
 
 
-class InfrastructureUnavailable(RuntimeError):
-    pass
+from aka.contracts.execution import ExecutionUnavailable
+
+InfrastructureUnavailable = ExecutionUnavailable
 
 
 def check_transport(process: subprocess.CompletedProcess) -> None:
