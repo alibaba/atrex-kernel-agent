@@ -32,12 +32,6 @@ def baseline_adapter(campaign, implementation=None):
     return bind_evaluation(implementation, campaign)
 
 
-def execution_adapter(context):
-    from .execution import CampaignExecution
-
-    return CampaignExecution(context)
-
-
 def run_campaign(
     campaign, *, evaluator_factory=None, episode_evaluation=None, acceptance_policy=None
 ):

@@ -5,33 +5,6 @@ from __future__ import annotations
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.legacy.evaluation import LegacyEvaluator
 
-from aka.legacy.workflow.evaluation import EpisodeMeasurements
-from aka.legacy.evaluation import records
-
-
-class EpisodeEvaluationAdapter(EpisodeMeasurements):
-    """Historical constructor; named record operations remain explicit."""
-
-    def __init__(
-        self,
-        workspace,
-        private_reference_dir,
-        threshold,
-        *,
-        evaluator,
-        acceptance,
-        command,
-    ):
-        super().__init__(
-            workspace,
-            private_reference_dir,
-            threshold,
-            evaluator=evaluator,
-            acceptance=acceptance,
-            records=records,
-            command=lambda argv: command(int(argv[3][1:])),
-        )
-
 
 def episode_adapter(implementation, campaign, *, settings=None, base=None):
     from .workflow import bind_evaluation
