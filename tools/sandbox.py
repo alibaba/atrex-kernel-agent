@@ -4208,8 +4208,9 @@ def main(argv: list[str] | None = None) -> int:
         if selected_execution() != {"profile": "legacy"}:
             from aka.legacy.application.execution_cli import main as selected_main
             prefix = ["--repo-root", str(REPO_ROOT)]
-            if "--workspace" not in arguments and not any(
-                    value.startswith("--workspace=") for value in arguments):
+            options = arguments[:arguments.index("--")] if "--" in arguments else arguments
+            if "--workspace" not in options and not any(
+                    value.startswith("--workspace=") for value in options):
                 prefix += ["--workspace", str(Path.cwd())]
             return selected_main([*prefix, *arguments])
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"

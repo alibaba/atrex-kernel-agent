@@ -42,11 +42,11 @@ def _digest(files):
     return digest.hexdigest()
 
 
-def _sources(campaign, workspace):
+def _sources(campaign, workspace, *, harness=None):
     from .session_io import _production_review_candidate_paths
 
     private = Path(campaign.private_reference_dir or workspace)
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
+    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness or HARNESS}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
@@ -115,7 +115,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
     return retry_infrastructure(workspace, stage, review_once)
 
 
-def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None):
+def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None, harness=None):
     from .session_io import _sandbox_command
 
     shapes = json.loads(shapes_path.read_text())
@@ -125,7 +125,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     if "atrex-bench/run_eval" in (workspace / "test_kernel.py").read_text():
         snapshot = directory / "snapshots" / "evaluator.py"
         snapshot.parent.mkdir()
-        shutil.copy2(HARNESS, snapshot)
+        shutil.copy2(harness or HARNESS, snapshot)
     results = []
     for index, plan in enumerate(schedule):
         if plan.get("status") == "unsupported":
@@ -198,12 +198,12 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     return {"status": status, "probes": results}
 
 
-def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None):
+def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None, harness=None):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
     workspace = Path(workspace)
-    files, shapes = _sources(campaign, workspace)
+    files, shapes = _sources(campaign, workspace, harness=harness)
     digest = _digest(files)
     validation_digest = _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"})
     cache = getattr(campaign, "_supplemental_results", {})
@@ -254,7 +254,8 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 trial = directory / f"probe-{attempt}"
                 trial.mkdir()
                 try:
-                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial, execute=execute)
+                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial,
+                                             execute=execute, harness=harness)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
                     evaluation = {"status": "needs_validation", "diagnosis": str(exc)}
                 record.setdefault("evaluations", []).append(evaluation)

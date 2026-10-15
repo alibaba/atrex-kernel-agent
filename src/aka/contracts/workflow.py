@@ -82,3 +82,28 @@ class Campaign(Protocol):
 
 class Workflow(Protocol):
     def campaign(self, request: CampaignRequest) -> Campaign: ...
+
+
+@dataclass(frozen=True)
+class ConversionBudget:
+    workspace: Path
+    limit: str
+
+
+@dataclass(frozen=True)
+class ConversionBudgetDecision:
+    stop_reason: str
+    warning_code: str = ""
+    message: str = ""
+
+
+class WorkflowPolicy(Protocol):
+    def conversion_budget(self, facts: ConversionBudget) -> ConversionBudgetDecision | None:
+        """None preserves the default hard failure for incomplete conversion."""
+        ...
+
+
+class WorkflowObserver(Protocol):
+    def campaign_started(self, request: CampaignRequest) -> None:
+        """Observe the resolved workspace before preparation; auxiliary failures fail open."""
+        ...

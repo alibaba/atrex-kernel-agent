@@ -27,6 +27,16 @@
       "required": true
     },
     {
+      "id": "workflow-policy",
+      "name": "aka.legacy.workflow.policy",
+      "required": true
+    },
+    {
+      "id": "workflow-observer",
+      "name": "aka.legacy.workflow.observer",
+      "required": true
+    },
+    {
       "id": "workflow",
       "name": "aka.legacy.workflow.plugin",
       "required": true,

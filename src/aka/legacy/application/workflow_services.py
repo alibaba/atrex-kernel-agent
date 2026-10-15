@@ -89,7 +89,8 @@ class BaselineExperiment(LegacyExperiment):
 
 
 class WorkflowServices:
-    def __init__(self, settings, campaign, *, evaluator_factory=None):
+    def __init__(self, settings, campaign, *, evaluator_factory=None, workflow_policy=None,
+                 workflow_observer=None):
         if sum(bool(v) for v in (settings.ssh, settings.url, settings.profile)) > 1:
             raise ValueError(
                 "sandbox_ssh, sandbox_url, and sandbox_profile are mutually exclusive"
@@ -104,6 +105,16 @@ class WorkflowServices:
         if not isinstance(getattr(evaluator_factory, "resources", None), EvaluationResources):
             raise TypeError("factory resources must be EvaluationResources")
         self.evaluator_factory = evaluator_factory
+        if workflow_policy is None:
+            from aka.legacy.workflow.policy import DefaultWorkflowPolicy
+            workflow_policy = DefaultWorkflowPolicy()
+        self.workflow_policy = workflow_policy
+        if workflow_observer is not None:
+            try:
+                workflow_observer.campaign_started(campaign.request)
+            except Exception as error:
+                import sys
+                print(f"[workflow] auxiliary observer failed: {type(error).__name__}", file=sys.stderr)
         self.acceptance = LegacyAcceptancePolicy(
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
@@ -208,6 +219,7 @@ class WorkflowServices:
             workspace,
             standard_correctness_passed=standard_correctness_passed,
             execute=self.numerical_command,
+            harness=self.evaluator_factory.resources.native_harness,
         )
 
     def numerical_command(self, command):

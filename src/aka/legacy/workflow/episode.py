@@ -261,12 +261,23 @@ class LongHorizonCampaign:
     worktree_root: Path | None = None
 
     acceptance: AcceptancePolicy = field(kw_only=True)
+    policy: object | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.fast_episodes < 0:
             raise ValueError("fast_episodes must be non-negative")
         if self.fast_trials < 1:
             raise ValueError("fast_trials must be positive")
+
+    def _conversion_budget(self, limit):
+        from aka.contracts.workflow import ConversionBudget, ConversionBudgetDecision
+        decision = (self.policy.conversion_budget(ConversionBudget(self.workspace, limit))
+                    if self.policy is not None else None)
+        if decision is None:
+            raise RuntimeError(f"mandatory Triton->Gluon conversion did not succeed before {limit}")
+        if not isinstance(decision, ConversionBudgetDecision) or not decision.stop_reason:
+            raise TypeError("WorkflowPolicy must return a conversion decision or None")
+        return decision.stop_reason
 
     @property
     def workspace(self) -> Path:
@@ -1178,7 +1189,12 @@ class LongHorizonCampaign:
                 memory_record=memory,
             )
             attempt["outcome_commit"] = outcome_commit
-            state.consecutive_without_promotion += 1
+            unavailable = verification is not None and verification.gate == "ERROR"
+            attempt["stall_counted"] = not unavailable
+            if unavailable:
+                attempt["verification_infrastructure_error"] = True
+            else:
+                state.consecutive_without_promotion += 1
             self.environment.save_stall(
                 self.workspace, state.consecutive_without_promotion
             )
@@ -1188,7 +1204,7 @@ class LongHorizonCampaign:
                 state.blocked += 1
             elif status == "invalid_handoff":
                 state.protocol_failures += 1
-            else:
+            elif not unavailable:
                 state.rejected += 1
         self._require_canonical_memory(memory_version)
         try:
@@ -1397,6 +1413,7 @@ class LongHorizonCampaign:
                 worktree_path,
             )
             CampaignStore.ensure_excluded(worktree.path)
+            self.environment.link_episode_runtime(self.base_campaign, worktree.path)
             if self._recover_completed_handoff(
                 store,
                 state,
@@ -1642,9 +1659,8 @@ class LongHorizonCampaign:
             if self.max_version is not None:
                 if self.environment.latest_version(self.workspace) >= self.max_version:
                     if conversion_pending:
-                        raise RuntimeError(
-                            "mandatory Triton->Gluon conversion did not succeed before max-iters"
-                        )
+                        reason = self._conversion_budget("max-iters")
+                        break
                     reason = "budget: max-iters"
                     break
             elif self.max_version is None and state.episodes >= self.max_episodes:
@@ -1658,9 +1674,8 @@ class LongHorizonCampaign:
                 break
             if self.token_budget and state.tokens >= self.token_budget:
                 if conversion_pending:
-                    raise RuntimeError(
-                        "mandatory Triton->Gluon conversion did not succeed before token-budget"
-                    )
+                    reason = self._conversion_budget("token-budget")
+                    break
                 reason = "budget: token-budget"
                 break
             resumed = recovered_episode is not None

@@ -5,7 +5,8 @@ from .dependencies import CampaignDependencies
 
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      prepare_request=lambda request, problem: request,
-                     baseline_factory=None, campaign_runner=None, evaluator_factory=None):
+                     baseline_factory=None, campaign_runner=None, evaluator_factory=None,
+                     workflow_policy=None, workflow_observer=None):
     from aka.legacy.agent.selection import LegacyAgent
     from aka.legacy.task.problem.legacy import LegacyProblemProvider
     from aka.legacy.task.source.legacy import LegacySourceProvider
@@ -21,7 +22,8 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
     def services(campaign):
         from aka.legacy.application.workflow_services import WorkflowServices
         return WorkflowServices(campaign.request.runtime, campaign,
-                                evaluator_factory=evaluator_factory)
+                                evaluator_factory=evaluator_factory, workflow_policy=workflow_policy,
+                                workflow_observer=workflow_observer)
 
     def execution(campaign):
         from .execution import CampaignExecution
@@ -68,6 +70,7 @@ def run_campaign(campaign):
         max_version=campaign.max_iters, fast_episodes=campaign.fast_episodes,
         fast_trials=campaign.fast_trials, token_budget=campaign.token_budget,
         handoff_resumes=campaign.handoff_resumes, max_stall=campaign.max_stall,
+        policy=services.workflow_policy,
     )
     engine.evaluation = EpisodeMeasurements(
         campaign.workspace, campaign.private_reference_dir, settings.min_improvement_pct,

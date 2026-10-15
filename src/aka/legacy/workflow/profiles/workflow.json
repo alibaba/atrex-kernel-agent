@@ -6,7 +6,9 @@
     "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
     "agent": "aka.legacy.agent.plugin:AGENT",
     "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
-    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
+    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
+    "workflow_policy": "aka.legacy.workflow.policy:WORKFLOW_POLICY",
+    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"
   },
   "composition": "workflow",
   "target": "startup",
@@ -16,6 +18,8 @@
     "candidate",
     "agent",
     "evaluator_factory",
+    "workflow_policy",
+    "workflow_observer",
     "workflow"
   ],
   "resources": [
@@ -85,6 +89,8 @@
     "candidate",
     "agent",
     "evaluator_factory",
+    "workflow_policy",
+    "workflow_observer",
     "workflow"
   ]
 }

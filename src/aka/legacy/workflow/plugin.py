@@ -5,7 +5,7 @@ from aka.core.keys import ServiceKey
 WORKFLOW = ServiceKey("workflow", "Workflow", module="aka.contracts.workflow")
 name = "workflow"
 provide = ("workflow",)
-inject = ("agent", "problem", "source", "candidate", "evaluator_factory")
+inject = ("agent", "problem", "source", "candidate", "evaluator_factory", "workflow_policy", "workflow_observer")
 identity_packages = (
     "aka.legacy.workflow",
     "aka.contracts.workflow",
@@ -31,6 +31,8 @@ def apply(ctx, config):
         agent=ctx.agent,
         task=dict(problem=ctx.problem, source=ctx.source, workspace=ctx.candidate),
         evaluator_factory=ctx.evaluator_factory,
+        workflow_policy=ctx.workflow_policy,
+        workflow_observer=ctx.workflow_observer,
     )
     ctx.effect(workflow.close, label="close Workflow selection")
     ctx.provide(WORKFLOW, workflow)

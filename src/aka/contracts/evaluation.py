@@ -34,13 +34,14 @@ class VerificationResult:
     artifact: str = ""
     candidate_performance_score: float | None = None
     incumbent_performance_score: float | None = None
+    failure: EvaluationFailure | None = None
 
     @property
     def passed(self) -> bool:
         return self.gate == "PASS" and not self.error
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "gate": self.gate,
             "candidate_latency_us": self.candidate_latency_us,
             "incumbent_latency_us": self.incumbent_latency_us,
@@ -51,6 +52,24 @@ class VerificationResult:
             "error": self.error or None,
             "artifact": self.artifact or None,
         }
+        if self.failure is not None:
+            value["failure"] = asdict(self.failure)
+        return value
+
+
+@dataclass(frozen=True)
+class EvaluationFailure:
+    category: str
+    code: str
+    message: str
+    candidate_repairable: bool = False
+
+
+class EvaluationUnavailable(RuntimeError):
+    """Validation produced no candidate verdict; retain it for a later attempt."""
+    def __init__(self, failure: EvaluationFailure):
+        self.failure = failure
+        super().__init__(failure.message)
 
 
 @dataclass(frozen=True)

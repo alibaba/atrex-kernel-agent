@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from aka.contracts.evaluation import EvaluationRequest
+from aka.contracts.evaluation import EvaluationRequest, EvaluationUnavailable
 from aka.contracts.experiment import ExperimentExecutionError
 from aka.contracts.acceptance import FrameworkCandidateRequest
 from aka.legacy.evaluation.local_results import _record_local_test_result
@@ -111,6 +111,8 @@ class WorkflowBaseline:
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
         if not verification.passed:
+            if verification.failure is not None and not verification.failure.candidate_repairable:
+                raise EvaluationUnavailable(verification.failure)
             return None, verification.error
         return verification.runs[0].result, ""
 
@@ -354,6 +356,8 @@ class WorkflowBaseline:
                 ]
             try:
                 result, validation_problem = validation_future.result()
+            except EvaluationUnavailable:
+                raise
             except Exception as exc:
                 result, validation_problem = (
                     None,
