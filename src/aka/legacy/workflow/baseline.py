@@ -87,6 +87,10 @@ class WorkflowBaseline:
                     f"sandbox V0 baseline produced no usable result: {cause}"
                 ) from cause
             raise cause if cause is not None else exc
+        if verification.failure is not None:
+            raise EvaluationUnavailable(verification.failure)
+        if not verification.runs:
+            raise RuntimeError("sandbox V0 baseline produced no usable result: " + verification.error)
         result = verification.runs[0].result
         memory = _record_local_test_result(workspace, "v0", result)
         if not verification.passed:

@@ -32,7 +32,10 @@ class RetainedWorkflowExport:
                            key=lambda path: int(path.stem[1:]) if path.stem[1:].isdigit() else 2**31):
             if not re.fullmatch(r"v\d+", path.stem):
                 continue
-            content = path.read_bytes()
+            try:
+                content = path.read_bytes()
+            except FileNotFoundError:
+                continue
             try:
                 memory = json.loads(content)
             except (UnicodeDecodeError, json.JSONDecodeError):

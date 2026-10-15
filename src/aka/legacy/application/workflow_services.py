@@ -1,6 +1,7 @@
 """Assemble per-Campaign dependencies; business consumers borrow public contracts."""
 
 from contextlib import contextmanager
+from aka.legacy.execution.legacy.executor import LegacyExecutor
 
 from aka.legacy.evaluation import LegacyEvaluator, EvaluationConfiguration
 from aka.legacy.evaluation.baseline import (
@@ -179,7 +180,8 @@ class WorkflowServices:
                 ssh=s.ssh,
                 ssh_init=s.ssh_init,
                 health_command=s.health_command,
-                wall_timeout=s.timeout + 14_400 + 120 if formal else None,
+                wall_timeout=(s.timeout + 14_400 + 120
+                              if formal and isinstance(selected, LegacyExecutor) else None),
                 private_reference_dir=self.campaign.private_reference_dir,
             )
             evaluator = self.create_evaluator()

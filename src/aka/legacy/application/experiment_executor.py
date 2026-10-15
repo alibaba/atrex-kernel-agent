@@ -38,7 +38,8 @@ class SandboxExecutor:
             preflight=command.operation == "preflight", cancel_event=command.cancel_event,
         )
         if not isinstance(self.executor, LegacyExecutor):
-            if any((request.profile, request.url, request.ssh)):
+            if any((request.profile, request.url, request.ssh, request.ssh_init, request.health_command,
+                    request.wall_timeout is not None)):
                 raise UnsupportedExecution("selected executor owns endpoint configuration; omit legacy endpoint options")
             bound = replace(command, environment=request.environment, hardware=request.hardware)
             self.executor.capabilities.require(bound)
