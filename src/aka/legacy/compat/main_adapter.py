@@ -4,7 +4,7 @@ from orchestrator.agent_runtime import process as _agent_process
 from aka.legacy.workflow.environment import (
     prepare_campaign, link_episode_runtime, episode_directives, run_sandbox,
     candidate_policy_violations, conversion_required, candidate_is_gluon,
-    restored_stall, save_stall,
+    restored_stall, save_stall, latest_version,
 )
 
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
