@@ -21,6 +21,7 @@ from orchestrator.hardware import hardware_vendor
 from . import main_adapter
 from .git_episode import (
     EpisodeWorktree,
+    clean_probe_artifacts,
     git_head,
     git_text,
     promote_candidate,
@@ -1998,6 +1999,7 @@ class LongHorizonCampaign:
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
+            clean_probe_artifacts(self.workspace)
             conversion_pending = main_adapter.conversion_required(
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
