@@ -67,6 +67,7 @@
     "optimizer_script": "${aka:repo_root}/orchestrator/optimize.py"
   },
   "environment": [
+    "ATREX_PLUGIN_DIR",
     "ATREX_WORKFLOW_OUTPUT_DIR",
     "ATREX_WORKFLOW_RUNTIME_CONTEXT",
     "ATREX_RUNTIME_POLICY",
