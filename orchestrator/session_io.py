@@ -21,7 +21,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import agent_runtime as _agent_runtime
+from ._bootstrap import task_modules
+
+task_modules()
+from aka.legacy import agent as _agent_runtime
 from .constants import (
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
@@ -170,28 +173,18 @@ def run_session(
             agent_cli,
             process_runner=_agent_runtime.run_bounded,
         )
-    from aka.legacy.compat.agent import invocation_request, AgentRunRequest
+    from aka.contracts.agent import AgentRunRequest
+    from aka.legacy.execution.environment import session_environment
 
-    result = runtime.run(
-        invocation_request(
-            AgentRunRequest(
-                workspace=workspace,
-                prompt=prompt,
-                timeout_s=timeout,
-                reasoning_effort=reasoning_effort,
-                sandbox_hardware=sandbox_hardware,
-                sandbox_profile=sandbox_profile,
-                sandbox_url=sandbox_url,
-                sandbox_ssh=sandbox_ssh,
-                sandbox_ssh_init=sandbox_ssh_init,
-                sandbox_health_command=sandbox_health_command,
-                sandbox_timeout_s=sandbox_timeout,
-                environment_state_file=str(environment_state_file() or ""),
-                session_id=session_id,
-                extra_environment=extra_environment,
-            )
-        )
+    environment = session_environment(
+        hardware=sandbox_hardware, profile=sandbox_profile, url=sandbox_url,
+        timeout=sandbox_timeout, ssh=sandbox_ssh, ssh_init=sandbox_ssh_init,
+        health_command=sandbox_health_command,
+        state_file=str(environment_state_file() or ""), extra=extra_environment,
     )
+    result = runtime.run(AgentRunRequest(
+        workspace, prompt, timeout, reasoning_effort, session_id, environment,
+    ))
     raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,

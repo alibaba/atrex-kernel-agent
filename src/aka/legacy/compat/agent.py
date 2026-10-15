@@ -31,43 +31,14 @@ class AgentRunRequest:
 def invocation_request(request):
     if isinstance(request, InvocationRequest):
         return request
-    environment = {str(k): str(v) for k, v in (request.extra_environment or {}).items()}
-    remove = []
-    if request.sandbox_hardware:
-        environment["ATREX_SANDBOX_GPU"] = request.sandbox_hardware
-    for value, key, others in (
-        (
-            request.sandbox_ssh,
-            "ATREX_SANDBOX_SSH",
-            ("ATREX_SANDBOX_URL", "ATREX_SANDBOX_PROFILE"),
-        ),
-        (
-            request.sandbox_url,
-            "ATREX_SANDBOX_URL",
-            ("ATREX_SANDBOX_SSH", "ATREX_SANDBOX_PROFILE"),
-        ),
-        (
-            request.sandbox_profile,
-            "ATREX_SANDBOX_PROFILE",
-            ("ATREX_SANDBOX_SSH", "ATREX_SANDBOX_URL"),
-        ),
-    ):
-        if value:
-            environment[key] = value
-            for other in others:
-                environment.pop(other, None)
-            remove.extend(others)
-            break
-    for value, key in (
-        (request.sandbox_ssh_init, "ATREX_SANDBOX_SSH_INIT"),
-        (request.sandbox_health_command, "ATREX_SANDBOX_HEALTH_COMMAND"),
-        (request.environment_state_file, "ATREX_ENVIRONMENT_STATE_FILE"),
-    ):
-        if value:
-            environment[key] = value
-    environment["ATREX_SANDBOX_TIMEOUT"] = str(request.sandbox_timeout_s)
-    for key in remove:
-        environment[key] = None
+    from aka.legacy.execution.environment import session_environment
+    environment = session_environment(
+        hardware=request.sandbox_hardware, profile=request.sandbox_profile,
+        url=request.sandbox_url, timeout=request.sandbox_timeout_s,
+        ssh=request.sandbox_ssh, ssh_init=request.sandbox_ssh_init,
+        health_command=request.sandbox_health_command,
+        state_file=request.environment_state_file, extra=request.extra_environment,
+    )
     return InvocationRequest(
         request.workspace,
         request.prompt,
