@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--patch", type=Path, action="append", default=[])
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--workspace", type=Path, required=True)
-    parser.add_argument("--hardware", required=True)
+    parser.add_argument("--hardware", default=os.environ.get("ATREX_SANDBOX_GPU", ""))
     parser.add_argument("--gateway-profile", default="")
     parser.add_argument("--url", default="")
     parser.add_argument("--ssh", default="")
@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
+    if not arguments.hardware:
+        parser.error("--hardware or ATREX_SANDBOX_GPU is required")
     if arguments.no_sync and arguments.sync:
         parser.error("--no-sync and --sync are mutually exclusive")
     root = arguments.repo_root.expanduser().resolve()
