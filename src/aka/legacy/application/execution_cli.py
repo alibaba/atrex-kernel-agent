@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--health-command", default=None)
     parser.add_argument("--sync", action="append", default=[])
     parser.add_argument("--no-sync", action="store_true")
-    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--timeout", type=int, default=int(os.environ.get("ATREX_SANDBOX_TIMEOUT", "600")))
     parser.add_argument("--wall-timeout", type=int)
     parser.add_argument("--kind", choices=("auto", "run", "profile", "dev"), default="auto")
     parser.add_argument("--preflight", action="store_true")
