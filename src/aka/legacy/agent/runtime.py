@@ -34,7 +34,7 @@ from .model import (
 )
 from aka.legacy.agent.process import ProcessRunner, protected_gateway_identity, run_bounded
 
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 
 REPO_ROOT = checkout_root()
 SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
@@ -117,7 +117,9 @@ class CliAgentRuntime:
         *,
         process_runner: ProcessRunner = run_bounded,
         check_open=None,
+        session_name="",
     ) -> None:
+        self._session_name = session_name
         self._adapter = adapter
         self._process_runner = process_runner
         self._check_open = check_open
@@ -129,12 +131,10 @@ class CliAgentRuntime:
     def build_command(
         self, prompt: str, session_id: str, reasoning_effort: str
     ) -> list[str]:
-        return self._adapter.build_command(
-            prompt,
-            session_id,
-            reasoning_effort,
-            self._session_settings(),
-        )
+        command = self._adapter.build_command(prompt, session_id, reasoning_effort, self._session_settings())
+        if self.id == "claude" and self._session_name and "--name" not in command:
+            command[1:1] = ["--name", self._session_name.format(session_id=session_id)]
+        return command
 
     def _session_settings(self) -> str:
         return os.environ.get(self._adapter.settings_variable) or os.environ.get(
@@ -309,10 +309,11 @@ def build_agent_runtime(
     runtime_assets_dir: Path | None = None,
     registry: BackendAdapterRegistry = DEFAULT_BACKEND_REGISTRY,
     check_open=None,
+    session_name="",
 ) -> AgentRuntime:
     adapter = registry.create(runtime_id, runtime_assets_dir)
     return CliAgentRuntime(
-        adapter, process_runner=process_runner, check_open=check_open
+        adapter, process_runner=process_runner, check_open=check_open, session_name=session_name
     )
 
 

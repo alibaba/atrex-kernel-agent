@@ -29,16 +29,9 @@ def run_session(
     prompt: str,
     timeout: int,
     agent_cli: str = "claude",
-    sandbox_hardware: str = "",
-    sandbox_profile: str = "",
-    sandbox_url: str = "",
-    sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT,
     reasoning_effort: str = "max",
     extra_environment: Optional[dict[str, str]] = None,
     agent_plugins: bool = True,
-    sandbox_ssh: str = "",
-    sandbox_ssh_init: str = "",
-    sandbox_health_command: str = "",
     runtime: _agent_runtime.AgentRuntime | None = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
@@ -55,9 +48,6 @@ def run_session(
     from aka.legacy.execution.environment import session_environment
 
     environment = session_environment(
-        hardware=sandbox_hardware, profile=sandbox_profile, url=sandbox_url,
-        timeout=sandbox_timeout, ssh=sandbox_ssh, ssh_init=sandbox_ssh_init,
-        health_command=sandbox_health_command,
         state_file=str(environment_state_file() or ""), extra=extra_environment,
     )
     result = runtime.run(AgentRunRequest(

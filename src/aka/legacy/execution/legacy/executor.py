@@ -11,6 +11,7 @@ import signal
 import subprocess
 import time
 from dataclasses import replace
+from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
 from .runtime import ExecutionHooks, SandboxRequest, current_invocation
@@ -52,7 +53,7 @@ class LegacyExecutor:
         if sum(bool(value) for value in (ssh, url, profile)) > 1:
             raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
         cmd = [
-            *request.launcher,
+            request.launcher[0], "-m", "aka.legacy.execution.gateway.sandbox",
             "--kind",
             gateway_kind,
             "--hardware",
@@ -82,6 +83,9 @@ class LegacyExecutor:
         else:
             cmd += ["--", *command]
         environment = dict(request.environment)
+        package_root = str(Path(__file__).resolve().parents[4])
+        environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
+            [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
         if wall_timeout is not None:
             effective_timeout = wall_timeout
         else:

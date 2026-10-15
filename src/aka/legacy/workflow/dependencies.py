@@ -14,7 +14,7 @@ import subprocess
 if TYPE_CHECKING:
     from .models import VerificationResult
     from .campaign import Campaign
-    from aka.legacy.application.workflow_services import WorkflowServices
+    from aka.legacy.workflow.services import WorkflowServices
 
 
 class BaselineOperations(Protocol):

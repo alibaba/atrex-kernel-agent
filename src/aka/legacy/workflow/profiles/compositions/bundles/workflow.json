@@ -2,6 +2,11 @@
   "api_version": 1,
   "entries": [
     {
+      "id": "resources",
+      "name": "aka.legacy.resources.plugin",
+      "required": true
+    },
+    {
       "id": "problem",
       "name": "aka.legacy.task.problem.plugin",
       "required": true
@@ -19,6 +24,16 @@
     {
       "id": "agent",
       "name": "aka.legacy.agent.plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation",
+      "name": "aka.legacy.evaluation.plugin",
+      "required": true
+    },
+    {
+      "id": "workflow-observer",
+      "name": "aka.legacy.workflow.observer",
       "required": true
     },
     {

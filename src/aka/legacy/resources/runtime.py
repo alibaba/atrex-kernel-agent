@@ -98,7 +98,7 @@ def link_runtime(
     plugin_registry: PluginRegistry | None = None,
     provider=None,
 ):
-    from aka.legacy.application.workspace import candidate_workspace
+    from aka.legacy.task.candidate_workspace.selection import candidate_workspace
     with candidate_workspace(provider=provider) as provider:
         return provider.install_runtime(workspace, atrex_bench_root,
                                  is_ppu=is_ppu,

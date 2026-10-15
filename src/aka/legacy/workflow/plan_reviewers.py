@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 
 REPO_ROOT = checkout_root()
 PLAN_REVIEWER_CACHE = Path(".atrex_long_horizon/plan_reviewer_availability.json")

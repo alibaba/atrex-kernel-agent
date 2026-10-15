@@ -8,7 +8,7 @@ if __package__ in (None, ""):
 
 def main(argv=None, *, repo_root=None):
     from aka.contracts.application import ApplicationRequest
-    from aka.legacy.application.paths import checkout_root
+    from aka.legacy.resources.checkout import checkout_root
     from aka.legacy.compat.host import run_application
     root = checkout_root() if repo_root is None else Path(repo_root).resolve()
     added = str(root) not in sys.path

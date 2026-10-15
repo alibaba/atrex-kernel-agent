@@ -98,7 +98,7 @@ def sandbox_command(
     cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through tools/sandbox.py and capture its user-visible output."""
-    from aka.legacy.application import execution
+    from aka.legacy.execution import selection as execution
     from aka.legacy.execution.legacy import runtime
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
@@ -116,7 +116,7 @@ def sandbox_command(
         spawn=spawn_owned_session, check_environment=raise_if_environment_blocked,
         queue_wait_grace=queue_wait_grace,
     )
-    with execution.application_execution() as executor:
+    with execution.execution_scope() as executor:
         return execution.run_sandbox(executor, request, hooks=hooks)
 
 

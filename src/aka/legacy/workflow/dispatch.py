@@ -113,15 +113,17 @@ def dispatch_framework_campaigns(
                     workspace_base=workspace_base, workspace_suffix=workspace_suffix,
                     restart_arguments=()))
             cmd = [sys.executable, str(optimizer_script), *arguments]
-            from aka.legacy.application.processes import child_environment as launch_environment
+            from aka.legacy.workflow.process_environment import child_environment as launch_environment
             child_environment = os.environ.copy()
             for name, value in launch_environment().items():
                 if value is None:
                     child_environment.pop(name, None)
                 else:
                     child_environment[name] = value
-            from aka.legacy.application import execution
+            from aka.legacy.execution import selection as execution
             child_environment = execution.execution_environment(child_environment)
+            package_root = str(Path(__file__).resolve().parents[3])
+            child_environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys([package_root, *child_environment.get("PYTHONPATH", "").split(os.pathsep)]))
             child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
             proc = subprocess.Popen(
                 cmd,

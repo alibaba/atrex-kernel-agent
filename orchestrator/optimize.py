@@ -10,7 +10,7 @@ def main(argv=None):
     if (source / "aka" / "bootstrap" / "host.py").is_file():
         sys.path.insert(0, str(source))
     from aka.legacy.compat.entry import main as launch
-    from aka.legacy.compat.launch import use_optimizer_entrypoint
+    from aka.legacy.workflow.launcher import use_optimizer_entrypoint
     with use_optimizer_entrypoint(Path(__file__)):
         return launch(argv, repo_root=root)
 

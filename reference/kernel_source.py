@@ -10,8 +10,8 @@ _source_packages = root / "src"
 if _source_packages.is_dir():
     sys.path.insert(0, str(_source_packages))
 
-from aka.legacy.application.source import source_provider
-from aka.legacy.application.workspace import candidate_workspace
+from aka.legacy.task.source.selection import source_provider
+from aka.legacy.task.candidate_workspace.selection import candidate_workspace
 
 
 def _usage_error(message, usage):

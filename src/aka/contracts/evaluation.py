@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from .execution import CommandSpec, JobResult
+from .workspace import CandidateWorkspace
 
 
 @dataclass(frozen=True)
@@ -33,13 +34,14 @@ class VerificationResult:
     artifact: str = ""
     candidate_performance_score: float | None = None
     incumbent_performance_score: float | None = None
+    failure: EvaluationFailure | None = None
 
     @property
     def passed(self) -> bool:
         return self.gate == "PASS" and not self.error
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "gate": self.gate,
             "candidate_latency_us": self.candidate_latency_us,
             "incumbent_latency_us": self.incumbent_latency_us,
@@ -50,6 +52,24 @@ class VerificationResult:
             "error": self.error or None,
             "artifact": self.artifact or None,
         }
+        if self.failure is not None:
+            value["failure"] = asdict(self.failure)
+        return value
+
+
+@dataclass(frozen=True)
+class EvaluationFailure:
+    category: str
+    code: str
+    message: str
+    candidate_repairable: bool = False
+
+
+class EvaluationUnavailable(RuntimeError):
+    """Validation produced no candidate verdict; baseline callers must stop before repair."""
+    def __init__(self, failure: EvaluationFailure):
+        self.failure = failure
+        super().__init__(failure.message)
 
 
 @dataclass(frozen=True)
@@ -80,3 +100,34 @@ class Evaluator(Protocol):
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
     ) -> VerificationResult: ...
+
+
+@dataclass(frozen=True)
+class EvaluationConfiguration:
+    timeout: int = 600
+    repeats: int = 2
+    per_run_timeout: int = 120
+    shape_batch_size: int = 4
+    max_parallelism: int = 4
+    private_reference_dir: Path | None = None
+    native: bool = False
+
+
+@dataclass(frozen=True)
+class EvaluationResources:
+    """Provider-owned immutable evaluator script installed in a candidate workspace."""
+    native_harness: Path | None = None
+
+
+class EvaluatorFactory(Protocol):
+    """Create isolated measurement state for each configured experiment.
+
+    The host borrows the returned Evaluator for one operation. The provider owns
+    command preparation and interpretation; the host owns execution and retries.
+    """
+
+    @property
+    def resources(self) -> EvaluationResources: ...
+
+    def create(self, configuration: EvaluationConfiguration, *,
+               candidate_workspace: CandidateWorkspace) -> Evaluator: ...

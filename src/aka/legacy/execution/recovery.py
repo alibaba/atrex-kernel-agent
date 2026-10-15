@@ -1,5 +1,5 @@
 from __future__ import annotations
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 
 import hashlib
 import json
@@ -183,8 +183,8 @@ def configure_recovery(
         os.environ[ENVIRONMENT_STATE_ENV] = str(inherited)
     ensure_private_directory(directory)
 
-    from aka.legacy.application.recovery import MIGRATION_FILE, complete_migration, has_selection
-    from aka.legacy.application.processes import child_environment
+    from aka.legacy.workflow.launch_migration import MIGRATION_FILE, complete_migration, has_selection
+    from aka.legacy.workflow.process_environment import child_environment
     if has_selection(directory / MIGRATION_FILE) and not child_environment():
         raise RuntimeError("pending recovery migration requires reconstructed launch selection")
     complete_migration(directory, owner=owner,
@@ -205,7 +205,7 @@ def configure_recovery(
     os.environ.pop("ATREX_SANDBOX_PROFILE", None)
     os.environ[RECOVERY_OWNER_ENV] = "1" if owner else "0"
 
-    from aka.legacy.application.processes import recovery_environment, schema3_recovery_allowed
+    from aka.legacy.workflow.process_environment import recovery_environment, schema3_recovery_allowed
     selection_environment = recovery_environment(directory, persist=False)
     if selection_environment:
         stable_metadata["launch_environment"] = selection_environment
@@ -263,8 +263,8 @@ def configure_recovery(
         }
         if legacy_upgrade:
             from aka.bootstrap.continuation import read as read_launch_selection
-            from aka.legacy.application.processes import child_environment
-            from aka.legacy.application.recovery import begin_migration
+            from aka.legacy.workflow.process_environment import child_environment
+            from aka.legacy.workflow.launch_migration import begin_migration
             begin_migration(directory, existing, metadata, read_launch_selection(child_environment()))
         else:
             recovery_environment(directory)
@@ -317,7 +317,7 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
         return None
     monitor = checkout_root() / "tools" / "monitor_optimize_tasks.py"
     log_path = context.directory / "monitor.log"
-    from aka.legacy.application import execution
+    from aka.legacy.execution import selection as execution
     environment = execution.execution_environment(os.environ)
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(

@@ -81,6 +81,32 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
         value = json.loads(profile.read_text())
     except (OSError, ValueError) as exc:
         raise CompositionError(str(profile), f"cannot read launch profile: {exc}") from exc
+    if isinstance(value, dict) and "extends" in value:
+        reference = value["extends"]
+        if not isinstance(reference, str) or ":" not in reference:
+            raise CompositionError(str(profile), "extends must reference module:relative-profile")
+        module, relative = reference.split(":", 1)
+        if (not module or any(not part.isidentifier() for part in module.split("."))
+                or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts):
+            raise CompositionError(str(profile), "invalid extended profile path")
+        from importlib.resources import files
+        try:
+            parent_path = Path(str(files(module).joinpath(relative))).resolve()
+            if parent_path == profile:
+                raise CompositionError(str(profile), "profile cannot extend itself")
+            inherited = json.loads(parent_path.read_text())
+        except (ImportError, OSError, ValueError) as exc:
+            raise CompositionError(str(profile), "extended launch profile is unavailable or malformed") from exc
+        if not isinstance(inherited, dict):
+            raise CompositionError(str(profile), "extended launch profile must be an object")
+        if "extends" in inherited:
+            raise CompositionError(str(profile), "nested profile extension is unsupported")
+        for key in ("resources", "environment"):
+            if any(not isinstance(document.get(key, []), list) for document in (value, inherited)):
+                raise CompositionError(str(profile), f"{key} must be an array")
+        value = {**inherited, **{key:item for key,item in value.items() if key != "extends"},
+                 "resources":[*inherited.get("resources", []), *value.get("resources", [])],
+                 "environment":list(dict.fromkeys([*inherited.get("environment", []), *value.get("environment", [])]))}
     fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "bindings", "environment", "doc"}
     version = value.get("api_version") if isinstance(value, dict) else None
     if version == 2:

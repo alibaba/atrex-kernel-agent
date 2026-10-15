@@ -32,6 +32,7 @@ def _record_local_test_result(workspace: Path, version: str, result: dict) -> Pa
     data.setdefault("masked", False)
     data["timestamp"] = datetime.now(timezone.utc).isoformat()
     perf = data.setdefault("performance", {})
+    perf["measurement_conditions"] = result.get("measurement_conditions", {})
     perf["latency_us"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_geomean"] = result.get("latency_us_geomean", 0.0)
     perf["latency_us_arith_mean"] = result.get("latency_us_arith_mean", 0.0)

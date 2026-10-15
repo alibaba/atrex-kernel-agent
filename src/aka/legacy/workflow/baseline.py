@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from aka.contracts.evaluation import EvaluationRequest
+from aka.contracts.evaluation import EvaluationRequest, EvaluationUnavailable
 from aka.contracts.experiment import ExperimentExecutionError
 from aka.contracts.acceptance import FrameworkCandidateRequest
 from aka.legacy.evaluation.local_results import _record_local_test_result
@@ -18,14 +18,13 @@ from aka.legacy.task.candidate_workspace.state import git_path_blob, git_worktre
 
 class WorkflowBaseline:
     def __init__(
-        self, campaign, *, preparation, experiment, acceptance, command, sol_seed
+        self, campaign, *, preparation, experiment, acceptance, command
     ):
         self.campaign = campaign
         self.preparation = preparation
         self.experiment = experiment
         self.acceptance = acceptance
         self.command = command
-        self.sol_seed = sol_seed
 
     def evaluator_directive(self):
         return self.preparation(True).evaluator_directive()
@@ -82,6 +81,10 @@ class WorkflowBaseline:
                     f"sandbox V0 baseline produced no usable result: {cause}"
                 ) from cause
             raise cause if cause is not None else exc
+        if verification.failure is not None:
+            raise EvaluationUnavailable(verification.failure)
+        if not verification.runs:
+            raise RuntimeError("sandbox V0 baseline produced no usable result: " + verification.error)
         result = verification.runs[0].result
         memory = _record_local_test_result(workspace, "v0", result)
         if not verification.passed:
@@ -106,6 +109,8 @@ class WorkflowBaseline:
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
         if not verification.passed:
+            if verification.failure is not None and not verification.failure.candidate_repairable:
+                raise EvaluationUnavailable(verification.failure)
             return None, verification.error
         return verification.runs[0].result, ""
 
@@ -199,14 +204,6 @@ class WorkflowBaseline:
             raise RuntimeError(
                 "native V0 requires workspace kernel.py and reference.py"
             )
-        if (
-            kernel_path.read_bytes()
-            != self.campaign._loaded_problem().initial_source.entry.read_bytes()
-        ):
-            raise RuntimeError(
-                "native V0 kernel.py differs from the selected initial implementation; refusing "
-                "mechanical baseline generation"
-            )
         (self.campaign.workspace / "README.md").write_text(
             self.native_v0_readme(generalized=generalized), encoding="utf-8"
         )
@@ -275,40 +272,19 @@ class WorkflowBaseline:
             )
 
     def setup_baseline_sol(self, op_dir: Path) -> None:
-        if not self.sol_seed.exists():
-            raise FileNotFoundError(f"missing {self.sol_seed}")
-        cmd = [
-            sys.executable,
-            str(self.sol_seed),
-            "--op-dir",
-            str(op_dir),
-            "--name",
-            self.campaign.campaign_name,
-            "--workspace",
-            str(self.campaign.workspace),
-            "--framework",
-            self.campaign.framework,
-            "--platform",
-            self.campaign.platform,
-            # The local step only materializes sources and git state.  GPU
-            # correctness/performance is run below in the remote sandbox.
-            "--no-bench",
-        ]
-        from reference import sol_seed
+        from aka.contracts.workspace import SourceRequest
+        from aka.legacy.resources.paths import REPO_ROOT
 
-        sol_seed.main(
-            cmd[2:],
-            dependencies=dict(
-                problem=self.campaign.problem_provider,
-                source=self.campaign.source_provider,
-                workspace=self.campaign.candidate_workspace,
-            ),
-            problem=self.campaign._loaded_problem(),
+        problem = self.campaign._loaded_problem()
+        content = self.campaign.source_provider.prepare(SourceRequest(
+            kind="sol", initial=problem.initial_source, name=self.campaign.campaign_name,
+            framework=self.campaign.framework, platform=self.campaign.platform,
+        ))
+        source_commit = self.campaign.candidate_workspace.prepare_sol(
+            self.campaign.workspace, content, problem_files=problem.agent.files,
+            reference_dir=REPO_ROOT / "reference",
         )
         self.campaign._link_runtime()
-        source_commit = v0_baseline_commit(self.campaign.workspace)
-        if not source_commit:
-            raise RuntimeError("SOL V0 has no committed kernel.py")
         result = self.campaign._run_v0_evaluator_with_correctness_prefetch()
         self.finalize_v0_measurement(
             result,
@@ -350,6 +326,8 @@ class WorkflowBaseline:
                 ]
             try:
                 result, validation_problem = validation_future.result()
+            except EvaluationUnavailable:
+                raise
             except Exception as exc:
                 result, validation_problem = (
                     None,

@@ -127,9 +127,9 @@ def _merge_batch_results(
             and performance_score is not None
             and all(result.get("all_pass") for result in results),
             "failures": failures,
-            "latency_us_geomean": _geomean(latencies),
+            "latency_us_geomean": None if missing_shape_ids else _geomean(latencies),
             "latency_us_arith_mean": (
-                sum(latencies) / len(latencies) if latencies else 0.0
+                None if missing_shape_ids else sum(latencies) / len(latencies) if latencies else 0.0
             ),
             "latency_us_by_shape": latency_by_shape,
             "speedup_vs_ref_mean": performance_score,

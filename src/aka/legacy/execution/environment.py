@@ -21,5 +21,5 @@ def session_environment(*, hardware="", profile="", url="", timeout=600,
                        (state_file, "ATREX_ENVIRONMENT_STATE_FILE")):
         if value:
             environment[key] = value
-    environment["ATREX_SANDBOX_TIMEOUT"] = str(timeout)
+    environment.setdefault("ATREX_SANDBOX_TIMEOUT", str(timeout))
     return environment

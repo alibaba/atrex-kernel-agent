@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from aka.legacy.execution.processes import spawn_owned_session
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75

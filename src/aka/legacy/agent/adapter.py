@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
@@ -326,6 +327,8 @@ class ClaudeAdapter(ClaudeLikeAdapter):
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
+            *(["--name", os.environ["ATREX_CLAUDE_SESSION_NAME"].format(session_id=session_id)]
+              if os.environ.get("ATREX_CLAUDE_SESSION_NAME") else []),
             "--session-id",
             session_id,
             "--effort",

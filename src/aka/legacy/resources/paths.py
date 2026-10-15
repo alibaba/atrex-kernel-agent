@@ -4,7 +4,7 @@ from __future__ import annotations
 from importlib.resources import files
 from pathlib import Path
 
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 
 
 REPO_ROOT = checkout_root()
@@ -18,7 +18,6 @@ PROBLEM_PROMPTS_DIR = Path(str(files("aka.legacy.task.problem").joinpath("prompt
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 
 
-SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 
 
 ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"

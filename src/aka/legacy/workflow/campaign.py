@@ -299,7 +299,7 @@ class Campaign:
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         environment.update(self.execution.environment())
-        if self.request.runtime.ssh:
+        if self.execution.uses_ssh:
             environment.pop("ATREX_SANDBOX_URL", None)
             environment.pop("ATREX_SANDBOX_PROFILE", None)
         state_file = environment_state_file()
@@ -591,7 +591,7 @@ class Campaign:
     @cached_property
     def source_checks_enabled(self) -> bool:
         """Freeze policy from trusted inputs, never candidate worktree metadata."""
-        if self.request.runtime.ssh:
+        if self.execution.uses_ssh:
             return True
         reference = self.private_reference_dir
         if reference is not None:
@@ -652,7 +652,7 @@ class Campaign:
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
-        # (no baseline session) — sol_seed.py copies the ground-truth files, writes
+        # (no baseline session) — Task installs the ground-truth files, writes
         # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
         problem = self._loaded_problem()
         op_dir = problem.evaluation.directory
@@ -1080,8 +1080,12 @@ class Campaign:
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
         # interrupted V1 worktree and needs validation/recovery first.
         if restart_journal:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming the unexpected-exit V1 handoff"
         if not progressed and dirty_candidate:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming preserved framework-baseline work"
 
         if self.framework_baseline == "auto" and self.optimization_mode != "production":
@@ -1125,6 +1129,8 @@ class Campaign:
             return "run", f"V0 is not a self-contained {self.framework} kernel"
         if latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION:
             return "adopt", "an interrupted framework baseline is already committed"
+        if self.resume_framework_candidate:
+            return "adopt", "validate the retained framework candidate"
         return "skip", (
             "HEAD has progressed beyond V0 without a framework-baseline pin; "
             "leaving this campaign on its existing baseline"

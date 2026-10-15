@@ -31,6 +31,8 @@ class WorkflowSettings:
     framework_baseline_reviewers: tuple[str, ...] = ()
     fast_episode_reviewers: tuple[str, ...] = ()
     full_episode_reviewers: tuple[str, ...] = ()
+    conversion_budget_action: str = "fail"
+    resume_framework_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,16 +47,15 @@ class ProblemSource:
 class CampaignRuntimeSettings:
     """Selected execution and measurement settings for one Campaign."""
     hardware: str = ""
-    profile: str = ""
-    url: str = ""
     timeout: int = 600
     verify_repeats: int = 2
     verify_run_timeout: int = 120
     min_improvement_pct: float = 0.0
-    ssh: str = ""
-    ssh_init: str = ""
-    ssh_gpu: int | None = None
-    health_command: str = ""
+    shape_batch_size: int = 4
+
+    def __post_init__(self):
+        if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
+            raise ValueError("shape_batch_size must be a positive integer")
 
 
 
@@ -76,3 +77,12 @@ class Campaign(Protocol):
 
 class Workflow(Protocol):
     def campaign(self, request: CampaignRequest) -> Campaign: ...
+
+
+class WorkflowObserver(Protocol):
+    def run_started(self, launch: object) -> None: ...
+    def run_finished(self, exit_code: int, error: str = "") -> None: ...
+
+    def campaign_started(self, request: CampaignRequest) -> None:
+        """Observe the resolved workspace before preparation; auxiliary failures fail open."""
+        ...

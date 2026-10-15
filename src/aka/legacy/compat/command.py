@@ -24,7 +24,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--profile", default="application")
     parser.add_argument("--profiles-dir", type=Path, default=PROFILES_DIR)
     parser.add_argument("--patch", action="append", type=Path, default=[])
-    parser.add_argument("--execution-profile", choices=("legacy",), default=None)
+    parser.add_argument("--execution-profile", default=None)
     parser.add_argument("--execution-patch", action="append", type=Path, default=[])
     options = parser.parse_args(argv[:boundary])
     if boundary == len(argv):
@@ -40,7 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         execution_selection = None
         if options.execution_profile is not None or options.execution_patch:
-            from aka.legacy.application.execution import selected_execution, read_execution_patches
+            from aka.legacy.execution.selection import selected_execution, read_execution_patches
             execution_selection = dict(selected_execution())
             if options.execution_profile is not None:
                 execution_selection["profile"] = options.execution_profile

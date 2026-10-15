@@ -14,6 +14,7 @@ from typing import Any
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 RUN_TIMEOUT_GRACE_SECONDS = 60
+TRACE_PATTERNS = ("traces.jsonl", "traces_seed*.jsonl", ".finalize_traces.jsonl")
 
 
 def _safe_relative(value: object) -> str:
@@ -57,6 +58,39 @@ def _apply_revision(
             raise FileNotFoundError(f"snapshot source is missing: {source}")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+
+
+def _clear_python_bytecode(root: Path, manifest: dict[str, object]) -> None:
+    """Prevent same-size, same-mtime source swaps from reusing stale code.
+
+    ``copy2`` intentionally preserves snapshot metadata.  Two revisions created in the
+    same second can therefore have the same timestamp and byte length, which is enough for
+    Python's timestamp-based ``.pyc`` validation to accept the previous revision.  ABBA
+    must execute the selected source, so remove only bytecode belonging to changed Python
+    paths after every revision swap.
+    """
+    for raw_path in manifest:
+        relative = _safe_relative(raw_path)
+        target = root / relative
+        if target.suffix != ".py":
+            continue
+        target.with_suffix(".pyc").unlink(missing_ok=True)
+        cache_dir = target.parent / "__pycache__"
+        if not cache_dir.is_dir():
+            continue
+        for cached in cache_dir.glob(f"{target.stem}.*.pyc"):
+            if cached.is_dir() and not cached.is_symlink():
+                raise IsADirectoryError(f"Python bytecode path is a directory: {cached}")
+            cached.unlink(missing_ok=True)
+
+
+def _clear_evaluator_outputs(root: Path) -> None:
+    """Remove outputs that would make a failed run look like its predecessor."""
+    for pattern in TRACE_PATTERNS:
+        for target in root.glob(pattern):
+            if target.is_dir() and not target.is_symlink():
+                raise IsADirectoryError(f"evaluator trace path is a directory: {target}")
+            target.unlink(missing_ok=True)
 
 
 def _parse_result(stdout: str) -> dict[str, Any] | None:
@@ -110,6 +144,8 @@ def run(request_path: Path, result_path: Path) -> int:
             if not isinstance(manifest, dict):
                 raise ValueError(f"missing {revision} snapshot manifest")
             _apply_revision(root, snapshot_root, manifest)
+            _clear_python_bytecode(root, manifest)
+            _clear_evaluator_outputs(root)
             try:
                 process = subprocess.run(
                     command,

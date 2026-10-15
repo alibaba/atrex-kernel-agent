@@ -51,9 +51,9 @@ class RecoveryCleanupUnverified(RuntimeError):
 
 def _load_restart(state_dir: Path) -> dict[str, Any]:
     source = _REPO_ROOT / "src"
-    if (source / "aka/legacy/application/recovery.py").is_file() and str(source) not in sys.path:
+    if (source / "aka/legacy/workflow/launch_migration.py").is_file() and str(source) not in sys.path:
         sys.path.insert(0, str(source))
-    from aka.legacy.application.recovery import complete_migration, has_selection
+    from aka.legacy.workflow.launch_migration import complete_migration, has_selection
     complete_migration(state_dir, owner=True)
     path = state_dir / "restart.json"
     try:

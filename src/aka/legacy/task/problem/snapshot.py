@@ -116,6 +116,12 @@ def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str) -> Load
                         evaluation_directory="evaluation", adapter=problem.evaluation.adapter,
                         private="evaluation" if problem.evaluation.private_reference_dir else None,
                         runtime=runtime, case_ids=problem.evaluation.case_ids)
+        if manifest["private"] is not None:
+            from .layout import validate_private_shapes, validate_agent_problem
+            captured_shapes = staging / "evaluation/shapes.json"
+            manifest["case_ids"] = tuple(str(value) for value in validate_private_shapes(captured_shapes))
+            if manifest["public_contract"]:
+                validate_agent_problem(staging / manifest["public_contract"], private_shapes_path=captured_shapes)
         manifest["files"] = {p.relative_to(staging).as_posix():
                              dict(sha256=hashlib.sha256(p.read_bytes()).hexdigest(),
                                   mode=stat.S_IMODE(p.stat().st_mode))

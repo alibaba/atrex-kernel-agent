@@ -4,8 +4,8 @@ from threading import RLock
 
 
 class LegacyAgent:
-    def __init__(self, *, process_runner=None, registry=None):
-        self._options = {}
+    def __init__(self, *, process_runner=None, registry=None, session_name=""):
+        self._options = {"session_name":session_name}
         if process_runner is not None:
             self._options["process_runner"] = process_runner
         if registry is not None:

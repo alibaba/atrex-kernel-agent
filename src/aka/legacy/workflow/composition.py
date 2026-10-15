@@ -5,7 +5,8 @@ from .dependencies import CampaignDependencies
 
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      prepare_request=lambda request, problem: request,
-                     baseline_factory=None, campaign_runner=None):
+                     evaluator_factory=None,
+                     workflow_observer=None):
     from aka.legacy.agent.selection import LegacyAgent
     from aka.legacy.task.problem.legacy import LegacyProblemProvider
     from aka.legacy.task.source.legacy import LegacySourceProvider
@@ -19,17 +20,19 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
     )
 
     def services(campaign):
-        from aka.legacy.application.workflow_services import WorkflowServices
-        return WorkflowServices(campaign.request.runtime, campaign)
+        from aka.legacy.workflow.services import WorkflowServices
+        return WorkflowServices(campaign.request.runtime, campaign,
+                                evaluator_factory=evaluator_factory,
+                                workflow_observer=workflow_observer)
 
     def execution(campaign):
-        from .execution import CampaignExecution
+        from aka.legacy.execution.campaign_runtime import CampaignExecution
         return CampaignExecution(campaign.services.settings)
 
     dependencies = CampaignDependencies(
         agent, task["problem"], task["source"], task["workspace"],
-        baseline_factory or (lambda campaign: campaign.services.baseline()),
-        campaign_runner or run_campaign, execution,
+        lambda campaign: campaign.services.baseline(),
+        run_campaign, execution,
         prepare_request=prepare_request, services=services,
     )
 
@@ -67,6 +70,7 @@ def run_campaign(campaign):
         max_version=campaign.max_iters, fast_episodes=campaign.fast_episodes,
         fast_trials=campaign.fast_trials, token_budget=campaign.token_budget,
         handoff_resumes=campaign.handoff_resumes, max_stall=campaign.max_stall,
+        conversion_budget_action=campaign.request.settings.conversion_budget_action,
     )
     engine.evaluation = EpisodeMeasurements(
         campaign.workspace, campaign.private_reference_dir, settings.min_improvement_pct,

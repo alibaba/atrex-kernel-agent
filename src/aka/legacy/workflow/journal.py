@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 from .models import TERMINAL_STATUSES
 from .protocol import atomic_write_json
 

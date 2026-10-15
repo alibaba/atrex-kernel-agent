@@ -30,15 +30,3 @@ class ApplicationRequest:
             ):
                 raise TypeError("argv must be a sequence of strings or None")
             object.__setattr__(self, "argv", tuple(self.argv))
-
-
-class Application(Protocol):
-    def run(self, request: ApplicationRequest) -> int:
-        """Run once; preserve exit codes, SystemExit and recovery exceptions.
-
-        The assembly owner constructs implementations with explicit dependencies
-        before invocation and owns the composition. Implementations do not select
-        plugins, resolve services from a Context/Root/BootReport, dispose borrowed
-        dependencies or silently construct another default application.
-        """
-        ...

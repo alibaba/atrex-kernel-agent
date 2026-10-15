@@ -1,1 +1,6 @@
-{"api_version": 1, "bundles": ["workflow"]}
+{
+  "api_version": 1,
+  "bundles": [
+    "workflow"
+  ]
+}

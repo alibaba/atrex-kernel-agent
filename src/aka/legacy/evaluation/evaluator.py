@@ -15,6 +15,8 @@ from typing import Sequence
 import uuid
 
 from aka.contracts.evaluation import (
+    EvaluationFailure,
+    EvaluationConfiguration,
     EvaluationRequest,
     PreparedEvaluation,
     VerificationResult,
@@ -59,18 +61,6 @@ def result_from_stdout(stdout: str) -> dict:
 
 
 @dataclass(frozen=True)
-class EvaluationConfiguration:
-    timeout: int = 600
-    repeats: int = 2
-    per_run_timeout: int = 120
-    shape_batch_size: int = 4
-    max_parallelism: int = 4
-    private_reference_dir: Path | None = None
-    native: bool = False
-    abba_driver: Path | None = None
-
-
-@dataclass(frozen=True)
 class _Plan:
     request: EvaluationRequest
     schedule: tuple[dict, ...] = ()
@@ -86,15 +76,18 @@ class LegacyEvaluator:
         configuration: EvaluationConfiguration = EvaluationConfiguration(),
         *,
         candidate_workspace: CandidateWorkspace | None = None,
+        abba_driver: Path | None = None,
     ):
         self.configuration = configuration
         self.candidate_workspace = candidate_workspace
+        self.abba_driver = abba_driver or Path(remote_abba.__file__)
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         config = self.configuration
         if request.mode == "fast":
             return PreparedEvaluation((), 1, _Plan(request))
         if request.mode in {"v0", "framework"}:
+            (request.workspace / ".atrex_long_horizon/ci_gateway_failure.json").unlink(missing_ok=True)
             command = ["python", "test_kernel.py", "--version", f"v{request.version}"]
             if request.mode == "framework":
                 command += ["--multi-seed", "5"]
@@ -130,7 +123,7 @@ class LegacyEvaluator:
         relative_dir = f"{VERIFY_DIR}/{uuid.uuid4().hex}"
         directory = request.workspace / relative_dir
         directory.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(config.abba_driver or Path(remote_abba.__file__), directory / "test_kernel.py")
+        shutil.copy2(self.abba_driver, directory / "test_kernel.py")
         manifests = {
             "incumbent": self.candidate_workspace.write_revision(
                 request.workspace,
@@ -304,6 +297,20 @@ class LegacyEvaluator:
         )
 
     def _baseline_result(self, request, observation):
+        failure_path = request.workspace / ".atrex_long_horizon/ci_gateway_failure.json"
+        if observation.transport_returncode != 0 and failure_path.is_file():
+            details = json.loads(failure_path.read_text())
+            category = details.get("failure_class", "protocol")
+            repairable = category == "request" and not details.get("reference_rejected") and bool(
+                details.get("candidate_rejected") or details.get("io_contract_rejected"))
+            message = ("candidate request rejected; repair source-policy violations and make "
+                       "Model.forward accept exactly the trusted input keys"
+                       if repairable else f"gateway validation pending: failure_class={category}; "
+                       "no correctness result was produced")
+            failure = EvaluationFailure(category, f"gateway-http-{details.get('http_status', 'unknown')}",
+                                        message, candidate_repairable=repairable)
+            return VerificationResult("FAIL" if repairable else "ERROR", None, None, None,
+                                      error=message, failure=failure)
         if request.mode == "framework" and observation.transport_returncode != 0:
             return VerificationResult(
                 "FAIL",

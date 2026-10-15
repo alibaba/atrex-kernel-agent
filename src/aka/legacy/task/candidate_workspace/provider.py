@@ -48,11 +48,8 @@ class GitCandidateWorkspace(GitSnapshots):
 
     def prepare_sol(self, workspace, content, *, problem_files, reference_dir):
         from .initial import prepare_sol
-        prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir)
+        return prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir)
 
-    def commit_sol(self, workspace):
-        from .initial import commit_sol
-        commit_sol(workspace)
 
     def install_runtime(self, workspace, atrex_bench_root=None, **options):
         from .runtime import link_runtime

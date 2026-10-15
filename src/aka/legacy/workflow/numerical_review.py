@@ -24,7 +24,7 @@ from aka.legacy.agent.availability import check_review_service
 from aka.legacy.execution.transport import check_transport
 from aka.legacy.experiment.retry import retry_infrastructure
 
-from aka.legacy.application.paths import checkout_root
+from aka.legacy.resources.checkout import checkout_root
 ROOT = checkout_root()
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
 from aka.legacy.evaluation.numerical import _validate_review, _probe_status
@@ -44,11 +44,11 @@ def _digest(files):
     return digest.hexdigest()
 
 
-def _sources(campaign, workspace):
+def _sources(campaign, workspace, *, harness=None):
     from aka.legacy.acceptance.review import _production_review_candidate_paths
 
     private = Path(campaign.private_reference_dir or workspace)
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
+    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness or HARNESS}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
@@ -76,6 +76,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
             result = run_session(
                 root, PROMPT.read_text(), timeout=timeout,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
+                runtime=campaign.agent_runtime,
             )
             campaign._account(result, "numerical supplemental-test planning")
             response = root / "numerical_review.json"
@@ -116,8 +117,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
     return retry_infrastructure(workspace, stage, review_once)
 
 
-def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None):
-    from aka.legacy.execution.sandbox import sandbox_command
+def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None, harness=None):
 
     shapes = json.loads(shapes_path.read_text())
     schedule = validation_schedule(suite, shapes, digest, "thorough")
@@ -126,7 +126,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     if "atrex-bench/run_eval" in (workspace / "test_kernel.py").read_text():
         snapshot = directory / "snapshots" / "evaluator.py"
         snapshot.parent.mkdir()
-        shutil.copy2(HARNESS, snapshot)
+        shutil.copy2(harness or HARNESS, snapshot)
     results = []
     for index, plan in enumerate(schedule):
         if plan.get("status") == "unsupported":
@@ -141,20 +141,14 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
         })
 
         def probe_once():
+            from aka.contracts.execution import CommandSpec
             if execute is None:
-                process = sandbox_command(
-                    workspace, campaign.sandbox_hardware, campaign.sandbox_profile,
-                    campaign.sandbox_url, 600,
-                    ["python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))],
-                    ssh=campaign.sandbox_ssh, ssh_init=campaign.sandbox_ssh_init,
-                    health_command=campaign.sandbox_health_command, gateway_kind="dev",
-                    private_reference_dir=campaign.private_reference_dir,
-                )
+                execute_command = campaign.services.numerical_command
             else:
-                from aka.contracts.execution import CommandSpec
-                process = execute(CommandSpec(workspace,
-                    ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
-                    timeout=600, operation="dev"))
+                execute_command = execute
+            process = execute_command(CommandSpec(workspace,
+                ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
+                timeout=600, operation="dev"))
             check_transport(process)
             for line in process.stdout.splitlines():
                 if line.startswith(PREFIX):
@@ -199,12 +193,12 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     return {"status": status, "probes": results}
 
 
-def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None):
+def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None, harness=None):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
     workspace = Path(workspace)
-    files, shapes = _sources(campaign, workspace)
+    files, shapes = _sources(campaign, workspace, harness=harness)
     digest = _digest(files)
     validation_digest = _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"})
     cache = getattr(campaign, "_supplemental_results", {})
@@ -255,7 +249,8 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 trial = directory / f"probe-{attempt}"
                 trial.mkdir()
                 try:
-                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial, execute=execute)
+                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial,
+                                             execute=execute, harness=harness)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
                     evaluation = {"status": "needs_validation", "diagnosis": str(exc)}
                 record.setdefault("evaluations", []).append(evaluation)

@@ -5,7 +5,9 @@
     "source": "aka.legacy.task.source.plugin:SOURCE",
     "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
     "agent": "aka.legacy.agent.plugin:AGENT",
-    "workflow": "aka.legacy.workflow.plugin:WORKFLOW"
+    "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
+    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
+    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"
   },
   "composition": "workflow",
   "target": "startup",
@@ -14,6 +16,8 @@
     "source",
     "candidate",
     "agent",
+    "evaluator_factory",
+    "workflow_observer",
     "workflow"
   ],
   "resources": [
@@ -63,22 +67,29 @@
   ],
   "bindings": {},
   "environment": [
-    "ATREX_WORKFLOW_OUTPUT_DIR",
-    "ATREX_WORKFLOW_RUNTIME_CONTEXT",
-    "ATREX_RUNTIME_POLICY",
+    "ATREX_PLUGIN_DIR",
+    "ATREX_CLAUDE_SESSION_NAME",
     "ATREX_ABBA_SHAPE_BATCH_SIZE",
     "ATREX_EVAL_SHAPE_BATCH_SIZE",
-    "ATREX_ENGINE_CONTRACT_CHILD",
-    "ATREX_INTERNAL_SANDBOX_WRAPPER",
     "ATREX_SANDBOX_ATREX_BENCH_VERSION",
     "ATREX_SANDBOX_REQUIREMENTS_FILE",
-    "AKA_EXECUTION_SELECTION"
+    "AKA_EXECUTION_SELECTION",
+    "ATREX_SANDBOX_PROFILE",
+    "ATREX_SANDBOX_URL",
+    "ATREX_SANDBOX_SSH",
+    "ATREX_SANDBOX_SSH_INIT",
+    "ATREX_SANDBOX_SSH_GPU",
+    "ATREX_SANDBOX_HEALTH_COMMAND",
+    "ATREX_SANDBOX_SSH_RUNTIME_BINDS",
+    "ATREX_ENVIRONMENT_POLL_INTERVAL"
   ],
   "tokens": [
     "problem",
     "source",
     "candidate",
     "agent",
+    "evaluator_factory",
+    "workflow_observer",
     "workflow"
   ]
 }
