@@ -1,7 +1,7 @@
 """Explicit optimization requests; legacy entry conversion lives outside this contract."""
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 from collections.abc import Callable
@@ -42,11 +42,29 @@ class ProblemSource:
 
 
 @dataclass(frozen=True)
+class CampaignRuntimeSettings:
+    """Selected execution and measurement settings for one Campaign."""
+    hardware: str = ""
+    profile: str = ""
+    url: str = ""
+    timeout: int = 600
+    verify_repeats: int = 2
+    verify_run_timeout: int = 120
+    min_improvement_pct: float = 0.0
+    ssh: str = ""
+    ssh_init: str = ""
+    ssh_gpu: int | None = None
+    health_command: str = ""
+
+
+
+@dataclass(frozen=True)
 class CampaignRequest:
     problem: ProblemSource
     workspace: Path
     name: str
     settings: WorkflowSettings
+    runtime: CampaignRuntimeSettings = field(default_factory=CampaignRuntimeSettings)
 
 
 class Campaign(Protocol):

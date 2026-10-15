@@ -13,55 +13,17 @@ def default_workflow(
     episode_evaluation=None,
     acceptance_policy=None,
 ):
-    from aka.legacy.agent.selection import LegacyAgent
-    from aka.legacy.task.problem.legacy import LegacyProblemProvider
-    from aka.legacy.task.source.legacy import LegacySourceProvider
-    from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
-    from aka.legacy.workflow.dependencies import CampaignDependencies
-    from aka.legacy.workflow.assembly import LegacyWorkflow
+    from aka.legacy.workflow.composition import compose_workflow
     from .startup import prepare_request
-    from .configuration import current_settings
 
-    def services(campaign):
-        from aka.legacy.application.workflow_services import WorkflowServices
-
-        return WorkflowServices(current_settings(), campaign)
-
-    owned_agent = agent is None
-    agent = agent if agent is not None else LegacyAgent()
-    task = (
-        task
-        if task is not None
-        else dict(
-            problem=LegacyProblemProvider(optimization_mode),
-            source=LegacySourceProvider(),
-            workspace=GitCandidateWorkspace(),
-        )
-    )
-    dependencies = CampaignDependencies(
-        agent,
-        task["problem"],
-        task["source"],
-        task["workspace"],
-        lambda c: baseline_adapter(c, baseline_evaluation),
-        lambda c: run_campaign(
-            c,
-            evaluator_factory=evaluator_factory,
-            episode_evaluation=episode_evaluation,
-            acceptance_policy=acceptance_policy,
-        ),
-        lambda c: execution_adapter(c.services.settings),
-        services=services,
+    return compose_workflow(
+        agent=agent, task=task, optimization_mode=optimization_mode,
         prepare_request=prepare_request,
+        baseline_factory=lambda campaign: baseline_adapter(campaign, baseline_evaluation),
+        campaign_runner=lambda campaign: run_campaign(
+            campaign, evaluator_factory=evaluator_factory,
+            episode_evaluation=episode_evaluation, acceptance_policy=acceptance_policy),
     )
-
-    class AssembledWorkflow(LegacyWorkflow):
-        def close(self):
-            super().close()
-            if owned_agent:
-                agent.close()
-
-    return AssembledWorkflow(dependencies)
 
 
 def baseline_adapter(campaign, implementation=None):

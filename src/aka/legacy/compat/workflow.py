@@ -64,7 +64,8 @@ def campaign_request(configuration):
             "unexpected campaign configuration: " + ", ".join(sorted(values))
         )
     return CampaignRequest(
-        problem, workspace, campaign_name, WorkflowSettings(**settings)
+        problem, workspace, campaign_name, WorkflowSettings(**settings),
+        EvaluationSettings(**evaluation)
     )
 
 

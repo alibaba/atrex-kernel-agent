@@ -41,11 +41,4 @@ class LongSessionRunner(SessionRunner):
             self.agent.close()
 
 
-def legacy_budget_tokens(turn, agent_cli):
-    if turn.terminal_usage.total_tokens is not None:
-        return turn.terminal_usage.total_tokens
-    if agent_cli == "codex":
-        return 0
-    from aka.legacy.agent.runtime import terminal_usage_from_stream
-
-    return terminal_usage_from_stream(turn.stdout).total_tokens or 0
+from aka.legacy.workflow.session import budget_tokens as legacy_budget_tokens

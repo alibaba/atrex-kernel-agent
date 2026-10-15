@@ -235,3 +235,13 @@ class LongSessionRunner:
             )
         finally:
             native.close()
+
+
+def budget_tokens(turn, agent_cli):
+    if turn.terminal_usage.total_tokens is not None:
+        return turn.terminal_usage.total_tokens
+    if agent_cli == "codex":
+        return 0
+    from aka.legacy.agent.runtime import terminal_usage_from_stream
+
+    return terminal_usage_from_stream(turn.stdout).total_tokens or 0

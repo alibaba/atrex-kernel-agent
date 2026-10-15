@@ -14,6 +14,7 @@ import subprocess
 if TYPE_CHECKING:
     from .models import VerificationResult
     from .campaign import Campaign
+    from aka.legacy.application.workflow_services import WorkflowServices
 
 
 class BaselineOperations(Protocol):
@@ -118,6 +119,7 @@ class EpisodeEnvironment(Protocol):
     def restored_stall(self, workspace: Path) -> int: ...
     def save_stall(self, workspace: Path, value: int) -> None: ...
     def read_memory(self, workspace: Path, version: int) -> dict | None: ...
+    def latest_version(self, workspace: Path) -> int: ...
     def speedup_vs_reference(self, memory: dict) -> float: ...
     def peak_util(self, memory: dict) -> float: ...
 
@@ -138,7 +140,7 @@ class CampaignDependencies:
     prepare_request: Callable[[CampaignRequest, LoadedProblem], CampaignRequest] = (
         lambda request, problem: request
     )
-    services: Callable[[Campaign], Any] | None = None
+    services: Callable[[Campaign], WorkflowServices] | None = None
 
 
 # Keep historical private imports usable during downstream migration.
