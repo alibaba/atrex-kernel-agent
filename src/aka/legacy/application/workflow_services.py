@@ -15,6 +15,7 @@ from aka.legacy.experiment.transport import ABBAExecutor, check_abba_result
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from .execution import application_execution
 from .experiment_executor import sandbox_executor
+from aka.contracts.evaluation import EvaluationResources
 
 
 class BorrowedExperiment:
@@ -88,21 +89,47 @@ class BaselineExperiment(LegacyExperiment):
 
 
 class WorkflowServices:
-    def __init__(self, settings, campaign):
+    def __init__(self, settings, campaign, *, evaluator_factory=None):
         if sum(bool(v) for v in (settings.ssh, settings.url, settings.profile)) > 1:
             raise ValueError(
                 "sandbox_ssh, sandbox_url, and sandbox_profile are mutually exclusive"
             )
         self.settings = settings
         self.campaign = campaign
+        if evaluator_factory is None:
+            from aka.legacy.evaluation.plugin import LegacyEvaluatorFactory
+            evaluator_factory = LegacyEvaluatorFactory()
+        if not callable(getattr(evaluator_factory, "create", None)):
+            raise TypeError("provider does not implement EvaluatorFactory")
+        if not isinstance(getattr(evaluator_factory, "resources", None), EvaluationResources):
+            raise TypeError("factory resources must be EvaluationResources")
+        self.evaluator_factory = evaluator_factory
         self.acceptance = LegacyAcceptancePolicy(
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
         )
-        self.evaluator = LegacyEvaluator(EvaluationConfiguration(shape_batch_size=settings.shape_batch_size))
+        self.evaluator = self.create_evaluator()
         self.records = records
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
+
+    def create_evaluator(self):
+        s = self.settings
+        evaluator = self.evaluator_factory.create(
+            EvaluationConfiguration(
+                timeout=s.timeout, repeats=s.verify_repeats,
+                per_run_timeout=s.verify_run_timeout,
+                shape_batch_size=s.shape_batch_size,
+                max_parallelism=1 if s.ssh else 4,
+                private_reference_dir=self.campaign.private_reference_dir,
+                native=bool(self.campaign.atrex_bench_root),
+            ),
+            candidate_workspace=self.campaign.candidate_workspace,
+        )
+        if any(not callable(getattr(evaluator, method, None))
+               for method in ("prepare", "record_step", "interpret")):
+            raise TypeError("factory did not return an Evaluator")
+        return evaluator
 
     def preparation(self, include_problem=False):
         from orchestrator.constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER
@@ -123,7 +150,8 @@ class WorkflowServices:
             target_util=c.target_util,
         )
         return BaselinePreparation(
-            inputs, BaselineResources(ATREX_BENCH_HARNESS, PROFILE_DRIVER)
+            inputs, BaselineResources(self.evaluator_factory.resources.native_harness
+                                      or ATREX_BENCH_HARNESS, PROFILE_DRIVER)
         )
 
     @contextmanager
@@ -143,19 +171,10 @@ class WorkflowServices:
                 wall_timeout=s.timeout + 14_400 + 120 if formal else None,
                 private_reference_dir=self.campaign.private_reference_dir,
             )
-            evaluator = LegacyEvaluator(
-                EvaluationConfiguration(
-                    timeout=s.timeout,
-                    repeats=s.verify_repeats,
-                    per_run_timeout=s.verify_run_timeout,
-                    shape_batch_size=s.shape_batch_size,
-                    max_parallelism=1 if s.ssh else 4,
-                    private_reference_dir=self.campaign.private_reference_dir,
-                    native=bool(self.campaign.atrex_bench_root),
-                ),
-                candidate_workspace=self.campaign.candidate_workspace,
-            )
-            if formal:
+            evaluator = self.create_evaluator()
+            if not isinstance(evaluator, LegacyEvaluator):
+                yield LegacyExperiment(bound, evaluator)
+            elif formal:
                 yield LegacyExperiment(
                     ABBAExecutor(bound),
                     evaluator,

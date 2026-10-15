@@ -5,7 +5,8 @@
     "source": "aka.legacy.task.source.plugin:SOURCE",
     "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
     "agent": "aka.legacy.agent.plugin:AGENT",
-    "workflow": "aka.legacy.workflow.plugin:WORKFLOW"
+    "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
+    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
   },
   "composition": "application",
   "target": "startup",
@@ -14,6 +15,7 @@
     "source",
     "candidate",
     "agent",
+    "evaluator_factory",
     "workflow"
   ],
   "resources": [
@@ -82,6 +84,7 @@
     "source",
     "candidate",
     "agent",
+    "evaluator_factory",
     "workflow"
   ]
 }

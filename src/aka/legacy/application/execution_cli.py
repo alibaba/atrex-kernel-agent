@@ -11,7 +11,7 @@ from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("legacy",), default=None)
+    parser.add_argument("--profile", default=None)
     parser.add_argument("--profiles-dir", type=Path)
     parser.add_argument("--patch", type=Path, action="append", default=[])
     parser.add_argument("--repo-root", type=Path, required=True)
@@ -23,12 +23,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ssh-init", default="")
     parser.add_argument("--health-command", default=None)
     parser.add_argument("--sync", action="append", default=[])
+    parser.add_argument("--no-sync", action="store_true")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--wall-timeout", type=int)
     parser.add_argument("--kind", choices=("auto", "run", "profile", "dev"), default="auto")
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
+    if arguments.no_sync and arguments.sync:
+        parser.error("--no-sync and --sync are mutually exclusive")
     root = arguments.repo_root.expanduser().resolve()
     launcher = root / "tools/sandbox.py"
     if not launcher.is_file():

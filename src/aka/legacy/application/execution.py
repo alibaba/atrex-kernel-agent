@@ -131,7 +131,14 @@ def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedPr
         artifacts=request.sync, operation="preflight" if request.preflight else request.gateway_kind,
         cancel_event=request.cancel_event)
     if not isinstance(executor, LegacyExecutor):
-        raise UnsupportedExecution("sandbox host binding requires the legacy execution provider")
+        if any((request.profile, request.url, request.ssh, request.ssh_init,
+                request.health_command, request.wall_timeout is not None)):
+            raise UnsupportedExecution(
+                "selected executor owns endpoint and recovery configuration; "
+                "omit legacy sandbox options"
+            )
+        executor.capabilities.require(command)
+        return _completed_process(command, executor.run(command))
     with sandbox_invocation(request, hooks) as invocation:
         result = executor.run(command)
         if not isinstance(result, JobResult):

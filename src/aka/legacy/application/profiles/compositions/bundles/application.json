@@ -22,6 +22,11 @@
       "required": true
     },
     {
+      "id": "evaluation",
+      "name": "aka.legacy.evaluation.plugin",
+      "required": true
+    },
+    {
       "id": "workflow",
       "name": "aka.legacy.workflow.plugin",
       "required": true,

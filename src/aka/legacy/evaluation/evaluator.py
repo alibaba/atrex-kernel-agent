@@ -15,6 +15,7 @@ from typing import Sequence
 import uuid
 
 from aka.contracts.evaluation import (
+    EvaluationConfiguration,
     EvaluationRequest,
     PreparedEvaluation,
     VerificationResult,
@@ -56,17 +57,6 @@ def result_from_stdout(stdout: str) -> dict:
             if isinstance(result, dict):
                 return result
     raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
-
-
-@dataclass(frozen=True)
-class EvaluationConfiguration:
-    timeout: int = 600
-    repeats: int = 2
-    per_run_timeout: int = 120
-    shape_batch_size: int = 4
-    max_parallelism: int = 4
-    private_reference_dir: Path | None = None
-    native: bool = False
 
 
 @dataclass(frozen=True)

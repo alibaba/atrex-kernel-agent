@@ -20,6 +20,7 @@ workflow = "aka.legacy.workflow.plugin:WORKFLOW"
 problem = "aka.legacy.task.problem.plugin:PROBLEM"
 source = "aka.legacy.task.source.plugin:SOURCE"
 candidate = "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
+evaluator_factory = "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

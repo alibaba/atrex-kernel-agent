@@ -4203,6 +4203,15 @@ def _append_sandbox_telemetry(event: str, **fields: object) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
+    if os.environ.get("AKA_EXECUTION_SELECTION"):
+        from aka.legacy.application.execution import selected_execution
+        if selected_execution() != {"profile": "legacy"}:
+            from aka.legacy.application.execution_cli import main as selected_main
+            prefix = ["--repo-root", str(REPO_ROOT)]
+            if "--workspace" not in arguments and not any(
+                    value.startswith("--workspace=") for value in arguments):
+                prefix += ["--workspace", str(Path.cwd())]
+            return selected_main([*prefix, *arguments])
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
     category = _sandbox_telemetry_category(arguments)
     started = time.monotonic()
