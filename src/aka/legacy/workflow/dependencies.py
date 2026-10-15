@@ -137,10 +137,10 @@ class CampaignDependencies:
     evaluation: Callable[[Campaign], BaselineOperations]
     workflow: Callable[[Campaign], str]
     execution: Callable[[Campaign], CampaignExecution]
+    services: Callable[[Campaign], WorkflowServices]
     prepare_request: Callable[[CampaignRequest, LoadedProblem], CampaignRequest] = (
         lambda request, problem: request
     )
-    services: Callable[[Campaign], WorkflowServices] | None = None
 
 
 # Keep historical private imports usable during downstream migration.

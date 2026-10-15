@@ -4,9 +4,7 @@ from __future__ import annotations
 import aka.legacy.agent as _agent_runtime
 
 
-CONVERT_PERF_TOL = (
-    0.05  # triton->gluon is a direct translation: gluon must be within +5% of triton
-)
+from aka.legacy.acceptance.policy import CONVERT_PERF_TOL
 
 
 DEFAULT_CONVERT_AFTER = (

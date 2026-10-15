@@ -1,10 +1,10 @@
 """Adapt selected Core Skill contributions to the existing workspace installer."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from aka.contracts.agent_resources import AgentSkill, AgentResourceInstallation
+from aka.legacy.task.durable import durable_write_json
 from .skills import fingerprint as _fingerprint
 from .skills import describe_skill
 
@@ -91,7 +91,7 @@ class AgentSkillsRegistryMixin:
         super().install(workspace)
         lock = workspace / STATE_DIR / "agent-skills.json"
         if self._agent_skills and not lock.exists():
-            lock.write_text(json.dumps(self._agent_skills_snapshot(), indent=2) + "\n")
+            durable_write_json(lock, self._agent_skills_snapshot(), indent=2)
         self._installation = self._resource_result(workspace.resolve())
         return self._installation
 

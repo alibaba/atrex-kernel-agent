@@ -146,9 +146,7 @@ class Campaign:
                 self, definition.name, getattr(self.request.settings, definition.name)
             )
         self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
-        self.services = (
-            self.dependencies.services(self) if self.dependencies.services is not None else None
-        )
+        self.services = self.dependencies.services(self)
         self.evaluation = self.dependencies.evaluation(self)
         self.execution = self.dependencies.execution(self)
         self.plugin_registry.check_lock(self.workspace)
@@ -301,6 +299,9 @@ class Campaign:
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         environment.update(self.execution.environment())
+        if self.request.runtime.ssh:
+            environment.pop("ATREX_SANDBOX_URL", None)
+            environment.pop("ATREX_SANDBOX_PROFILE", None)
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)

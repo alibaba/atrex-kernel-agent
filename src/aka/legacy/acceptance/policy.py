@@ -13,11 +13,14 @@ from aka.contracts.evaluation import VerificationResult
 from aka.contracts.workspace import CandidateWorkspace
 
 
+CONVERT_PERF_TOL = 0.05
+
+
 class LegacyAcceptancePolicy:
     def __init__(
         self,
         *,
-        conversion_tolerance: float = 0.05,
+        conversion_tolerance: float = CONVERT_PERF_TOL,
         candidate_workspace: CandidateWorkspace | None = None,
         production_policy: Callable[[], Sequence[str]] | None = None,
     ):

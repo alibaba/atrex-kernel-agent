@@ -2,9 +2,7 @@
 
 from aka.legacy.workflow.episode import *
 from aka.legacy.workflow.episode import LongHorizonCampaign as EpisodeCampaign
-from . import main_adapter
 from .session import LongSessionRunner
-from .workflow import bind_evaluation
 from .assembly import CampaignEnvironment
 
 
@@ -20,7 +18,6 @@ class LongHorizonCampaign(EpisodeCampaign):
         **options
     ):
         from aka.legacy.compat.verifier import GatewayABBAValidator
-        from aka.legacy.compat.legacy_evaluation.episode import LegacyEpisodeEvaluation
 
         if not hasattr(base_campaign, "evaluation") and hasattr(
             base_campaign, "_supplemental_numerical_feedback"
@@ -28,6 +25,7 @@ class LongHorizonCampaign(EpisodeCampaign):
             from types import SimpleNamespace
 
             base_campaign.evaluation = SimpleNamespace(
+                evaluator_directive=base_campaign._evaluator_directive,
                 supplemental_numerical_feedback=base_campaign._supplemental_numerical_feedback
             )
         base_context = getattr(

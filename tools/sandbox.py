@@ -97,23 +97,14 @@ from aka.legacy.execution.configuration import distributed_evaluation_world_size
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
 from aka.legacy.evaluation.transport_results import (
-    _finite_number,
     _request_shape_ids,
     _shape_batches,
     _shape_batch_request,
     _shape_batch_reference,
-    _compile_failures,
-    _bounded_actionable_diagnostic,
-    _looks_like_candidate_exception,
-    _compile_diagnostics,
-    _candidate_exception_diagnostics,
-    _metadata_shape_latency_us,
-    _metadata_speedup_mean,
     _optimizer_result_from_eval,
     _merge_optimizer_results,
     _record_episode_evaluation,
     _record_result_lines,
-    _positive_number,
     _with_workspace_performance_score,
     _hydrate_result_lines,
     _public_numerical_result_line,

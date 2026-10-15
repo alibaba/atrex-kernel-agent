@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from aka.contracts.experiment import ExperimentExecutionError
+from aka.legacy.evaluation.abba import DEFAULT_SHAPE_BATCH_SIZE
 from aka.legacy.experiment import LegacyExperiment
 from aka.legacy.experiment.runner import abba_stage
 from aka.legacy.experiment.transport import ABBAExecutor, check_abba_result
@@ -12,7 +13,7 @@ class GatewayABBAValidator:
         self, *, hardware: str, profile="", url="", ssh="", ssh_init="",
         health_command="", timeout=600, repeats=2, per_run_timeout=120,
         min_improvement_pct=0.0, queue_wait_grace=14_400,
-        private_reference_dir=None, shape_batch_size=4, workspace_provider=None,
+        private_reference_dir=None, shape_batch_size=DEFAULT_SHAPE_BATCH_SIZE, workspace_provider=None,
         experiment=None,
     ):
         self.hardware = hardware

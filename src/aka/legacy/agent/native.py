@@ -1,8 +1,6 @@
 """Native session invocation; no handoff, retry budget or completion decisions."""
 
 from dataclasses import replace
-from pathlib import Path
-from collections.abc import Mapping
 from .adapter import DEFAULT_BACKEND_REGISTRY
 from .runtime import (
     REASONING_EFFORTS,
