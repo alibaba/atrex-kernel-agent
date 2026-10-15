@@ -20,8 +20,6 @@
     {
       "root": "${aka:repo_root}",
       "paths": [
-        "orchestrator",
-        "long_horizon",
         "tools",
         "assets",
         "agents",
@@ -31,7 +29,8 @@
         "plugin_runtime",
         "gpu-wiki",
         "3rdparty",
-        "reference-projects"
+        "reference-projects",
+        "orchestrator/prompts"
       ],
       "submodules": {
         "3rdparty/ncu-report-skill": "1cf238d6b41c79bd35041192506c4d45e765a3f1",
@@ -63,9 +62,7 @@
       }
     }
   ],
-  "bindings": {
-    "optimizer_script": "${aka:repo_root}/orchestrator/optimize.py"
-  },
+  "bindings": {},
   "environment": [
     "ATREX_WORKFLOW_OUTPUT_DIR",
     "ATREX_WORKFLOW_RUNTIME_CONTEXT",

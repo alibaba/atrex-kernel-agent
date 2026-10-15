@@ -8,6 +8,8 @@ provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate")
 identity_packages = (
     "aka.legacy.workflow",
+    "aka.legacy.task",
+    "aka.legacy.resources",
     "aka.contracts.workflow",
     "aka.contracts.experiment",
     "aka.contracts.evaluation",

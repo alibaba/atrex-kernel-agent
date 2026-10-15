@@ -6,11 +6,8 @@ import sys
 
 from aka.legacy.application.execution import application_execution
 from aka.legacy.application.processes import invocation_environment, use_launch_environment
-from orchestrator.environment_recovery import (
-    ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context,
-    environment_is_blocked, launch_recovery_monitor, signal_restart_ready,
-)
-from orchestrator.trace_retention import write_trace_retention_manifest
+from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked, launch_recovery_monitor, signal_restart_ready
+from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
 from .invocation import decode_launch
 from .preparation import prepare_request, FrameworkDispatchComplete
 
@@ -23,7 +20,7 @@ class WorkflowStartup:
         launch = decode_launch(invocation.argv)
         script = invocation.bindings.get("optimizer_script")
         if not script:
-            raise ValueError("Workflow launch requires an optimizer_script process binding")
+            script = str(Path(__file__).with_name("entry.py"))
         with invocation_environment(invocation.environment), use_launch_environment(invocation.environment), application_execution():
             try:
                 result = self._run(launch, Path(script))
