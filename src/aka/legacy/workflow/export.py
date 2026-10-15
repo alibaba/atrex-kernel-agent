@@ -32,10 +32,15 @@ class RetainedWorkflowExport:
                            key=lambda path: int(path.stem[1:]) if path.stem[1:].isdigit() else 2**31):
             if not re.fullmatch(r"v\d+", path.stem):
                 continue
-            memory = document(path)
+            content = path.read_bytes()
+            try:
+                memory = json.loads(content)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                memory = None
+            if not isinstance(memory, dict):
+                memory = None
             revision = ""
             if memory is not None:
-                content = path.read_bytes()
                 result = subprocess.run(["git", "log", "-1", "--format=%H", "HEAD", "--",
                                          path.relative_to(workspace).as_posix()], cwd=workspace,
                                         capture_output=True, text=True)
@@ -52,6 +57,9 @@ class RetainedWorkflowExport:
         if active and isinstance(active.get("worktree"), str):
             journal_paths.append(Path(active["worktree"]) / ".atrex_long_horizon/journal.json")
         journal_paths.append(runtime / "journal.json")
+        for path in journal_paths:
+            if path.is_file() and document(path) is None:
+                raise ValueError("retained Workflow journal is malformed")
         journals = tuple(value for path in dict.fromkeys(journal_paths)
                          if (value := document(path)) is not None)
         state = document(runtime / "state.json") or {}
