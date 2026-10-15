@@ -38,7 +38,14 @@ class SandboxExecutor:
             preflight=command.operation == "preflight", cancel_event=command.cancel_event,
         )
         if not isinstance(self.executor, LegacyExecutor):
-            raise UnsupportedExecution("sandbox host binding requires the legacy execution provider")
+            if any((request.profile, request.url, request.ssh)):
+                raise UnsupportedExecution("selected executor owns endpoint configuration; omit legacy endpoint options")
+            bound = replace(command, environment=request.environment, hardware=request.hardware)
+            self.executor.capabilities.require(bound)
+            result = self.executor.run(bound)
+            if not isinstance(result, JobResult):
+                raise TypeError("Executor.run must return JobResult")
+            return result
         bound = replace(command, environment=request.environment, hardware=request.hardware)
         with sandbox_invocation(request, self.hooks) as invocation:
             result = self.executor.run(bound)
