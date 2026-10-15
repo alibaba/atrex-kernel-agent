@@ -30,7 +30,7 @@ where = ["src"]
 include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
-"*" = ["skills/**/*"]
+"*" = ["skills/**/*", "prompts/*.md"]
 "aka.legacy.application" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]
 "aka.legacy.task.problem" = ["profiles/*.json", "profiles/bundles/*.json"]
 "aka.legacy.task.source" = ["profiles/*.json", "profiles/bundles/*.json"]

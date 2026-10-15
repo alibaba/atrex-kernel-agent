@@ -10,6 +10,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from aka.legacy.resources.paths import PROMPTS_DIR
 from threading import Event
 from typing import Any
 
@@ -34,8 +35,8 @@ from .telemetry import summarize_episode
 from aka.legacy.application.paths import checkout_root
 
 MODULE_ROOT = checkout_root()
-PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
-FAST_PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "fast_episode.md"
+PROMPT_PATH = PROMPTS_DIR / "episode.md"
+FAST_PROMPT_PATH = PROMPTS_DIR / "fast_episode.md"
 GOAL_AFTER_EPISODES = 50
 GOAL_STALL_THRESHOLD = 3
 GOAL_HANDOFF_RESUMES = 20

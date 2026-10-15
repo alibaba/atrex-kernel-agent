@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from aka.legacy.resources.paths import PROMPTS_DIR
 import shutil
 import subprocess
 import tempfile
@@ -28,7 +29,7 @@ ROOT = checkout_root()
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
 from aka.legacy.evaluation.numerical import _validate_review, _probe_status
 DRIVER = Path(remote_numerical.__file__)
-PROMPT = ROOT / "orchestrator" / "prompts" / "numerical_review.md"
+PROMPT = PROMPTS_DIR / "numerical_review.md"
 HARNESS = ROOT / "reference" / "atrex_bench_test_kernel.py"
 
 

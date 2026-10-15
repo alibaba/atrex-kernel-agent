@@ -24,7 +24,7 @@ OWNERS = {
 
 def owned(distribution: str) -> tuple[Path, ...]:
     files = []
-    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh')
+    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh', '.md')
     for relative in OWNERS[distribution]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else
