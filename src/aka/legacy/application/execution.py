@@ -10,7 +10,7 @@ from aka.legacy.execution.assembly import compose_execution
 from aka.legacy.execution.legacy.executor import LegacyExecutor
 from aka.legacy.execution.legacy.runtime import sandbox_invocation
 from aka.contracts.execution import (
-    CommandSpec, Executor, JobResult, UnsupportedExecution, validate_executor,
+    CommandSpec, JobResult, UnsupportedExecution,
 )
 
 _current_executor = ContextVar("aka_application_executor", default=None)
@@ -55,9 +55,9 @@ def execution_environment(environment):
 
 
 @contextmanager
-def application_execution(executor=None, selection=None, *, agent_skills=()):
+def application_execution(*, selection=None):
     current = _current_executor.get()
-    if executor is None and current is not None:
+    if current is not None:
         if selection is not None and dict(selection) != selected_execution():
             raise ValueError("cannot change execution selection inside an active application scope")
         yield current
@@ -67,19 +67,13 @@ def application_execution(executor=None, selection=None, *, agent_skills=()):
     if "profiles_dir" in arguments:
         arguments["profiles_dir"] = Path(arguments["profiles_dir"]).expanduser().resolve()
         selected["profiles_dir"] = str(arguments["profiles_dir"])
-    composition = None
-    if executor is None:
-        composition = compose_execution(**arguments)
+    composition = compose_execution(**arguments)
+    try:
         executor = composition.executor
-        try:
-            agent_skills = composition.agent_skills
-        except BaseException:
-            composition.dispose()
-            raise
-    else:
-        validate_executor(executor)
-    # Materialize caller resources before changing the active context.
-    skills = tuple(agent_skills)
+        skills = tuple(composition.agent_skills)
+    except BaseException:
+        composition.dispose()
+        raise
     executor_token = _current_executor.set(executor)
     selection_token = _current_selection.set(selected)
     skills_token = _current_agent_skills.set(skills)
@@ -89,8 +83,7 @@ def application_execution(executor=None, selection=None, *, agent_skills=()):
         _current_executor.reset(executor_token)
         _current_selection.reset(selection_token)
         _current_agent_skills.reset(skills_token)
-        if composition is not None:
-            composition.dispose()
+        composition.dispose()
 
 
 def selected_agent_skills():
@@ -125,7 +118,7 @@ def _completed_process(command, result):
     return subprocess.CompletedProcess(list(command.command), returncode, result.stdout, result.stderr)
 
 
-def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedProcess[str]:
+def run_sandbox(executor: LegacyExecutor, request, *, hooks) -> subprocess.CompletedProcess[str]:
     command = CommandSpec(workspace=request.workspace, command=request.command,
         timeout=request.timeout, environment=request.environment, hardware=request.hardware,
         artifacts=request.sync, operation="preflight" if request.preflight else request.gateway_kind,

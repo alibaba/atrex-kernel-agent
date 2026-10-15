@@ -2,13 +2,13 @@
 from dataclasses import replace
 from contextvars import ContextVar
 
-from aka.contracts.execution import CommandSpec, Executor, JobResult, UnsupportedExecution
+from aka.contracts.execution import CommandSpec, JobResult, UnsupportedExecution
 from aka.legacy.execution.legacy.executor import LegacyExecutor
 from aka.legacy.execution.legacy.runtime import sandbox_invocation
 
 
 class SandboxExecutor:
-    def __init__(self, executor: Executor, request, hooks):
+    def __init__(self, executor: LegacyExecutor, request, hooks):
         self.executor = executor
         self.request = request
         self.hooks = hooks
@@ -52,7 +52,7 @@ class SandboxExecutor:
         return result
 
 
-def sandbox_executor(executor: Executor, *, hardware="", profile="", url="",
+def sandbox_executor(executor: LegacyExecutor, *, hardware="", profile="", url="",
                      ssh="", ssh_init="", health_command="", wall_timeout=None,
                      private_reference_dir=None) -> SandboxExecutor:
     """Construct the host dependency; Experiment only sees Executor.run."""
