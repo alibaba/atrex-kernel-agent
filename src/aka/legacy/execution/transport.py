@@ -19,4 +19,3 @@ def check_transport(process: subprocess.CompletedProcess) -> None:
     if (process.returncode == INFRASTRUCTURE_EXIT_CODE
             and INFRASTRUCTURE_MARKER in (process.stderr or "").splitlines()):
         raise InfrastructureUnavailable("GPU validation transport unavailable")
-

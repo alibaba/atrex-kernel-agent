@@ -190,4 +190,3 @@ def install_workspace_policy(
                 handle.write("\n")
             handle.write("\n# orchestrator optimization-mode identity (local policy state)\n")
             handle.write(entry + "\n")
-

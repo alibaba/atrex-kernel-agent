@@ -54,4 +54,3 @@ def hardware_directive(platform: str, arch: str) -> str:
         "architecture when consulting enabled knowledge tools or primary specifications; never "
         "substitute another hardware identity or guess missing limits.\n"
     )
-

@@ -72,4 +72,3 @@ def source_uses_gluon(source: str) -> bool:
             ):
                 return True
     return False
-

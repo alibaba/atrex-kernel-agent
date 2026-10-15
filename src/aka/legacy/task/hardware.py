@@ -84,4 +84,3 @@ def framework_workspace_suffix(
     if optimization_mode == "production":
         suffix += "_production"
     return suffix
-

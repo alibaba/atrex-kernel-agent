@@ -173,4 +173,3 @@ def reject_production_commit(
     })
     memory_path.write_text(json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return memory_path
-

@@ -61,4 +61,3 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
                 durable_write_json(path, record, indent=2, ensure_ascii=False)
                 print(f"[infrastructure] {stage}: recovered; continuing validation", flush=True)
             return result
-

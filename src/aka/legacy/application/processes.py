@@ -111,4 +111,3 @@ def invocation_environment(values):
         yield
     finally:
         apply(previous)
-

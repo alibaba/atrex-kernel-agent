@@ -12,4 +12,3 @@ def render_prompt(template_path: Path, **kw: str) -> str:
     if mode_policy:
         text = str(mode_policy).rstrip() + "\n\n" + text
     return text
-

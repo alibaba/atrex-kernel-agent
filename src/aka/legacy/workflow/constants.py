@@ -62,4 +62,3 @@ TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 
 
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
-

@@ -41,4 +41,3 @@ def retry_review(workspace: Path, stage: str, operation):
         "reviewer infrastructure timed out twice for this evidence; "
         "validation blocked (increase the reviewer timeout to retry)"
     )
-

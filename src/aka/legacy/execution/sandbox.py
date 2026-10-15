@@ -207,4 +207,3 @@ def detect_arch(
         except (OSError, subprocess.SubprocessError):
             continue
     return ""
-

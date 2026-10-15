@@ -6,9 +6,10 @@ import sys
 root = Path(__file__).resolve().parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
-from orchestrator._bootstrap import task_modules
+_source_packages = root / "src"
+if _source_packages.is_dir():
+    sys.path.insert(0, str(_source_packages))
 
-task_modules()
 from aka.legacy.application.source import source_provider
 from aka.legacy.application.workspace import candidate_workspace
 

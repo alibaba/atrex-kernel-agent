@@ -76,4 +76,3 @@ def run_session(
         capabilities=result.capabilities,
         observation_errors=result.observation_errors,
     )
-

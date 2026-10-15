@@ -223,4 +223,3 @@ def _validate_production_review(
             f"production review verdict {verdict!r} disagrees with item decisions"
         )
     return rejected, summary.strip()
-

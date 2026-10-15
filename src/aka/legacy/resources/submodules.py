@@ -65,4 +65,3 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
                     "Run `git submodule update --init` manually."
                 )
         print("[orchestrator] all submodules ready", flush=True)
-

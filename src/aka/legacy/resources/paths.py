@@ -35,4 +35,3 @@ DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
 
 
 AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"
-

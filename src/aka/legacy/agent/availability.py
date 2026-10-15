@@ -24,4 +24,3 @@ def check_review_service(result) -> None:
         }:
             raise InfrastructureUnavailable(f"review service unavailable: {error['type']}")
     raise ValueError(f"reviewer failed (exit={result.exit_status}); no service-outage evidence")
-

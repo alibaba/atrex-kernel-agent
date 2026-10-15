@@ -53,8 +53,9 @@ GROUND_TRUTH = ("definition.json", "reference.py", "workload.jsonl")
 _repo_root = SCRIPT_DIR.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
-from orchestrator._bootstrap import task_modules
-task_modules()
+_source_packages = _repo_root / "src"
+if _source_packages.is_dir():
+    sys.path.insert(0, str(_source_packages))
 from aka.legacy.task.source.sol.render import _build_kernel, _render_kernel, _solution_json, _readme
 from aka.legacy.application.source import source_provider
 from aka.legacy.application.workspace import candidate_workspace
