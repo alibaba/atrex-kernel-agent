@@ -6,7 +6,7 @@ from typing import Any
 from orchestrator._bootstrap import task_modules
 
 task_modules()
-from aka.legacy.task.git import (_git, git_text, git_head, working_changes, changed_paths, ignored_evidence_files, protected_violation, _manifest_deleted)
+from aka.legacy.task.git import (_git, git_text, git_head, working_changes, clean_probe_artifacts, changed_paths, ignored_evidence_files, protected_violation, _manifest_deleted)
 from aka.legacy.task.candidate_workspace.policy import (PROTECTED_PATHS, PROTECTED_PREFIXES, EPISODE_EVIDENCE_PREFIXES, CANDIDATE_PATHS, TIMELINE_PROBE_MARKERS)
 from aka.contracts.workspace import CandidateHandle
 from aka.legacy.application.workspace import candidate_workspace

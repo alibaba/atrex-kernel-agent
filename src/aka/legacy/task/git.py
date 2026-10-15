@@ -52,6 +52,14 @@ def git_worktree_blob(workspace: Path, path: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def clean_probe_artifacts(workspace: Path) -> str:
+    """Remove untracked diagnostics without touching tracked files or other paths."""
+    output = _git(workspace, "clean", "-fd", "--", ".probe", "probes").stdout
+    if output:
+        print(f"[long-horizon] cleaned probe artifacts:\n{output}", end="", flush=True)
+    return output
+
+
 def working_changes(workspace: Path) -> list[str]:
     # Porcelain status uses its first two columns for XY state.  Preserve the
     # leading space on an unstaged first entry; git_text().strip() would remove
@@ -101,5 +109,4 @@ def _manifest_deleted(workspace: Path, base_commit: str, candidate_commit: str) 
         workspace, "diff", "--no-renames", "--diff-filter=D", "--name-only",
         base_commit, candidate_commit, "--", "solution.json",
     ).splitlines()
-
 
