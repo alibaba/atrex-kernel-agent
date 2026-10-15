@@ -1,39 +1,19 @@
-"""Construct the preserved application and adapt it to the neutral startup seam."""
-from pathlib import Path
+"""Deprecated composition name for Workflow's internal startup entry.
 
-from aka.contracts.application import ApplicationRequest
-from .entrypoint import create_legacy_application
-from .processes import use_launch_environment, invocation_environment
-from .execution import application_execution
+Old profile files can retain this row while migrating to workflow.startup=true.
+Inputs must already be canonical before Bootstrap, just as in the normal profile.
+"""
+from .processes import invocation_environment, use_launch_environment
 
 name = "application"
 provide = ("startup",)
-inject = ("problem", "source", "candidate", "workflow")
+inject = ("workflow",)
 Config = {"type": "object", "properties": {"repo_root": {"type": "string", "minLength": 1}},
           "required": ["repo_root"], "additionalProperties": False}
 interpolate = ("repo_root",)
-identity_packages = ("aka.legacy.application", "aka.legacy.execution", "aka.contracts", "aka.bootstrap")
-
-
-class LegacyStartup:
-    def __init__(self, application, repo_root):
-        self._application = application
-        self._repo_root = repo_root
-
-    def run(self, invocation):
-        try:
-            from orchestrator.process_launch import optimizer_entrypoint
-        except ModuleNotFoundError as exc:
-            if exc.name not in {"orchestrator", "orchestrator.process_launch"}:
-                raise
-            raise RuntimeError("make the matching AKA checkout importable before invocation") from exc
-        expected = invocation.bindings.get("optimizer_script")
-        if expected is None or Path(expected).resolve() != optimizer_entrypoint():
-            raise RuntimeError("startup selected a different optimizer entrypoint")
-        with invocation_environment(invocation.environment), use_launch_environment(invocation.environment), application_execution():
-            return self._application.run(ApplicationRequest(self._repo_root, invocation.argv))
+identity_packages = ("aka.legacy.workflow", "aka.legacy.application", "aka.legacy.execution", "aka.contracts", "aka.bootstrap")
 
 
 def apply(ctx, config):
-    root = Path(config["repo_root"]).resolve()
-    ctx.provide("startup", LegacyStartup(create_legacy_application(root, problem=ctx.problem, source=ctx.source, workspace=ctx.candidate, workflow=ctx.workflow), root))
+    from aka.legacy.workflow.startup import WorkflowStartup
+    ctx.provide("startup", WorkflowStartup(ctx.workflow))

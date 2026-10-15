@@ -9,23 +9,31 @@ inject = ("agent", "problem", "source", "candidate")
 identity_packages = (
     "aka.legacy.workflow",
     "aka.contracts.workflow",
-    "aka.legacy.compat",
     "aka.contracts.experiment",
     "aka.contracts.evaluation",
     "aka.contracts.acceptance",
     "aka.legacy.evaluation",
     "aka.legacy.acceptance",
     "aka.legacy.experiment",
+    "aka.legacy.application",
+    "aka.legacy.execution",
+    "aka.contracts.startup",
 )
-Config = {"type": "object", "properties": {}, "additionalProperties": False}
+Config = {"type": "object", "properties": {"startup": {"type": "boolean"}}, "additionalProperties": False}
+
+Defaults = {"startup": False}
 
 
 def apply(ctx, config):
-    from aka.legacy.compat.assembly import default_workflow
+    from .composition import compose_workflow
 
-    workflow = default_workflow(
+    workflow = compose_workflow(
         agent=ctx.agent,
         task=dict(problem=ctx.problem, source=ctx.source, workspace=ctx.candidate),
     )
     ctx.effect(workflow.close, label="close Workflow selection")
     ctx.provide(WORKFLOW, workflow)
+
+    if config.get("startup", False):
+        from .startup import WorkflowStartup
+        ctx.provide("startup", WorkflowStartup(workflow))

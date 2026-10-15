@@ -35,7 +35,7 @@ def application_variables(repo_root, values=None):
 
 
 def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR,
-                    patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None):
+                    patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None, canonical=False):
     pending = pending_recovery_directory()
     if pending is not None:
         if (profile != "application" or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
@@ -53,7 +53,7 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         if environment is None:
             raise RuntimeError("recovery migration completed concurrently; retry with the recorded launch selection")
         with invocation_environment(environment):
-            return run_application(request)
+            return run_application(request, canonical=canonical)
     optimizer = sys.modules.get("orchestrator.optimize")
     if optimizer is not None and Path(optimizer.__file__).resolve() != request.repo_root / "orchestrator/optimize.py":
         raise RuntimeError("a different AKA checkout is already loaded")
@@ -100,9 +100,23 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         selection = replace(selection, resources=(*selection.resources, *bound_resources, (script.parent, tuple(paths))),
                             bindings={**selection.bindings, "optimizer_script": str(script)})
     if execution_selection is not None:
-        if not any(row.name == "aka.legacy.application.plugin" for row in selection.composition.enabled):
-            raise CompositionError("application", "execution selection requires the legacy application")
+        if not any(row.name in {"aka.legacy.application.plugin", "aka.legacy.workflow.plugin"} for row in selection.composition.enabled):
+            raise CompositionError("application", "execution selection requires a Workflow launch")
         selection = replace(selection, environment={**selection.environment,
             EXECUTION_SELECTION_ENV: json.dumps(dict(execution_selection), sort_keys=True)})
     with (default_recovery_profile() if legacy_recovery else nullcontext()), invocation_environment(selection.environment):
-        return run_selection(selection, Invocation(request.argv))
+        if canonical or (request.argv and request.argv[0] == "--workflow-request"):
+            from aka.legacy.workflow.invocation import decode_launch
+            decode_launch(request.argv)
+            argv = request.argv
+        else:
+            from aka.legacy.compat import cli as legacy_cli
+            argv = legacy_cli.adapt_argv(request.argv)
+            if payload is None:
+                # Raw restart arguments are re-adapted by the external caller.
+                # Freeze that caller's conversion too, without making normal
+                # Workflow composition depend on the compatibility package.
+                adapter = Path(legacy_cli.__file__).parent
+                selection = replace(selection, resources=(*selection.resources,
+                    (adapter, ("cli.py", "workflow.py", "problem.py", "configuration.py"))))
+        return run_selection(selection, Invocation(argv))
