@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+if (ROOT / "src").is_dir():
+    sys.path.insert(0, str(ROOT / "src"))
 
 import aka.legacy.workflow.journal as journal  # noqa: E402
 
