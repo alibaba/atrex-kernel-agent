@@ -74,6 +74,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
             result = run_session(
                 root, PROMPT.read_text(), timeout=timeout,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
+                runtime=campaign.agent_runtime,
             )
             campaign._account(result, "numerical supplemental-test planning")
             response = root / "numerical_review.json"
@@ -277,7 +278,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
         if _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"}) != validation_digest:
             raise ValueError("candidate or contract changed during supplemental validation")
     except NumericalPlanningTimeout as exc:
-        from long_horizon.campaign import _latest_complete_episode_performance
+        from aka.legacy.evaluation.results import _latest_complete_episode_performance
 
         try:
             # Episode receipts bind the full standard workload result to the current
