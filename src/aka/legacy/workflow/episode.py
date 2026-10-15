@@ -277,6 +277,15 @@ class LongHorizonCampaign:
             raise RuntimeError(f"mandatory Triton->Gluon conversion did not succeed before {limit}")
         if not isinstance(decision, ConversionBudgetDecision) or not decision.stop_reason:
             raise TypeError("WorkflowPolicy must return a conversion decision or None")
+        if decision.warning_code:
+            from datetime import datetime, timezone
+            warning = self.workspace / RUNTIME_DIR / "warnings.jsonl"
+            warning.parent.mkdir(parents=True, exist_ok=True)
+            with warning.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"schema_version": 1, "severity": "warning", "gate_failed": False,
+                    "timestamp": datetime.now(timezone.utc).isoformat(), "code": decision.warning_code,
+                    "message": decision.message, "stop_reason": f"budget: {limit}"}) + "\n")
+            print(f"[long-horizon] WARNING: {decision.message}; retaining the verified incumbent", flush=True)
         return decision.stop_reason
 
     @property
