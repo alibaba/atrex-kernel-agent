@@ -124,6 +124,7 @@ class WorkflowBaseline:
                 v0_blob,
                 baseline_commit,
                 include_policy_review,
+                source_checks_enabled=self.campaign.source_checks_enabled,
             )
         )
 
@@ -333,11 +334,11 @@ class WorkflowBaseline:
 
     def framework_baseline_external_gates(self, n: int) -> tuple[Optional[dict], str]:
         """Run policy review and the sole authoritative V1 evaluator concurrently."""
-        print(
-            "[orchestrator] framework baseline: running policy review and combined "
-            "correctness/performance validation in parallel",
-            flush=True,
-        )
+        if self.campaign.source_checks_enabled:
+            message = "running policy review and combined correctness/performance validation in parallel"
+        else:
+            message = "multi-GPU Agate source review skipped; running correctness/performance validation"
+        print(f"[orchestrator] framework baseline: {message}", flush=True)
         with ThreadPoolExecutor(max_workers=2) as executor:
             policy_future = executor.submit(
                 copy_context().run, self.campaign._production_kernel_violations

@@ -87,7 +87,7 @@ class LegacyAcceptancePolicy:
         candidate_blob = git_worktree_blob(request.workspace, "kernel.py")
         if not candidate_blob or candidate_blob == request.v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = (
+        violations = [] if not request.source_checks_enabled else (
             self.production_policy()
             if request.include_policy_review
             else production_structure_violations(request.workspace, request.framework)
@@ -97,8 +97,10 @@ class LegacyAcceptancePolicy:
                 f"the candidate is not a self-contained {request.framework} implementation: "
                 + "; ".join(violations)
             )
-        if request.framework.lower() in {"triton", "gluon"} and kernel_is_gluon(
-            request.workspace
+        if (
+            request.source_checks_enabled
+            and request.framework.lower() in {"triton", "gluon"}
+            and kernel_is_gluon(request.workspace)
         ):
             # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
             return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"

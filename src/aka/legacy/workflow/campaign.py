@@ -81,6 +81,7 @@ from .plan_reviewers import (
     discover_plan_reviewers,
     plan_reviewer_environment,
 )
+from orchestrator.sandbox_config import distributed_evaluation_world_size, evaluator_num_gpus
 from orchestrator.plugins import PluginRegistry
 from orchestrator.session_io import (
     SessionResult,
@@ -622,12 +623,43 @@ class Campaign:
         *,
         require_gluon: bool = False,
     ) -> list[str]:
+        if not self.source_checks_enabled:
+            return []
         return production_kernel_violations(
             workspace or self.workspace,
             self.framework,
             require_gluon=require_gluon,
             production_reviewer=self._review_production_candidate,
         )
+
+    @cached_property
+    def source_checks_enabled(self) -> bool:
+        """Freeze policy from trusted inputs, never candidate worktree metadata."""
+        if self.request.runtime.ssh:
+            return True
+        reference = self.private_reference_dir
+        if reference is not None:
+            return evaluator_num_gpus(reference) < 2
+        baseline = v0_baseline_commit(self.workspace) if self.workspace.is_dir() else ""
+        if baseline:
+            # Resume from the immutable V0, including the absence of metadata.
+            # Reading HEAD or the live file would let a candidate disable its gate.
+            if not git_path_blob(self.workspace, baseline, "metadata.json"):
+                return True
+            result = subprocess.run(
+                ["git", "show", f"{baseline}:metadata.json"],
+                cwd=str(self.workspace), capture_output=True, encoding="utf-8",
+                check=True,
+            )
+            try:
+                metadata = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid JSON in V0 metadata.json") from exc
+            if not isinstance(metadata, dict):
+                raise ValueError("V0 metadata.json must contain a JSON object")
+            return distributed_evaluation_world_size(metadata) < 2
+        # Before V0 exists, the Task-owned evaluation snapshot is authoritative.
+        return evaluator_num_gpus(self.problem.evaluation.directory) < 2
 
     def _link_runtime(self) -> None:
         from long_horizon.store import CampaignStore
@@ -647,6 +679,7 @@ class Campaign:
             self.optimization_mode,
             self.framework,
             agent_runtime=self.agent_cli,
+            source_checks_enabled=self.source_checks_enabled,
         )
 
     def _sandbox_directive(self) -> str:
@@ -656,7 +689,10 @@ class Campaign:
         return self.execution.directive(fast=True)
 
     def _mode_directive(self) -> str:
-        return optimization_mode_directive(self.optimization_mode, self.framework)
+        return optimization_mode_directive(
+            self.optimization_mode, self.framework,
+            source_checks_enabled=self.source_checks_enabled,
+        )
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
@@ -1100,6 +1136,8 @@ class Campaign:
                 "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
             )
         if not progressed:
+            if not self.source_checks_enabled:
+                return "pin", "multi-GPU Agate source checks are disabled; retain the validated V0"
             structural = production_structure_violations(self.workspace, self.framework)
             if any(
                 value.startswith("unsupported production framework")

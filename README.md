@@ -41,6 +41,27 @@ AKA supports:
 - production-mode numerical probes and mode-specific performance verification;
 - resumable, Git-isolated optimization with canonical measurement history.
 
+For Agate evaluations requesting two or more GPUs, production source-policy inspection is
+disabled automatically. The GPU count comes from the evaluator's
+`benchmark_contract.distributed_evaluation` (`torchrun`, `nccl`, `world_size >= 2`), the same
+contract used to submit Agate's `num_gpus`. These campaigns can reuse communication libraries
+and the validated V0 without a self-authored framework conversion. Correctness, numerical
+probes, performance checks and immutable evaluation inputs remain enforced. Single-GPU and
+SSH campaigns retain source-policy inspection. Invalid distributed contracts are errors;
+operator names and candidate dependency declarations do not enable this exception.
+The source-policy decision is frozen per campaign from private evaluator metadata, or from
+the committed V0 metadata on resume (the original operator directory before V0 exists).
+Creating or editing metadata in the candidate workspace cannot change that decision.
+Legacy metadata without a `distributed_evaluation` key retains single-GPU submission and
+source checks even if `hardware.required_gpus` describes multiple GPUs. An explicit distributed
+contract requires every supplied `hardware.required_gpus` value, including `1`, to match its
+`world_size`.
+
+`ATREX_SANDBOX_ATREX_BENCH_VERSION` and `ATREX_SANDBOX_REQUIREMENTS_FILE` can pin an Agate
+runtime. The latter is read as UTF-8 with explicit file errors. When replaying a typed request
+through the CLI, the requirements file must still be configured and its parsed contents must
+match the request; missing or changed pins fail instead of silently using a different runtime.
+
 ## News
 
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.

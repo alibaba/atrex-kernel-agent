@@ -29,9 +29,12 @@ class FrameworkCandidateRequest:
     v0_blob: str
     baseline_commit: str
     include_policy_review: bool = True
+    source_checks_enabled: bool = True
 
 
 class AcceptancePolicy(Protocol):
     def decide(
         self, verification: VerificationResult, requirements: AcceptanceRequirements
     ) -> AcceptanceDecision: ...
+
+    def check_framework_candidate(self, request: FrameworkCandidateRequest) -> str: ...
