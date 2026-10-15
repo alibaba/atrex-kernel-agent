@@ -36,7 +36,7 @@ class LegacyAgent:
     def open_session(self, runtime_id, workspace, *, session_id="", environment=None):
         import uuid
         from .native import NativeSession
-        from orchestrator.agent_runtime.process import run_bounded
+        from aka.legacy.agent.process import run_bounded
 
         with self._lock:
             self._check_open()

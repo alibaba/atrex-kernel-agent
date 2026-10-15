@@ -4,9 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from orchestrator._bootstrap import task_modules
 
-task_modules()
 from aka.legacy.task.git import (
     _git,
     git_text,

@@ -1,2 +1,6 @@
-"""Historical verification record exports; module interfaces are unchanged."""
-from aka.legacy.workflow.models import VerificationRun, VerificationResult
+"""Compatibility import for aka.legacy.compat.legacy_evaluation.models."""
+from orchestrator._bootstrap import task_modules
+task_modules()
+import importlib
+import sys
+sys.modules[__name__] = importlib.import_module("aka.legacy.compat.legacy_evaluation.models")

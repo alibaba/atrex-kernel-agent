@@ -13,12 +13,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from orchestrator.constants import (
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
-    SUPPLEMENTAL_PENDING_PREFIX,
-)
-from orchestrator.hardware import hardware_vendor
+from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, SUPPLEMENTAL_PENDING_PREFIX
+from aka.legacy.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
 from aka.legacy.task.git import git_head, git_text, working_changes
@@ -426,7 +422,7 @@ class LongHorizonCampaign:
         )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
-            f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
+            f"PYTHONPATH={MODULE_ROOT} python -m aka.legacy.workflow.journal "
             f"--live-path {json.dumps(str(live_memory_path))}"
         )
         fast_trial_plan_paths = "\n".join(

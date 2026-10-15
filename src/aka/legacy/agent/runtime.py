@@ -32,11 +32,7 @@ from .model import (
     TokenUsage,
     sum_token_usages,
 )
-from orchestrator.agent_runtime.process import (
-    ProcessRunner,
-    protected_gateway_identity,
-    run_bounded,
-)
+from aka.legacy.agent.process import ProcessRunner, protected_gateway_identity, run_bounded
 
 from aka.legacy.application.paths import checkout_root
 

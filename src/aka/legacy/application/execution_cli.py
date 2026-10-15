@@ -46,23 +46,13 @@ def main(argv: list[str] | None = None) -> int:
         command = command[1:]
     if not command and not arguments.preflight:
         parser.error("provide a command after -- or use --preflight")
-    for name, module in tuple(sys.modules.items()):
-        if name == "orchestrator" or name.startswith("orchestrator."):
-            # Historical orchestrator entries can alias installed legacy modules.
-            # Those implementations belong to the wheel, while real checkout
-            # modules still have to come from the requested repository.
-            if getattr(module, "__name__", "").startswith("aka.legacy."):
-                continue
-            location = getattr(module, "__file__", None)
-            if location is not None and not Path(location).resolve().is_relative_to(root):
-                parser.error("a different AKA checkout is already loaded")
     added = str(root) not in sys.path
     if added:
         sys.path.insert(0, str(root))
     try:
-        from orchestrator.environment_recovery import raise_if_environment_blocked
-        from orchestrator.recovery_processes import spawn_owned_session
-        from orchestrator.sandbox_config import queue_wait_grace
+        from aka.legacy.execution.recovery import raise_if_environment_blocked
+        from aka.legacy.execution.processes import spawn_owned_session
+        from aka.legacy.execution.configuration import queue_wait_grace
         from aka.legacy.application.execution import execution_environment, application_execution, run_sandbox
         hooks = ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)
         with application_execution(selection=selection) as executor:

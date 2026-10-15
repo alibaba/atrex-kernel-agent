@@ -25,28 +25,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from orchestrator.durable_state import (  # noqa: E402
-    durable_replace,
-    durable_rmdir,
-    durable_unlink,
-    durable_write_json,
-    durable_write_text,
-    ensure_private_directory,
-)
-from orchestrator.recovery_processes import (  # noqa: E402
-    ACTIVE_MARKER,
-    HANDOFF_ID_ENV,
-    HANDOFF_LOCK_FD_ENV,
-    RESTART_COMPLETE,
-    RESTART_EXIT,
-    RESTART_PRIMARY_PID,
-    STOP_MARKER,
-    clear_process_registry,
-    matching_processes,
-    process_identity_matches,
-    spawn_owned_session,
-    terminate_processes,
-)
+# Prefer source packages when running directly from a checkout.
+_source_packages = Path(__file__).resolve().parents[1] / "src"
+if _source_packages.is_dir():
+    sys.path.insert(0, str(_source_packages))
+
+from aka.legacy.task.durable import durable_replace, durable_rmdir, durable_unlink, durable_write_json, durable_write_text, ensure_private_directory
+from aka.legacy.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV, RESTART_COMPLETE, RESTART_EXIT, RESTART_PRIMARY_PID, STOP_MARKER, clear_process_registry, matching_processes, process_identity_matches, spawn_owned_session, terminate_processes
 
 RESTART_HANDOFF_TIMEOUT = 10_800
 RESTART_CLEANUP_TIMEOUT = 30

@@ -3,56 +3,21 @@ from __future__ import annotations
 import argparse, json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 from typing import Optional
-from orchestrator.process_launch import optimizer_entrypoint
-from orchestrator import agent_runtime as _agent_runtime
-from orchestrator.campaign import Campaign
-from orchestrator.constants import (
-    AGENT_CLI_CHOICES,
-    DEFAULT_CONVERT_AFTER,
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
-    DEFAULT_HANDOFF_RESUMES,
-    DEFAULT_SANDBOX_TIMEOUT,
-    DEFAULT_VERIFY_REPEATS,
-    DEFAULT_VERIFY_RUN_TIMEOUT,
-    FRAMEWORK_BASELINE_FILE,
-    FRAMEWORK_BASELINE_MODES,
-    FRAMEWORK_BASELINE_TIMEOUT_S,
-    MAX_SANDBOX_TIMEOUT,
-)
-from orchestrator.environment_recovery import (
-    DEFAULT_SSH_HEALTH_COMMAND,
-    ENVIRONMENT_TEMPFAIL,
-    EnvironmentUnavailable,
-    configure_recovery,
-    current_recovery_context,
-    environment_is_blocked,
-    launch_recovery_monitor,
-    raise_if_environment_blocked,
-    signal_restart_ready,
-)
-from orchestrator.hardware import (
-    _workspace_slug,
-    framework_workspace_suffix,
-    supported_frameworks,
-)
-from orchestrator.trace_retention import (
-    write_trace_retention_manifest,
-)
-from orchestrator.optimization_policy import (
-    OPTIMIZATION_MODE_CHOICES,
-)
-from orchestrator.plugins import PluginError, PluginRegistry
-from orchestrator.session_io import (
-    check_ssh_environment,
-    detect_arch,
-    ensure_submodules,
-)
-from orchestrator.ssh_health import runtime_health_command
-from orchestrator.workspace_state import (
-    latest_version,
-    read_memory,
-)
+from aka.legacy.application.launch import optimizer_entrypoint
+import aka.legacy.agent as _agent_runtime
+from aka.legacy.compat.campaign import Campaign
+from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S
+from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_TIMEOUT
+from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND, ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, configure_recovery, current_recovery_context, environment_is_blocked, launch_recovery_monitor, raise_if_environment_blocked, signal_restart_ready
+from aka.legacy.task.hardware import _workspace_slug, framework_workspace_suffix, supported_frameworks
+from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
+from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
+from aka.legacy.resources.plugins import PluginError, PluginRegistry
+from aka.legacy.execution.sandbox import check_ssh_environment, detect_arch
+from aka.legacy.resources.submodules import ensure_submodules
+from aka.legacy.execution.health import runtime_health_command
+from aka.legacy.task.candidate_workspace.state import latest_version, read_memory
 
 def _without_cli_options(argv: list[str], option_names: tuple[str, ...]) -> list[str]:
     """Remove value-taking options from argv before adding canonical child values."""
@@ -192,8 +157,8 @@ def dispatch_framework_campaigns(
                     child_environment.pop(name, None)
                 else:
                     child_environment[name] = value
-            from orchestrator._bootstrap import execution_modules
-            execution, _runtime = execution_modules()
+            from aka.legacy.application import execution
+            from aka.legacy.execution.legacy import runtime as _runtime
             child_environment = execution.execution_environment(child_environment)
             child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
             proc = subprocess.Popen(
@@ -388,6 +353,7 @@ def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> 
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    from orchestrator._bootstrap import run
-
-    return run(argv)
+    from aka.contracts.application import ApplicationRequest
+    from aka.legacy.application.host import run_application
+    from aka.legacy.application.paths import checkout_root
+    return run_application(ApplicationRequest(checkout_root(), argv))

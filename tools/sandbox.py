@@ -86,18 +86,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator.durable_state import durable_write_json  # noqa: E402
-from orchestrator.sandbox_config import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
-from orchestrator.sandbox_config import (  # noqa: E402
-    distributed_evaluation_world_size as _distributed_evaluation_world_size,
-)
-from orchestrator.ssh_health import (  # noqa: E402
-    DEFAULT_SSH_HEALTH_COMMAND,
-    combined_health_command,
-)
+# Prefer source packages when running directly from a checkout.
+_source_packages = Path(__file__).resolve().parents[1] / "src"
+if _source_packages.is_dir():
+    sys.path.insert(0, str(_source_packages))
 
-from orchestrator._bootstrap import task_modules
-task_modules()
+from aka.legacy.task.durable import durable_write_json  # noqa: E402
+from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
+from aka.legacy.execution.configuration import distributed_evaluation_world_size as _distributed_evaluation_world_size
+from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
+
 from aka.legacy.evaluation.transport_results import (
     _finite_number,
     _request_shape_ids,
@@ -3396,8 +3394,6 @@ def _run_typed_gateway(
                     file=sys.stderr,
                     flush=True,
                 )
-            from orchestrator._bootstrap import task_modules
-            task_modules()
             from aka.legacy.experiment.batches import run_batches
             processes = run_batches(
                 batch_items, run_batch, max_workers=DEFAULT_EVAL_BATCH_WORKERS,

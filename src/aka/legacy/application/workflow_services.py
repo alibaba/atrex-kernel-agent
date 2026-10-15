@@ -105,7 +105,7 @@ class WorkflowServices:
         self.formal_experiment = BorrowedExperiment(self, formal=True)
 
     def preparation(self, include_problem=False):
-        from orchestrator.constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER
+        from aka.legacy.resources.paths import ATREX_BENCH_HARNESS, PROFILE_DRIVER
 
         c = self.campaign
         native = bool(c.atrex_bench_root)
@@ -128,7 +128,7 @@ class WorkflowServices:
 
     @contextmanager
     def experiment(self, *, formal=False):
-        from orchestrator.infrastructure_retry import retry_infrastructure
+        from aka.legacy.experiment.retry import retry_infrastructure
 
         s = self.settings
         with application_execution() as selected:
@@ -181,7 +181,7 @@ class WorkflowServices:
         return shlex.join([*argv, "--no-sync", "--", *command])
 
     def numerical_feedback(self, workspace, *, standard_correctness_passed=False):
-        from orchestrator.numerical_policy import supplemental_feedback
+        from aka.legacy.workflow.numerical_review import supplemental_feedback
 
         return supplemental_feedback(
             self.campaign,
@@ -198,7 +198,7 @@ class WorkflowServices:
 
     def baseline(self):
         from aka.legacy.workflow.baseline import WorkflowBaseline
-        from orchestrator.constants import SOL_SEED
+        from aka.legacy.resources.paths import SOL_SEED
 
         return WorkflowBaseline(
             self.campaign,

@@ -73,7 +73,7 @@ def complete_migration(directory: Path, *, owner: bool, repo_root=None, environm
         # A committed schema-4 record losing its selection is corruption, not
         # an interrupted write that may be repaired from legacy state.
         raise RuntimeError("committed recovery migration lacks its launch selection")
-    from orchestrator.durable_state import durable_unlink, durable_write_json, durable_write_text
+    from aka.legacy.task.durable import durable_unlink, durable_write_json, durable_write_text
     if not selection_path.exists():
         durable_write_text(selection_path, payload)
     if current == previous:
@@ -84,7 +84,7 @@ def complete_migration(directory: Path, *, owner: bool, repo_root=None, environm
 
 def begin_migration(directory: Path, previous, following, payload):
     """Record intent after configuration validation and before either new write."""
-    from orchestrator.durable_state import durable_write_json
+    from aka.legacy.task.durable import durable_write_json
     record = {"version": 1, "previous": previous, "next": following, "selection": payload}
     _validate(directory.resolve(), record)
     if has_selection(directory / MIGRATION_FILE):

@@ -1,6 +1,9 @@
 """Historical environment names forwarded to their Workflow implementation."""
-from orchestrator import constants as _constants, workspace_state as _workspace_state
-from orchestrator.agent_runtime import process as _agent_process
+from aka.legacy.workflow.constants import CONVERT_PERF_TOL as _constants_CONVERT_PERF_TOL
+from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS as _constants_IMMUTABLE_BASELINE_PATHS
+from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE as _constants_STALL_STATE_FILE
+import aka.legacy.task.candidate_workspace.state as _workspace_state
+import aka.legacy.agent.process as _agent_process
 from aka.legacy.workflow.environment import (
     prepare_campaign, link_episode_runtime, episode_directives, run_sandbox,
     candidate_policy_violations, conversion_required, candidate_is_gluon,
@@ -12,9 +15,9 @@ run_bounded = _agent_process.run_bounded
 peak_util = _workspace_state.peak_util
 read_memory = _workspace_state.read_memory
 speedup_vs_reference = _workspace_state.speedup_vs_reference
-CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
-IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
-STALL_STATE_FILE = _constants.STALL_STATE_FILE
+CONVERT_PERF_TOL = _constants_CONVERT_PERF_TOL
+IMMUTABLE_BASELINE_PATHS = _constants_IMMUTABLE_BASELINE_PATHS
+STALL_STATE_FILE = _constants_STALL_STATE_FILE
 
 from aka.legacy.agent.native import (
     fresh_session_command,

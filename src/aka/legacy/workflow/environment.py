@@ -2,34 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestrator import constants as _constants
-from orchestrator import workspace_state as _workspace_state
+from aka.legacy.workflow.constants import CONVERT_PERF_TOL as _constants_CONVERT_PERF_TOL
+from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS as _constants_IMMUTABLE_BASELINE_PATHS
+from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE as _constants_STALL_STATE_FILE
+import aka.legacy.task.candidate_workspace.state as _workspace_state
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from aka.legacy.workflow.campaign import Campaign
-from orchestrator.constants import DEFAULT_CONVERT_AFTER
-from orchestrator.hardware import (
-    hardware_directive,
-    hardware_vendor,
-    head_kernel_is_gluon,
-    should_convert_to_gluon,
-)
-from orchestrator.optimization_policy import install_workspace_policy
-from orchestrator.session_io import _sandbox_command
-from orchestrator.workspace_runtime import (
-    _agent_runtime_directive,
-    _plan_generator_directive,
-    link_runtime,
-)
-from orchestrator.workspace_state import (
-    git_head,
-    head_kernel_is_initial_baseline,
-    latest_version,
-    read_stall,
-    reconstruct_stall,
-    write_stall,
-)
+from aka.legacy.workflow.constants import DEFAULT_CONVERT_AFTER
+from aka.legacy.workflow.hardware import hardware_directive, should_convert_to_gluon
+from aka.legacy.task.hardware import hardware_vendor
+from aka.legacy.task.source.inspection import head_kernel_is_gluon
+from aka.legacy.workflow.policy import install_workspace_policy
+from aka.legacy.execution.sandbox import sandbox_command
+from aka.legacy.resources.runtime import _agent_runtime_directive, _plan_generator_directive, link_runtime
+from aka.legacy.task.candidate_workspace.state import git_head, head_kernel_is_initial_baseline, latest_version, read_stall, reconstruct_stall, write_stall
 
 
 def prepare_campaign(campaign: Campaign) -> None:
@@ -120,7 +108,7 @@ def run_sandbox(
     private_reference_dir: Path | None = None,
 ):
     """Use main's sandbox command builder and queue/timeout semantics verbatim."""
-    return _sandbox_command(
+    return sandbox_command(
         workspace,
         hardware,
         profile,
@@ -179,10 +167,9 @@ def save_stall(workspace: Path, value: int) -> None:
 peak_util = _workspace_state.peak_util
 read_memory = _workspace_state.read_memory
 speedup_vs_reference = _workspace_state.speedup_vs_reference
-CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
-IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
-STALL_STATE_FILE = _constants.STALL_STATE_FILE
-
+CONVERT_PERF_TOL = _constants_CONVERT_PERF_TOL
+IMMUTABLE_BASELINE_PATHS = _constants_IMMUTABLE_BASELINE_PATHS
+STALL_STATE_FILE = _constants_STALL_STATE_FILE
 
 
 class CampaignEnvironment:

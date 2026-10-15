@@ -41,7 +41,7 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
         if (profile != "application" or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
                 or patch_files or patches or variables or tokens or execution_selection is not None):
             raise CompositionError("recovery", "cannot override a pending default legacy launch migration")
-        process_launch = sys.modules.get("orchestrator.process_launch")
+        from . import launch as process_launch
         script = (process_launch.optimizer_entrypoint() if process_launch is not None
                   else request.repo_root / "orchestrator/optimize.py")
         environment = complete_migration(pending,
@@ -54,9 +54,15 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
             raise RuntimeError("recovery migration completed concurrently; retry with the recorded launch selection")
         with invocation_environment(environment):
             return run_application(request, canonical=canonical)
-    optimizer = sys.modules.get("orchestrator.optimize")
-    if optimizer is not None and Path(optimizer.__file__).resolve() != request.repo_root / "orchestrator/optimize.py":
-        raise RuntimeError("a different AKA checkout is already loaded")
+    resources = sys.modules.get("aka.legacy.resources.paths")
+    if resources is not None and resources.REPO_ROOT != request.repo_root.resolve():
+        metadata = resources.REPO_ROOT / ".internal-runtime.json"
+        try:
+            source_root = Path(json.loads(metadata.read_text())["open_root"]).resolve()
+        except (OSError, ValueError, KeyError, TypeError):
+            source_root = None
+        if source_root != request.repo_root.resolve():
+            raise RuntimeError("a different AKA checkout is already loaded")
     payload = read(os.environ)
     legacy_recovery = requires_default_recovery()
     if legacy_recovery and (payload is not None or profile != "application"
@@ -68,7 +74,7 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
                 or patches or variables or execution_selection is not None):
             raise CompositionError("continuation", "cannot override a reconstructed launch selection")
         selection = restore(payload, tokens=tokens)
-        process_launch = sys.modules.get("orchestrator.process_launch")
+        from . import launch as process_launch
         script = (process_launch.optimizer_entrypoint() if process_launch is not None
                   else request.repo_root / "orchestrator/optimize.py")
         expected_script = selection.bindings.get("optimizer_script")
@@ -84,7 +90,7 @@ def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR
             variables=application_variables(request.repo_root, variables))
         # A selected internal launcher is an explicit process dependency. Avoid
         # importing the optimizer during assembly or modifying its module identity.
-        process_launch = sys.modules.get("orchestrator.process_launch")
+        from . import launch as process_launch
         script = (process_launch.optimizer_entrypoint() if process_launch is not None
                   else request.repo_root / "orchestrator/optimize.py")
         script = Path(script).resolve()

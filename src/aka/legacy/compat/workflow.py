@@ -113,7 +113,7 @@ class BoundEvaluation:
         self.context = context
 
     def __getattr__(self, name):
-        from long_horizon.legacy_evaluation import results
+        import aka.legacy.compat.legacy_evaluation.results as results
 
         if hasattr(results, "_" + name):
             return getattr(results, "_" + name)

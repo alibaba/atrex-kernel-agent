@@ -1,10 +1,7 @@
 """Map retained sandbox settings to invocation environment for Workflow."""
 
-from orchestrator.session_io import (
-    run_session,
-    sandbox_directive,
-    fast_sandbox_directive,
-)
+from aka.legacy.agent.session import run_session
+from aka.legacy.execution.sandbox import sandbox_directive, fast_sandbox_directive
 
 
 class CampaignExecution:

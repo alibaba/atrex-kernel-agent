@@ -13,12 +13,7 @@ from aka.contracts.evaluation import EvaluationRequest
 from aka.contracts.experiment import ExperimentExecutionError
 from aka.contracts.acceptance import FrameworkCandidateRequest
 from aka.legacy.evaluation.local_results import _record_local_test_result
-from orchestrator.workspace_state import (
-    git_path_blob,
-    git_worktree_blob,
-    read_memory,
-    v0_baseline_commit,
-)
+from aka.legacy.task.candidate_workspace.state import git_path_blob, git_worktree_blob, read_memory, v0_baseline_commit
 
 
 class WorkflowBaseline:

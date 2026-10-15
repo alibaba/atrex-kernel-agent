@@ -2,9 +2,9 @@
 from __future__ import annotations
 import os, signal, subprocess, sys, time
 from pathlib import Path
-from orchestrator.agent_runtime.process import descendant_process_commands
-from orchestrator.hardware import framework_workspace_suffix
-from orchestrator.environment_recovery import ENVIRONMENT_TEMPFAIL, environment_is_blocked
+from aka.legacy.agent.process import descendant_process_commands
+from aka.legacy.task.hardware import framework_workspace_suffix
+from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, environment_is_blocked
 
 
 def dispatch_framework_campaigns(

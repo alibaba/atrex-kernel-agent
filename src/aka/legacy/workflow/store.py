@@ -4,10 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from orchestrator._bootstrap import task_modules
-from orchestrator.durable_state import durable_write_json
+from aka.legacy.task.durable import durable_write_json
 
-task_modules()
 from aka.legacy.task.candidate_workspace.excludes import (
     RUNTIME_DIR,
     VERIFY_DIR,
@@ -28,9 +26,7 @@ class CampaignStore:
 
     @staticmethod
     def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
-        from orchestrator._bootstrap import task_modules
 
-        task_modules()
         from aka.legacy.task.candidate_workspace.excludes import ensure_excluded
 
         ensure_excluded(workspace, wiki_trace_only=wiki_trace_only)

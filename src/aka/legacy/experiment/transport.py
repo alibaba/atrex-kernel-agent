@@ -2,7 +2,7 @@
 import subprocess
 
 from aka.contracts.execution import JobResult
-from orchestrator.infrastructure_retry import InfrastructureUnavailable, check_transport
+from aka.legacy.execution.transport import InfrastructureUnavailable, check_transport
 
 
 def check_abba_result(result: JobResult) -> None:

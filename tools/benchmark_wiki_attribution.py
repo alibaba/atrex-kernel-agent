@@ -18,7 +18,7 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from long_horizon import journal  # noqa: E402
+import aka.legacy.workflow.journal as journal  # noqa: E402
 
 
 QUERY_ID = "wiki-query-0123456789abcdef0123456789abcdef"

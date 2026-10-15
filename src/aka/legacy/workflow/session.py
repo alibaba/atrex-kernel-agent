@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from orchestrator.environment_recovery import raise_if_environment_blocked
+from aka.legacy.execution.recovery import raise_if_environment_blocked
 
 from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult

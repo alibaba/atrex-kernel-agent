@@ -19,8 +19,8 @@ class LongHorizonCampaign(EpisodeCampaign):
         acceptance_policy=None,
         **options
     ):
-        from long_horizon.verifier import GatewayABBAValidator
-        from long_horizon.legacy_evaluation.episode import LegacyEpisodeEvaluation
+        from aka.legacy.compat.verifier import GatewayABBAValidator
+        from aka.legacy.compat.legacy_evaluation.episode import LegacyEpisodeEvaluation
 
         if not hasattr(base_campaign, "evaluation") and hasattr(
             base_campaign, "_supplemental_numerical_feedback"

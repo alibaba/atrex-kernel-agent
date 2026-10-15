@@ -60,10 +60,10 @@ def sandbox_executor(executor: Executor, *, hardware="", profile="", url="",
     import sys
     from pathlib import Path
 
-    from orchestrator.constants import SANDBOX_TOOL
-    from orchestrator.environment_recovery import raise_if_environment_blocked
-    from orchestrator.recovery_processes import spawn_owned_session
-    from orchestrator.sandbox_config import queue_wait_grace
+    from aka.legacy.resources.paths import SANDBOX_TOOL
+    from aka.legacy.execution.recovery import raise_if_environment_blocked
+    from aka.legacy.execution.processes import spawn_owned_session
+    from aka.legacy.execution.configuration import queue_wait_grace
     from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
     from .execution import execution_environment
 

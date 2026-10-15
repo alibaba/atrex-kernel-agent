@@ -5,11 +5,12 @@ from pathlib import Path
 import re
 import sys
 
-from orchestrator.constants import FRAMEWORK_BASELINE_FILE
-from orchestrator.environment_recovery import configure_recovery, raise_if_environment_blocked
-from orchestrator.hardware import framework_workspace_suffix, supported_frameworks
-from orchestrator.session_io import check_ssh_environment, detect_arch, ensure_submodules
-from orchestrator.ssh_health import runtime_health_command
+from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.legacy.execution.recovery import configure_recovery, raise_if_environment_blocked
+from aka.legacy.task.hardware import framework_workspace_suffix, supported_frameworks
+from aka.legacy.execution.sandbox import check_ssh_environment, detect_arch
+from aka.legacy.resources.submodules import ensure_submodules
+from aka.legacy.execution.health import runtime_health_command
 from .dispatch import dispatch_framework_campaigns
 from .invocation import encode_launch
 

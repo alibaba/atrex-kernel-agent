@@ -17,39 +17,15 @@ from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
-from orchestrator._bootstrap import task_modules
 
-task_modules()
 from aka.contracts.problem import LoadedProblem
 from aka.legacy.agent.runtime import auth_hint
 
-from orchestrator.constants import (
-    SUPPLEMENTAL_PENDING_PREFIX,
-    SUPPLEMENTAL_REPAIR_PREFIX,
-    AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_PRIVATE_REFERENCE_ENV,
-    DEFAULT_CONVERT_AFTER,
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
-    DEFAULT_HANDOFF_RESUMES,
-    DEFAULT_SANDBOX_TIMEOUT,
-    DEFAULT_VERIFY_REPEATS,
-    DEFAULT_VERIFY_RUN_TIMEOUT,
-    DEPENDENCY_REVIEW_PROMPT,
-    DEPENDENCY_REVIEW_SCHEMA_VERSION,
-    DEPENDENCY_REVIEW_TIMEOUT_S,
-    FRAMEWORK_BASELINE_CATEGORY,
-    FRAMEWORK_BASELINE_FILE,
-    FRAMEWORK_BASELINE_TIMEOUT_S,
-    FRAMEWORK_BASELINE_VERSION,
-    PROMPTS_DIR,
-    REPO_ROOT,
-    WORKSPACE_INIT,
-)
-from orchestrator.environment_recovery import (
-    EnvironmentUnavailable,
-    environment_state_file,
-)
+from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
+from aka.legacy.resources.paths import AGENT_PROBLEM_GENERATION_PROMPT, DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR, REPO_ROOT, WORKSPACE_INIT
+from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT
+from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.legacy.execution.recovery import EnvironmentUnavailable, environment_state_file
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
 )
@@ -68,46 +44,25 @@ from .framework_baseline_progress import (
 from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
 )
-from orchestrator.hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from orchestrator.operator_layout import AGENT_PROBLEM_FILENAME
-from orchestrator.optimization_policy import (
-    install_workspace_policy,
-    optimization_mode_directive,
-    production_kernel_violations,
-    production_structure_violations,
-)
+from aka.legacy.workflow.hardware import hardware_directive
+from aka.legacy.task.hardware import hardware_vendor
+from aka.legacy.task.source.inspection import kernel_is_gluon
+from aka.legacy.task.problem import AGENT_PROBLEM_FILENAME
+from aka.legacy.workflow.policy import install_workspace_policy, optimization_mode_directive
+from aka.legacy.acceptance.source_policy import production_kernel_violations, production_structure_violations
 from .plan_reviewers import (
     REVIEWER_ENVIRONMENT,
     discover_plan_reviewers,
     plan_reviewer_environment,
 )
-from orchestrator.sandbox_config import distributed_evaluation_world_size, evaluator_num_gpus
-from orchestrator.plugins import PluginRegistry
-from orchestrator.session_io import (
-    SessionResult,
-    _production_review_candidate_paths,
-    _production_review_digest,
-    _record_local_test_result,
-    _render,
-    _validate_production_review,
-)
-from orchestrator.workspace_runtime import (
-    _agent_runtime_directive,
-    _baseline_driver_directive,
-    link_runtime,
-)
-from orchestrator.workspace_state import (
-    git_head,
-    git_kernel_blob,
-    git_path_blob,
-    git_worktree_blob,
-    head_kernel_is_initial_baseline,
-    latest_version,
-    read_memory,
-    resolve_framework_baseline_commit,
-    v0_baseline_commit,
-    write_stall,
-)
+from aka.legacy.execution.configuration import distributed_evaluation_world_size, evaluator_num_gpus
+from aka.legacy.resources.plugins import PluginRegistry
+from aka.legacy.agent.session import SessionResult
+from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
+from aka.legacy.evaluation.local_results import _record_local_test_result
+from aka.legacy.resources.prompts import render_prompt
+from aka.legacy.resources.runtime import _agent_runtime_directive, _baseline_driver_directive, link_runtime
+from aka.legacy.task.candidate_workspace.state import git_head, git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, latest_version, read_memory, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
@@ -250,7 +205,7 @@ class Campaign:
                     if validation_error
                     else "Create agent_problem.json now."
                 )
-                prompt = _render(
+                prompt = render_prompt(
                     AGENT_PROBLEM_GENERATION_PROMPT,
                     REPAIR_CONTEXT=repair_context,
                 )
@@ -464,7 +419,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from orchestrator.infrastructure_retry import check_review_service
+        from aka.legacy.agent.availability import check_review_service
 
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon
@@ -602,7 +557,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
-        from orchestrator.infrastructure_retry import retry_review
+        from aka.legacy.workflow.review_retry import retry_review
 
         digest = _production_review_digest(workspace, framework, require_gluon)
         stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
@@ -662,7 +617,7 @@ class Campaign:
         return evaluator_num_gpus(self.problem.evaluation.directory) < 2
 
     def _link_runtime(self) -> None:
-        from long_horizon.store import CampaignStore
+        from aka.legacy.workflow.store import CampaignStore
 
         self._assert_generalized_inputs_are_private()
         CampaignStore.ensure_excluded(self.workspace, wiki_trace_only=True)
@@ -707,9 +662,7 @@ class Campaign:
             raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
         # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
         # so cwd must be the work_dir (or the process cwd when --workspace is absent).
-        from orchestrator._bootstrap import task_modules
 
-        task_modules()
         from aka.contracts.workspace import SourceRequest
 
         content = self.source_provider.prepare(
@@ -754,7 +707,7 @@ class Campaign:
         if self.atrex_bench_root:
             self.evaluation.setup_baseline_native(op_dir, generalized=generalized)
             return
-        prompt = _render(
+        prompt = render_prompt(
             PROMPTS_DIR / "setup.md",
             PLUGINS=self.plugin_directive("setup"),
             WORKSPACE=str(self.workspace),
@@ -1063,8 +1016,8 @@ class Campaign:
     ) -> None:
         """Best-effort live progress before the Long Horizon supervisor starts."""
         try:
-            from long_horizon.journal import sync_live_memory
-            from long_horizon.store import CampaignStore
+            from aka.legacy.workflow.journal import sync_live_memory
+            from aka.legacy.workflow.store import CampaignStore
 
             store = CampaignStore(self.workspace)
             created_at = datetime.now(timezone.utc).isoformat()
@@ -1614,7 +1567,7 @@ class Campaign:
                     catalog_path.read_bytes()
                 ).hexdigest()
 
-                prompt = _render(
+                prompt = render_prompt(
                     PROMPTS_DIR / "framework_baseline_correctness_review.md",
                     REVIEWER=label,
                     FRAMEWORK=self.framework,
@@ -2001,7 +1954,7 @@ class Campaign:
 
     def _framework_baseline_prompt(self, n: int) -> str:
         smoke_command, smoke_scope = self.evaluation.framework_baseline_smoke_command(n)
-        return _render(
+        return render_prompt(
             PROMPTS_DIR / "framework_baseline.md",
             PLUGINS=self.plugin_directive("framework_baseline"),
             WORKSPACE=str(self.workspace),

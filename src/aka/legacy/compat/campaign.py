@@ -4,7 +4,7 @@ from aka.legacy.workflow.campaign import *
 from aka.legacy.workflow.campaign import Campaign as WorkflowCampaign
 from .workflow import campaign_request, evaluation_configuration
 from .configuration import evaluation_settings
-from long_horizon.legacy_evaluation.baseline import LegacyBaselineEvaluation
+from aka.legacy.compat.legacy_evaluation.baseline import LegacyBaselineEvaluation
 
 
 class Campaign(WorkflowCampaign):

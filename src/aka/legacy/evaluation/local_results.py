@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import datetime, timezone
-from orchestrator.workspace_state import speedup_vs_reference
+from aka.legacy.task.candidate_workspace.state import speedup_vs_reference
 
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 

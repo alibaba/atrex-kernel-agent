@@ -39,7 +39,7 @@ class GatewayABBAValidator:
         from aka.legacy.application.experiment_executor import sandbox_executor
         from aka.legacy.application.workspace import candidate_workspace
         from aka.legacy.evaluation import EvaluationConfiguration, LegacyEvaluator
-        from orchestrator.infrastructure_retry import retry_infrastructure
+        from aka.legacy.experiment.retry import retry_infrastructure
 
         request = EvaluationRequest(
             workspace, base_commit=base_commit, candidate_commit=candidate_commit,

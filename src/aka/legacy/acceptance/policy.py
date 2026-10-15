@@ -80,8 +80,8 @@ class LegacyAcceptancePolicy:
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
         session that wrote the kernel but never committed it still be accepted.
         """
-        from orchestrator.hardware import kernel_is_gluon
-        from orchestrator.optimization_policy import production_structure_violations
+        from aka.legacy.task.source.inspection import kernel_is_gluon
+        from aka.legacy.acceptance.source_policy import production_structure_violations
         from aka.legacy.task.git import git_worktree_blob
 
         candidate_blob = git_worktree_blob(request.workspace, "kernel.py")
