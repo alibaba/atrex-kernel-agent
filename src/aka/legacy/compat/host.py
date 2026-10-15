@@ -36,6 +36,8 @@ def application_variables(repo_root, values=None):
 
 def run_application(request, *, profile="application", profiles_dir=PROFILES_DIR,
                     patch_files=(), patches=(), variables=None, tokens=(), execution_selection=None, canonical=False):
+    if request.argv is None:
+        request = replace(request, argv=tuple(sys.argv[1:]))
     pending = pending_recovery_directory()
     if pending is not None:
         if (profile != "application" or Path(profiles_dir).resolve() != PROFILES_DIR.resolve()
