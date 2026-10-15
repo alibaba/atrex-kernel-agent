@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["atrex-aka-framework==0.1.0"]
 
 [project.entry-points."aka.commands"]
-optimize = "aka.legacy.application.cli:main"
+optimize = "aka.legacy.compat.command:main"
 workflow = "aka.legacy.workflow.cli:main"
 execution = "aka.legacy.application.execution_cli:main"
 

@@ -354,6 +354,6 @@ def _run_application(argv: Optional[list[str]] = None, *, dependencies=None) -> 
 
 def main(argv: Optional[list[str]] = None) -> int:
     from aka.contracts.application import ApplicationRequest
-    from aka.legacy.application.host import run_application
+    from aka.legacy.compat.host import run_application
     from aka.legacy.application.paths import checkout_root
     return run_application(ApplicationRequest(checkout_root(), argv))

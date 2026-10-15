@@ -8,8 +8,7 @@ from typing import Iterator, Sequence
 
 _entrypoint: ContextVar[Path | None] = ContextVar("optimizer_entrypoint", default=None)
 _resources: ContextVar[tuple[Path, ...]] = ContextVar("optimizer_resources", default=())
-from aka.legacy.application.paths import checkout_root
-_DEFAULT_ENTRYPOINT = checkout_root() / "orchestrator" / "optimize.py"
+_DEFAULT_ENTRYPOINT = Path(__file__).with_name("entry.py")
 
 
 def optimizer_entrypoint() -> Path:
