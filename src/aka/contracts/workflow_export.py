@@ -42,6 +42,23 @@ class CandidateFact:
 
 
 @dataclass(frozen=True)
+class EvaluationFact:
+    kind: str
+    timestamp: str | None
+    source_sha256: dict[str, str]
+    result: ResultFact
+
+
+@dataclass(frozen=True)
+class EpisodeCandidateFact:
+    head_revision: str | None
+    revision: str | None
+    base_revision: str | None
+    artifacts: dict[str, str]
+    evaluations: tuple[EvaluationFact, ...] = ()
+
+
+@dataclass(frozen=True)
 class EpisodeFact:
     episode: int
     version: int | None
@@ -53,6 +70,9 @@ class EpisodeFact:
     gate: str | None
     experiments: tuple[dict, ...] = ()
     phases: tuple[dict, ...] = ()
+    mode: str | None = None
+    violation: str | None = None
+    final_candidate: EpisodeCandidateFact | None = None
 
 
 @dataclass(frozen=True)
@@ -161,10 +181,44 @@ def snapshot_document(snapshot: WorkflowExportSnapshot, *, include_content: bool
     return value
 
 
+
+def _result_from_document(row):
+    """Shared semantic check for durable producer output and portable snapshots."""
+    import math
+    def number(value, *, positive=False, optional=False):
+        if optional and value is None:
+            return
+        if type(value) not in (int,float) or not math.isfinite(value) or (positive and value <= 0):
+            raise ValueError('invalid public measurement')
+    def flag(value):
+        if type(value) is not bool:
+            raise ValueError('invalid public boolean')
+    result = dict(row)
+    result['expected_case_ids'] = tuple(result['expected_case_ids'])
+    expected = result['expected_case_ids']
+    if len(set(expected)) != len(expected) or any(not isinstance(key,str) or not key for key in expected):
+        raise ValueError('invalid public case identities')
+    if result['state'] not in ('unmeasured','running','pass','correctness_failure','infrastructure_error','rejected','interrupted'):
+        raise ValueError('unsupported public result state')
+    number(result['latency_us'],positive=True,optional=True)
+    number(result['score'],optional=True)
+    for key, value in result['case_latencies_us'].items():
+        if not isinstance(key,str):
+            raise ValueError('invalid public case identity')
+        number(value,positive=True)
+    for value in result.get('metrics',{}).values():
+        number(value)
+    flag(result['complete']); flag(result.get('case_ids_opaque',True))
+    if result['complete'] and (not expected or set(result['case_latencies_us']) != set(expected) or result['latency_us'] is None):
+        raise ValueError('complete result lacks required measurements')
+    if result['state']=='pass' and (not result['complete'] or result['correctness']!='PASS' or result['gate']!='PASS'):
+        raise ValueError('passing result lacks complete verification')
+    return ResultFact(**result)
+
+
 def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
     """Decode and validate a detached public export, including missing measurements."""
     import base64
-    import math
     from pathlib import PurePosixPath
 
     def counter(value, *, optional=False):
@@ -173,12 +227,6 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
         if type(value) is not int or value < 0:
             raise ValueError('invalid public counter')
 
-    def number(value, *, positive=False, optional=False):
-        if optional and value is None:
-            return
-        if type(value) not in (int, float) or not math.isfinite(value) or (positive and value <= 0):
-            raise ValueError('invalid public measurement')
-
     def flag(value):
         if type(value) is not bool:
             raise ValueError('invalid public boolean')
@@ -186,28 +234,9 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
     def candidate(row):
         if row is None:
             return None
-        result = dict(row['result'])
-        result['expected_case_ids'] = tuple(result['expected_case_ids'])
-        expected = result['expected_case_ids']
-        if len(set(expected)) != len(expected) or any(not isinstance(key,str) or not key for key in expected):
-            raise ValueError('invalid public case identities')
-        if result['state'] not in ('unmeasured','running','pass','correctness_failure','infrastructure_error','rejected','interrupted'):
-            raise ValueError('unsupported public result state')
-        number(result['latency_us'],positive=True,optional=True)
-        number(result['score'],optional=True)
-        for key, value in result['case_latencies_us'].items():
-            if not isinstance(key,str):
-                raise ValueError('invalid public case identity')
-            number(value,positive=True)
-        for value in result.get('metrics',{}).values():
-            number(value)
-        flag(result['complete']); flag(row['promoted']); flag(result.get('case_ids_opaque',True))
-        if result['complete'] and (not expected or set(result['case_latencies_us']) != set(expected) or result['latency_us'] is None):
-            raise ValueError('complete result lacks required measurements')
-        if result['state']=='pass' and (not result['complete'] or result['correctness']!='PASS' or result['gate']!='PASS'):
-            raise ValueError('passing result lacks complete verification')
+        flag(row['promoted'])
         counter(row['version']);counter(row['episode'],optional=True)
-        return CandidateFact(**{**row, 'result':ResultFact(**result)})
+        return CandidateFact(**{**row, 'result':_result_from_document(row['result'])})
 
     try:
         if type(value.get('schema_version')) is not int or value['schema_version'] != EXPORT_VERSION:
@@ -251,7 +280,48 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
         episodes=[]
         for row in value['episodes']:
             counter(row['episode']);counter(row['version'],optional=True);flag(row['accepted'])
-            episodes.append(EpisodeFact(**{**row,'experiments':tuple(row['experiments']),'phases':tuple(row.get('phases',()))}))
+            for key in ('mode','violation'):
+                if row.get(key) is not None and not isinstance(row[key],str):
+                    raise ValueError('invalid episode mode or violation')
+            final=row.get('final_candidate')
+            if final is not None:
+                import re
+                final=dict(final)
+                for key in ('head_revision','revision','base_revision'):
+                    revision=final[key]
+                    if revision is not None and (not isinstance(revision,str) or not re.fullmatch('[0-9a-f]{40}',revision)):
+                        raise ValueError('invalid episode candidate revision')
+                if final['revision'] is not None and final['revision']!=final['head_revision']:
+                    raise ValueError('episode source revision differs from captured HEAD')
+                handles=final['artifacts']
+                if not isinstance(handles,dict) or 'kernel.py' not in handles or set(handles)-{'kernel.py','solution.json'}:
+                    raise ValueError('invalid final episode source handles')
+                by_id={artifact.id:artifact for artifact in artifacts}
+                digests={}
+                for name,handle in handles.items():
+                    artifact=by_id.get(handle)
+                    role='episode-candidate-source' if name=='kernel.py' else 'episode-candidate-manifest'
+                    if (artifact is None or artifact.role!=role or
+                            artifact.filename!=f"episodes/e{row['episode']:04d}/final/{name}"):
+                        raise ValueError('final episode artifact differs from its source handle')
+                    digests[name]=artifact.sha256
+                evaluations=[]
+                for evaluation in final['evaluations']:
+                    if evaluation['source_sha256']!=digests:
+                        raise ValueError('episode evaluation does not bind final source bytes')
+                    if (baseline is not None and tuple(evaluation['result']['expected_case_ids'])
+                            != baseline.result.expected_case_ids):
+                        raise ValueError('episode evaluation differs from campaign cases')
+                    if not isinstance(evaluation['kind'],str) or not evaluation['kind']:
+                        raise ValueError('episode evaluation has no kind')
+                    if evaluation['timestamp'] is not None and not isinstance(evaluation['timestamp'],str):
+                        raise ValueError('invalid episode evaluation timestamp')
+                    evaluations.append(EvaluationFact(**{**evaluation,'result':_result_from_document(evaluation['result'])}))
+                final=EpisodeCandidateFact(**{**final,'evaluations':tuple(evaluations)})
+            episodes.append(EpisodeFact(**{**row,'experiments':tuple(row['experiments']),
+                'phases':tuple(row.get('phases',())),'final_candidate':final}))
+        if len({episode.episode for episode in episodes})!=len(episodes):
+            raise ValueError('duplicate public episode identity')
         warnings=tuple(value['warnings'])
         for row in warnings:
             if not isinstance(row.get('code'),str):

@@ -235,7 +235,12 @@ class RetainedWorkflowExport:
                     artifacts.append(_artifact('output_' + hashlib.sha256(relative.encode()).hexdigest(),
                                                relative, role, path.read_bytes(), 'text/plain'))
         episodes = []
+        from .episode_output import read as read_episode_output
         for number, attempt in sorted(attempts.items()):
+            final_candidate, final_artifacts = read_episode_output(
+                runtime / f'episodes/e{number:04d}', episode=number,
+                version=_integer(attempt.get('version')), expected_case_ids=expected, attempt=attempt)
+            artifacts.extend(final_artifacts)
             journal = document(runtime / f'episodes/e{number:04d}/episode_runtime/journal.json') or {}
             experiments = journal.get('experiments') or []
             # Only declared experiment facts cross the public boundary.
@@ -249,7 +254,8 @@ class RetainedWorkflowExport:
             episodes.append(EpisodeFact(number, _integer(attempt.get('version')),
                 str(attempt.get('status') or 'unmeasured'), attempt.get('accepted') is True,
                 attempt.get('candidate_commit'), attempt.get('session_id'), attempt.get('summary'),
-                (attempt.get('verification') or {}).get('gate'), public_experiments, phases))
+                (attempt.get('verification') or {}).get('gate'), public_experiments, phases,
+                attempt.get('mode'), attempt.get('violation'), final_candidate))
         for path in sorted((workspace/'.gpu_wiki_profile/raw/query_events').glob('*/*.json')):
             if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(workspace):
                 relative = path.relative_to(workspace).as_posix()

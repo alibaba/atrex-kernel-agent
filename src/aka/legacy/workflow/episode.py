@@ -1082,6 +1082,14 @@ class LongHorizonCampaign:
         )
 
         episode_dir = store.episode_dir(episode)
+        from .episode_output import capture as capture_episode_output
+        expected_cases = self.evaluation.expected_shape_ids()
+        if expected_cases is None:
+            baseline = self.environment.read_memory(self.workspace, 0) or {}
+            expected_cases = set((baseline.get("performance") or {}).get("latency_us_by_shape") or {})
+        capture_episode_output(worktree.path, episode_dir, episode=episode,
+            version=memory_version, base_revision=base_commit,
+            expected_case_ids=tuple(sorted(str(key) for key in expected_cases)))
         self.base_campaign.candidate_workspace.archive(
             worktree, episode_dir / "archive", "HEAD"
         )
