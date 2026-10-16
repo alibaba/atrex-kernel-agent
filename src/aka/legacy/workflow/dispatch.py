@@ -100,7 +100,18 @@ def dispatch_framework_campaigns(frameworks, run_framework) -> int:
             sys.stdout.flush()
             sys.stderr.flush()
             ready_read, ready_write = os.pipe()
-            pid = os.fork()
+            # Register a child only after setsid is acknowledged. Defer parent
+            # cancellation until then, so it cannot orphan an unregistered
+            # child or signal the parent's own process group.
+            previous_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK, (*handled_signals, signal.SIGINT))
+            try:
+                pid = os.fork()
+            except BaseException:
+                os.close(ready_read)
+                os.close(ready_write)
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                raise
             if pid == 0:
                 os.close(ready_read)
                 result = 1
@@ -110,6 +121,7 @@ def dispatch_framework_campaigns(frameworks, run_framework) -> int:
                     os.close(ready_write)
                     for sig, handler in previous_handlers.items():
                         signal.signal(sig, handler)
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                     os.environ["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
                     result = run_framework(framework)
                 except KeyboardInterrupt:
@@ -135,6 +147,7 @@ def dispatch_framework_campaigns(frameworks, run_framework) -> int:
             finally:
                 os.close(ready_read)
                 children.append((framework, "", proc))
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             print(f"[orchestrator] dispatched framework={framework} pid={pid}", flush=True)
 
         remaining = {proc.pid: (framework, proc) for framework, _, proc in children}
