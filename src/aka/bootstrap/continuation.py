@@ -64,7 +64,7 @@ def capture(selection: Selection) -> tuple[Selection, str]:
             for package in ("aka.core", "aka.bootstrap", "aka.contracts")}
     value = {"version": selection.continuation_version, "target": selection.target,
              "required_services": list(selection.required_services),
-             "bindings": dict(selection.bindings), "environment": dict(selection.environment),
+             "environment": dict(selection.environment),
              "composition": {"profile": effective.profile, "rows": [asdict(row) for row in effective.rows],
                              "layers": list(effective.layers), "variables": dict(effective.variables)},
              "identity": identity, "resources": resources, "host": host}
@@ -93,7 +93,7 @@ def restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
     try:
         value = json.loads(payload)
         version = value.get("version") if isinstance(value, dict) else None
-        fields = {"version", "target", "required_services", "composition", "identity", "resources", "host", "bindings", "environment"}
+        fields = {"version", "target", "required_services", "composition", "identity", "resources", "host", "environment"}
         if version == 2:
             fields.update(("token_definitions", "token_definition_identity"))
         if type(version) is not int or version not in (1, 2) or set(value) != fields:
@@ -120,7 +120,7 @@ def restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
         selection = Selection(composition, value["target"], tuple(selected),
                               tuple(value["required_services"]), resources,
                               {item["root"]: item["submodules"] for item in value["resources"] if item["submodules"]},
-                              value["bindings"], value["environment"], dict(definitions), version)
+                              value["environment"], dict(definitions), version)
         _, current = capture(selection)
         if json.loads(current) != value:
             raise ValueError("effective config, implementation or resource identity mismatch")

@@ -8,7 +8,7 @@ import json
 import os
 
 from aka.bootstrap.continuation import SELECTION_ENV, DIGEST_ENV, digest, read
-from .launch_migration import MIGRATION_FILE, has_selection
+from aka.bootstrap.recovery_metadata import MIGRATION_FILE, has_selection
 
 _launch_environment = ContextVar("aka_legacy_launch_environment", default=None)
 _schema3_default = ContextVar("aka_legacy_schema3_default", default=False)

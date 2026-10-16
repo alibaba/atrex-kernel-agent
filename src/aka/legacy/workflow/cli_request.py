@@ -3,7 +3,6 @@
 from dataclasses import fields
 from pathlib import Path
 from aka.contracts.workflow import CampaignRequest, WorkflowSettings
-from aka.contracts.problem import LoadedProblem
 from aka.contracts.workflow import CampaignRuntimeSettings as EvaluationSettings
 
 
@@ -16,16 +15,10 @@ def campaign_request(configuration):
     workspace = (Path(work_dir) if work_dir else Path.cwd()) / (
         "kernel_opt_" + campaign_name
     )
-    values.pop("kernel_demo", "")
-    values.pop("atrex_bench_root", "")
-    from .cli_problem import constructor_problem_request
     from aka.contracts.workflow import ProblemSource
-
-    supplied = values.pop("problem", None)
-    if isinstance(supplied, LoadedProblem):
-        problem = ProblemSource(supplied.directory, None)
-    else:
-        problem = supplied or constructor_problem_request(configuration)
+    problem = values.pop("problem")
+    if not isinstance(problem, ProblemSource):
+        raise TypeError("campaign CLI requires an explicit ProblemSource")
     for policy, prefix in (
         ("framework_baseline_reviewers", "v1"),
         ("fast_episode_reviewers", "fast_episode"),

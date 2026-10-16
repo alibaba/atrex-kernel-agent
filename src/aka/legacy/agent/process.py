@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -354,7 +355,26 @@ def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) ->
 
 
 def descendant_process_commands(root_pid: int) -> list[tuple[int, list[str]]]:
-    """Return live descendants and argv using Linux procfs, tolerating races."""
+    """Return live descendants and argv, tolerating process exit races."""
+    if sys.platform == "darwin":
+        result = subprocess.run(["ps", "-axo", "pid=,ppid=,command="],
+                                capture_output=True, text=True, check=True)
+        rows = {}
+        for line in result.stdout.splitlines():
+            fields = line.strip().split(None, 2)
+            if len(fields) == 3:
+                rows[int(fields[0])] = (int(fields[1]), fields[2].split())
+        seen = {root_pid}
+        descendants = []
+        pending = [root_pid]
+        while pending:
+            parent = pending.pop()
+            for pid, (ppid, argv) in rows.items():
+                if ppid == parent and pid not in seen:
+                    seen.add(pid)
+                    pending.append(pid)
+                    descendants.append((pid, argv))
+        return descendants
     pending = [root_pid]
     seen = {root_pid}
     descendants: list[tuple[int, list[str]]] = []

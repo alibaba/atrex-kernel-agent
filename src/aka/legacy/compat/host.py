@@ -1,12 +1,11 @@
-"""Convert the retained optimization CLI once before canonical Workflow launch."""
-from pathlib import Path
+"""Convert the retained optimization CLI once before Bootstrap."""
 import os
 import sys
-from aka.legacy.workflow.launch import run_workflow, PROFILES_DIR
+from .launch import run_workflow
 from aka.legacy.workflow.process_environment import invocation_environment
 
 
-def run_application(request, *, profile="application", **options):
+def run_application(request):
     argv = tuple(sys.argv[1:] if request.argv is None else request.argv)
     if argv[:1] != ("--workflow-request",):
         from aka.bootstrap.continuation import read, restore
@@ -16,4 +15,4 @@ def run_application(request, *, profile="application", **options):
         environment = restore(payload).environment if payload is not None else {}
         with invocation_environment(environment):
             argv = adapt_argv(argv)
-    return run_workflow(request.repo_root, argv, profile="workflow" if profile == "application" else profile, **options)
+    return run_workflow(request.repo_root, argv)

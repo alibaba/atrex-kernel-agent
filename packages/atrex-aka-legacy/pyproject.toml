@@ -11,7 +11,7 @@ dependencies = ["atrex-aka-framework==0.1.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.compat.command:main"
-workflow = "aka.legacy.workflow.cli:main"
+workflow = "aka.bootstrap.workflow_cli:main"
 execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
@@ -32,9 +32,7 @@ include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
 "*" = ["skills/**/*", "prompts/*.md"]
-"aka.legacy.task.problem" = ["profiles/*.json", "profiles/bundles/*.json"]
-"aka.legacy.task.source" = ["profiles/*.json", "profiles/bundles/*.json"]
-"aka.legacy.task.candidate_workspace" = ["profiles/*.json", "profiles/bundles/*.json", "*.sh"]
+"aka.legacy.task.candidate_workspace" = ["*.sh"]
 "aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json"]
 
 "aka.legacy.workflow" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]

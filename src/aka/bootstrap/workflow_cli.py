@@ -9,9 +9,11 @@ import os
 from aka.bootstrap.host import run_profile, resume
 from aka.bootstrap.continuation import read, restore
 from aka.contracts.startup import Invocation
-from .invocation import decode_launch
+from aka.contracts.workflow_launch import decode_launch
 
-PROFILES_DIR = Path(__file__).with_name("profiles")
+from importlib.resources import files
+
+PROFILES_DIR = Path(str(files("aka.legacy.workflow"))) / "profiles"
 
 
 def main(argv=None):

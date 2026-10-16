@@ -16,8 +16,6 @@ class WorkflowLaunch:
     workspace_base: Path
     workspace_suffix: str = ""
     restart_arguments: tuple[str, ...] = ()
-    child_arguments: tuple[str, ...] = ()
-    child_bindings: tuple[tuple[int, str], ...] = ()
     provided_settings: tuple[str, ...] | None = None
     provided_runtime: tuple[str, ...] | None = None
 
@@ -52,7 +50,7 @@ class WorkflowLaunch:
             value = getattr(settings, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        for name in ("restart_arguments", "child_arguments"):
+        for name in ("restart_arguments",):
             values = getattr(self, name)
             if isinstance(values, (str, bytes)) or any(not isinstance(v, str) for v in values):
                 raise TypeError(f"{name} must contain strings")
@@ -65,14 +63,6 @@ class WorkflowLaunch:
                 if not isinstance(values, (tuple, list)) or any(not isinstance(v, str) or v not in allowed for v in values) or len(set(values)) != len(values):
                     raise ValueError(f"{name} must contain unique known fields")
                 object.__setattr__(self, name, tuple(values))
-        seen = set()
-        for index, key in self.child_bindings:
-            if type(index) is not int or not 0 <= index < len(self.child_arguments) or index in seen:
-                raise ValueError("invalid child argument binding index")
-            if key not in {"framework", "workspace", "suffix", "arch"}:
-                raise ValueError("unknown child argument binding")
-            seen.add(index)
-        object.__setattr__(self, "child_bindings", tuple(tuple(v) for v in self.child_bindings))
 
 
 def encode_launch(launch: WorkflowLaunch) -> tuple[str, str]:
@@ -102,7 +92,7 @@ def decode_launch(argv) -> WorkflowLaunch:
     campaign = CampaignRequest(problem=ProblemSource(**source), settings=WorkflowSettings(**settings),
         runtime=CampaignRuntimeSettings(**request.pop("runtime", {})), **request)
     values["workspace_base"] = Path(values["workspace_base"])
-    for name in ("restart_arguments", "child_arguments"):
+    for name in ("restart_arguments",):
         sequence = values.get(name, ())
         if not isinstance(sequence, (tuple, list)) or any(not isinstance(v, str) for v in sequence):
             raise TypeError(f"{name} must contain strings")

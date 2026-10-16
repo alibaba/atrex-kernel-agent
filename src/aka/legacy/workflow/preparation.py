@@ -8,13 +8,6 @@ import sys
 from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
 from aka.legacy.task.hardware import framework_workspace_suffix, supported_frameworks
 from aka.legacy.resources.submodules import ensure_submodules
-from .dispatch import dispatch_framework_campaigns
-from .invocation import encode_launch
-
-
-class FrameworkDispatchComplete(Exception):
-    def __init__(self, exit_code):
-        self.exit_code = exit_code
 
 
 def recorded_workspace_arch(workspace: Path) -> str:
@@ -26,13 +19,13 @@ def recorded_workspace_arch(workspace: Path) -> str:
     return arch if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", arch) else ""
 
 
-def prepare_request(launch, problem, optimizer_script):
+def prepare_request(launch, problem):
     request = launch.request
     settings, runtime = request.settings, request.runtime
     hardware = runtime.hardware or settings.platform
     base = launch.workspace_base
     from aka.legacy.execution.configuration import prepare_runtime
-    arch, endpoint = prepare_runtime(launch, problem, optimizer_script)
+    arch, endpoint = prepare_runtime(launch, problem)
     suffix = launch.workspace_suffix or (framework_workspace_suffix(
         settings.framework, settings.platform, settings.optimization_mode) if settings.framework else "")
     if not arch and settings.framework:
@@ -53,10 +46,6 @@ def prepare_request(launch, problem, optimizer_script):
           f"frameworks={','.join(frameworks)} reviewers={reviewers} "
           f"runtime_arch={arch or 'UNKNOWN (detect failed)'} "
           "(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
-    if not settings.framework:
-        raise FrameworkDispatchComplete(dispatch_framework_campaigns(
-            launch.child_arguments, optimizer_script, frameworks, base.resolve(), arch,
-            settings.platform, settings.optimization_mode, launch=launch))
     return replace(request, workspace=base / f"kernel_opt_{problem.name}_{suffix}",
                    name=problem.name + ("_" + suffix if suffix else ""),
-                   settings=replace(settings, arch=arch))
+                   settings=replace(settings, arch=arch)), frameworks

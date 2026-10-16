@@ -118,7 +118,7 @@ def configure_recovery(
     *,
     workspace_base: Path,
     raw_argv: Sequence[str],
-    optimize_script: Path,
+    optimize_script: Path | None,
     sandbox_hardware: str,
     ssh_target: str,
     ssh_init: str,
@@ -132,11 +132,9 @@ def configure_recovery(
     workspace_base = workspace_base.expanduser().resolve()
     inherited = environment_state_file()
     owner = os.environ.get(RECOVERY_OWNER_ENV, "1") != "0"
-    command = [
-        str(Path(sys.executable).resolve()),
-        str(optimize_script.resolve()),
-        *raw_argv,
-    ]
+    command = ([str(Path(sys.executable).resolve()), str(optimize_script.resolve()), *raw_argv]
+               if optimize_script is not None else
+               [str(Path(sys.executable).resolve()), "-m", "aka", "run", "--resume", "--", *raw_argv])
     stable_metadata = {
         "cwd": str(Path.cwd().resolve()),
         "command": command,
@@ -183,7 +181,7 @@ def configure_recovery(
         os.environ[ENVIRONMENT_STATE_ENV] = str(inherited)
     ensure_private_directory(directory)
 
-    from aka.legacy.workflow.launch_migration import MIGRATION_FILE, complete_migration, has_selection
+    from aka.bootstrap.recovery_metadata import MIGRATION_FILE, complete_migration, has_selection
     from aka.legacy.workflow.process_environment import child_environment
     if has_selection(directory / MIGRATION_FILE) and not child_environment():
         raise RuntimeError("pending recovery migration requires reconstructed launch selection")
@@ -264,7 +262,7 @@ def configure_recovery(
         if legacy_upgrade:
             from aka.bootstrap.continuation import read as read_launch_selection
             from aka.legacy.workflow.process_environment import child_environment
-            from aka.legacy.workflow.launch_migration import begin_migration
+            from aka.bootstrap.recovery_metadata import begin_migration
             begin_migration(directory, existing, metadata, read_launch_selection(child_environment()))
         else:
             recovery_environment(directory)

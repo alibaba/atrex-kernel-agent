@@ -65,7 +65,6 @@
       }
     }
   ],
-  "bindings": {},
   "environment": [
     "ATREX_PLUGIN_DIR",
     "ATREX_CLAUDE_SESSION_NAME",

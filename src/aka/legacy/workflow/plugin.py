@@ -20,11 +20,11 @@ identity_packages = (
     "aka.legacy.execution",
     "aka.contracts.startup",
 )
-Config = {"type": "object", "properties": {"startup": {"type": "boolean"}, "conversion_budget_action":{"type":"string","enum":["fail","retain_verified"]}, "execution_selection":{"type":"object","properties":{"profile":{"type":"string"},"profiles_dir":{"type":"string"},"patches":{"type":"array","items":{"type":"object"}}},"additionalProperties":False}}, "additionalProperties": False}
-
-interpolate = ("execution_selection.profiles_dir",)
-
-Defaults = {"startup": False, "conversion_budget_action":"fail", "execution_selection":{}}
+Config = {"type": "object", "properties": {
+    "startup": {"type": "boolean"},
+    "conversion_budget_action": {"type": "string", "enum": ["fail", "retain_verified"]},
+}, "additionalProperties": False}
+Defaults = {"startup": False, "conversion_budget_action": "fail"}
 
 
 def apply(ctx, config):

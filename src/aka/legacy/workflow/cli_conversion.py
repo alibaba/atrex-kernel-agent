@@ -442,11 +442,6 @@ def adapt_argv(argv):
     values.update(name=source.directory.name, problem=source,
                   sandbox_hardware=sandbox_hardware)
     request = campaign_request(values)
-    child_args = without_options(raw_argv,
-        ("--framework", "--workspace", "--arch", "--workspace-suffix"))
-    offset = len(child_args)
-    child_args.extend(("--framework", "{framework}", "--workspace", "{workspace}",
-                       "--workspace-suffix", "{suffix}", "--arch", "{arch}"))
     explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
     workflow_options = {field.name for field in __import__("dataclasses").fields(request.settings)
                         if "--" + field.name.replace("_", "-") in explicit}
@@ -455,24 +450,5 @@ def adapt_argv(argv):
     if "--verify-shape-batch-size" in explicit:
         runtime_options.add("shape_batch_size")
     return encode_launch(WorkflowLaunch(request, Path(args.workspace or Path.cwd()),
-        args.workspace_suffix, tuple(raw_argv), tuple(child_args),
-        tuple((offset + i, key) for i, key in ((1, "framework"), (3, "workspace"),
-                                              (5, "suffix"), (7, "arch"))),
+        args.workspace_suffix, tuple(raw_argv),
         provided_settings=tuple(sorted(workflow_options)), provided_runtime=tuple(sorted(runtime_options))))
-
-
-def without_options(argv: list[str], option_names: tuple[str, ...]) -> list[str]:
-    """Remove value-taking options from argv before adding canonical child values."""
-    cleaned: list[str] = []
-    skip_value = False
-    for arg in argv:
-        if skip_value:
-            skip_value = False
-            continue
-        if arg in option_names:
-            skip_value = True
-            continue
-        if any(arg.startswith(name + "=") for name in option_names):
-            continue
-        cleaned.append(arg)
-    return cleaned

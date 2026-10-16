@@ -1,5 +1,4 @@
-"""Workflow's internal process entry; Bootstrap owns its assembly lifetime."""
-from pathlib import Path
+"""Run the selected Workflow; all child campaigns stay inside Workflow."""
 import os
 import signal
 import sys
@@ -9,7 +8,7 @@ from aka.legacy.workflow.process_environment import invocation_environment, use_
 from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked, launch_recovery_monitor, signal_restart_ready
 from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
 from .invocation import decode_launch
-from .preparation import prepare_request, FrameworkDispatchComplete
+from .preparation import prepare_request
 
 
 class WorkflowStartup:
@@ -39,30 +38,18 @@ class WorkflowStartup:
 
     def run(self, invocation):
         launch = decode_launch(invocation.argv)
-        script = invocation.bindings.get("optimizer_script")
-        if not script:
-            script = str(Path(__file__).with_name("entry.py"))
         from dataclasses import replace
         from .invocation import encode_launch
         launch = self._effective_launch(launch)
         values = dict(invocation.environment)
-        selected = self.configuration.get("execution_selection")
-        if selected:
-            import json
-            inherited = values.get("AKA_EXECUTION_SELECTION") or os.environ.get("AKA_EXECUTION_SELECTION")
-            if inherited and json.loads(inherited) != selected:
-                raise ValueError("execution selection conflicts with selected Workflow profile")
-            values["AKA_EXECUTION_SELECTION"] = json.dumps(selected, sort_keys=True)
-        # Freeze the effective request for children; child dispatch uses canonical arguments.
-        launch = replace(launch, child_arguments=(), child_bindings=())
-        if Path(script).resolve() == Path(__file__).with_name("entry.py").resolve():
-            launch = replace(launch, restart_arguments=encode_launch(replace(launch, restart_arguments=())))
+        # External recovery replays the effective request, never profile defaults.
+        launch = replace(launch, restart_arguments=encode_launch(replace(launch, restart_arguments=())))
         self._notify("run_started", launch)
         result, error = 1, ""
         try:
             with invocation_environment(values), use_launch_environment(values), execution_scope():
                 try:
-                    result = self._run(launch, Path(script))
+                    result = self._run(launch)
                 except EnvironmentUnavailable:
                     result = ENVIRONMENT_TEMPFAIL
                 if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
@@ -81,14 +68,39 @@ class WorkflowStartup:
         finally:
             self._notify("run_finished", result, error)
 
-    def _run(self, launch, script):
+    def _run(self, launch):
         # These are private calls within the Workflow implementation, not a
         # second module Interface. Problem is loaded once, before preparation.
         problem = self._workflow._load_problem(launch.request)
-        try:
-            request = prepare_request(launch, problem, script)
-        except FrameworkDispatchComplete as completed:
-            return completed.exit_code
+        request, frameworks = prepare_request(launch, problem)
+        if not launch.request.settings.framework:
+            from .dispatch import dispatch_framework_campaigns
+            from dataclasses import replace
+            from aka.legacy.task.hardware import framework_workspace_suffix
+            def run_framework(framework):
+                # Each selected DSL keeps its own trusted preflight, without
+                # reloading Task or rebuilding the selected modules.
+                from aka.legacy.execution.configuration import selected_ssh, legacy_settings
+                if selected_ssh():
+                    from aka.legacy.execution.health import runtime_health_command
+                    from aka.legacy.execution.sandbox import check_ssh_environment
+                    os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command(
+                        sol=problem.initial_source.kind == "sol", framework=framework)
+                    connection = legacy_settings()
+                    check_ssh_environment(launch.workspace_base,
+                        request.runtime.hardware or request.settings.platform,
+                        connection.ssh, connection.ssh_init, connection.health_command)
+                suffix = framework_workspace_suffix(framework, request.settings.platform, request.settings.optimization_mode)
+                child_request = replace(request, settings=replace(request.settings, framework=framework))
+                child_request = replace(child_request,
+                    workspace=launch.workspace_base / f"kernel_opt_{problem.name}_{suffix}",
+                    name=problem.name + "_" + suffix)
+                return self._run_campaign(child_request, problem)
+
+            return dispatch_framework_campaigns(frameworks, run_framework)
+        return self._run_campaign(request, problem)
+
+    def _run_campaign(self, request, problem):
         campaign = self._workflow._campaign(request, problem)
         trace_status = "failed"
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}

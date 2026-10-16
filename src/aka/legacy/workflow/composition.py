@@ -4,7 +4,6 @@ from .dependencies import CampaignDependencies
 
 
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
-                     prepare_request=lambda request, problem: request,
                      evaluator_factory=None,
                      workflow_observer=None):
     from aka.legacy.agent.selection import LegacyAgent
@@ -33,7 +32,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
         agent, task["problem"], task["source"], task["workspace"],
         lambda campaign: campaign.services.baseline(),
         run_campaign, execution,
-        prepare_request=prepare_request, services=services,
+        services=services,
     )
 
     class AssembledWorkflow(LegacyWorkflow):

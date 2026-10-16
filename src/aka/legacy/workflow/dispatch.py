@@ -1,32 +1,40 @@
-"""Supervise framework campaigns using explicitly supplied process arguments."""
+"""Run framework campaigns in child processes with inherited Workflow dependencies."""
 from __future__ import annotations
-import os, signal, subprocess, sys, time
-from pathlib import Path
+import os, signal, sys, time
+import traceback
 from aka.legacy.agent.process import descendant_process_commands
-from aka.legacy.task.hardware import framework_workspace_suffix
-from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, environment_is_blocked
+from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, environment_is_blocked
 
 
-def dispatch_framework_campaigns(
-    child_arguments: tuple[str, ...],
-    optimizer_script: Path,
-    frameworks: tuple[str, ...],
-    workspace_base: Path,
-    arch: str,
-    platform: str,
-    optimization_mode: str = "leaderboard",
-    *, launch=None,
-) -> int:
-    """Launch explicit-framework optimizer children concurrently and wait for all.
+class _CampaignProcess:
+    def __init__(self, pid):
+        self.pid = pid
+        self.returncode = None
 
-    Each child receives a flat framework/hardware suffix, so its eventual
-    workspace is ``<workspace_base>/kernel_opt_<op>_<framework>_<platform>``
-    (with ``_production`` appended in production mode). Budgets remain per campaign; a failed
-    framework does not cancel the other independent campaigns.
+    def poll(self):
+        if self.returncode is None:
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if pid:
+                self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        while self.poll() is None:
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(.05)
+
+
+def dispatch_framework_campaigns(frameworks, run_framework) -> int:
+    """Preserve per-framework budgets, independent failures and group cancellation.
+
+    The synchronous POSIX startup forks before any campaign starts worker threads.
+    Each child borrows the assembled module selections and loaded Problem; it does
+    not enter Bootstrap, reload providers, or dispose the parent's composition.
     """
-    children: list[tuple[str, str, subprocess.Popen[str]]] = []
-    workspace_base.mkdir(parents=True, exist_ok=True)
-    failed: list[tuple[str, int]] = []
+    children = []
+    failed = []
 
     def stop_children() -> None:
         # Framework children and every coding-agent session deliberately use
@@ -55,10 +63,8 @@ def dispatch_framework_campaigns(
                     pass
         for _, _, proc in children:
             if proc.poll() is None:
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    pass
+                proc.wait(timeout=10)
+
         for pgid in process_groups:
             try:
                 os.killpg(pgid, signal.SIGTERM)
@@ -66,10 +72,8 @@ def dispatch_framework_campaigns(
                 pass
         for _, _, proc in children:
             if proc.poll() is None:
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
+                proc.wait(timeout=3)
+
         for pgid in process_groups:
             try:
                 os.killpg(pgid, signal.SIGKILL)
@@ -77,10 +81,8 @@ def dispatch_framework_campaigns(
                 pass
         for _, _, proc in children:
             if proc.poll() is None:
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
+                proc.wait(timeout=5)
+
 
     handled_signals = (signal.SIGTERM, signal.SIGHUP)
     previous_handlers = {
@@ -95,48 +97,45 @@ def dispatch_framework_campaigns(
         signal.signal(handled_signal, interrupt_dispatch)
     try:
         for framework in frameworks:
-            workspace_suffix = framework_workspace_suffix(
-                framework, platform, optimization_mode
-            )
-            substitutions = {"framework": framework, "workspace": str(workspace_base),
-                             "suffix": workspace_suffix, "arch": arch or ""}
-            if child_arguments:
-                arguments = list(child_arguments)
-                for index, key in launch.child_bindings:
-                    arguments[index] = substitutions[key]
-            else:
-                from dataclasses import replace
-                from .invocation import encode_launch
-                child_request = replace(launch.request, settings=replace(
-                    launch.request.settings, framework=framework, arch=arch or ""))
-                arguments = encode_launch(replace(launch, request=child_request,
-                    workspace_base=workspace_base, workspace_suffix=workspace_suffix,
-                    restart_arguments=()))
-            cmd = [sys.executable, str(optimizer_script), *arguments]
-            from aka.legacy.workflow.process_environment import child_environment as launch_environment
-            child_environment = os.environ.copy()
-            for name, value in launch_environment().items():
-                if value is None:
-                    child_environment.pop(name, None)
-                else:
-                    child_environment[name] = value
-            from aka.legacy.execution import selection as execution
-            child_environment = execution.execution_environment(child_environment)
-            package_root = str(Path(__file__).resolve().parents[3])
-            child_environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys([package_root, *child_environment.get("PYTHONPATH", "").split(os.pathsep)]))
-            child_environment["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
-            proc = subprocess.Popen(
-                cmd,
-                start_new_session=True,
-                text=True,
-                env=child_environment,
-            )
-            children.append((framework, workspace_suffix, proc))
-            print(
-                f"[orchestrator] dispatched framework={framework} pid={proc.pid} "
-                f"workspace_suffix={workspace_suffix} work_root={workspace_base}",
-                flush=True,
-            )
+            sys.stdout.flush()
+            sys.stderr.flush()
+            ready_read, ready_write = os.pipe()
+            pid = os.fork()
+            if pid == 0:
+                os.close(ready_read)
+                result = 1
+                try:
+                    os.setsid()
+                    os.write(ready_write, b"1")
+                    os.close(ready_write)
+                    for sig, handler in previous_handlers.items():
+                        signal.signal(sig, handler)
+                    os.environ["ATREX_ENVIRONMENT_RECOVERY_OWNER"] = "0"
+                    result = run_framework(framework)
+                except KeyboardInterrupt:
+                    result = 130
+                except EnvironmentUnavailable:
+                    result = ENVIRONMENT_TEMPFAIL
+                except SystemExit as error:
+                    result = error.code if type(error.code) is int else (0 if error.code is None else 1)
+                except BaseException:
+                    traceback.print_exc()
+                finally:
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(result if type(result) is int and 0 <= result <= 255 else 1)
+            os.close(ready_write)
+            proc = _CampaignProcess(pid)
+            try:
+                # Cancellation must never mistake the parent's group for the
+                # child's group before setsid has completed.
+                if os.read(ready_read, 1) != b"1":
+                    proc.wait(timeout=5)
+                    raise RuntimeError("framework child failed to create its process group")
+            finally:
+                os.close(ready_read)
+                children.append((framework, "", proc))
+            print(f"[orchestrator] dispatched framework={framework} pid={pid}", flush=True)
 
         remaining = {proc.pid: (framework, proc) for framework, _, proc in children}
         while remaining:

@@ -15,15 +15,3 @@ def problem_request(directory, optimization_mode, *, workspace="", suffix=""):
     return ProblemSource(
         origin, base / ".aka-problems" / snapshot_key
     )
-
-
-def constructor_problem_request(configuration):
-    name = configuration["name"]
-    suffix = configuration.get("workspace_suffix", "")
-    campaign_name = name + ("_" + suffix if suffix else "")
-    work_dir = configuration.get("work_dir", "")
-    base = Path(work_dir) if work_dir else Path.cwd()
-    return ProblemSource(
-        Path(configuration.get("kernel_demo", "")).resolve().parent,
-        base / ".aka-problems" / campaign_name,
-    )

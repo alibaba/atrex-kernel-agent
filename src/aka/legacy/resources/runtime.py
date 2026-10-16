@@ -98,9 +98,10 @@ def link_runtime(
     plugin_registry: PluginRegistry | None = None,
     provider=None,
 ):
-    from aka.legacy.task.candidate_workspace.selection import candidate_workspace
-    with candidate_workspace(provider=provider) as provider:
-        return provider.install_runtime(workspace, atrex_bench_root,
-                                 is_ppu=is_ppu,
-                                 plugin_registry=plugin_registry or PluginRegistry(),
-                                 repo_root=REPO_ROOT, stall_state_file=STALL_STATE_FILE)
+    if provider is None:
+        from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
+        provider = GitCandidateWorkspace()
+    return provider.install_runtime(workspace, atrex_bench_root,
+                                    is_ppu=is_ppu,
+                                    plugin_registry=plugin_registry or PluginRegistry(),
+                                    repo_root=REPO_ROOT, stall_state_file=STALL_STATE_FILE)

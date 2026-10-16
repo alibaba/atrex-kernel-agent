@@ -23,7 +23,6 @@ class Selection:
     required_services: tuple[str, ...]
     resources: tuple[tuple[Path, tuple[str, ...]], ...]
     submodules: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
-    bindings: Mapping[str, str] = field(default_factory=dict)
     environment: Mapping[str, str | None] = field(default_factory=dict)
     token_definitions: Mapping[str, str] = field(default_factory=dict)
     continuation_version: int = 1
@@ -107,7 +106,7 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
         value = {**inherited, **{key:item for key,item in value.items() if key != "extends"},
                  "resources":[*inherited.get("resources", []), *value.get("resources", [])],
                  "environment":list(dict.fromkeys([*inherited.get("environment", []), *value.get("environment", [])]))}
-    fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "bindings", "environment", "doc"}
+    fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "environment", "doc"}
     version = value.get("api_version") if isinstance(value, dict) else None
     if version == 2:
         fields.add("token_definitions")
@@ -173,13 +172,9 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
         if submodules:
             pinned[str(path)] = dict(submodules)
         resolved.append((path, tuple(resource["paths"])))
-    bindings = value.get("bindings", {})
-    if not isinstance(bindings, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in bindings.items()):
-        raise CompositionError(str(profile), "bindings must map names to strings")
-    bindings = {key: substitute(text, composition.variables, str(profile)) for key, text in bindings.items()}
     environment_names = names("environment")
     if any("=" in name or "\0" in name or name.startswith("AKA_LAUNCH_") for name in environment_names):
         raise CompositionError(str(profile), "invalid environment binding name")
     environment = {key: os.environ.get(key) for key in environment_names}
-    return Selection(composition, target, tuple(seams.values()), required, tuple(resolved), pinned, bindings, environment,
+    return Selection(composition, target, tuple(seams.values()), required, tuple(resolved), pinned, environment,
                      dict(definitions), version)

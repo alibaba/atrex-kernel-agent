@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from aka.contracts.application import ApplicationRequest
 
-from .host import PROFILES_DIR, run_application
+from .host import run_application
+from aka.legacy.workflow.process_environment import invocation_environment
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -16,14 +18,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     boundary = argv.index("--") if "--" in argv else len(argv)
     parser = argparse.ArgumentParser(
         prog="aka optimize",
-        usage="%(prog)s --repo-root PATH [FRAMEWORK OPTIONS] -- [OPTIMIZATION ARGS]",
-        description="Run the selected application from an explicit AKA checkout.",
+        usage="%(prog)s --repo-root PATH [EXECUTION OPTIONS] -- [OPTIMIZATION ARGS]",
+        description="Run the retained optimization CLI from an explicit AKA checkout.",
         epilog="Example: aka optimize --repo-root /path/to/aka -- --op-dir /path/to/problem --platform L20N --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--profile", default="application")
-    parser.add_argument("--profiles-dir", type=Path, default=PROFILES_DIR)
-    parser.add_argument("--patch", action="append", type=Path, default=[])
     parser.add_argument("--execution-profile", default=None)
     parser.add_argument("--execution-patch", action="append", type=Path, default=[])
     options = parser.parse_args(argv[:boundary])
@@ -47,13 +46,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if options.execution_patch:
                 execution_selection["patches"] = [*execution_selection.get("patches", ()),
                     *read_execution_patches(options.execution_patch)]
-        return run_application(
-            ApplicationRequest(root, argv[boundary + 1:]),
-            profile=options.profile,
-            profiles_dir=options.profiles_dir.expanduser().resolve(),
-            patch_files=tuple(path.expanduser().resolve() for path in options.patch),
-            **({"execution_selection": execution_selection} if execution_selection is not None else {}),
-        )
+        environment = {}
+        if execution_selection is not None:
+            from aka.bootstrap.continuation import read
+            if read(os.environ) is not None:
+                parser.error("cannot override Execution selection during continuation")
+            import json
+            environment["AKA_EXECUTION_SELECTION"] = json.dumps(execution_selection, sort_keys=True)
+        with invocation_environment(environment):
+            return run_application(ApplicationRequest(root, argv[boundary + 1:]))
+
     finally:
         if added:
             sys.path.remove(str(root))

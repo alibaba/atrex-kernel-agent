@@ -43,7 +43,7 @@ def run_selection(selection, invocation: Invocation) -> int:
             if not callable(entry):
                 raise TypeError("selected startup target must implement run(invocation)")
             require_sync(entry, "startup.run")
-            result = call_sync(entry, Invocation(invocation.argv, continuation, selection.bindings))
+            result = call_sync(entry, Invocation(invocation.argv, continuation))
             if type(result) is not int:
                 raise TypeError("startup.run must return an integer exit code")
             return result
