@@ -9,7 +9,7 @@ from typing import Sequence
 
 from aka.contracts.startup import Invocation
 from .continuation import DIGEST_ENV, SELECTION_ENV
-from .host import resume, run_profile
+from .host import check_profile, resume, run_profile
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -21,12 +21,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--resume", action="store_true", help="reconstruct the recorded launch selection")
     parser.add_argument("--patch", type=Path, action="append", default=[])
     parser.add_argument("--var", action="append", default=[], metavar="NAME=VALUE")
+    parser.add_argument("--check", action="store_true", help="assemble and validate the profile without running the startup target")
     args = parser.parse_args(argv[:boundary])
     if boundary == len(argv):
         parser.error("separate startup arguments with --")
     if args.resume:
-        if args.patch or args.var:
-            parser.error("--resume does not accept --patch or --var")
+        if args.patch or args.var or args.check:
+            parser.error("--resume does not accept --patch, --var or --check")
         return resume(Invocation(argv[boundary + 1:]))
     if SELECTION_ENV in os.environ or DIGEST_ENV in os.environ:
         parser.error("launch selection already supplied; use --resume or clear AKA_LAUNCH_SELECTION and AKA_LAUNCH_DIGEST")
@@ -38,5 +39,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if name in variables:
             parser.error(f"duplicate variable: {name}")
         variables[name] = value
+    if args.check:
+        if argv[boundary + 1:]:
+            parser.error("--check does not accept startup arguments")
+        return check_profile(args.profile, patch_files=args.patch, variables=variables)
     return run_profile(args.profile, Invocation(argv[boundary + 1:]),
                        patch_files=args.patch, variables=variables)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

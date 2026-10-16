@@ -26,6 +26,7 @@ class Selection:
     environment: Mapping[str, str | None] = field(default_factory=dict)
     token_definitions: Mapping[str, str] = field(default_factory=dict)
     continuation_version: int = 1
+    python_paths: tuple[Path, ...] = ()
 
 
 def load_token_definitions(definitions: Mapping[str, str]) -> dict[str, ServiceKey]:
@@ -100,13 +101,18 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
             raise CompositionError(str(profile), "extended launch profile must be an object")
         if "extends" in inherited:
             raise CompositionError(str(profile), "nested profile extension is unsupported")
-        for key in ("resources", "environment"):
+        for key in ("resources", "environment", "python_paths"):
             if any(not isinstance(document.get(key, []), list) for document in (value, inherited)):
                 raise CompositionError(str(profile), f"{key} must be an array")
+        for document in (value, inherited):
+            if not isinstance(document.get("environment_values", {}), dict):
+                raise CompositionError(str(profile), "environment_values must be an object")
         value = {**inherited, **{key:item for key,item in value.items() if key != "extends"},
                  "resources":[*inherited.get("resources", []), *value.get("resources", [])],
+                 "python_paths":[*inherited.get("python_paths", []), *value.get("python_paths", [])],
+                 "environment_values":{**inherited.get("environment_values", {}), **value.get("environment_values", {})},
                  "environment":list(dict.fromkeys([*inherited.get("environment", []), *value.get("environment", [])]))}
-    fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "environment", "doc"}
+    fields = {"api_version", "composition", "target", "tokens", "required_services", "resources", "environment", "environment_values", "python_paths", "doc"}
     version = value.get("api_version") if isinstance(value, dict) else None
     if version == 2:
         fields.add("token_definitions")
@@ -176,5 +182,22 @@ def resolve_profile(profile: Path, *, patch_files: Sequence[Path] = (),
     if any("=" in name or "\0" in name or name.startswith("AKA_LAUNCH_") for name in environment_names):
         raise CompositionError(str(profile), "invalid environment binding name")
     environment = {key: os.environ.get(key) for key in environment_names}
+    values = value.get("environment_values", {})
+    if (not isinstance(values, dict) or any(not isinstance(key, str) or not key
+            or "=" in key or "\0" in key or key.startswith("AKA_LAUNCH_")
+            or not isinstance(text, str) or "\0" in text for key, text in values.items())):
+        raise CompositionError(str(profile), "environment_values must map valid names to strings")
+    environment.update({key: substitute(text, composition.variables, str(profile))
+                        for key, text in values.items()})
+    python_paths = []
+    for text in names("python_paths"):
+        path = Path(substitute(text, composition.variables, str(profile))).expanduser()
+        path = (profile.parent / path).resolve() if not path.is_absolute() else path.resolve()
+        if not path.is_dir() or not any(path == root or any(
+                path.is_relative_to((root / name).resolve()) for name in paths)
+                for root, paths in resolved):
+            raise CompositionError(str(profile), "python_paths must name declared resource roots or directories")
+        if path not in python_paths:
+            python_paths.append(path)
     return Selection(composition, target, tuple(seams.values()), required, tuple(resolved), pinned, environment,
-                     dict(definitions), version)
+                     dict(definitions), version, tuple(python_paths))
