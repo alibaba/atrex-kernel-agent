@@ -102,6 +102,17 @@ class LegacyProblemProvider:
                                        "production" if problem.evaluation.private_reference_dir else self.optimization_mode,
                                        str(problem.evaluation.runtime_root or ""), generated_digest, problem)
 
+    def runtime_files(self, problem):
+        if problem.snapshot_directory is None:
+            raise ValueError("runtime files require a frozen Problem")
+        from .snapshot import inspect
+        frozen, _ = inspect(problem.snapshot_directory)
+        runtime = frozen.evaluation.runtime_root
+        if runtime is None:
+            return ()
+        return tuple(WorkspaceFile("atrex-bench/" + path.relative_to(runtime).as_posix(), source=path)
+                     for path in sorted(runtime.rglob("*")) if path.is_file())
+
     def snapshot(self, problem):
         from .snapshot import inspect
         if problem.snapshot_directory is None:

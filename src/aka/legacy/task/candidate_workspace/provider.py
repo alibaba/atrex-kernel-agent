@@ -33,9 +33,9 @@ class GitCandidateWorkspace(GitSnapshots):
         from .baseline import restore_baseline
         return restore_baseline(workspace, baseline_commit)
 
-    def install_files(self, workspace, files):
+    def install_files(self, workspace, files, *, immutable=False):
         from .content import install_files
-        return install_files(workspace, files)
+        return install_files(workspace, files, immutable=immutable)
 
     def plan(self, workspace, episode, base_commit, root=None):
         handle = EpisodeWorktree.plan(workspace, episode, base_commit, root)
@@ -57,16 +57,11 @@ class GitCandidateWorkspace(GitSnapshots):
         return promote_candidate(workspace, **options)
 
 
-    def initialize_kernel(self, reference_dir, entry, arguments, *, content, working_directory=None):
+    def initialize_kernel(self, workspace, content, *, runtime_files):
         from .initial import initialize_kernel
-        return initialize_kernel(reference_dir, entry, arguments, content=content,
-                                 working_directory=working_directory)
+        return initialize_kernel(workspace, content, runtime_files=runtime_files)
 
-    def prepare_sol(self, workspace, content, *, problem_files, reference_dir, harness):
+    def prepare_sol(self, workspace, content, *, problem_files, harness, runtime_files):
         from .initial import prepare_sol
-        return prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir, harness=harness)
-
-
-    def install_runtime(self, workspace, atrex_bench_root=None, **options):
-        from .runtime import link_runtime
-        return link_runtime(workspace, atrex_bench_root, **options)
+        return prepare_sol(workspace, content, problem_files=problem_files,
+                           harness=harness, runtime_files=runtime_files)

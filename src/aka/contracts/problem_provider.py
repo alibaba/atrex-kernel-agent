@@ -39,6 +39,14 @@ class ProblemProvider(Protocol):
         """Return typed public contributions and host checks using owned content."""
         ...
 
+    def runtime_files(self, problem: LoadedProblem) -> tuple[WorkspaceFile, ...]:
+        """Describe retained evaluator code for copying from a validated frozen Task.
+
+        These files are Task checkpoint content, not external Resources roots.
+        Private cases and benchmark data are never included in this projection.
+        """
+        ...
+
     def snapshot(self, problem: LoadedProblem) -> ProblemSnapshot:
         """Validate an already frozen Problem and return its current content identity."""
         ...

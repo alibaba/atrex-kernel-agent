@@ -1,4 +1,5 @@
 """Task selects evaluator content; transports only consume the frozen roles."""
+from importlib.resources import files
 from pathlib import Path
 from aka.contracts.content import WorkspaceFile
 
@@ -35,9 +36,9 @@ def validate_resources(evaluation):
 
 
 def selected_resources(directory, *, sol, native, native_harness=None, worker_requirements=None):
-    from aka.legacy.resources.paths import ATREX_BENCH_HARNESS, REPO_ROOT
-    harness = (native_harness or ATREX_BENCH_HARNESS) if native else (
-        REPO_ROOT / "reference/test_kernel.py" if sol else directory / "test_kernel.py")
+    package = files(__package__)
+    harness = (Path(native_harness) if native_harness is not None else Path(str(package.joinpath("native_harness.py")))) if native else (
+        Path(str(package.joinpath("sol_harness.py"))) if sol else directory / "test_kernel.py")
     item = WorkspaceFile("test_kernel.py", source=Path(harness)) if (native or sol or harness.is_file()) else None
     requirements = (WorkspaceFile("worker-requirements.txt", source=Path(worker_requirements))
                     if worker_requirements is not None else WorkspaceFile("worker-requirements.txt", text=""))
@@ -45,3 +46,14 @@ def selected_resources(directory, *, sol, native, native_harness=None, worker_re
     validate_resources(EvaluationInput("legacy-native-v1" if native else "legacy-sol-v1" if sol else "legacy-kernel-v1",
                                        directory, (), harness=item, worker_requirements=requirements))
     return item, requirements
+
+
+def contribute_resources(ctx):
+    """Contribute installed Task authoring content, independent of run snapshots."""
+    from aka.contracts.agent_resources import WorkspaceResourceContribution
+    resource = WorkspaceResourceContribution(
+        "task-problem-generation-prompt",
+        Path(str(files(__package__).joinpath("prompts/generalize_agent_problem.md"))),
+        visibility="runtime",
+    )
+    ctx.contribute("workspace_resources", resource.name, resource)

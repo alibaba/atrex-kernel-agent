@@ -143,8 +143,6 @@ class WorkflowServices:
         return evaluator
 
     def preparation(self, include_problem=False):
-        from aka.legacy.resources.paths import PROFILE_DRIVER
-
         c = self.campaign
         native = bool(c.atrex_bench_root)
         inputs = BaselineInputs(
@@ -161,7 +159,8 @@ class WorkflowServices:
             target_util=c.target_util,
         )
         return BaselinePreparation(
-            inputs, BaselineResources(self.evaluation_input().harness, PROFILE_DRIVER)
+            inputs, BaselineResources(self.evaluation_input().harness,
+                c.plugin_registry.resource_result().resource("execution-profile-driver").source)
         )
 
     @contextmanager
@@ -197,7 +196,8 @@ class WorkflowServices:
 
     def sandbox_command(self, command):
         import shlex
-        argv = ["python", "tools/sandbox.py", "--kind", "run"]
+        import sys
+        argv = [sys.executable, "-m", "aka.legacy.execution.cli", "--kind", "run"]
         if self.settings.hardware:
             argv += ["--hardware", self.settings.hardware]
         return shlex.join([*argv, "--no-sync", "--", *command])
