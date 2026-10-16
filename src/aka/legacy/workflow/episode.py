@@ -603,6 +603,9 @@ class LongHorizonCampaign:
     def _copy_runtime_artifacts(
         self, worktree: CandidateHandle, episode_dir: Path
     ) -> None:
+        from .episode_evidence import FILENAME, capture as capture_evidence
+        if not (episode_dir / FILENAME).exists():
+            capture_evidence(worktree.path, episode_dir, episode=worktree.episode)
         source = worktree.path / RUNTIME_DIR
         if source.is_dir():
             destination = episode_dir / "episode_runtime"

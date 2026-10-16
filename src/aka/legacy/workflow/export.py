@@ -225,18 +225,14 @@ class RetainedWorkflowExport:
                     f'candidates/v{candidate.version}/{filename}',role,blob.stdout,mime))
         # Public authored plans and compact profiler evidence are declared by
         # Workflow; consumers do not follow paths embedded in private records.
-        for directory, pattern, role in (('plans', '*.md', 'plan'),
-                                          ('profiles', '**/summary.txt', 'profiler-evidence'),
-                                          ('profiles', '**/REPORT.md', 'profiler-evidence'),
-                                          ('profiles', '**/evidence.md', 'profiler-evidence')):
-            for path in sorted((workspace / directory).glob(pattern)):
-                if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(workspace):
-                    relative = path.relative_to(workspace).as_posix()
-                    artifacts.append(_artifact('output_' + hashlib.sha256(relative.encode()).hexdigest(),
-                                               relative, role, path.read_bytes(), 'text/plain'))
+        from .episode_evidence import selected, read as read_episode_evidence
+        for relative, role, content in selected(workspace):
+            artifacts.append(_artifact('output_' + hashlib.sha256(relative.encode()).hexdigest(),
+                                       relative, role, content, 'text/plain'))
         episodes = []
         from .episode_output import read as read_episode_output
         for number, attempt in sorted(attempts.items()):
+            artifacts.extend(read_episode_evidence(runtime / f'episodes/e{number:04d}', episode=number))
             final_candidate, final_artifacts = read_episode_output(
                 runtime / f'episodes/e{number:04d}', episode=number,
                 version=_integer(attempt.get('version')), expected_case_ids=expected, attempt=attempt)

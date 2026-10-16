@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from aka.legacy.workflow.campaign import Campaign
 from aka.legacy.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.legacy.workflow.hardware import hardware_directive, should_convert_to_gluon
-from aka.legacy.task.hardware import hardware_vendor
 from aka.legacy.task.source.inspection import head_kernel_is_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
 from aka.legacy.execution.sandbox import sandbox_command
@@ -87,9 +86,7 @@ def episode_directives(
         ),
         "evaluator": campaign.evaluation.evaluator_directive(),
         "mode_policy": campaign._mode_directive(),
-        "agent_runtime": _agent_runtime_directive(
-            agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu"
-        ),
+        "agent_runtime": _agent_runtime_directive(agent_cli),
         "plan_generator": _plan_generator_directive(agent_cli, version),
     }
 

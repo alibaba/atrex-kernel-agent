@@ -1,6 +1,6 @@
 """Workflow-owned instructions for the selected Agent backend."""
 
-def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False) -> str:
+def _agent_runtime_directive(agent_cli: str) -> str:
     if agent_cli in {'codex', 'pi'}:
         directory = '.agents/skills'
     else:

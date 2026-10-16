@@ -50,6 +50,8 @@ def _result(result, expected):
 
 
 def capture(workspace, episode_dir, *, episode, version, base_revision, expected_case_ids):
+    from .episode_evidence import capture as capture_evidence
+    capture_evidence(workspace, episode_dir, episode=episode)
     workspace, episode_dir = Path(workspace), Path(episode_dir)
     files = {}
     unavailable = None
