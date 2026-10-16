@@ -47,6 +47,12 @@ def token_definition_identity(definitions) -> dict:
 
 
 def capture(selection: Selection) -> tuple[Selection, str]:
+    from .runtime import selection_runtime
+    with selection_runtime(selection.environment, selection.python_paths):
+        return _capture(selection)
+
+
+def _capture(selection: Selection) -> tuple[Selection, str]:
     if type(selection.continuation_version) is not int or selection.continuation_version not in (1, 2):
         raise ValueError("unsupported selection format")
     if selection.continuation_version == 1 and selection.token_definitions:
@@ -71,6 +77,8 @@ def capture(selection: Selection) -> tuple[Selection, str]:
     if selection.continuation_version == 2:
         value["token_definitions"] = dict(selection.token_definitions)
         value["token_definition_identity"] = token_definition_identity(selection.token_definitions)
+    if selection.python_paths:
+        value["python_paths"] = [str(path) for path in selection.python_paths]
     return replace(selection, composition=effective), encode(value)
 
 
@@ -90,12 +98,38 @@ def read(environment: Mapping[str, str | None]) -> str | None:
 
 
 def restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
+    from .runtime import selection_runtime
+    try:
+        value = json.loads(payload)
+        environment = value["environment"]
+        paths = value.get("python_paths", [])
+        if (not isinstance(environment, dict) or any(not isinstance(key, str)
+                or not key or "=" in key or "\0" in key or key.startswith("AKA_LAUNCH_")
+                or (item is not None and (not isinstance(item, str) or "\0" in item))
+                for key, item in environment.items()) or not isinstance(paths, list)
+                or any(not isinstance(path, str) or not Path(path).is_absolute() for path in paths)):
+            raise ValueError("invalid recorded launch runtime")
+        for path in paths:
+            directory = Path(path).resolve()
+            if not directory.is_dir() or not any(directory == Path(item["root"]).resolve()
+                    or any(directory.is_relative_to((Path(item["root"]) / name).resolve())
+                           for name in item["paths"]) for item in value["resources"]):
+                raise ValueError("recorded python path is outside declared resources")
+    except (AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
+        raise CompositionError("continuation", f"cannot reconstruct selection: {exc}") from exc
+    with selection_runtime(environment, paths):
+        return _restore(payload, tokens=tokens)
+
+
+def _restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
     try:
         value = json.loads(payload)
         version = value.get("version") if isinstance(value, dict) else None
         fields = {"version", "target", "required_services", "composition", "identity", "resources", "host", "bindings", "environment"}
         if version == 2:
             fields.update(("token_definitions", "token_definition_identity"))
+        if "python_paths" in value:
+            fields.add("python_paths")
         if type(version) is not int or version not in (1, 2) or set(value) != fields:
             raise ValueError("unsupported selection format")
         comp = value["composition"]
@@ -120,7 +154,8 @@ def restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
         selection = Selection(composition, value["target"], tuple(selected),
                               tuple(value["required_services"]), resources,
                               {item["root"]: item["submodules"] for item in value["resources"] if item["submodules"]},
-                              value["bindings"], value["environment"], dict(definitions), version)
+                              value["bindings"], value["environment"], dict(definitions), version,
+                              tuple(Path(path) for path in value.get("python_paths", [])))
         _, current = capture(selection)
         if json.loads(current) != value:
             raise ValueError("effective config, implementation or resource identity mismatch")

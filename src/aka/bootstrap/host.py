@@ -10,6 +10,7 @@ from aka.core.boot import boot
 from aka.core.effects import call_sync, require_sync
 from .continuation import SELECTION_ENV, DIGEST_ENV, capture, digest, read, restore
 from .profile import resolve_profile
+from .runtime import selection_runtime
 
 
 def run_profile(profile: Path, invocation: Invocation, **options) -> int:
@@ -27,7 +28,30 @@ def resume(invocation: Invocation, *, environment=None, tokens=()) -> int:
     return run_selection(restore(payload, tokens=tokens), invocation)
 
 
+def check_profile(profile: Path, **options) -> int:
+    """Validate and assemble a launch selection without invoking its business target."""
+    selection = resolve_profile(profile, **options)
+    with selection_runtime(selection.environment, selection.python_paths):
+        selection, _ = capture(selection)
+        report = boot(selection.composition, tokens=selection.tokens,
+                      required_services=selection.required_services)
+        try:
+            report.verify_composition()
+            entry = getattr(report.service(selection.target), "run", None)
+            if not callable(entry):
+                raise TypeError("selected startup target must implement run(invocation)")
+            require_sync(entry, "startup.run")
+            return 0
+        finally:
+            report.dispose()
+
+
 def run_selection(selection, invocation: Invocation) -> int:
+    with selection_runtime(selection.environment, selection.python_paths):
+        return _run_selection(selection, invocation)
+
+
+def _run_selection(selection, invocation: Invocation) -> int:
     selection, payload = capture(selection)
     with tempfile.TemporaryDirectory(prefix="aka-launch-") as tmp:
         path = Path(tmp) / "selection.json"

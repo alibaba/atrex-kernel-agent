@@ -57,29 +57,30 @@ class WorkflowStartup:
         launch = replace(launch, child_arguments=(), child_bindings=())
         if Path(script).resolve() == Path(__file__).with_name("entry.py").resolve():
             launch = replace(launch, restart_arguments=encode_launch(replace(launch, restart_arguments=())))
-        self._notify("run_started", launch)
         result, error = 1, ""
-        try:
-            with invocation_environment(values), use_launch_environment(values), execution_scope():
-                try:
-                    result = self._run(launch, Path(script))
-                except EnvironmentUnavailable:
-                    result = ENVIRONMENT_TEMPFAIL
-                if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
-                    context = current_recovery_context()
-                    supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
-                    pid = launch_recovery_monitor(context) if context is not None and not supervised else None
-                    if pid is not None:
-                        print("[orchestrator] remote GPU environment unavailable; optimization stopped; "
-                              f"recovery monitor pid={pid} state={context.directory}", file=sys.stderr, flush=True)
-                    result = ENVIRONMENT_TEMPFAIL
-                return result
-        except BaseException as caught:
-            result = 130 if isinstance(caught,KeyboardInterrupt) else (caught.code if isinstance(caught,SystemExit) and type(caught.code) is int else 1)
-            error = type(caught).__name__
-            raise
-        finally:
-            self._notify("run_finished", result, error)
+        with invocation_environment(values), use_launch_environment(values):
+            self._notify("run_started", launch)
+            try:
+                with execution_scope():
+                    try:
+                        result = self._run(launch, Path(script))
+                    except EnvironmentUnavailable:
+                        result = ENVIRONMENT_TEMPFAIL
+                    if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
+                        context = current_recovery_context()
+                        supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
+                        pid = launch_recovery_monitor(context) if context is not None and not supervised else None
+                        if pid is not None:
+                            print("[orchestrator] remote GPU environment unavailable; optimization stopped; "
+                                  f"recovery monitor pid={pid} state={context.directory}", file=sys.stderr, flush=True)
+                        result = ENVIRONMENT_TEMPFAIL
+                    return result
+            except BaseException as caught:
+                result = 130 if isinstance(caught,KeyboardInterrupt) else (caught.code if isinstance(caught,SystemExit) and type(caught.code) is int else 1)
+                error = type(caught).__name__
+                raise
+            finally:
+                self._notify("run_finished", result, error)
 
     def _run(self, launch, script):
         # These are private calls within the Workflow implementation, not a

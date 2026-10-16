@@ -66,6 +66,8 @@
     }
   ],
   "bindings": {},
+  "python_paths": ["${aka:repo_root}"],
+  "environment_values": {"AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"},
   "environment": [
     "ATREX_PLUGIN_DIR",
     "ATREX_CLAUDE_SESSION_NAME",
