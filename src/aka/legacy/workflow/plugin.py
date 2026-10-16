@@ -22,12 +22,15 @@ identity_packages = (
 )
 Config = {"type": "object", "properties": {
     "startup": {"type": "boolean"},
+    "reference_projects": {"type": "array", "items": {"type": "string"}},
     "conversion_budget_action": {"type": "string", "enum": ["fail", "retain_verified"]},
 }, "additionalProperties": False}
-Defaults = {"startup": False, "conversion_budget_action": "fail"}
+Defaults = {"startup": False, "conversion_budget_action": "fail", "reference_projects": []}
 
 
 def apply(ctx, config):
+    from .resources import contribute
+    contribute(ctx, config)
     from .composition import compose_workflow
 
     workflow = compose_workflow(

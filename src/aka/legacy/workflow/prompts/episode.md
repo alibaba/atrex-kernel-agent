@@ -22,7 +22,7 @@ final squash promotion. You own only this episode branch and its structured evid
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are linked into the worktree.
+- Only selected module Skills and declared reference/plugin resources are installed in this worktree. Inspect `python -m aka.legacy.resources.cli list` and `.atrex_plugins/instructions.md` before using optional capabilities.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}
@@ -51,7 +51,7 @@ the supervisor creates it after terminal validation.
 
 - Never run `python test_kernel.py`, `python kernel.py`, or import GPU/JIT kernel packages directly
   on the host. Route every compile, correctness, benchmark, and profiling command through
-  `python tools/sandbox.py ... --`.
+  `python -m aka.legacy.execution.cli ... --`.
 - Never start, stop, restart, signal, replace, or mutate the shared gateway service, its screen
   session, state directory, database, log, or jobs. Report infrastructure failure instead.
 - Never install or build dependencies with pip, uv, conda, setup.py, ninja, cmake, or package-manager
@@ -88,7 +88,7 @@ journals remain archived under
 
 ## Engineering loop
 
-`skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
+`.agents/skills/gpu-kernel-episode-loop/SKILL.md` defines the binding evidence loop for this episode:
 reconstruct the incumbent, profile and localize, research progressively, plan according to the episode mode,
 implement and repair, validate development correctness and performance, record every decisive
 experiment, and mark the phase telemetry. **Read that file now and execute its loop**; it is a
@@ -142,7 +142,7 @@ Use the one-based journal index of the experiment selected for handoff. Its stru
 must pass correctness and its decision must be `promote` or `keep_as_best`.
 
 For a PPU full episode, the outcome may also include `accepted_ppu_diagnostics` following
-`skills/ppu-acu-joint-profile/SKILL.md`. Include only profiler evidence that still applies to the
+`.agents/skills/ppu-acu-joint-profile/SKILL.md`. Include only profiler evidence that still applies to the
 terminal probe-free kernel and bind each row to an accepted decision-grade artifact by path,
 SHA-256, schema, and evidence id. Omit the field or use an empty list when there is no reusable
 evidence. The supervisor verifies those bindings before writing rows into canonical memory.

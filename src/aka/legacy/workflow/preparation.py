@@ -7,7 +7,6 @@ import sys
 
 from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
 from aka.legacy.task.hardware import framework_workspace_suffix, supported_frameworks
-from aka.legacy.resources.submodules import ensure_submodules
 
 
 def recorded_workspace_arch(workspace: Path) -> str:
@@ -19,7 +18,7 @@ def recorded_workspace_arch(workspace: Path) -> str:
     return arch if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", arch) else ""
 
 
-def prepare_request(launch, problem):
+def prepare_request(launch, problem, *, frozen=False):
     request = launch.request
     settings, runtime = request.settings, request.runtime
     hardware = runtime.hardware or settings.platform
@@ -33,7 +32,6 @@ def prepare_request(launch, problem):
         if arch:
             print(f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
                   file=sys.stderr, flush=True)
-    ensure_submodules(settings.platform, arch or "")
     frameworks = ((settings.framework,) if settings.framework
                   else supported_frameworks(settings.platform, arch))
     reviewers = ",".join(f"{stage}[{','.join(names)}]" for stage, names in (
@@ -46,6 +44,10 @@ def prepare_request(launch, problem):
           f"frameworks={','.join(frameworks)} reviewers={reviewers} "
           f"runtime_arch={arch or 'UNKNOWN (detect failed)'} "
           "(device name / vendor-smi may be desensitized; trusting the runtime API)", flush=True)
+    if frozen:
+        if arch and settings.arch and arch != settings.arch:
+            raise ValueError('checkpoint runtime architecture differs from its frozen request')
+        return request, frameworks
     return replace(request, workspace=base / f"kernel_opt_{problem.name}_{suffix}",
                    name=problem.name + ("_" + suffix if suffix else ""),
                    settings=replace(settings, arch=arch)), frameworks

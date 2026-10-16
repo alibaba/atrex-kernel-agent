@@ -20,7 +20,7 @@ Manages per-iteration memory files (memory/v<N>.json) in the kernel optimization
 workspace. Supports creation, reading, updating, masking, and summarizing iterations.
 
 Usage:
-    python tools/memory_manager.py <command> [options]
+    python -m aka.legacy.workflow.memory_manager <command> [options]
 
 Commands:
     init          Create the memory/ directory in the workspace.
@@ -34,18 +34,18 @@ Commands:
     list          List all iteration files with their masked status.
 
 Examples:
-    python tools/memory_manager.py init --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py create --workspace /tmp/kernel_opt_mla --version v0
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --version v1
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --version v1 --field performance.tflops
-    python tools/memory_manager.py read --workspace /tmp/kernel_opt_mla --unmasked-only --field correctness.status
-    python tools/memory_manager.py update --workspace /tmp/kernel_opt_mla --version v1 \\
+    python -m aka.legacy.workflow.memory_manager init --workspace /tmp/kernel_opt_mla
+    python -m aka.legacy.workflow.memory_manager create --workspace /tmp/kernel_opt_mla --version v0
+    python -m aka.legacy.workflow.memory_manager read --workspace /tmp/kernel_opt_mla --version v1
+    python -m aka.legacy.workflow.memory_manager read --workspace /tmp/kernel_opt_mla --version v1 --field performance.tflops
+    python -m aka.legacy.workflow.memory_manager read --workspace /tmp/kernel_opt_mla --unmasked-only --field correctness.status
+    python -m aka.legacy.workflow.memory_manager update --workspace /tmp/kernel_opt_mla --version v1 \\
         --set 'performance.tflops=150.2' --set 'correctness.status=PASS'
-    python tools/memory_manager.py mask --workspace /tmp/kernel_opt_mla --version v2 v3
-    python tools/memory_manager.py unmask --workspace /tmp/kernel_opt_mla --version v2
-    python tools/memory_manager.py summary --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py latest --workspace /tmp/kernel_opt_mla
-    python tools/memory_manager.py list --workspace /tmp/kernel_opt_mla
+    python -m aka.legacy.workflow.memory_manager mask --workspace /tmp/kernel_opt_mla --version v2 v3
+    python -m aka.legacy.workflow.memory_manager unmask --workspace /tmp/kernel_opt_mla --version v2
+    python -m aka.legacy.workflow.memory_manager summary --workspace /tmp/kernel_opt_mla
+    python -m aka.legacy.workflow.memory_manager latest --workspace /tmp/kernel_opt_mla
+    python -m aka.legacy.workflow.memory_manager list --workspace /tmp/kernel_opt_mla
 """
 
 import argparse

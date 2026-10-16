@@ -32,7 +32,7 @@ directive outrank this skill. Where they conflict, follow the prompt.
 ## Episode mode
 
 Use the Python-supplied `ATREX_EPISODE_MODE` (default: `full`), as defined in
-`skills/gen-plan/SKILL.md`. Fast/full episodes advance one coherent engineering direction.
+`.agents/skills/gen-plan/SKILL.md`. Fast/full episodes advance one coherent engineering direction.
 Goal episodes can repeat this loop across a roadmap of directions, preserving the best
 validated checkpoint until the roadmap is complete or exhausted.
 
@@ -42,9 +42,9 @@ Telemetry is best-effort and must not block engineering work. Mark phase boundar
 commands and keep at most one phase active:
 
 ```bash
-python3 tools/iteration_trace.py phase-start <profile|research|planning|implementation|correctness|benchmark|recording>
-python3 tools/iteration_trace.py phase-end <profile|research|planning|implementation|correctness|benchmark|recording>
-python3 tools/iteration_trace.py source-read <gpu_wiki|reference_projects|workspace|public_web> <safe-relative-reference>
+python3 -m aka.legacy.workflow.iteration_trace phase-start <profile|research|planning|implementation|correctness|benchmark|recording>
+python3 -m aka.legacy.workflow.iteration_trace phase-end <profile|research|planning|implementation|correctness|benchmark|recording>
+python3 -m aka.legacy.workflow.iteration_trace source-read <gpu_wiki|reference_projects|workspace|public_web> <safe-relative-reference>
 ```
 
 Never put credentials, private URL parameters, absolute user paths, raw tool output, or transcript
@@ -68,10 +68,12 @@ hypothesis tied to the current bottleneck.
 
 ### 2. Profile and localize
 
-For a PPU target, do not apply the NVIDIA/AMD default below. Read
-`skills/ppu-acu-joint-profile/SKILL.md` first and let its PPU-specific per-iteration rule decide
+For a PPU target, do not apply the NVIDIA/AMD default below. Confirm that the `ppu-acu` capability is selected; if it is unavailable, report the missing PPU evidence capability. When installed, read
+`.agents/skills/ppu-acu-joint-profile/SKILL.md` first and let its PPU-specific per-iteration rule decide
 whether new PPU profiler evidence is needed. That route may use source or compiler inspection, the
 probe-free benchmark, or still-valid PPU evidence instead of collecting a new profile.
+
+Use only profiling capabilities listed by the selected Resources installation. NVIDIA and AMD wrappers below are available only when that capability was selected; missing required profiling must be reported explicitly.
 
 Reuse a profile only when it matches the current committed kernel. Otherwise profile through the
 sandbox using the vendor-appropriate tooling. Both wrappers run `python <file>`, so the profiled file
@@ -80,12 +82,12 @@ evaluator only ever imports:
 
 ```bash
 # NVIDIA
-python tools/sandbox.py --kind profile --sync <PROFILE_DIR> -- \
-  bash tools/profile_nvidia.sh profile_driver.py --output-dir <PROFILE_DIR> --source
+python -m aka.legacy.execution.cli --kind profile --sync <PROFILE_DIR> -- \
+  bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir <PROFILE_DIR> --source
 
 # AMD
-python tools/sandbox.py --kind profile --sync <PROFILE_DIR> -- \
-  bash tools/profile_kernel.sh profile_driver.py --output-dir <PROFILE_DIR>
+python -m aka.legacy.execution.cli --kind profile --sync <PROFILE_DIR> -- \
+  bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir <PROFILE_DIR>
 ```
 
 `profile_driver.py` imports the current `kernel.py`, builds real inputs from the campaign contract
@@ -95,8 +97,8 @@ invokes the candidate repeatedly. Select what it drives with environment variabl
 it — it is a protected path and a candidate that modifies it is rejected:
 
 ```bash
-PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python tools/sandbox.py ...   # SOL: one workload
-PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python tools/sandbox.py ...       # generalized or legacy Atrex-Bench
+PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python -m aka.legacy.execution.cli ...   # SOL: one workload
+PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python -m aka.legacy.execution.cli ...       # generalized or legacy Atrex-Bench
 ```
 
 When several shapes or workloads need profiling, run one sandbox command per id in waves of at most
@@ -114,7 +116,7 @@ lowering or instruction selection is part of the hypothesis. Do not make specula
 changes before obtaining usable evidence.
 
 When ordinary profiling has isolated one kernel but cannot distinguish a specific in-kernel timing
-hypothesis, read `skills/autonomous-gpu-kernel-timeline/SKILL.md` and run its autonomous loop. Use
+hypothesis and the `timeline` capability is installed, read `.agents/skills/autonomous-gpu-kernel-timeline/SKILL.md` and run its autonomous loop. Use
 standalone CUDA/inline PTX through its CUDA backend and CuTe DSL through IKeT. Keep every attempt
 under `<PROFILE_DIR>/timeline/attempt-N`; when the remote command reads backend files, pass that
 specific skill path with sandbox `--input` and sync only the attempt output directory.
@@ -165,13 +167,13 @@ option before `--`, which routes the job through the dev interface.
 Search in this order and stop when one actionable direction is supported:
 
 1. **Enabled knowledge tools.** Read `.atrex_plugins/instructions.md` and inspect
-   `python3 tools/plugin.py list`. Follow the session's phase-specific plugin instructions.
+   `python3 -m aka.legacy.resources.cli list`. Follow the session's phase-specific plugin instructions.
    Profile first, then describe measured symptoms, exact product/runtime architecture, operator,
    framework, shapes/dtypes, failed attempts and the fact needed for the next decision. On PPU,
    use the decisive evidence selected by `ppu-acu-joint-profile`, even when no new profile was needed.
    Preserve source IDs and attribution exactly. Respect architecture scope and context budgets.
    If no suitable plugin is enabled, continue with available references; never invoke a disabled tool.
-2. `reference-projects/` only when the enabled knowledge tools are absent or insufficient.
+2. Explicitly installed `reference-projects/<project>/` resources, when the enabled knowledge tools are absent or insufficient. If none were selected, continue to public sources.
 3. Public primary sources only when local sources do not answer the question.
 
 After repeated rejected episodes, expand across DSLs targeting the same architecture instead of
@@ -204,9 +206,9 @@ unattributable. When the evidence localizes a symptom to specific lines, change 
 Use the immutable evaluator for development measurements:
 
 ```bash
-python tools/sandbox.py --kind run --no-sync -- \
+python -m aka.legacy.execution.cli --kind run --no-sync -- \
   python test_kernel.py --version vlong --no-memory
-python tools/sandbox.py --kind run --no-sync -- \
+python -m aka.legacy.execution.cli --kind run --no-sync -- \
   python test_kernel.py --version vlong --multi-seed 5 --no-memory
 ```
 
@@ -243,6 +245,6 @@ has credible performance evidence, or as soon as the direction is exhausted or b
 and restore the best validated checkpoint, or report a blocker. Then follow
 the episode prompt's terminal contract for finalizing the journal and publishing the handoff. For a
 PPU full episode, include `outcome.accepted_ppu_diagnostics` using the schema in
-`skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
+`.agents/skills/ppu-acu-joint-profile/SKILL.md`; retain only evidence that still applies to the terminal
 probe-free kernel. Each retained row must bind an accepted decision-grade artifact by path, SHA-256,
 schema, and evidence id. This is optional when no reusable PPU profiler evidence exists.

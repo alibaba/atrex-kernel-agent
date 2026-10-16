@@ -21,7 +21,7 @@ own only this episode branch, its final `kernel.py` and `solution.json`, journal
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are linked into the worktree.
+- Only selected module Skills and declared reference/plugin resources are installed in this worktree. Inspect `python -m aka.legacy.resources.cli list` and `.atrex_plugins/instructions.md` before using optional capabilities.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}
@@ -52,7 +52,7 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 - Do not run multi-seed validation and do not run or simulate incumbent/candidate ABBA.
 - Never run GPU/JIT code on the host. Static source inspection is allowed; the official evaluator
   command below is the only GPU execution route and must run once per trial. Do not route
-  import/API probes or additional benchmarks through `tools/sandbox.py`.
+  import/API probes or additional benchmarks through `python -m aka.legacy.execution.cli`.
 - Never install or build dependencies. Never start, stop, restart, signal, replace, or mutate the
   shared sandbox executor or its jobs. Treat infrastructure failure as `blocked`.
 
@@ -65,8 +65,8 @@ markers for every trial, with at most one phase active. Use `planning`, `impleme
 `benchmark` respectively; never emit `profile` or `research` markers:
 
 ```bash
-python3 tools/iteration_trace.py phase-start <planning|implementation|benchmark>
-python3 tools/iteration_trace.py phase-end <planning|implementation|benchmark>
+python3 -m aka.legacy.workflow.iteration_trace phase-start <planning|implementation|benchmark>
+python3 -m aka.legacy.workflow.iteration_trace phase-end <planning|implementation|benchmark>
 ```
 
 At episode start, record the incumbent `HEAD`, its canonical `performance_score`, latency, and

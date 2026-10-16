@@ -193,6 +193,7 @@ class NativeSession:
         check_open=None,
         *,
         runtime=None,
+        output_directory=None,
     ):
         from .runtime import build_agent_runtime
 
@@ -201,6 +202,7 @@ class NativeSession:
         )
         is_codex = runtime_id == "codex"
         self.workspace = workspace
+        self.output_directory = output_directory or workspace
         environment = (
             session_environment()
             if runtime_id == "claude"
@@ -244,6 +246,18 @@ class NativeSession:
         return self._session_id
 
     def close(self):
+        if not self._closed and self._invoked and self.supports_resume:
+            from .checkpoint import capture_native_session
+            from pathlib import Path
+            import hashlib
+            marker = Path(self.output_directory)/'.aka-agent-session-errors'/hashlib.sha256(self._session_id.encode()).hexdigest()
+            try:
+                capture_native_session(self.output_directory, self.workspace, self.runtime_id,
+                                       self._session_id, self.environment)
+                marker.unlink(missing_ok=True)
+            except (OSError, ValueError) as error:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(type(error).__name__ + '\n')
         self._closed = True
         self._observer = None
 
@@ -328,6 +342,10 @@ class NativeSession:
         ):
             self._stdout_usage = stream_session_usage
         self._invoked = True
+        from .public_output import record_invocation
+        record_invocation(self.output_directory, self.runtime_id, self._session_id,
+                          terminal_usage, events, observation_errors,
+                          resume_supported=self.supports_resume, stdout=stdout)
         return NativeInvocation(
             exit_status,
             timed_out,

@@ -13,9 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-from aka.legacy.resources.checkout import checkout_root
-
-REPO_ROOT = checkout_root()
+from importlib.resources import files
 PLAN_REVIEWER_CACHE = Path(".atrex_long_horizon/plan_reviewer_availability.json")
 PLAN_REVIEWER_CACHE_SCHEMA_VERSION = 2
 DEFAULT_PLAN_REVIEWER_PROBE_TIMEOUT_S = 120
@@ -79,7 +77,7 @@ def _probe_reviewer(
             "reason": f"{reviewer} is the active campaign backend",
         }
 
-    helper = REPO_ROOT / "skills" / "gen-plan" / "scripts" / helper_name
+    helper = Path(str(files("aka.legacy.workflow").joinpath("skills", "gen-plan", "scripts", helper_name)))
     environment = os.environ.copy()
     environment["ATREX_AGENT_CLI"] = agent_cli
     # Discovery is called only for requested reviewers. Exercise the CLI even

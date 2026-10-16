@@ -273,7 +273,7 @@ class WorkflowBaseline:
 
     def setup_baseline_sol(self, op_dir: Path) -> None:
         from aka.contracts.workspace import SourceRequest
-        from aka.legacy.resources.paths import REPO_ROOT
+        from .resources import initial_files
 
         problem = self.campaign._loaded_problem()
         content = self.campaign.source_provider.prepare(SourceRequest(
@@ -282,7 +282,8 @@ class WorkflowBaseline:
         ))
         source_commit = self.campaign.candidate_workspace.prepare_sol(
             self.campaign.workspace, content, problem_files=problem.agent.files,
-            reference_dir=REPO_ROOT / "reference",
+            harness=problem.evaluation.harness,
+            runtime_files=initial_files(self.campaign.plugin_registry, sol=True),
         )
         self.campaign._link_runtime()
         result = self.campaign._run_v0_evaluator_with_correctness_prefetch()

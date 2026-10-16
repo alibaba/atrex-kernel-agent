@@ -1,7 +1,7 @@
 # GPU Kernel Optimizer — Agent Constraints
 
 This file defines hard behavioral constraints for the optimization workflow.
-The full multi-cycle workflow and terminal handoff are defined in `orchestrator/prompts/episode.md`.
+The full multi-cycle workflow and terminal handoff are defined in the injected episode prompt.
 
 ## Framework Guidance
 
@@ -75,14 +75,14 @@ gate and commits mechanically. Do not duplicate that full gate inside the V1 Age
 episodes whose active prompt assigns multi-seed validation to the Agent, run through the mandatory sandbox:
 
 ```bash
-python tools/sandbox.py --kind run --no-sync -- \
+python -m aka.legacy.execution.cli --kind run --no-sync -- \
   python test_kernel.py --version v<N> --multi-seed 5 --no-memory
 ```
 
 This re-runs the evaluator under 5 additional random seeds and reports PASS only if ALL seeds
 pass. If any seed fails correctness, the kernel is BROKEN — revert with `git reset --hard HEAD`
-and try a different lever. See `orchestrator/prompts/episode.md` and
-`skills/gpu-kernel-episode-loop/SKILL.md` for the full procedure.
+and try a different lever. See the injected episode prompt and
+`.agents/skills/gpu-kernel-episode-loop/SKILL.md` for the full procedure.
 
 Benchmark only the base seed. Every additional seed is a full-shape correctness-only pass;
 do not repeat warmup/timing/reference benchmarking for extra seeds. The public gateway caps
@@ -143,11 +143,11 @@ library primitives — are unaffected.
 
 ## Workflow References
 
-- Optimization loop orchestrator: `orchestrator/optimize.py`
-- Multi-cycle episode prompt and handoff contract: `orchestrator/prompts/episode.md`
-- Episode evidence loop (profile/research/plan/implement/validate/record): `skills/gpu-kernel-episode-loop/SKILL.md`
-- Baseline setup session: `orchestrator/prompts/setup.md`
+- The Workflow supervisor owns the optimization loop and supplies the current phase prompt.
+- Multi-cycle episode prompt and handoff contract: the injected episode prompt
+- Episode evidence loop (profile/research/plan/implement/validate/record): `.agents/skills/gpu-kernel-episode-loop/SKILL.md`
+- Baseline setup session: the injected setup prompt
 - Triton→Gluon conversion: latched directive inside the episode prompt
-- NVIDIA profiling skill (Stage 1): `.claude/skills/ncu-report-skill/SKILL.md`
-- Plan generation (Stage 2): repository-native `skills/gen-plan/SKILL.md` with independent Codex
+- Profiling capabilities (Stage 1): consult `python -m aka.legacy.resources.cli list` and the selected `profiling/profile_guide.md`; report missing required capabilities.
+- Plan generation (Stage 2): installed `.agents/skills/gen-plan/SKILL.md` with independent Codex
   and Qoder review synthesis

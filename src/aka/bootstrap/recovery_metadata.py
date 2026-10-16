@@ -91,3 +91,26 @@ def begin_migration(directory: Path, previous, following, payload):
         raise RuntimeError("a recovery launch migration is already pending")
     durable_write_json(directory / MIGRATION_FILE, record)
     complete_migration(directory, owner=True)
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def restored_services(payload: str, names: tuple[str, ...]):
+    """Borrow named services from a verified recorded selection without Startup.
+
+    Bootstrap owns environment, composition and disposal; a business owner uses
+    its typed services inside this scope and must not retain them afterwards.
+    """
+    from aka.bootstrap.runtime import selection_runtime
+    from aka.core.boot import boot
+    selection = restore(payload)
+    with selection_runtime(selection.environment, selection.python_paths):
+        report = boot(selection.composition, tokens=selection.tokens,
+                      required_services=selection.required_services)
+        try:
+            report.verify_composition()
+            yield tuple(report.service(name) for name in names)
+        finally:
+            report.dispose()

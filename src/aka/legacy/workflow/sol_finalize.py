@@ -31,8 +31,8 @@ What it does:
      kernel via `test_kernel.py`.
 
 Usage (cwd anywhere):
-    python reference/sol_finalize.py --workspace kernel_opt_<name>            # package only
-    python reference/sol_finalize.py --workspace kernel_opt_<name> --validate  # + re-run evaluator
+    python -m aka.legacy.workflow.sol_finalize --workspace kernel_opt_<name>            # package only
+    python -m aka.legacy.workflow.sol_finalize --workspace kernel_opt_<name> --validate  # + re-run evaluator
 """
 
 from __future__ import annotations

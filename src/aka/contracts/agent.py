@@ -170,7 +170,16 @@ class AgentRuntime(Protocol):
     def run(self, request: AgentRunRequest) -> AgentRunResult: ...
 
 
+@dataclass(frozen=True)
+class AgentCheckpointSnapshot:
+    directory: Path
+    identity: str
+
+
 class Agent(Protocol):
+    def export_checkpoint(self, workspace: Path, destination: Path) -> AgentCheckpointSnapshot: ...
+    def validate_checkpoint(self, snapshot: AgentCheckpointSnapshot, *, check_destinations: bool = False) -> None: ...
+    def restore_checkpoint(self, snapshot: AgentCheckpointSnapshot) -> None: ...
     def runtime(self, runtime_id: str) -> AgentRuntime:
         """Borrow the selected backend; selection is stable for this owner lifetime."""
         ...
@@ -182,6 +191,7 @@ class Agent(Protocol):
         *,
         session_id: str = "",
         environment: Mapping[str, str] | None = None,
+        output_directory: Path | None = None,
     ) -> "AgentSession": ...
 
 

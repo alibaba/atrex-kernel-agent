@@ -79,6 +79,7 @@ class LongSessionRunner:
         session_id: str = "",
         telemetry_environment: Mapping[str, str] | None = None,
         record_usage: Callable[[int], None] | None = None,
+        output_directory: Path | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
         is_codex = self.agent_cli == "codex"
@@ -89,7 +90,7 @@ class LongSessionRunner:
             self.agent_cli,
             workspace,
             session_id=session_id,
-            environment=telemetry_environment,
+            environment=telemetry_environment, output_directory=output_directory,
         )
         try:
             telemetry_attempt_prefix = native.environment.get(

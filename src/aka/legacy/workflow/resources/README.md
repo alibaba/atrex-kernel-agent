@@ -1,8 +1,7 @@
 # Campaign Workspace Reference
 
-This file describes the runtime contract linked into workspaces by
-`orchestrator/optimize.py`. It is guidance for Agent sessions, not a standalone entry point or
-workspace template.
+This selected Workflow resource describes the campaign contract for Agent sessions.
+Use its Task Context fields with the injected setup prompt when writing the workspace README.
 
 ## Target
 
@@ -16,7 +15,7 @@ workspace template.
 ## Execution Boundary
 
 - Every compile, correctness, benchmark, signature collection, and profile command runs through
-  `tools/sandbox.py` on `--sandbox-hardware`.
+  `python -m aka.legacy.execution.cli` on `--sandbox-hardware`.
 - Host-side GPU/JIT execution and dependency installation are forbidden.
 - The logical platform and gateway hardware selector may use different names; runtime architecture
   probing is authoritative for vendor/framework dispatch.
@@ -49,17 +48,18 @@ workspace template.
 ## Knowledge and Tools
 
 - Consult enabled knowledge tools using `.atrex_plugins/instructions.md` and
-  `python3 tools/plugin.py list`. Follow the injected phase instructions. State the exact product,
+  `python -m aka.legacy.resources.cli list`. Follow the injected phase instructions. State the exact product,
   authoritative runtime architecture, operator, framework, measurements and unresolved question.
   Preserve returned source identifiers. With no suitable tool, use available reference sources.
-- Search `reference-projects/` only when the local knowledge base is insufficient.
-- Use `tools/profile_nvidia.sh` and `tools/classify_ncu.py` for NVIDIA evidence.
-- Use `tools/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.
-- Use `tools/profile_ppu.py` for T-Head PPU evidence; it is an `ncu`-compatible front end for
-  `acu` and must be reachable as `ncu` on PATH. See `reference/profile_guide.md` for activation
+- Search explicitly installed `reference-projects/<project>/` resources only when the enabled knowledge tools are insufficient. No reference projects are selected by default.
+- Profiling resources below are available only for explicitly selected capabilities; confirm the installed Resources inventory before using them. Report a missing required capability.
+- Use `profiling/nvidia/profile_nvidia.sh` and `profiling/nvidia/classify_ncu.py` for NVIDIA evidence.
+- Use `profiling/amd/profile_kernel.sh` for AMD rocprofv3/ATT/PMC evidence.
+- Use `profiling/ppu/profile_ppu.py` for T-Head PPU evidence; it is an `ncu`-compatible front end for
+  `acu` and must be reachable as `ncu` on PATH. See `profiling/profile_guide.md` for activation
   and the mandatory performance-counter release step.
-- Use `tools/compute_utilization.py` and the measurement/extraction helpers for supporting
-  calculations; use `tools/memory_manager.py` only for workspace memory operations allowed by the
+- Use `profiling/common/compute_utilization.py` and the measurement/extraction helpers for supporting
+  calculations; use `python -m aka.legacy.workflow.memory_manager` only for workspace memory operations allowed by the
   current prompt.
 
 ## Mechanical Stop and Acceptance Rules

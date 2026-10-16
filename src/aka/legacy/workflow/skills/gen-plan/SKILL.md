@@ -53,7 +53,7 @@ Execute these phases sequentially.
 From the campaign workspace, run:
 
 ```bash
-bash skills/gen-plan/scripts/validate-gen-plan-io.sh \
+bash .agents/skills/gen-plan/scripts/validate-gen-plan-io.sh \
   --input <input> --output <output> <mode>
 ```
 
@@ -77,7 +77,7 @@ Build an evidence-to-action chain:
 5. Define correctness, performance, rollback, and stop conditions.
 
 Before consulting either reviewer, populate
-`skills/gen-plan/templates/candidate-proposal-template.md` in automatically removed process scratch.
+`.agents/skills/gen-plan/templates/candidate-proposal-template.md` in automatically removed process scratch.
 This frozen candidate proposal is not the final plan. It must state the selected evidence-to-action
 chain, the episode mode and permitted optimization categories, target paths and symbols, the expected mechanism, scope
 constraints, rejected directions, validation and falsification conditions, and unresolved
@@ -107,7 +107,7 @@ is the primary review target; the draft and context are evidence for testing its
 include credentials, raw secrets, unrelated files, or large binary profile artifacts.
 
 ```bash
-bash skills/gen-plan/scripts/ask-reviewers.sh \
+bash .agents/skills/gen-plan/scripts/ask-reviewers.sh \
   --input <input> \
   --proposal <temporary-candidate-proposal> \
   --context README.md \
@@ -183,7 +183,7 @@ justify a change.
 Available reviewers are advisory, not authoritative. The final plan must remain a superset of the
 human draft and must still contain exactly one optimization category in fast/full mode.
 
-Use `skills/gen-plan/templates/gen-plan-template.md` as the output schema. Replace every placeholder
+Use `.agents/skills/gen-plan/templates/gen-plan-template.md` as the output schema. Replace every placeholder
 with concrete content. The plan must include:
 
 - the goal and the profile/research evidence that motivates it;

@@ -16,7 +16,8 @@ from aka.legacy.task.hardware import hardware_vendor
 from aka.legacy.task.source.inspection import head_kernel_is_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
 from aka.legacy.execution.sandbox import sandbox_command
-from aka.legacy.resources.runtime import _agent_runtime_directive, _plan_generator_directive, link_runtime
+from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
+from aka.legacy.resources.workspace import install_workspace_resources
 from aka.legacy.task.candidate_workspace.state import git_head, head_kernel_is_initial_baseline, latest_version, read_stall, reconstruct_stall, write_stall
 
 
@@ -53,14 +54,16 @@ def prepare_campaign(campaign: Campaign) -> None:
             )
 
 
+def install_campaign_resources(campaign: Campaign, workspace: Path) -> None:
+    registry = campaign.plugin_registry
+    registry.check_lock(workspace)
+    campaign.candidate_workspace.install_files(
+        workspace, campaign.problem_provider.runtime_files(campaign.problem), immutable=True)
+    install_workspace_resources(workspace, plugin_registry=registry)
+
+
 def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
-    native = Path(campaign.atrex_bench_root) if campaign.atrex_bench_root else None
-    link_runtime(
-        workspace,
-        native,
-        plugin_registry=campaign.plugin_registry,
-        is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
-    )
+    install_campaign_resources(campaign, workspace)
     install_workspace_policy(
         workspace,
         campaign.optimization_mode,

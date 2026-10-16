@@ -33,7 +33,7 @@ class LegacyAgent:
                 self._runtimes[runtime_id] = runtime
             return self._runtimes[runtime_id]
 
-    def open_session(self, runtime_id, workspace, *, session_id="", environment=None):
+    def open_session(self, runtime_id, workspace, *, session_id="", environment=None, output_directory=None):
         import uuid
         from .native import NativeSession
         from aka.legacy.agent.process import run_bounded
@@ -53,10 +53,22 @@ class LegacyAgent:
                 executor,
                 environment,
                 self._check_open,
-                runtime=runtime,
+                runtime=runtime, output_directory=output_directory,
             )
             self._sessions.add(session)
             return session
+
+    def export_checkpoint(self, workspace, destination):
+        from .checkpoint import export_checkpoint
+        return export_checkpoint(workspace, destination)
+
+    def validate_checkpoint(self, snapshot, *, check_destinations=False):
+        from .checkpoint import validate_checkpoint
+        validate_checkpoint(snapshot, check_destinations=check_destinations)
+
+    def restore_checkpoint(self, snapshot):
+        from .checkpoint import restore_checkpoint
+        restore_checkpoint(snapshot)
 
     def close(self):
         with self._lock:

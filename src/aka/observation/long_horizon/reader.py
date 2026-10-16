@@ -10,7 +10,7 @@ from pathlib import Path
 from threading import RLock
 
 from aka.contracts.observation import OBSERVATION_VERSION, Campaign, Campaigns, Episode
-from .artifacts import SCOPE as ARTIFACT_SCOPE, artifact_bytes, describe_artifacts
+from .artifacts import SCOPE as ARTIFACT_SCOPE, capture_artifacts
 
 RUNTIME = ".atrex_long_horizon"
 PHASES = ("profile", "research", "planning", "implementation", "correctness", "benchmark", "recording")
@@ -147,6 +147,7 @@ class WorkspaceReader:
         self._paths = {}
         self._cache = {}
         self._previous_progress = {}
+        self._artifact_contents = {}
         # ThreadingHTTPServer can request list and detail concurrently.
         self._lock = RLock()
 
@@ -240,7 +241,7 @@ class WorkspaceReader:
             perf = obj(memory.get("performance"))
             shapes = obj(perf.get("latency_us_by_shape"))
             expected = integer(perf.get("expected_shape_count"))
-            complete = (perf.get("measurement_status") in (None, "complete")
+            complete = (perf.get("measurement_status") == "complete"
                         and all(positive(v) is not None for v in shapes.values())
                         and (bool(shapes) or perf.get("performance_objective") != "shape_speedup_arithmetic_mean")
                         and (expected is None or len(shapes) == expected))
@@ -273,7 +274,7 @@ class WorkspaceReader:
                     incumbent = {"version": n, "value": value, "unit": unit,
                                  "label": "Mean speedup across shapes" if unit == "×" else "Geometric mean latency",
                                  "objective": objective, "series": series,
-                                 "source": f"memory/v{n}.json"}
+                                 "source": f"memory/v{n}.json", "revision": memory.get("git_commit_hash")}
                     curve_available = True
                     promoted = not is_baseline
             missing_promotion = promotion is not None and not promoted and not is_baseline
@@ -376,10 +377,10 @@ class WorkspaceReader:
         hardware = obj(manifest.get("hardware"))
         memory_time = max((self._mtime(source) for source in self._cache if source.parent == path / "memory"), default=0)
         framework = string(baseline.get("framework")) or string(hardware.get("framework"))
-        return {"observation_version": OBSERVATION_VERSION,
+        snapshot = {"observation_version": OBSERVATION_VERSION,
                 "id": identifier, "name": path.name, "display_name": display_name(path.name, framework),
                 "workspace": str(path), "stages": stages,
-                "artifacts": describe_artifacts(path), "artifact_scope": ARTIFACT_SCOPE,
+                "artifact_scope": ARTIFACT_SCOPE,
                 "framework": framework, "platform": baseline.get("platform") or hardware.get("platform"),
                 "arch": baseline.get("arch") or hardware.get("arch"),
                 "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
@@ -389,6 +390,17 @@ class WorkspaceReader:
                            "receipt_count": len(obj(state.get("usage_receipts"))), "reason_codes": reasons,
                            "pending": progress["pending_tokens"], "scope": SCOPE},
                 "episodes": rows, "issues": issues}
+        descriptions, contents = capture_artifacts(path, snapshot)
+        snapshot['artifacts'] = descriptions
+        cache = self._artifact_contents.setdefault(identifier, {})
+        cache.update(contents)
+        # Keep a bounded set of recent detached downloads per campaign.
+        while len(cache) > 128 or sum(len(value) for value in cache.values()) > 64 * 1024 * 1024:
+            oldest = next(iter(cache))
+            if oldest in contents:
+                break
+            del cache[oldest]
+        return snapshot
 
     def campaigns(self) -> Campaigns:
         with self._lock:
@@ -412,8 +424,10 @@ class WorkspaceReader:
 
     def artifact(self, identifier: str, artifact_id: str) -> bytes:
         with self._lock:
-            self._discover()
-            return artifact_bytes(self._paths[identifier], artifact_id, self._snapshot(identifier))
+            try:
+                return self._artifact_contents[identifier][artifact_id]
+            except KeyError as exc:
+                raise KeyError(artifact_id) from exc
 
     def episode(self, identifier: str, number: int) -> Episode:
         with self._lock:

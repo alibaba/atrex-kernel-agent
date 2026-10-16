@@ -34,10 +34,9 @@ from .model import (
 )
 from aka.legacy.agent.process import ProcessRunner, protected_gateway_identity, run_bounded
 
-from aka.legacy.resources.checkout import checkout_root
+from importlib.resources import files
 
-REPO_ROOT = checkout_root()
-SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
+SESSION_SHELL_GUARD = Path(str(files("aka.legacy.execution").joinpath("runtime_tools/session_shell_guard.sh")))
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
@@ -87,8 +86,10 @@ def build_session_environment(runtime_id: str) -> dict[str, str]:
     # Private Atrex-Bench evaluator inputs are campaign-scoped and must be reintroduced only by
     # the owning campaign, never inherited accidentally by an unrelated or legacy session.
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+    environment.pop("ATREX_SANDBOX_REQUIREMENTS_FILE", None)
+    environment.pop("AKA_GATEWAY_DEV_DEPENDENCIES", None)
     environment["ATREX_AGENT_CLI"] = runtime_id
-    python_bin = str(Path(sys.executable).resolve().parent)
+    python_bin = str(Path(sys.executable).absolute().parent)
     path_parts = [
         part
         for part in environment.get("PATH", "").split(os.pathsep)
@@ -98,6 +99,8 @@ def build_session_environment(runtime_id: str) -> dict[str, str]:
     environment["PIP_ONLY_BINARY"] = ":all:"
     environment["PIP_INDEX_URL"] = PYPI_MIRROR
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    if not SESSION_SHELL_GUARD.is_file():
+        raise ValueError("selected Agent shell guard resource is unavailable")
     environment["BASH_ENV"] = str(SESSION_SHELL_GUARD)
     protected_screen, protected_state = protected_gateway_identity(environment)
     environment["ATREX_PROTECTED_GATEWAY_SCREEN"] = protected_screen
@@ -242,6 +245,9 @@ class CliAgentRuntime:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:
                 observation_errors += (cleanup_error,)
+        from .public_output import record_invocation
+        record_invocation(request.workspace, self.id, session_id,
+                          terminal_usage, events, observation_errors, stdout=stdout)
         return AgentRunResult(
             runtime_id=self.id,
             exit_status=exit_status,

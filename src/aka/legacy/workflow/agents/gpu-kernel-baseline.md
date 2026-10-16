@@ -46,7 +46,7 @@ You will receive:
 
 ### Phase 2: Learn Framework APIs from enabled knowledge tools
 
-1. Read `.atrex_plugins/instructions.md` and inspect `python3 tools/plugin.py list` for enabled
+1. Read `.atrex_plugins/instructions.md` and inspect `python3 -m aka.legacy.resources.cli list` for enabled
    tool names and input schemas. Follow the session's phase-specific plugin instructions.
 2. Query available knowledge tools with the exact product, authoritative runtime architecture,
    framework, operator, shapes, dtypes and missing implementation facts. If no suitable plugin is
@@ -116,10 +116,10 @@ timeout 60 python test_kernel.py   # default 60s per run
 latency(us) | TFLOPS | bandwidth(GB/s) | TFLOPS peak utilization(%) | bandwidth peak utilization(%)
 ```
 
-4. Use `compute_utilization.py` to calculate TFLOPS and bandwidth utilization:
+4. When the selected profiling resources include `profiling/common/compute_utilization.py`, use it to calculate TFLOPS and bandwidth utilization. Otherwise retain the available evaluator metrics and mark unsupported utilization metrics unavailable:
 
 ```bash
-python tools/compute_utilization.py \
+python profiling/common/compute_utilization.py \
   --gpu <gpu> --dtype <dtype> \
   --flops-expr '<expr>' --bytes-expr '<expr>' \
   --time-ms <ms> --grid-blocks <blocks>
@@ -135,14 +135,14 @@ python tools/compute_utilization.py \
    - Correctness results: case list, max `rel_err`, PASS/FAIL (include any TIMEOUT_FAIL cases)
    - Baseline performance: latency(us), TFLOPS, bandwidth(GB/s), and peak utilization percentages
 
-7. Write baseline iteration data to `memory/v0.json` using `tools/memory_manager.py`:
+7. Write baseline iteration data to `memory/v0.json` using `aka.legacy.workflow.memory_manager`:
 
 ```bash
 # Create the iteration file
-python tools/memory_manager.py create --workspace kernel_opt_<name> --version v0
+python -m aka.legacy.workflow.memory_manager create --workspace kernel_opt_<name> --version v0
 
 # Fill in performance and metadata
-python tools/memory_manager.py update --workspace kernel_opt_<name> --version v0 \
+python -m aka.legacy.workflow.memory_manager update --workspace kernel_opt_<name> --version v0 \
     --set 'performance.latency_us=<value>' \
     --set 'performance.tflops=<value>' \
     --set 'performance.bandwidth_gbps=<value>' \

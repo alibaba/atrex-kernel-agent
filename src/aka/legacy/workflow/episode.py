@@ -10,7 +10,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from aka.legacy.resources.paths import PROMPTS_DIR
+from .resources import PROMPTS_DIR
 from threading import Event
 from typing import Any
 
@@ -32,9 +32,6 @@ from .dependencies import EpisodeMeasurements, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 
-from aka.legacy.resources.checkout import checkout_root
-
-MODULE_ROOT = checkout_root()
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
 FAST_PROMPT_PATH = PROMPTS_DIR / "fast_episode.md"
 GOAL_AFTER_EPISODES = 50
@@ -454,7 +451,7 @@ class LongHorizonCampaign:
         )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
-            f"PYTHONPATH={MODULE_ROOT} python -m aka.legacy.workflow.journal "
+            "python -m aka.legacy.workflow.journal "
             f"--live-path {json.dumps(str(live_memory_path))}"
         )
         fast_trial_plan_paths = "\n".join(
@@ -612,6 +609,9 @@ class LongHorizonCampaign:
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
+        observations = worktree.path / '.aka-agent-observations'
+        if observations.is_dir():
+            shutil.copytree(observations, episode_dir / 'agent_observations', dirs_exist_ok=True)
         verification = worktree.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
@@ -1670,6 +1670,9 @@ class LongHorizonCampaign:
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
+            if recovered_episode is None and (store.root / 'pause-requested').exists():
+                reason = 'paused: checkpoint requested'
+                break
             conversion_pending = self.environment.conversion_required(
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
@@ -1841,6 +1844,7 @@ class LongHorizonCampaign:
                         episode_mode=episode_mode
                     ),
                     telemetry_environment=telemetry_environment,
+                    output_directory=self.workspace,
                     record_usage=lambda tokens: store.record_usage(
                         state, usage_receipt, tokens
                     ),

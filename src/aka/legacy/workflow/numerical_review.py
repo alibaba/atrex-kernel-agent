@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from aka.legacy.resources.paths import PROMPTS_DIR
+from .resources import PROMPTS_DIR
 import shutil
 import subprocess
 import tempfile
@@ -17,20 +17,17 @@ import uuid
 
 from aka.legacy.evaluation.drivers.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
 from aka.legacy.workflow.store import VERIFY_DIR
-from reference.atrex_bench_test_kernel import _fp4_correctness_max_rel_l2
+from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.legacy.task.durable import durable_write_json
 from aka.legacy.agent.availability import check_review_service
 from aka.legacy.execution.transport import check_transport
 from aka.legacy.experiment.retry import retry_infrastructure
 
-from aka.legacy.resources.checkout import checkout_root
-ROOT = checkout_root()
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
 from aka.legacy.evaluation.numerical import _validate_review, _probe_status
 DRIVER = Path(remote_numerical.__file__)
 PROMPT = PROMPTS_DIR / "numerical_review.md"
-HARNESS = ROOT / "reference" / "atrex_bench_test_kernel.py"
 
 
 class NumericalPlanningTimeout(RuntimeError):
@@ -48,7 +45,9 @@ def _sources(campaign, workspace, *, harness=None):
     from aka.legacy.acceptance.review import _production_review_candidate_paths
 
     private = Path(campaign.private_reference_dir or workspace)
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness or HARNESS}
+    if harness is None:
+        raise ValueError('numerical validation requires the frozen Task harness')
+    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
@@ -126,7 +125,9 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     if "atrex-bench/run_eval" in (workspace / "test_kernel.py").read_text():
         snapshot = directory / "snapshots" / "evaluator.py"
         snapshot.parent.mkdir()
-        shutil.copy2(harness or HARNESS, snapshot)
+        if harness is None:
+            raise ValueError('numerical validation requires the frozen Task harness')
+        shutil.copy2(harness, snapshot)
     results = []
     for index, plan in enumerate(schedule):
         if plan.get("status") == "unsupported":

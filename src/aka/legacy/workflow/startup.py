@@ -70,10 +70,24 @@ class WorkflowStartup:
                 self._notify("run_finished", result, error)
 
     def _run(self, launch):
+        import shutil
+        runtime = launch.request.settings.agent_cli
+        if shutil.which(runtime) is None:
+            raise ValueError(f'Agent CLI is unavailable: {runtime}')
+        from aka.legacy.execution.configuration import selected_ssh
+        if selected_ssh() and any(shutil.which(command) is None for command in ('ssh', 'scp')):
+            raise ValueError('selected SSH execution requires ssh and scp')
         # These are private calls within the Workflow implementation, not a
         # second module Interface. Problem is loaded once, before preparation.
         problem = self._workflow._load_problem(launch.request)
-        request, frameworks = prepare_request(launch, problem)
+        from .checkpoint import CONTEXT
+        from .export import document
+        context = document(launch.request.workspace / CONTEXT)
+        if context is not None:
+            frozen = decode_launch(tuple(context['argv'])).request
+            if launch.request != frozen:
+                raise ValueError('existing campaign requires its frozen request for resume')
+        request, frameworks = prepare_request(launch, problem, frozen=context is not None)
         if not launch.request.settings.framework:
             from .dispatch import dispatch_framework_campaigns
             from dataclasses import replace
@@ -102,7 +116,14 @@ class WorkflowStartup:
         return self._run_campaign(request, problem)
 
     def _run_campaign(self, request, problem):
+        from .public_state import campaign_lease
+        with campaign_lease(request.workspace, writer=True):
+            return self._run_campaign_with_lease(request, problem)
+
+    def _run_campaign_with_lease(self, request, problem):
         campaign = self._workflow._campaign(request, problem)
+        from .checkpoint import record_context
+        record_context(campaign)
         trace_status = "failed"
         previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
 
@@ -123,6 +144,13 @@ class WorkflowStartup:
             raise
         finally:
             try:
+                if sys.exc_info()[0] is None:
+                    record_context(campaign)
+                else:
+                    try:
+                        record_context(campaign)
+                    except Exception as error:
+                        print(f'[workflow] checkpoint context unavailable: {type(error).__name__}', file=sys.stderr)
                 write_trace_retention_manifest(campaign.workspace, trace_status, hardware={
                     "platform": request.settings.platform, "arch": request.settings.arch or "",
                     "sandbox_hardware": request.runtime.hardware or request.settings.platform})

@@ -21,15 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-# Prefer source packages when running directly from a checkout.
-_source_packages = Path(__file__).resolve().parents[1] / "src"
-if _source_packages.is_dir():
-    sys.path.insert(0, str(_source_packages))
-
 from aka.legacy.task.durable import durable_replace, durable_rmdir, durable_unlink, durable_write_json, durable_write_text, ensure_private_directory
 from aka.legacy.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV, RESTART_COMPLETE, RESTART_EXIT, RESTART_PRIMARY_PID, STOP_MARKER, clear_process_registry, matching_processes, process_identity_matches, spawn_owned_session, terminate_processes
 
@@ -50,9 +41,6 @@ class RecoveryCleanupUnverified(RuntimeError):
 
 
 def _load_restart(state_dir: Path) -> dict[str, Any]:
-    source = _REPO_ROOT / "src"
-    if (source / "aka/bootstrap/recovery_metadata.py").is_file() and str(source) not in sys.path:
-        sys.path.insert(0, str(source))
     from aka.bootstrap.recovery_metadata import complete_migration, has_selection
     complete_migration(state_dir, owner=True)
     path = state_dir / "restart.json"
@@ -694,10 +682,8 @@ def _reconcile_active_run(state_dir: Path) -> tuple[bool, int | None]:
 
 
 def _health_command(metadata: dict[str, Any]) -> list[str]:
-    sandbox = Path(__file__).resolve().parent / "sandbox.py"
     command = [
-        str(Path(sys.executable).resolve()),
-        str(sandbox),
+        sys.executable, "-m", "aka.legacy.execution.cli",
         "--hardware",
         metadata["sandbox_hardware"],
         "--ssh",

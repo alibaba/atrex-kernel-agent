@@ -13,15 +13,12 @@ from pathlib import Path
 from typing import Protocol
 
 from aka.legacy.execution.processes import spawn_owned_session
-from aka.legacy.resources.checkout import checkout_root
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
-TRUSTED_SANDBOX_ENTRYPOINTS = frozenset({
-    (checkout_root() / "tools" / "sandbox.py").resolve(),
-})
+TRUSTED_SANDBOX_ENTRYPOINTS = frozenset()
 
 
 def register_sandbox_entrypoints(*paths: Path) -> None:
@@ -258,7 +255,8 @@ def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) ->
             return True
         if re.fullmatch(r"python[0-9.]*", executable):
             mode, entry = _python_entrypoint(tokens)
-            if mode == "script" and Path(entry).name == "local_gateway.py":
+            if ((mode == "script" and Path(entry).name == "local_gateway.py")
+                    or (mode == "module" and entry == "aka.legacy.execution.runtime_tools.local_gateway")):
                 return "serve" in lowered[1:]
             if mode == "code":
                 code = entry.lower()

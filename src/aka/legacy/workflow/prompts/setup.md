@@ -15,12 +15,12 @@ The workspace already exists at your cwd (`{{WORKSPACE}}`) — it was created by
 (`workspace_init.sh` already ran: directory structure, git, and `kernel.py` are in place).
 **Do NOT re-run `workspace_init.sh`.**
 Never delete or move Git-tracked workspace state (`memory/`, `roofline.json`, helpers, historical plans or
-profiles). Sandbox input filtering is owned by `tools/sandbox.py`; deleting campaign history to reduce a
+profiles). Sandbox input filtering is owned by `python -m aka.legacy.execution.cli`; deleting campaign history to reduce a
 payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
-- `tools/`, `reference/`, `skills/`, `reference-projects/`, plus discovered plugin resources are symlinked into the workspace — read/use them by relative path
-  (e.g. `python tools/memory_manager.py --workspace .`, `reference/v_iteration.schema.json`).
+- Selected module Skills and declared reference/plugin resources are installed in this workspace. Inspect `python -m aka.legacy.resources.cli list` and `.atrex_plugins/instructions.md` for the available content; use each declared path
+  (e.g. `python -m aka.legacy.workflow.memory_manager summary --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 
 {{HARDWARE}}
@@ -35,7 +35,7 @@ uses available tooling; do not install or locally compile a third-party library.
 Do not import or execute JIT-capable GPU package code directly on the host. Even a preinstalled package such
 as `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, or `vllm` can invoke `ninja`, `ptxas`, or `nvcc` on first use.
 Static source inspection is allowed. Route any import/API probe/benchmark that may initialize GPU code
-through `tools/sandbox.py`.
+through `python -m aka.legacy.execution.cli`.
 
 Do the following, in order, but only through baseline:
 
@@ -48,9 +48,9 @@ Do the following, in order, but only through baseline:
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
 3. **Stage 1 — Baseline.** {{BASELINE_DRIVER}}: implement `kernel.py`, use the evaluator
    route declared above, run exactly one base-seed full-workload measurement for baseline performance, write `baseline_report.md`, write
-   `memory/v0.json` (via `tools/memory_manager.py`), and `git commit` ("V0: baseline kernel").
+   `memory/v0.json` (via `aka.legacy.workflow.memory_manager`), and `git commit` ("V0: baseline kernel").
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
-   `python test_kernel.py --version v0 --no-memory` exactly once through `tools/sandbox.py --kind run`.
+   `python test_kernel.py --version v0 --no-memory` exactly once through `python -m aka.legacy.execution.cli --kind run`.
    Do not run `--multi-seed` for V0. Parse the emitted
    `[test_kernel] RESULT_JSON=...`, and write `memory/v0.json` locally. Reject local-GPU measurement and remotely
    written memory. The test must cover the evaluator's complete workload—hidden cases for a generalized

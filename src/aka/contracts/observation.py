@@ -144,7 +144,13 @@ class EpisodeSummary(TypedDict):
     tokens: EpisodeTokens
 
 
-class Artifact(TypedDict):
+class _ArtifactIdentity(TypedDict, total=False):
+    sha256: str
+    snapshot_id: str
+    visibility: Literal['public']
+
+
+class Artifact(_ArtifactIdentity):
     """Opaque IDs use letters, digits, underscores and hyphens; names are basenames."""
 
     id: str
