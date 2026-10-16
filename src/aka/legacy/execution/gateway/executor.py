@@ -5,8 +5,9 @@ import signal
 import subprocess
 import sys
 import time
-from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity, ExecutionUnavailable
+from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity
 from aka.legacy.execution.configuration import queue_wait_grace
+from aka.legacy.execution.transport import check_transport
 
 
 class GatewayExecutor:
@@ -87,6 +88,5 @@ class GatewayExecutor:
         except BaseException:
             stop()
             raise
-        if process.returncode == 75 and "__ATREX_INFRASTRUCTURE_UNAVAILABLE__" in stderr.splitlines():
-            raise ExecutionUnavailable("GPU validation transport unavailable")
+        check_transport(subprocess.CompletedProcess(argv, process.returncode, stdout, stderr))
         return JobResult(process.returncode, stdout, stderr, resource=self.resource_identity)

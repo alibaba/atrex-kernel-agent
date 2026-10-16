@@ -37,11 +37,11 @@ Supported GPUs (built-in specs):
   --peak-bandwidth-tb-s; the tool never fabricates specs it does not have.
 
 Usage:
-    python tools/compute_utilization.py         --gpu h20 --dtype bf16         --flops-expr "2*BM*BN*K" --bytes-expr "(BM*K + BN*K + BM*BN)*2"         --time-ms 0.5 --grid-blocks 64
+    python profiling/common/compute_utilization.py         --gpu h20 --dtype bf16         --flops-expr "2*BM*BN*K" --bytes-expr "(BM*K + BN*K + BM*BN)*2"         --time-ms 0.5 --grid-blocks 64
 
-    python tools/compute_utilization.py         --gpu h100 --dtype bf16         --flops-expr "2*BM*BN*K" --bytes-expr "(BM*K + BN*K + BM*BN)*2"         --time-ms 0.05 --grid-blocks 16         --measured-bandwidth-tb-s 2.8
+    python profiling/common/compute_utilization.py         --gpu h100 --dtype bf16         --flops-expr "2*BM*BN*K" --bytes-expr "(BM*K + BN*K + BM*BN)*2"         --time-ms 0.05 --grid-blocks 16         --measured-bandwidth-tb-s 2.8
 
-    python tools/compute_utilization.py         --flops 134217728 --bytes 1212416         --time-ms 0.5 --grid-blocks 64         --gpu mi300x --dtype bf16
+    python profiling/common/compute_utilization.py         --flops 134217728 --bytes 1212416         --time-ms 0.5 --grid-blocks 64         --gpu mi300x --dtype bf16
 """
 
 import argparse

@@ -15,7 +15,7 @@
 
 """Trusted localhost scheduler compatible with the public agate jobs API.
 
-The server intentionally implements the subset used by ``tools/sandbox.py``:
+The server intentionally implements the subset used by ``python -m aka.legacy.execution.cli``:
 
 * ``GET /healthz``
 * ``GET /v1/env`` and ``GET /v1/env/local``

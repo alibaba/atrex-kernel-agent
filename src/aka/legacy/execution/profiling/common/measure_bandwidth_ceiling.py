@@ -22,17 +22,17 @@ so a same-size memcpy measurement is needed as the baseline for memory-bound ban
 
 Usage:
     # Measure the bandwidth ceiling for a specified byte count
-    python tools/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32
+    python profiling/common/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32
 
     # Measure the bandwidth ceiling for a specified tensor shape (compute bytes automatically)
-    python tools/measure_bandwidth_ceiling.py --shape 4096,4096 --dtype bf16
+    python profiling/common/measure_bandwidth_ceiling.py --shape 4096,4096 --dtype bf16
 
     # Adjust benchmark parameters
-    python tools/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32 \
+    python profiling/common/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32 \
         --warmup 50 --rep 200
 
     # Emit an argument that can be passed directly to compute_utilization.py
-    python tools/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32 --emit-flag
+    python profiling/common/measure_bandwidth_ceiling.py --bytes 1e8 --dtype fp32 --emit-flag
 """
 
 import argparse

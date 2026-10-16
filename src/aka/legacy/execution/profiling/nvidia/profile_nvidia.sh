@@ -17,16 +17,16 @@
 # NVIDIA kernel profile tool (ncu wrapper)
 #
 # Usage:
-#     bash tools/profile_nvidia.sh <kernel.py> [options]
+#     bash profiling/nvidia/profile_nvidia.sh <kernel.py> [options]
 #
 # Examples:
-#     bash tools/profile_nvidia.sh my_kernel.py --output-dir ./profile
-#     bash tools/profile_nvidia.sh my_kernel.py --kernel-name "mla_decode" --launch-skip 1
-#     bash tools/profile_nvidia.sh my_kernel.py --source --output-dir ./profile
+#     bash profiling/nvidia/profile_nvidia.sh my_kernel.py --output-dir ./profile
+#     bash profiling/nvidia/profile_nvidia.sh my_kernel.py --kernel-name "mla_decode" --launch-skip 1
+#     bash profiling/nvidia/profile_nvidia.sh my_kernel.py --source --output-dir ./profile
 #
 # Dependencies:
 #     ncu (NVIDIA Nsight Compute CLI) in PATH
-#     ncu report helpers (for parsing .ncu-rep): bundled in tools/ncu_helpers/
+#     ncu report helpers (for parsing .ncu-rep): bundled in profiling/nvidia/ncu_helpers/
 #       (analyze_reports.py, ncu_utils.py); override with NCU_HELPERS / --ncu-helpers
 #     classify_ncu.py (symptom classification)
 #
@@ -248,13 +248,10 @@ if ! ncu_python -c 'import ncu_report' &>/dev/null; then
     done
 fi
 
-# Detect ncu report helpers path (bundled copy ships in tools/ncu_helpers/)
+# Detect ncu report helpers path (bundled copy ships in profiling/nvidia/ncu_helpers/)
 if [[ -z "$NCU_HELPERS" ]]; then
     SEARCH_PATHS=(
         "$SCRIPT_DIR/ncu_helpers"
-        "$HOME/.claude/skills/ncu-report-skill/helpers"
-        "$HOME/.config/opencode/skills/ncu-report-skill/helpers"
-        "$HOME/.codex/skills/ncu-report-skill/helpers"
     )
     for p in "${SEARCH_PATHS[@]}"; do
         if [[ -f "$p/analyze_reports.py" && -f "$p/ncu_utils.py" ]]; then

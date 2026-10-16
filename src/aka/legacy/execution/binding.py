@@ -82,7 +82,6 @@ def sandbox_executor(executor: Executor, *, hardware="", timeout=600, formal=Fal
     import sys
     from pathlib import Path
 
-    from aka.legacy.resources.paths import SANDBOX_TOOL
     from aka.legacy.execution.recovery import raise_if_environment_blocked
     from aka.legacy.execution.processes import spawn_owned_session
     from aka.legacy.execution.configuration import queue_wait_grace
@@ -100,7 +99,7 @@ def sandbox_executor(executor: Executor, *, hardware="", timeout=600, formal=Fal
     from .configuration import legacy_settings
     settings = legacy_settings() if isinstance(executor, LegacyExecutor) else None
     request = SandboxRequest(
-        workspace=Path("."), launcher=(sys.executable, str(SANDBOX_TOOL)),
+        workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
         hardware=hardware, profile=settings.profile if settings else "",
         url=settings.url if settings else "", timeout=timeout, command=(),
         environment=execution_environment(environment), ssh=settings.ssh if settings else "",

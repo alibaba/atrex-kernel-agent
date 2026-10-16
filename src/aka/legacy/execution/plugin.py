@@ -25,3 +25,8 @@ def apply(ctx, config):
     scope = execution_scope(selection=selected)
     scope.__enter__()
     ctx.effect(lambda: scope.__exit__(None, None, None), label="close Execution selection")
+    from .selection import selected_agent_skills, selected_workspace_resources
+    for kind, values in (("workspace_resources", selected_workspace_resources()),
+                         ("agent_skills", selected_agent_skills())):
+        for value in values:
+            ctx.contribute(kind, value.name, value)

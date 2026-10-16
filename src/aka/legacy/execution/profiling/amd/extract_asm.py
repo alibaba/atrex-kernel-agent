@@ -19,9 +19,9 @@ Assembly extraction and analysis tool
 Extract AMDGPU assembly from a compiled Gluon kernel and analyze key instruction patterns.
 
 Usage:
-    python tools/extract_asm.py <kernel.py> -o kernel.asm
-    python tools/extract_asm.py <kernel.py> --check-load-width
-    python tools/extract_asm.py <kernel.py> --check-all
+    python profiling/amd/extract_asm.py <kernel.py> -o kernel.asm
+    python profiling/amd/extract_asm.py <kernel.py> --check-load-width
+    python profiling/amd/extract_asm.py <kernel.py> --check-all
 """
 
 import argparse

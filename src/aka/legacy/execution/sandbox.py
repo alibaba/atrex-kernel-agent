@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 from aka.legacy.resources.prompts import render_prompt
-from aka.legacy.resources.paths import SANDBOX_FULL_WORKFLOW_PROMPT, SANDBOX_SAFETY_BOUNDARY_PROMPT
+from .resources import ROOT
+SANDBOX_FULL_WORKFLOW_PROMPT = ROOT / "prompts/sandbox_full_workflow.md"
+SANDBOX_SAFETY_BOUNDARY_PROMPT = ROOT / "prompts/sandbox_safety_boundary.md"
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
-from aka.legacy.resources.paths import SANDBOX_TOOL
 from aka.legacy.execution.recovery import raise_if_environment_blocked
 from aka.legacy.execution.processes import spawn_owned_session
 from aka.legacy.execution.configuration import queue_wait_grace
@@ -97,7 +98,7 @@ def sandbox_command(
     preflight: bool = False,
     cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one command through tools/sandbox.py and capture its user-visible output."""
+    """Run one command through the installed Execution CLI and capture its user-visible output."""
     from aka.legacy.execution import selection as execution
     from aka.legacy.execution.legacy import runtime
     environment = os.environ.copy()
@@ -105,7 +106,7 @@ def sandbox_command(
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     request = runtime.SandboxRequest(
-        workspace=workspace, launcher=(sys.executable, str(SANDBOX_TOOL)),
+        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
         hardware=hardware, profile=profile, url=url, timeout=timeout,
         command=tuple(command), environment=execution.execution_environment(environment),
         ssh=ssh, ssh_init=ssh_init, health_command=health_command, sync=sync,

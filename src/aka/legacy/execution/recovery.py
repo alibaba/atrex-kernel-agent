@@ -1,5 +1,4 @@
 from __future__ import annotations
-from aka.legacy.resources.checkout import checkout_root
 
 import hashlib
 import json
@@ -132,9 +131,9 @@ def configure_recovery(
     workspace_base = workspace_base.expanduser().resolve()
     inherited = environment_state_file()
     owner = os.environ.get(RECOVERY_OWNER_ENV, "1") != "0"
-    command = ([str(Path(sys.executable).resolve()), str(optimize_script.resolve()), *raw_argv]
+    command = ([sys.executable, str(optimize_script.resolve()), *raw_argv]
                if optimize_script is not None else
-               [str(Path(sys.executable).resolve()), "-m", "aka", "run", "--resume", "--", *raw_argv])
+               [sys.executable, "-m", "aka", "run", "--resume", "--", *raw_argv])
     stable_metadata = {
         "cwd": str(Path.cwd().resolve()),
         "command": command,
@@ -267,15 +266,15 @@ def configure_recovery(
         else:
             recovery_environment(directory)
             _write_private_json(restart_path, metadata)
-        monitor = checkout_root() / "tools" / "monitor_optimize_tasks.py"
+
         recover = directory / "recover.sh"
         durable_write_text(
             recover,
             "#!/usr/bin/env bash\nset -euo pipefail\nexec "
             + " ".join(
                 [
-                    _shell_quote(str(Path(sys.executable).resolve())),
-                    _shell_quote(str(monitor)),
+                    _shell_quote(sys.executable),
+                    "-m", "aka.legacy.workflow.monitor_optimize_tasks",
                     "--state-dir",
                     _shell_quote(str(directory)),
                     "--resume",
@@ -290,8 +289,8 @@ def configure_recovery(
             "#!/usr/bin/env bash\nset -euo pipefail\nexec "
             + " ".join(
                 [
-                    _shell_quote(str(Path(sys.executable).resolve())),
-                    _shell_quote(str(monitor)),
+                    _shell_quote(sys.executable),
+                    "-m", "aka.legacy.workflow.monitor_optimize_tasks",
                     "--state-dir",
                     _shell_quote(str(directory)),
                     "--stop",
@@ -313,15 +312,15 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
     """Start one detached monitor. Its own lock resolves concurrent launch races."""
     if not context.owner or not context.state_file.is_file():
         return None
-    monitor = checkout_root() / "tools" / "monitor_optimize_tasks.py"
+
     log_path = context.directory / "monitor.log"
     from aka.legacy.execution import selection as execution
     environment = execution.execution_environment(os.environ)
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
-                str(Path(sys.executable).resolve()),
-                str(monitor),
+                sys.executable,
+                "-m", "aka.legacy.workflow.monitor_optimize_tasks",
                 "--state-dir",
                 str(context.directory),
             ],

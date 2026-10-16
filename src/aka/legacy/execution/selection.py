@@ -16,6 +16,7 @@ from aka.contracts.execution import (
 _current_executor = ContextVar("aka_execution_executor", default=None)
 _current_selection = ContextVar("aka_execution_scope_selection", default=None)
 _current_agent_skills = ContextVar("aka_execution_agent_skills", default=None)
+_current_workspace_resources = ContextVar("aka_execution_workspace_resources", default=None)
 SELECTION_ENV = "AKA_EXECUTION_SELECTION"
 
 
@@ -71,31 +72,31 @@ def execution_scope(*, selection=None):
     try:
         executor = composition.executor
         skills = tuple(composition.agent_skills)
+        resources = tuple(composition.workspace_resources)
     except BaseException:
         composition.dispose()
         raise
     executor_token = _current_executor.set(executor)
     selection_token = _current_selection.set(selected)
     skills_token = _current_agent_skills.set(skills)
+    resources_token = _current_workspace_resources.set(resources)
     try:
         yield executor
     finally:
         _current_executor.reset(executor_token)
         _current_selection.reset(selection_token)
         _current_agent_skills.reset(skills_token)
+        _current_workspace_resources.reset(resources_token)
         composition.dispose()
 
 
 def selected_agent_skills():
-    """Borrow the active composition; direct host callers use their selection."""
-    skills = _current_agent_skills.get()
-    if skills is not None:
-        return skills
-    arguments = dict(selected_execution())
-    if "profiles_dir" in arguments:
-        arguments["profiles_dir"] = Path(arguments["profiles_dir"]).expanduser().resolve()
-    with compose_execution(**arguments) as composition:
-        return composition.agent_skills
+    """Borrow contributions from the active Executor lifetime."""
+    return _current_agent_skills.get() or ()
+
+
+def selected_workspace_resources():
+    return _current_workspace_resources.get() or ()
 
 
 def _completed_process(command, result):

@@ -314,7 +314,7 @@ def pc_to_source_line(action, pc):
 #
 # These metric names are known to exist and return meaningful values on
 # B200 / sm_100 with Nsight Compute 2026.x. For a fuller list and rationale
-# see reference/profile_guide.md. Other GPU generations (A100, H100,
+# see profiling/profile_guide.md. Other GPU generations (A100, H100,
 # consumer cards) and future ncu releases may need alternate names — always
 # verify with action.metric_names() if a metric returns None.
 

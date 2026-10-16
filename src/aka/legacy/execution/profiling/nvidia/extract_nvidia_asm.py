@@ -21,20 +21,20 @@ key instruction patterns. Counterpart to the AMD-side extract_asm.py.
 
 Usage:
     # Extract SASS from .ncu-rep (recommended, especially for CuteDSL kernels)
-    python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
+    python profiling/nvidia/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
 
     # Extract from a kernel file (Triton backend)
-    python tools/extract_nvidia_asm.py <kernel.py> --check-all
+    python profiling/nvidia/extract_nvidia_asm.py <kernel.py> --check-all
 
     # Extract from an existing cubin / .so
-    python tools/extract_nvidia_asm.py --cubin kernel.cubin --check-all --arch sm90
+    python profiling/nvidia/extract_nvidia_asm.py --cubin kernel.cubin --check-all --arch sm90
 
     # Analyze an existing SASS text file
-    python tools/extract_nvidia_asm.py --asm-file kernel.sass --check-all
+    python profiling/nvidia/extract_nvidia_asm.py --asm-file kernel.sass --check-all
 
 Recommended workflow for CuteDSL:
-    1. bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1
-    2. python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
+    1. bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir profiles/v1
+    2. python profiling/nvidia/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all
 
     Reason: CuteDSL compiles via NVRTC, and the cubin cache location is not fixed.
     Extracting SASS from .ncu-rep (action.sass_by_pc()) is the most reliable approach.
@@ -279,9 +279,9 @@ def extract_sass_cutedsl(kernel_file):
             "\n"
             "Recommended approach:\n"
             "  1. First collect .ncu-rep with profile_nvidia.sh:\n"
-            "       bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1\n"
+            "       bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir profiles/v1\n"
             "     Then extract SASS from .ncu-rep:\n"
-            "       python tools/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all\n"
+            "       python profiling/nvidia/extract_nvidia_asm.py --ncu-rep profiles/v1/ncu.ncu-rep --check-all\n"
             "\n"
             "  2. Or use cute.compile with options='--generate-line-info',\n"
             "     and use cute.compile[cute.KeepPTX()] in code to retain PTX.\n"
@@ -294,13 +294,13 @@ def extract_sass_cutedsl(kernel_file):
 
 
 def _find_ncu_helpers():
-    """Detect the ncu report helpers path (bundled copy ships in tools/ncu_helpers/)."""
+    """Detect the ncu report helpers path (bundled copy ships in profiling/nvidia/ncu_helpers/)."""
+    override = os.environ.get("NCU_HELPERS")
+    if override:
+        return os.path.abspath(override) if os.path.isfile(os.path.join(override, "ncu_utils.py")) else None
     script_dir = os.path.dirname(os.path.abspath(__file__))
     search_paths = [
         os.path.join(script_dir, "ncu_helpers"),
-        os.path.expanduser("~/.claude/skills/ncu-report-skill/helpers"),
-        os.path.expanduser("~/.config/opencode/skills/ncu-report-skill/helpers"),
-        os.path.expanduser("~/.codex/skills/ncu-report-skill/helpers"),
     ]
     for p in search_paths:
         if os.path.isfile(os.path.join(p, "ncu_utils.py")):

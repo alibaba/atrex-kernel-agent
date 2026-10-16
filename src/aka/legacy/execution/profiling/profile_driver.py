@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """External profiling driver for a kernel-opt workspace.
 
-Both profiler wrappers (`tools/profile_nvidia.sh`, `tools/profile_kernel.sh`) run
+Both profiler wrappers (`profiling/nvidia/profile_nvidia.sh`, `profiling/amd/profile_kernel.sh`) run
 `python <file>`, so the profiled file must be runnable on its own. `kernel.py` is not:
 the evaluator only ever *imports* it. This driver is that runnable entry point, kept
 outside `kernel.py` so no rewrite of `run()`/`Model` can silently remove the ability

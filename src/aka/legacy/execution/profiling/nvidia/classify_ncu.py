@@ -17,15 +17,15 @@
 NCU Metrics Symptom Classification Tool
 
 Reads key metrics from metrics_key_*.json output by the bundled
-tools/ncu_helpers/analyze_reports.py, infers symptoms based on the 14 NCU
-diagnosis Patterns (see reference/profile_guide.md), and generates summary.txt.
+profiling/nvidia/ncu_helpers/analyze_reports.py, infers symptoms based on the 14 NCU
+diagnosis Patterns (see profiling/profile_guide.md), and generates summary.txt.
 
 Usage:
-    python3 tools/classify_ncu.py \
+    python3 profiling/nvidia/classify_ncu.py \
         --metrics <output-dir>/analysis/metrics_key_run.json \
         --output <output-dir>/summary.txt
 
-    python3 tools/classify_ncu.py \
+    python3 profiling/nvidia/classify_ncu.py \
         --metrics <output-dir>/analysis/metrics_key_run.json \
         --json  # Output in JSON format
 """
@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 
-# Pattern definitions: the 14 NCU diagnosis Patterns (see reference/profile_guide.md)
+# Pattern definitions: the 14 NCU diagnosis Patterns (see profiling/profile_guide.md)
 # Each Pattern maps to: (pattern_id, label, gpu-wiki symptom)
 PATTERNS = {
     "A": ("small-grid", "Small grid / SM idle", "low-sm-utilization"),
@@ -363,7 +363,7 @@ def format_summary(metrics, findings):
     # profile_guide.md documents; supplementary ids like `_mem` are not in it.
     pattern_ids = [f[0] for f in findings if f[0] in PATTERNS and f[0].isalpha()]
     if pattern_ids:
-        lines.append(f"Playbook: See reference/profile_guide.md "
+        lines.append(f"Playbook: See profiling/profile_guide.md "
                      f"Pattern {', '.join(pattern_ids)}")
 
     symptoms_for_wiki = set()

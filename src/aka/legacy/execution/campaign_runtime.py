@@ -62,7 +62,7 @@ class CampaignExecution:
         return (
             "## V1 GPU sandbox boundary\n\n"
             f"- Target `{hardware}` through `{endpoint}`. Every GPU import, compile, smoke, "
-            "correctness check, and timer must cross `tools/sandbox.py`; never execute "
+            "correctness check, and timer must cross `python -m aka.legacy.execution.cli`; never execute "
             "`kernel.py`, `test_kernel.py`, a profiler, or a JIT-capable GPU import on the host.\n"
             "- Use only the bounded smoke command below during the ordinary V1 turn. Do not "
             "run a full-workload evaluator, `--multi-seed`, a separate benchmark, or profiling.\n"

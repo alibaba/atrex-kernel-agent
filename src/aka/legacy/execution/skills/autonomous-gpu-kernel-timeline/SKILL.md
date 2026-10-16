@@ -34,7 +34,7 @@ answers the question.
    `--correctness-evidence`; a model-supplied `--correctness passed` is only an exploration note and
    cannot produce `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
    evidence. If the remote command reads backend files, pass
-   `--input skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
+   `--input .claude/skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `python -m aka.legacy.execution.cli`; sync only
    the attempt-specific directory.
 4. Read the summary and Perfetto trace. Remove, move, or refine probes and repeat when the evidence
    is insufficient, semantically misplaced, or too intrusive. Name every reported interval as

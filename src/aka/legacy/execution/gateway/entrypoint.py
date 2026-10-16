@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Owned gateway process entry with bounded result-less transport recovery."""
-from pathlib import Path
 import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from aka.legacy.execution.gateway.recovery import run_with_recovery, _kind, _record_gateway_failure
 
 

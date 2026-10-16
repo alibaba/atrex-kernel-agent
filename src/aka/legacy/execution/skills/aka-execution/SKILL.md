@@ -12,8 +12,7 @@ supported backend options, request format, defaults, and error behavior.
 
 Read the run's Execution tool description, schema, selected backend, and workspace
 information. Use its bound executor and configuration. For standalone
-`aka execution`, inspect `aka execution --help` and supply a matching checkout and
-prepared workspace. The current legacy implementation is described in
+`aka execution`, inspect `aka execution --help` and supply a prepared workspace. The current legacy implementation is described in
 [Legacy requests](references/legacy-request.md).
 
 Continue existing runs with their recorded selection and execution path.

@@ -25,12 +25,12 @@ invocation is stateless; callers must not rely on remote filesystem persistence.
 
 Examples::
 
-    python tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-    python tools/sandbox.py --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
-        bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
-    python tools/sandbox.py --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
-        bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v1
-    python tools/sandbox.py --kind run --hardware H20 --ssh gpu-host --no-sync -- \
+    python -m aka.legacy.execution.cli --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+    python -m aka.legacy.execution.cli --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
+        bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
+    python -m aka.legacy.execution.cli --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
+        bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v1
+    python -m aka.legacy.execution.cli --kind run --hardware H20 --ssh gpu-host --no-sync -- \
         python test_kernel.py --no-memory
 
 ``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``,
@@ -81,16 +81,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
-
-from aka.legacy.resources.checkout import checkout_root
-REPO_ROOT = checkout_root()
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-# Prefer source packages when running directly from a checkout.
-_source_packages = REPO_ROOT / "src"
-if _source_packages.is_dir():
-    sys.path.insert(0, str(_source_packages))
 
 from aka.legacy.task.durable import durable_write_json  # noqa: E402
 from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
@@ -247,11 +237,11 @@ CANDIDATE_RUNTIME_INPUT_PATHS = frozenset(
 )
 NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
     {
-        "tools/profile_nvidia.sh",
-        "tools/classify_ncu.py",
+        "profiling/nvidia/profile_nvidia.sh",
+        "profiling/nvidia/classify_ncu.py",
     }
 )
-AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"tools/profile_kernel.sh"})
+AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"profiling/amd/profile_kernel.sh"})
 OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
@@ -301,7 +291,7 @@ def _find_agate() -> str | None:
         if executable is None:
             raise FileNotFoundError(f"ATREX_AGATE_EXECUTABLE is not executable: {configured}")
         return executable
-    adjacent = Path(sys.executable).resolve().parent / "agate"
+    adjacent = Path(sys.executable).absolute().parent / "agate"
     if adjacent.is_file() and os.access(adjacent, os.X_OK):
         return str(adjacent)
     return shutil.which("agate")
@@ -422,16 +412,10 @@ def _make_input_bundle(
         for arcname, payload in (injected_payloads or {}).items():
             add_payload(tf, payload, arcname)
         add_tree(tf, workspace)
-        # Optimization workspaces receive tools/ as a symlink.  Materialize the
-        # small tool directory so remote profile commands are self-contained.
-        workspace_tools = workspace / "tools"
-        if workspace_tools.is_symlink() or not workspace_tools.exists():
-            add_tree(tf, REPO_ROOT / "tools", "tools")
-        # ``skills/`` is normally a runtime symlink and is intentionally skipped during the
-        # workspace walk.  Materialize only explicitly selected skill files so a profiling
-        # snapshot can use its backend on the worker without uploading every installed skill.
-        if any(path.startswith("skills/") for path in selected_inputs):
-            add_tree(tf, REPO_ROOT / "skills", "skills")
+        # Resources has installed explicit immutable mounts. Materialize only
+        # allowlisted members, including members beneath those selected symlinks.
+        for arcname in sorted(selected_inputs):
+            add_file(tf, workspace / arcname, arcname)
     return base64.b64encode(archive.getvalue()).decode("ascii"), count, skipped
 
 
@@ -603,10 +587,10 @@ def _command_input_paths(
 
     if "profile_nvidia.sh" in basenames:
         selected.update(NVIDIA_PROFILE_TOOL_INPUT_PATHS)
-        ncu_helpers = REPO_ROOT / "tools" / "ncu_helpers"
+        ncu_helpers = workspace / "profiling/nvidia/ncu_helpers"
         if ncu_helpers.is_dir():
             selected.update(
-                f"tools/ncu_helpers/{path.relative_to(ncu_helpers).as_posix()}"
+                f"profiling/nvidia/ncu_helpers/{path.relative_to(ncu_helpers).as_posix()}"
                 for path in _walk_files(ncu_helpers)
             )
     if "profile_kernel.sh" in basenames:
@@ -986,7 +970,7 @@ def _is_profile_command(parts: list[str]) -> bool:
                 is not None
             ):
                 return True
-    wrappers = {"tools/profile_nvidia.sh", "tools/profile_kernel.sh"}
+    wrappers = {"profiling/nvidia/profile_nvidia.sh", "profiling/amd/profile_kernel.sh"}
     executable = PurePosixPath(command[index]).as_posix()
     if Path(executable).name == "profile_driver.py" or executable in wrappers:
         return True
@@ -3891,7 +3875,7 @@ def _main(argv: list[str] | None = None) -> int:
             "--intent",
             dev_intent,
             "--note",
-            f"tools/sandbox.py {args.kind} compatibility path",
+            f"aka.legacy.execution.cli {args.kind} compatibility path",
         ]
         if args.url:
             agate += ["--url", args.url]

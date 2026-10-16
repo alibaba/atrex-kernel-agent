@@ -17,11 +17,11 @@
 # Instruction-level profiling tool for Gluon kernels
 #
 # Usage:
-#     bash tools/profile_kernel.sh <kernel.py> [Options]
+#     bash profiling/amd/profile_kernel.sh <kernel.py> [Options]
 #
 # Examples:
-#     bash tools/profile_kernel.sh my_kernel.py --output-dir ./profile
-#     bash tools/profile_kernel.sh my_kernel.py --kernel-regex "matmul_kernel" --pmc-only
+#     bash profiling/amd/profile_kernel.sh my_kernel.py --output-dir ./profile
+#     bash profiling/amd/profile_kernel.sh my_kernel.py --kernel-regex "matmul_kernel" --pmc-only
 #
 # [TODO] Ensure rocprofv3 is in PATH and run this on an AMD GPU environment
 

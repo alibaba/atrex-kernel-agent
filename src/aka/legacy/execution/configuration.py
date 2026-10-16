@@ -116,32 +116,17 @@ def prepare_runtime(launch, problem):
         profile="", url="", ssh="", ssh_init="", health_command="")
     hardware = launch.request.runtime.hardware or launch.request.settings.platform
     if selected_ssh():
-        # Existing schema-3 legacy commands are replayed only through the two retained CLI entries.
-        optimizer_script = None
-        raw_argv = launch.restart_arguments or encode_launch(launch)
+        # Retired checkout-script recovery commands cannot identify an installed run.
         from .recovery import environment_state_file
         state = environment_state_file()
         if state is not None and state.with_name("restart.json").is_file():
             record = json.loads(state.with_name("restart.json").read_text())
             command = record.get("command", [])
-            from aka.legacy.resources.checkout import checkout_root
-            from aka.legacy.compat import entry
-            allowed = {str((checkout_root() / "orchestrator/optimize.py").resolve()), str(Path(entry.__file__).resolve())}
-            if len(command) >= 2 and command[1] in allowed:
-                optimizer_script = Path(command[1])
-                raw_argv = tuple(command[2:])
-                # Verify that old CLI arguments select this same effective campaign.
-                from aka.legacy.compat.cli import adapt_argv
-                from aka.contracts.workflow_launch import decode_launch
-                recorded = decode_launch(raw_argv if raw_argv[:1] == ("--workflow-request",) else adapt_argv(raw_argv))
-                if (recorded.request.problem != launch.request.problem
-                        or recorded.request.settings != launch.request.settings
-                        or recorded.request.runtime != launch.request.runtime
-                        or recorded.workspace_base != launch.workspace_base
-                        or recorded.workspace_suffix != launch.workspace_suffix):
-                    raise RuntimeError("legacy recovery command selects a different campaign")
+            if len(command) < 6 or command[1:6] != ["-m", "aka", "run", "--resume", "--"]:
+                raise RuntimeError("retired script recovery command; use the installed profile continuation")
+        raw_argv = launch.restart_arguments or encode_launch(launch)
         configure_recovery(workspace_base=launch.workspace_base,
-            raw_argv=raw_argv, optimize_script=optimizer_script,
+            raw_argv=raw_argv, optimize_script=None,
             sandbox_hardware=hardware, ssh_target=settings.ssh, ssh_init=settings.ssh_init,
             ssh_runtime_binds=json.loads(os.environ.get("ATREX_SANDBOX_SSH_RUNTIME_BINDS", "[]")),
             ssh_gpu=settings.ssh_gpu, health_command=settings.health_command,

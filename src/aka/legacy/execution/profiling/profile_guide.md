@@ -17,19 +17,19 @@ The recommended entry point for AMD profiling:
 
 ```bash
 # Full profile (ATT + PMC + ASM)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
+bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
 
 # PMC only (hardware counters)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --pmc-only
+bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --pmc-only
 
 # ATT only (instruction-level trace)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --att-only
+bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --att-only
 
 # ASM only (assembly extraction)
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --asm-only
+bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> --asm-only
 
 # Filter specific kernel
-bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> \
+bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N> \
     --kernel-regex "<kernel_name>" --iteration-range 0-0
 ```
 
@@ -57,7 +57,7 @@ Output structure:
 
 ATT decoding requires the `rocprof-trace-decoder` library. The `profile_kernel.sh` script **auto-detects** the decoder at:
 ```
-tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64
+${ROCPROF_TRACE_DECODER_DIR}
 ```
 The script automatically sets `--att-library-path` and `LD_LIBRARY_PATH` — no manual configuration required.
 
@@ -245,11 +245,11 @@ silicon and Nsight Compute does not exist for it. The ncu analog is `acu` from t
 
 ### Quick Start
 
-`tools/profile_ppu.py` is an ncu-compatible front end for `acu`. Symlink it as `ncu` so the
+`profiling/ppu/profile_ppu.py` is an ncu-compatible front end for `acu`. Symlink it as `ncu` so the
 gateway's existing `--kind profile` path works unchanged:
 
 ```bash
-ln -s $PWD/tools/profile_ppu.py /usr/local/cuda/bin/ncu
+ln -s $PWD/profiling/ppu/ncu /usr/local/cuda/bin/ncu
 ```
 
 `/usr/local/cuda/bin` is already on the gateway PATH and is the path `_find_profile_tool`
@@ -257,7 +257,7 @@ probes, so this needs no code change and no gateway restart. After that, profile
 normal route:
 
 ```bash
-python tools/sandbox.py --kind profile --hardware local --url http://127.0.0.1:<port> \
+python -m aka.legacy.execution.cli --kind profile --hardware local --url http://127.0.0.1:<port> \
     --profiler ncu --profile-level sol -- python profile_driver.py
 ```
 
@@ -281,7 +281,7 @@ ppu-smi gpm -i <device> -s 0     # release
 
 Issuing `-s 0` when the stream is already `Disabled` is a driver no-op and `acu` still aborts.
 `acu` re-enables the stream when it exits, so this must run before **every** profile.
-`tools/profile_ppu.py` does it automatically, scoped to `CUDA_VISIBLE_DEVICES` so it does not
+`profiling/ppu/profile_ppu.py` does it automatically, scoped to `CUDA_VISIBLE_DEVICES` so it does not
 disturb GPUs owned by other campaigns. The `amperfd profmetric --pause` control lives on the
 host and is not reachable from inside the container, so this toggle is the in-container route.
 
@@ -300,7 +300,7 @@ The emitted CSV has the same columns as ncu's (`Kernel Name`, `Metric Name`, `Me
 ### Metric Name Mapping
 
 PPU uses `ppu__` and `cu__` where NVIDIA uses `gpu__`, `sm__`, and `dram__`. NVIDIA names are
-rejected outright (`[Asight]: Failed to find metric as following`). `tools/profile_ppu.py`
+rejected outright (`[Asight]: Failed to find metric as following`). `profiling/ppu/profile_ppu.py`
 translates on the way in and restores the NVIDIA names in the CSV so the gateway's SOL parsing
 works unchanged:
 
@@ -468,14 +468,14 @@ By default, `profile_kernel.sh` executes **all three steps** (ASM → ATT → PM
 
 ```
 Step 1: Measure kernel time
-  └─ python tools/measure_kernel_time.py kernel.py
+  └─ python profiling/common/measure_kernel_time.py kernel.py
 
 Step 2: Compute utilization
-  └─ python tools/compute_utilization.py --gpu <gpu> --dtype <dtype> \
+  └─ python profiling/common/compute_utilization.py --gpu <gpu> --dtype <dtype> \
        --flops-expr '<expr>' --bytes-expr '<expr>' --time-ms <ms>
 
 Step 3: If utilization < 90%, run full profile (default: ASM + ATT + PMC)
-  └─ bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
+  └─ bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v<N>
   └─ Script auto-executes: Step 0 (ASM) → Step 1 (ATT) → Step 2 (PMC)
 
 Step 4: Locate target kernel (auto-done by script, or manually)
@@ -503,10 +503,10 @@ Step 0: Locate target kernel launch index ⚠️ (MANDATORY)
   └─ Find target kernel name and index N
 
 Step 1: Measure kernel time
-  └─ python tools/measure_kernel_time.py kernel.py
+  └─ python profiling/common/measure_kernel_time.py kernel.py
 
 Step 2: Compute utilization
-  └─ python tools/compute_utilization.py --gpu <gpu> --dtype <dtype> \
+  └─ python profiling/common/compute_utilization.py --gpu <gpu> --dtype <dtype> \
        --flops-expr '<expr>' --bytes-expr '<expr>' --time-ms <ms>
 
 Step 3: If utilization < 90%, run ncu profile
@@ -551,7 +551,7 @@ Examples:
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | `rocprofv3: command not found` | ROCm not in PATH | `export PATH=/opt/rocm/bin:$PATH` |
-| ATT decoder fails | Missing library at auto-detected path | Verify `tools/rocprof-trace-decoder/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so` exists |
+| ATT decoder fails | Missing library at auto-detected path | Verify `${ROCPROF_TRACE_DECODER_DIR}/librocprof-trace-decoder.so` exists |
 | Stats CSV empty | Wrong dispatch | Use `--iteration-range "[1]"` to skip warmup |
 | PMC batch fails with Warning | Counter mutual exclusion or GPU busy | Retry; partial results from other batches are still usable |
 | No `.amdgcn` files produced | Kernel uses JIT cache, no recompilation | Check `asm/compile.log`; clear Triton cache or set `TRITON_CACHE_DIR` manually |
@@ -572,6 +572,6 @@ Examples:
 |---------|-------|----------|
 | `Device is not ready for profiling` (exit 101) | Host `amperf-collector` holds the device PCM | Force an Enabled -> Disabled GPM transition before every run (see above) |
 | GPM already `Disabled` but still aborts | `-s 0` on an already-disabled stream is a driver no-op | Prime with `-s 1` first, then `-s 0` |
-| `traced server does not exist` | asight env not sourced | `tools/profile_ppu.py` sets PATH/PYTHONPATH itself; otherwise `source /usr/local/PPU_SDK/asight/envsetup.sh` |
+| `traced server does not exist` | asight env not sourced | `profiling/ppu/profile_ppu.py` sets PATH/PYTHONPATH itself; otherwise `source /usr/local/PPU_SDK/asight/envsetup.sh` |
 | `ModuleNotFoundError: atrex_bench` | Gateway never puts `<bench>/src` on PYTHONPATH | Drop a `.pth` pointing at `<bench>/src` into site-packages |
 | Job killed at the timeout (exit `-15`) | `acu` replays every launch; a large reference means hundreds of kernels x 6 passes | Narrow with `--kernel-regex`, or use `--profile-level survey` |

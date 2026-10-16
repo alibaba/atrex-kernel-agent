@@ -8,13 +8,12 @@ Inspect the actual installed `aka execution --help` before preparing a request.
 
 ## Standalone entry point
 
-Use Python 3.10+, matching installed AKA packages, a matching AKA checkout, and
-the original runtime dependencies. `--repo-root` must contain `tools/sandbox.py`;
+Use Python 3.10+, matching installed AKA packages and the original runtime dependencies.
 `--workspace` identifies prepared execution inputs. Run the following on the host,
 replacing paths and using the endpoint and hardware selected for this run:
 
 ```sh
-aka execution --repo-root /path/to/matching-checkout \
+aka execution \
   --workspace /path/to/prepared-workspace --hardware L20N \
   --gateway-profile prod --kind dev --timeout 60 \
   -- python3 gpu_smoke.py
@@ -54,7 +53,7 @@ The target requires OpenSSH/SCP, Bubblewrap, explicitly bound runtimes, and one
 assigned NVIDIA GPU. Original distributed evaluation / profiling limits apply.
 
 **Local HTTP:** Use the selected service URL and a hardware alias it accepts
-(local is the default alias). `tools/local_gateway.py` serves this path and
+(local is the default alias). `python -m aka.legacy.execution.runtime_tools.local_gateway` serves this path and
 currently rejects multi-GPU requests. Starting or changing a service is not an
 automatic consequence of reading the Skill.
 

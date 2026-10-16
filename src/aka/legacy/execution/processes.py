@@ -18,10 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-if __package__ in (None, ""):
-    # Direct owned-session children must load the same installed package as their parent.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from aka.legacy.task.durable import durable_rmdir, durable_unlink, durable_write_json, durable_write_text
 
 HANDOFF_ID_ENV = "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"
@@ -568,8 +564,7 @@ def spawn_owned_session(
     start_read, start_write = os.pipe()
     os.set_inheritable(start_read, True)
     wrapper = [
-        str(Path(sys.executable).resolve()),
-        str(Path(__file__).resolve()),
+        sys.executable, "-m", "aka.legacy.execution.processes",
         "--owned-session",
         str(start_read),
         "1" if finalize_handoff else "0",
@@ -943,8 +938,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     guardian_read, guardian_write = os.pipe()
     os.set_inheritable(guardian_read, True)
     guardian_command = [
-        str(Path(sys.executable).resolve()),
-        str(Path(__file__).resolve()),
+        sys.executable, "-m", "aka.legacy.execution.processes",
         "--cleanup-guardian",
         str(guardian_read),
         str(os.getpid()),
@@ -1002,8 +996,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     primary_read, primary_write = os.pipe()
     os.set_inheritable(primary_read, True)
     primary_command = [
-        str(Path(sys.executable).resolve()),
-        str(Path(__file__).resolve()),
+        sys.executable, "-m", "aka.legacy.execution.processes",
         "--owned-command",
         str(primary_read),
         "--",

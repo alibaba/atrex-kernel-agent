@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from aka.contracts.execution import Executor, validate_executor
-from aka.contracts.agent_resources import AgentSkill
+from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 from aka.core.boot import boot, compose
 from aka.core.errors import BootFailure
 from aka.core.keys import ServiceKey
@@ -41,6 +41,17 @@ class ExecutionComposition:
         if not self.disposed:
             self.disposed = True
             self.report.dispose()
+
+    @property
+    def workspace_resources(self) -> tuple[WorkspaceResourceContribution, ...]:
+        if self.disposed:
+            raise RuntimeError("execution composition has been disposed")
+        entries = self.report.root.scope.resolve("workspace_resources")
+        values = tuple(entry.value for entry in entries)
+        if any(not isinstance(value, WorkspaceResourceContribution) or entry.name != value.name
+               for entry, value in zip(entries, values)):
+            raise TypeError("invalid Execution workspace resource contribution")
+        return values
 
     def __enter__(self) -> ExecutionComposition:
         return self

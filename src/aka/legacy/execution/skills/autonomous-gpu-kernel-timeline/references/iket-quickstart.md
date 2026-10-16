@@ -56,7 +56,7 @@ so native `.pftrace` does not have to cross the sandbox boundary. The wrapper re
 existing run directory:
 
 ```bash
-python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
+python .claude/skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
   --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
   --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
   --kernel-regex '^exact_generated_kernel_name$' \
@@ -70,10 +70,10 @@ python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
 For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
 
 ```bash
-python tools/sandbox.py --kind profile \
-  --input skills/autonomous-gpu-kernel-timeline \
+python -m aka.legacy.execution.cli --kind profile \
+  --input .claude/skills/autonomous-gpu-kernel-timeline \
   --sync profiles/episode_N/timeline/attempt-N -- \
-  python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
+  python .claude/skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
     --run-dir profiles/episode_N/timeline/attempt-N/iket-run \
     --evidence-dir profiles/episode_N/timeline/attempt-N/evidence \
     --kernel-regex '^exact_generated_kernel_name$' \

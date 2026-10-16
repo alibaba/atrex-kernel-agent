@@ -35,12 +35,12 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
 ATTEMPT=profiles/episode_N/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
-  --input skills/ppu-acu-joint-profile \
+python -m aka.legacy.execution.cli --kind profile --hardware <PPU_HARDWARE> \
+  --input .claude/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.claude/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_ppu.py"
 ```
 
@@ -56,12 +56,12 @@ instrumented commands before returning:
 
 ```bash
 ATTEMPT=profiles/episode_N/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
-  --input skills/ppu-acu-joint-profile \
+python -m aka.legacy.execution.cli --kind profile --hardware <PPU_HARDWARE> \
+  --input .claude/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.claude/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
         --baseline-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_a.py"]' \
         --instrumented-command '["python","profiles/episode_N/timeline/attempt-N/harness/run_b.py"]' \
@@ -72,7 +72,7 @@ python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
 and launch path. It must execute the equivalent of `capture_ppu.py`, fail if decode is rejected, and
 then call `scripts/timeline.py measure` in the same parent process/allocation. The helper still starts
 a fresh child process per A/B sample; physical device identity must remain identical across all
-samples. Two separate `tools/sandbox.py` invocations do not establish same-allocation evidence.
+samples. Two separate `python -m aka.legacy.execution.cli` invocations do not establish same-allocation evidence.
 
 ## Harness responsibilities
 

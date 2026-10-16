@@ -5,7 +5,7 @@ Activate by making this reachable as `ncu` on the gateway's PATH; `/usr/local/cu
 is both on that PATH and the path `_find_profile_tool` already probes, so a symlink there
 needs no code change and no gateway restart:
 
-    ln -s <repo>/tools/profile_ppu.py /usr/local/cuda/bin/ncu
+    ln -s <repo>/profiling/ppu/profile_ppu.py /usr/local/cuda/bin/ncu
 
 AKA's local gateway builds an NVIDIA `ncu` command line and then parses the CSV with
 NVIDIA metric names. `acu` is option-compatible except for three things, all handled here:

@@ -60,7 +60,7 @@ sandbox-owned `.atrex_long_horizon/evaluations.jsonl` produced by the immutable 
 instrumented `kernel.py`.
 
 Campaign workspaces expose `skills/` as a local symlink that is not uploaded implicitly. Add
-`--input skills/autonomous-gpu-kernel-timeline/backends/cuda_backend` to a sandbox command that reads
+`--input .claude/skills/autonomous-gpu-kernel-timeline/backends/cuda_backend` to a sandbox command that reads
 the header or adapter at runtime. This deliberately selects the sandbox's custom dev-compatible
 transport while preserving evaluator inputs; it does not authorize changing `profile_driver.py`.
 
