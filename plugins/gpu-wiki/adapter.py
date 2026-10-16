@@ -15,13 +15,6 @@ def main() -> None:
     plugin_root = Path(__file__).resolve().parent
     manifest = json.loads((plugin_root / "plugin.json").read_text())
     root = (plugin_root / manifest["resources"]["gpu-wiki"]).resolve()
-    internal = (
-        plugin_root / manifest["resources"]["internal-gpu-wiki"]["path"]
-    ).resolve()
-    if internal != (root.parent / "internal_gpu_wiki").resolve():
-        raise ValueError(
-            "Wiki resources must declare the public store and its internal_gpu_wiki sibling"
-        )
     override = os.environ.get("ATREX_WIKI_STORE_ROOT")
     if override and Path(override).expanduser().resolve() != root:
         raise ValueError(

@@ -21,6 +21,7 @@ from aka.legacy.resources.plugins import PluginError, PluginRegistry, decode_jso
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plugin-dir", help="Select an independent local plugin catalog")
+    parser.add_argument("--plugin", action="append", help="Include an explicit directory containing plugin.json")
     parser.add_argument(
         "--workspace", default=("." if (Path.cwd() / ".atrex_plugins/lock.json").is_file()
                                 else os.environ.get("ATREX_PLUGIN_WORKSPACE", "."))
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         workspace = Path(args.workspace).resolve()
-        registry = PluginRegistry(args.plugin_dir)
+        registry = PluginRegistry(args.plugin_dir, plugins=args.plugin)
         registry.check_lock(workspace)
         if args.command == "list":
             from aka.legacy.agent.resources import discover_resources

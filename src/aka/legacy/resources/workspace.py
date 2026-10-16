@@ -5,6 +5,81 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+def _check_workspace_contribution(workspace: Path, resources, registry) -> None:
+    """Check every runtime destination against plugin mounts before writing."""
+    from plugin_runtime.schema import PluginError
+    from plugin_runtime.registry import STATE_DIR
+    entries = list(resources.runtime_links)
+    for root in (".claude", ".qoder"):
+        entries.extend((source, f"{root}/skills/{name}") for source, name in resources.backend_skills)
+        if resources.agents.exists():
+            entries.append((resources.agents, f"{root}/agents"))
+    entries.extend((source, f".agents/skills/{source.name}") for source in resources.project_skills)
+    if resources.ncu_skill.exists():
+        entries.extend((resources.ncu_skill, f"{root}/skills/ncu-report-skill")
+                       for root in (".claude", ".qoder", ".agents"))
+    if resources.evaluator_root is not None:
+        _check_atrex_bench_runtime(workspace, resources.evaluator_root)
+    mounts = registry.mounts()
+    registry.environment(workspace)
+    for source, name in entries:
+        path = Path(name)
+        if any(path.is_relative_to(Path(other)) or Path(other).is_relative_to(path)
+               for other in mounts):
+            raise PluginError("mount_conflict", f"plugin overlaps workspace resource: {name}")
+        destination = workspace / name
+        if (destination.exists() or destination.is_symlink()) and not (
+                destination.is_symlink() and destination.resolve() == source.resolve()):
+            raise PluginError("mount_conflict", f"workspace resource would replace {destination}")
+    cleanup_paths = tuple(f".agents/skills/{name}" for name in (
+        "humanize", "humanize-gen-plan", "humanize-refine-plan", "humanize-rlcr"))
+    if not resources.ppu_enabled:
+        cleanup_paths += tuple(f"{root}/skills/ppu-acu-joint-profile"
+                               for root in (".claude", ".qoder", ".agents"))
+    for name in cleanup_paths:
+        if any(Path(name).is_relative_to(Path(other)) or Path(other).is_relative_to(Path(name))
+               for other in mounts):
+            raise PluginError("mount_conflict", f"plugin overlaps retired workspace resource: {name}")
+    directories = [workspace / STATE_DIR, *(workspace / root for root in (
+        ".claude/skills", ".qoder/skills", ".agents/skills"))]
+    directories.extend((workspace / name).parent for _, name in entries)
+    for directory in directories:
+        for parent in (directory, *directory.parents):
+            if parent == workspace:
+                break
+            if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+                raise PluginError("mount_conflict", f"workspace resource parent is not a local directory: {parent}")
+
+def _check_atrex_bench_runtime(workspace: Path, source: Path) -> None:
+    """Validate the evaluator copy and any existing owned runtime before writes."""
+    from plugin_runtime.schema import PluginError
+    entry = source / "scripts/run_eval.py"
+    package = source / "src/atrex_bench"
+    if not entry.is_file() or not package.is_dir():
+        raise FileNotFoundError(f"invalid Atrex-Bench runtime root: {source}")
+    destination = workspace / "atrex-bench"
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise PluginError("mount_conflict", f"evaluator runtime would replace {destination}")
+    if not destination.exists():
+        return
+    def files(root):
+        return {p.relative_to(root).as_posix(): p for p in root.rglob("*")
+                if p.is_file() and "__pycache__" not in p.parts and p.suffix not in {".pyc", ".pyo"}}
+    expected = {"scripts/run_eval.py": entry,
+                **{f"src/atrex_bench/{name}": p for name, p in files(package).items()}}
+    actual = files(destination)
+    expected_dirs = {"scripts", "src", "src/atrex_bench", *(
+        "src/atrex_bench/" + p.relative_to(package).as_posix() for p in package.rglob("*")
+        if p.is_dir() and "__pycache__" not in p.parts)}
+    actual_dirs = {p.relative_to(destination).as_posix() for p in destination.rglob("*")
+                   if p.is_dir() and "__pycache__" not in p.parts}
+    if (any(p.is_symlink() for p in destination.rglob("*"))
+            or actual_dirs != expected_dirs
+            or actual.keys() != expected.keys()
+            or any(p.read_bytes() != expected[name].read_bytes() for name, p in actual.items())):
+        raise PluginError("mount_conflict", f"evaluator runtime differs from selected source: {destination}")
+
+
 def _install_atrex_bench_runtime(workspace: Path, atrex_bench_root: Path) -> None:
     """Copy evaluator code without exposing the checkout's data directory."""
     evaluator = atrex_bench_root / "scripts" / "run_eval.py"
@@ -32,6 +107,7 @@ def install_workspace_resources(workspace: Path, resources, *, plugin_registry, 
     """Install a selected contribution; preserve original workspace semantics."""
     registry = plugin_registry
     registry.check_lock(workspace)
+    _check_workspace_contribution(workspace, resources, registry)
     for src, destination in resources.runtime_links:
         dst = workspace / destination
         if not dst.exists():

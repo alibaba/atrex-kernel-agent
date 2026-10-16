@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import json
 from contextvars import ContextVar
 
 _selected_catalog = ContextVar("aka_tool_catalog", default=None)
+_selected_plugins = ContextVar("aka_explicit_tool_plugins", default=None)
 
 from plugin_runtime import Plugin, PluginError
 from plugin_runtime import PluginRegistry as Registry
@@ -22,9 +24,14 @@ PLUGIN_DIR = REPO_ROOT / "plugins"
 
 
 class PluginRegistry(AgentSkillsRegistryMixin, Registry):
-    def __init__(self, plugin_dir: Path | str | None = None):
+    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=None):
+        if plugins is None:
+            plugins = _selected_plugins.get()
+            if plugins is None:
+                plugins = decode_json(os.environ.get("ATREX_PLUGIN_PATHS", "[]"))
         super().__init__(plugin_dir if plugin_dir is not None else
-                         (_selected_catalog.get() or os.environ.get("ATREX_PLUGIN_DIR", PLUGIN_DIR)))
+                         (_selected_catalog.get() or os.environ.get("ATREX_PLUGIN_DIR", PLUGIN_DIR)),
+                         plugins=plugins)
         self.bind_agent_skills(execution.selected_agent_skills())
 
     def instructions(self, phase: str, **values: str) -> str:
@@ -39,6 +46,7 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         reserved = {
             "ATREX_PLUGIN_WORKSPACE": str(workspace.resolve()),
             "ATREX_PLUGIN_DIR": str(self.plugin_dir),
+            "ATREX_PLUGIN_PATHS": json.dumps([str(path) for path in self.plugin_paths]),
         }
         if environment.keys() & reserved.keys():
             raise PluginError(

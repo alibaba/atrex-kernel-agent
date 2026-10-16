@@ -77,18 +77,26 @@ class Plugin:
 
 
 class PluginRegistry:
-    def __init__(self, plugin_dir: Path | str):
+    def __init__(self, plugin_dir: Path | str, *, plugins=()):
         self.plugin_dir = Path(plugin_dir).resolve()
         if not self.plugin_dir.is_dir():
             raise PluginError(
                 "invalid_config", f"missing plugin directory: {self.plugin_dir}"
             )
+        if not isinstance(plugins, (list, tuple)) or any(
+            not isinstance(path, (Path, str)) for path in plugins
+        ):
+            raise PluginError("invalid_config", "plugins must be explicit plugin directories")
+        self.plugin_paths = tuple(Path(path).expanduser().resolve() for path in plugins)
+        if any(not path.is_dir() for path in self.plugin_paths):
+            raise PluginError("invalid_config", "selected plugin is not a directory")
         self.plugins: list[Plugin] = []
         seen = set()
-        manifests = sorted(self.plugin_dir.glob("*/plugin.json"))
+        manifests = [*sorted(self.plugin_dir.glob("*/plugin.json")),
+                     *(path / "plugin.json" for path in self.plugin_paths)]
         for manifest in manifests:
             try:
-                plugin = self._load(manifest.parent)
+                plugin = self._load(manifest.parent.resolve())
             except OSError as exc:
                 raise PluginError(
                     "invalid_manifest",
@@ -234,6 +242,8 @@ class PluginRegistry:
         return {
             "api_version": 1,
             "plugin_dir": str(self.plugin_dir),
+            **({"plugin_paths": [str(path) for path in self.plugin_paths]}
+               if self.plugin_paths else {}),
             "plugins": [
                 {
                     "id": p.id,
@@ -280,18 +290,32 @@ class PluginRegistry:
                 "plugin_changed",
                 "discovered plugins changed; restore the locked inputs or use a new workspace",
             )
+        self._check_workspace_mounts(workspace)
+
+    def _check_workspace_mounts(self, workspace):
+        # link_runtime calls check_lock before touching discovery directories.
+        # Reject redirects and occupied destinations at that initial barrier.
+        state = workspace / STATE_DIR
+        if state.is_symlink() or (state.exists() and not state.is_dir()):
+            raise PluginError("mount_conflict", "Agent resource state must be a workspace directory")
+        for path in (workspace / ".gitignore", state / "lock.json", state / "instructions.md"):
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise PluginError("mount_conflict", f"resource state must be a local file: {path}")
+        for name, source in self.mounts().items():
+            destination = workspace / name
+            if any(parent.is_symlink() for parent in destination.parents
+                   if parent != workspace and workspace in parent.parents):
+                raise PluginError("mount_conflict", f"Agent resource parent is a symlink: {name}")
+            if any(parent.exists() and not parent.is_dir() for parent in destination.parents
+                   if parent != workspace and workspace in parent.parents):
+                raise PluginError("mount_conflict", f"Agent resource parent is not a directory: {name}")
+            if (destination.exists() or destination.is_symlink()) and not (
+                    destination.is_symlink() and destination.resolve() == source):
+                raise PluginError("mount_conflict", f"Agent resource would replace {destination}")
 
     def install(self, workspace: Path) -> None:
         self.check_lock(workspace)
         mounts = self.mounts()
-        for name, source in mounts.items():
-            destination = workspace / name
-            if (destination.exists() or destination.is_symlink()) and not (
-                destination.is_symlink() and destination.resolve() == source
-            ):
-                raise PluginError(
-                    "mount_conflict", f"plugin mount would replace {destination}"
-                )
         state = workspace / STATE_DIR
         state.mkdir(parents=True, exist_ok=True)
         for name, source in mounts.items():

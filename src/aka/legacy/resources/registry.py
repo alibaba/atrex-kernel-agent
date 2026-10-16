@@ -55,34 +55,28 @@ class AgentSkillsRegistryMixin:
             for skill in self._agent_skills
         ]}
 
+    def resource_snapshot(self):
+        """Export the selected plugin and module Skill locks without workspace IO."""
+        return {"plugins": self.snapshot(), "agent_skills": self._agent_skills_snapshot()}
+
+    def check_resource_snapshot(self, snapshot):
+        """Validate frozen resources before a checkpoint creates its destination."""
+        from plugin_runtime.schema import PluginError
+        from plugin_runtime.registry import PluginRegistry
+        current = {"plugins": PluginRegistry(self.plugin_dir, plugins=self.plugin_paths).snapshot(),
+                   "agent_skills": self._agent_skills_snapshot()}
+        if snapshot != current:
+            raise PluginError("plugin_changed", "selected tool or Skill resources differ from the frozen inputs")
+
     def check_lock(self, workspace):
         from plugin_runtime.registry import STATE_DIR
         from plugin_runtime.schema import PluginError, read_json
         super().check_lock(workspace)
         lock = Path(workspace) / STATE_DIR / "agent-skills.json"
+        if lock.is_symlink() or (lock.exists() and not lock.is_file()):
+            raise PluginError("mount_conflict", "Agent Skill lock must be a local file")
         if lock.exists() and read_json(lock) != self._agent_skills_snapshot():
             raise PluginError("plugin_changed", "selected Agent Skills changed; restore locked resources or use a new workspace")
-        self._check_workspace_mounts(Path(workspace))
-
-    def _check_workspace_mounts(self, workspace):
-        from plugin_runtime.registry import STATE_DIR
-        from plugin_runtime.schema import PluginError
-        # link_runtime calls check_lock before touching discovery directories.
-        # Reject redirects and occupied destinations at that initial barrier.
-        state = workspace / STATE_DIR
-        if state.is_symlink() or (state.exists() and not state.is_dir()):
-            raise PluginError("mount_conflict", "Agent resource state must be a workspace directory")
-        for name, source in self.mounts().items():
-            destination = workspace / name
-            if any(parent.is_symlink() for parent in destination.parents
-                   if parent != workspace and workspace in parent.parents):
-                raise PluginError("mount_conflict", f"Agent resource parent is a symlink: {name}")
-            if any(parent.exists() and not parent.is_dir() for parent in destination.parents
-                   if parent != workspace and workspace in parent.parents):
-                raise PluginError("mount_conflict", f"Agent resource parent is not a directory: {name}")
-            if (destination.exists() or destination.is_symlink()) and not (
-                    destination.is_symlink() and destination.resolve() == source):
-                raise PluginError("mount_conflict", f"Agent resource would replace {destination}")
 
     def install(self, workspace):
         from plugin_runtime.registry import STATE_DIR
