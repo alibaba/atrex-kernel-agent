@@ -91,11 +91,18 @@ def _has_result(process: subprocess.CompletedProcess[str]) -> bool:
 def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
     if process.returncode == 0 or _has_result(process):
         return False
+    from .protocol import terminal_cancellation
+    try:
+        job = json.loads(process.stdout or "")
+    except (TypeError, json.JSONDecodeError):
+        job = None
+    if isinstance(job, dict) and terminal_cancellation(job):
+        return False
     output = ((process.stdout or "") + "\n" + (process.stderr or "")).lower()
     if UPSTREAM_EVAL_RETRIES_EXHAUSTED in output:
         return False
     diagnostic = _last_protocol_failure(process)
-    if diagnostic and diagnostic.get("failure_class") in {"request", "authentication"}:
+    if diagnostic and diagnostic.get("failure_class") in {"request", "authentication", "cancelled"}:
         return False
     return any(marker in output for marker in TRANSIENT_MARKERS)
 

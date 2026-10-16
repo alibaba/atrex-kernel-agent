@@ -17,6 +17,11 @@ PROTOCOL_FAILURE_SCHEMA = "optimization.gateway-protocol-failure/v1"
 
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
+def terminal_cancellation(job: dict | None) -> bool:
+    """An explicit cancellation outcome must survive evaluator redaction."""
+    return bool(job and job.get("status") == "cancelled"
+                and (job.get("result") or job.get("error")))
+
 def _response_failure(stdout: str) -> tuple[str, str] | None:
     if not stdout.strip():
         return "empty", "empty-stdout"
@@ -52,6 +57,22 @@ def protocol_failure(
     recover: Callable[[subprocess.CompletedProcess[str]], str | None],
 ) -> dict[str, object] | None:
     """Classify an invalid Agate response without retaining response contents."""
+    try:
+        job = json.loads(process.stdout or "")
+    except (TypeError, json.JSONDecodeError):
+        job = None
+    if isinstance(job, dict) and terminal_cancellation(job):
+        diagnostic = {
+            "schema": PROTOCOL_FAILURE_SCHEMA,
+            "agate_return_code": int(process.returncode),
+            "response_type": "json-object",
+            "reason": "terminal-cancelled",
+            "failure_class": "cancelled",
+        }
+        job_id = _safe_job_id(process, recover)
+        if job_id is not None:
+            diagnostic["job_id"] = job_id
+        return diagnostic
     failure = _response_failure(process.stdout or "")
     if failure is None and process.returncode != 0:
         failure = ("json-object", "nonzero-return-code")

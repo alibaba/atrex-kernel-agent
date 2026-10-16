@@ -2779,12 +2779,27 @@ def _cancelled_without_outcome(job: dict | None) -> bool:
 
 def _report_infrastructure_failure(job: dict) -> bool:
     """Preserve the failure category without revealing private evaluator details."""
+    from .protocol import terminal_cancellation
+    if terminal_cancellation(job):
+        return False
     error = job.get("error")
     if (isinstance(error, dict) and (error.get("error_class") or error.get("class")) == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
         print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
     return False
+
+
+def _report_cancellation(job: dict) -> bool:
+    """Keep terminal cancellation visible when evaluator content is withheld."""
+    from .protocol import protocol_failure, terminal_cancellation
+    if not terminal_cancellation(job):
+        return False
+    diagnostic = protocol_failure(
+        subprocess.CompletedProcess([], 1, json.dumps(job), ""), lambda _: None)
+    print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True),
+          file=sys.stderr, flush=True)
+    return True
 
 
 def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
@@ -2802,6 +2817,9 @@ def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
 
 
 def _ray_submit_version_mismatch(job: dict | None) -> bool:
+    from .protocol import terminal_cancellation
+    if terminal_cancellation(job):
+        return False
     error = job.get("error") if job else None
     return bool(
         isinstance(error, dict)
@@ -2811,6 +2829,9 @@ def _ray_submit_version_mismatch(job: dict | None) -> bool:
 
 
 def _queue_timeout_before_start(job: dict | None) -> bool:
+    from .protocol import terminal_cancellation
+    if terminal_cancellation(job):
+        return False
     error = job.get("error") if job else None
     return bool(
         isinstance(error, dict)
@@ -3399,6 +3420,9 @@ def _run_typed_gateway(
 
     jobs: list[dict[str, Any]] = []
     for proc in processes:
+        job = _job_response(proc.stdout or "")
+        if job is not None and _report_cancellation(job):
+            return proc.returncode or 1
         detail = (proc.stderr or "") + (proc.stdout or "")
         if proc.returncode and _typed_fallback_allowed(detail):
             print(
@@ -3409,7 +3433,6 @@ def _run_typed_gateway(
         if proc.stderr and not generalized:
             print("\n".join(line for line in proc.stderr.rstrip().splitlines()
                               if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
-        job = _job_response(proc.stdout or "")
         if job is None:
             if _report_agate_transport_failure(proc):
                 return ENVIRONMENT_TEMPFAIL
@@ -4102,6 +4125,8 @@ def _main(argv: list[str] | None = None) -> int:
             )
         return proc.returncode or 2
 
+    if _report_cancellation(job):
+        return proc.returncode or 1
     if _report_infrastructure_failure(job):
         return ENVIRONMENT_TEMPFAIL
     result = job.get("result") or {}
