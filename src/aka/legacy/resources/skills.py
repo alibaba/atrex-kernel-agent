@@ -29,3 +29,26 @@ def describe_skill(skill: AgentSkill) -> InstalledAgentSkill:
         fingerprint(skill), tuple(AgentResourceFile(
             path.relative_to(skill.source).as_posix(), path.stat().st_mode & 0o777,
             hashlib.sha256(path.read_bytes()).hexdigest()) for path in skill_files(skill)))
+
+
+def describe_resource(resource):
+    """Fingerprint the complete selected immutable resource, including modes."""
+    from dataclasses import asdict
+    import json
+    from aka.contracts.agent_resources import WorkspaceResourceContribution, InstalledWorkspaceResource
+    resource = WorkspaceResourceContribution(**asdict(resource))
+    source = resource.source
+    paths = (source,) if source.is_file() else tuple(p for p in sorted(source.rglob("*"))
+        if not {".git", "__pycache__", ".pytest_cache"}.intersection(p.relative_to(source).parts)
+        and p.suffix not in {".pyc", ".pyo"})
+    files = tuple(AgentResourceFile("." if p == source else p.relative_to(source).as_posix(),
+        p.stat().st_mode & 0o777, hashlib.sha256(p.read_bytes()).hexdigest()) for p in paths if p.is_file())
+    if not files:
+        raise ValueError(f"workspace resource has no files: {resource.name}")
+    directories = [(p.relative_to(source).as_posix(), p.stat().st_mode & 0o777)
+                   for p in paths if p.is_dir()]
+    identity = {"files": [asdict(f) for f in files], "directories": directories,
+                "kind": "file" if source.is_file() else "directory", "mode": source.stat().st_mode & 0o777}
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    return InstalledWorkspaceResource(resource.name, source, resource.destination,
+        resource.visibility, resource.version, digest, files)

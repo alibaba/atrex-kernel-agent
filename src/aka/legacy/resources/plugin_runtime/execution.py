@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .schema import PluginError, decode_json
+from aka.core.plugin_runtime.schema import PluginError, decode_json
 
 
 def resolve_command(root: Path, declaration: dict) -> tuple[str, ...]:
@@ -26,7 +26,9 @@ def resolve_command(root: Path, declaration: dict) -> tuple[str, ...]:
     ]
     executable = argv[0]
     if "/" in executable:
-        path = (root / executable).resolve()
+        # Preserve the venv launcher path: resolving its symlink selects the
+        # system interpreter and loses the installed module environment.
+        path = (root / executable).absolute()
         executable = str(path) if path.is_file() and os.access(path, os.X_OK) else ""
     else:
         executable = shutil.which(executable) or ""

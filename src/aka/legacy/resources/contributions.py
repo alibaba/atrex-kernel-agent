@@ -1,32 +1,39 @@
-"""Select legacy workspace resources without performing installation."""
-from dataclasses import dataclass
+"""Read explicitly selected module resources from the current composition scope."""
+from contextvars import ContextVar
+from dataclasses import asdict
+import json
+import os
 from pathlib import Path
 
+from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 
-@dataclass(frozen=True)
-class WorkspaceResourceContribution:
-    runtime_links: tuple[tuple[Path, str], ...]
-    backend_skills: tuple[tuple[Path, str], ...]
-    project_skills: tuple[Path, ...]
-    agents: Path
-    ncu_skill: Path
-    evaluator_root: Path | None
-    ppu_enabled: bool
-    legacy_mounts: tuple[tuple[str, Path], ...]
+_selected_scope = ContextVar("aka_workspace_resource_scope", default=None)
+SELECTION_ENV = "ATREX_WORKSPACE_RESOURCES"
 
 
-def select_workspace_resources(repo_root: Path, *, is_ppu=False, atrex_bench_root=None):
-    project = repo_root / "skills"
-    names = ["gen-plan", "autonomous-gpu-kernel-timeline"]
-    if is_ppu:
-        names.append("ppu-acu-joint-profile")
-    wiki = repo_root / "gpu-wiki"
-    return WorkspaceResourceContribution(
-        tuple((repo_root / name, name) for name in ("tools", "reference", "skills", "reference-projects")
-              if (repo_root / name).exists()),
-        tuple((project / name, name) for name in names if (project / name / "SKILL.md").is_file()),
-        tuple(source for source in project.iterdir() if (source / "SKILL.md").is_file()
-              and (source.name != "ppu-acu-joint-profile" or is_ppu)) if project.is_dir() else (),
-        repo_root / "agents", repo_root / "3rdparty" / "ncu-report-skill", atrex_bench_root, is_ppu,
-        (("gpu-wiki", wiki), *((f"{backend}/skills/KernelWiki", wiki / "3rdparty/KernelWiki")
-                              for backend in (".claude", ".qoder", ".agents"))))
+def selected_resources():
+    scope = _selected_scope.get()
+    if scope is not None:
+        values = []
+        for kind, expected in (("workspace_resources", WorkspaceResourceContribution), ("agent_skills", AgentSkill)):
+            entries = scope.resolve(kind)
+            if any(not isinstance(entry.value, expected) or entry.name != entry.value.name for entry in entries):
+                raise TypeError(f"invalid {kind} contribution")
+            values.append(tuple(entry.value for entry in entries))
+        return tuple(values)
+    try:
+        value = json.loads(os.environ.get(SELECTION_ENV, '{"resources":[],"skills":[]}'))
+        if not isinstance(value, dict) or set(value) != {"resources", "skills"}:
+            raise ValueError("invalid inherited workspace resource selection")
+        if not all(isinstance(value[k], list) for k in value):
+            raise ValueError("workspace resource selection must contain arrays")
+        return (tuple(WorkspaceResourceContribution(**{**row, "source": Path(row["source"])}) for row in value["resources"]),
+                tuple(AgentSkill(**{**row, "source": Path(row["source"])}) for row in value["skills"]))
+    except (TypeError, KeyError) as exc:
+        raise ValueError("invalid inherited workspace resource declaration") from exc
+
+
+def selection_environment(resources, skills):
+    def row(value):
+        return {**asdict(value), "source": str(value.source)}
+    return json.dumps({"resources": [row(r) for r in resources], "skills": [row(s) for s in skills]}, sort_keys=True)

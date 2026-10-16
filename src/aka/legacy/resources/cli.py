@@ -9,12 +9,6 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-# Prefer source packages when running directly from a checkout.
-_source_packages = Path(__file__).resolve().parents[1] / "src"
-if _source_packages.is_dir():
-    sys.path.insert(0, str(_source_packages))
-
 from aka.legacy.resources.plugins import PluginError, PluginRegistry, decode_json, read_json
 
 

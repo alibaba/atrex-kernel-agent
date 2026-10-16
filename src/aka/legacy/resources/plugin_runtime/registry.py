@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .execution import execute_json, resolve_command
-from .schema import PluginError, check_schema, read_json, validate_schema
+from aka.core.plugin_runtime.schema import PluginError, check_schema, read_json, validate_schema
 
 NAME = re.compile(r"[a-z][a-z0-9-]*")
 STATE_DIR = ".atrex_plugins"
@@ -77,9 +77,9 @@ class Plugin:
 
 
 class PluginRegistry:
-    def __init__(self, plugin_dir: Path | str, *, plugins=()):
-        self.plugin_dir = Path(plugin_dir).resolve()
-        if not self.plugin_dir.is_dir():
+    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=()):
+        self.plugin_dir = Path(plugin_dir).expanduser().resolve() if plugin_dir else None
+        if self.plugin_dir is not None and not self.plugin_dir.is_dir():
             raise PluginError(
                 "invalid_config", f"missing plugin directory: {self.plugin_dir}"
             )
@@ -92,7 +92,7 @@ class PluginRegistry:
             raise PluginError("invalid_config", "selected plugin is not a directory")
         self.plugins: list[Plugin] = []
         seen = set()
-        manifests = [*sorted(self.plugin_dir.glob("*/plugin.json")),
+        manifests = [*(sorted(self.plugin_dir.glob("*/plugin.json")) if self.plugin_dir else ()),
                      *(path / "plugin.json" for path in self.plugin_paths)]
         for manifest in manifests:
             try:
@@ -241,7 +241,7 @@ class PluginRegistry:
     def snapshot(self) -> dict:
         return {
             "api_version": 1,
-            "plugin_dir": str(self.plugin_dir),
+            "plugin_dir": str(self.plugin_dir) if self.plugin_dir is not None else None,
             **({"plugin_paths": [str(path) for path in self.plugin_paths]}
                if self.plugin_paths else {}),
             "plugins": [

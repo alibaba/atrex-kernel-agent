@@ -1,22 +1,27 @@
-"""Select the tool catalog within Resources for this composition lifetime."""
+"""Select explicit tool roots and borrow module contributions for this lifetime."""
 from pathlib import Path
+
 name = "resources"
 identity_packages = ("aka.legacy.resources",)
-Config = {"type":"object", "properties":{"plugin_dir":{"type":"string"},
-    "plugins":{"type":"array", "items":{"type":"string", "minLength":1}}}, "additionalProperties":False}
-Defaults = {"plugin_dir":"", "plugins":[]}
+Config = {"type": "object", "properties": {
+    "plugin_dir": {"type": "string"},
+    "plugins": {"type": "array", "items": {"type": "string", "minLength": 1}},
+}, "additionalProperties": False}
+Defaults = {"plugin_dir": "", "plugins": []}
 interpolate = ("plugin_dir", "plugins")
 
+
 def apply(ctx, config):
-    from .plugins import PLUGIN_DIR, _selected_catalog, _selected_plugins
+    from .contributions import _selected_scope
+    from .plugins import _selected_catalog, _selected_plugins
     value = config.get("plugin_dir", "")
-    selected = Path(value).expanduser().resolve() if value else PLUGIN_DIR
-    if not selected.is_dir():
+    catalog = Path(value).expanduser().resolve() if value else None
+    if catalog is not None and not catalog.is_dir():
         raise ValueError("selected tool catalog is not a directory")
     plugins = tuple(Path(value).expanduser().resolve() for value in config.get("plugins", ()))
     if any(not (path / "plugin.json").is_file() for path in plugins):
         raise ValueError("selected tool plugin requires plugin.json")
-    token = _selected_catalog.set(selected)
-    ctx.effect(lambda: _selected_catalog.reset(token), label="restore tool catalog selection")
-    plugin_token = _selected_plugins.set(plugins)
-    ctx.effect(lambda: _selected_plugins.reset(plugin_token), label="restore explicit plugin selection")
+    for variable, value in ((_selected_catalog, catalog), (_selected_plugins, plugins),
+                            (_selected_scope, ctx.current_scope)):
+        token = variable.set(value)
+        ctx.effect(lambda variable=variable, token=token: variable.reset(token), label="restore resource selection")
