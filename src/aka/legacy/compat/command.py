@@ -19,8 +19,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="aka optimize",
         usage="%(prog)s --repo-root PATH [EXECUTION OPTIONS] -- [OPTIMIZATION ARGS]",
-        description="Run the retained optimization CLI from an explicit AKA checkout.",
-        epilog="Example: aka optimize --repo-root /path/to/aka -- --op-dir /path/to/problem --platform L20N --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
+        description="Translate the retained optimization CLI for installed AKA modules and explicit tool resources.",
+        epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform L20N --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--execution-profile", default=None)
@@ -30,32 +30,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("separate application arguments with -- (use -- --help for application help)")
     root = options.repo_root.expanduser().resolve()
     if not root.is_dir():
-        parser.error(f"checkout directory does not exist: {root}")
-    # An explicit checkout is a declared runtime dependency, not the current cwd.
-    # Keep this import path alive during application execution, including lazy imports.
-    added = str(root) not in sys.path
-    if added:
-        sys.path.insert(0, str(root))
-    try:
-        execution_selection = None
-        if options.execution_profile is not None or options.execution_patch:
-            from aka.legacy.execution.selection import selected_execution, read_execution_patches
-            execution_selection = dict(selected_execution())
-            if options.execution_profile is not None:
-                execution_selection["profile"] = options.execution_profile
-            if options.execution_patch:
-                execution_selection["patches"] = [*execution_selection.get("patches", ()),
-                    *read_execution_patches(options.execution_patch)]
-        environment = {}
-        if execution_selection is not None:
-            from aka.bootstrap.continuation import read
-            if read(os.environ) is not None:
-                parser.error("cannot override Execution selection during continuation")
-            import json
-            environment["AKA_EXECUTION_SELECTION"] = json.dumps(execution_selection, sort_keys=True)
-        with invocation_environment(environment):
-            return run_application(ApplicationRequest(root, argv[boundary + 1:]))
-
-    finally:
-        if added:
-            sys.path.remove(str(root))
+        parser.error(f"tool resource directory does not exist: {root}")
+    execution_selection = None
+    if options.execution_profile is not None or options.execution_patch:
+        from aka.legacy.execution.selection import selected_execution, read_execution_patches
+        execution_selection = dict(selected_execution())
+        if options.execution_profile is not None:
+            execution_selection["profile"] = options.execution_profile
+        if options.execution_patch:
+            execution_selection["patches"] = [*execution_selection.get("patches", ()),
+                *read_execution_patches(options.execution_patch)]
+    environment = {}
+    if execution_selection is not None:
+        from aka.bootstrap.continuation import read
+        if read(os.environ) is not None:
+            parser.error("cannot override Execution selection during continuation")
+        import json
+        environment["AKA_EXECUTION_SELECTION"] = json.dumps(execution_selection, sort_keys=True)
+    with invocation_environment(environment):
+        return run_application(ApplicationRequest(root, argv[boundary + 1:]))

@@ -31,8 +31,7 @@ where = ["src"]
 include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
-"*" = ["skills/**/*", "prompts/*.md"]
-"aka.legacy.task.candidate_workspace" = ["*.sh"]
+"*" = ["*", "**/*"]
 "aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json"]
 
 "aka.legacy.workflow" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]

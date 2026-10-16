@@ -1,7 +1,7 @@
 """Workflow constants implementation and callable interface."""
 from __future__ import annotations
 
-import aka.legacy.agent as _agent_runtime
+from aka.legacy.agent.adapter import DEFAULT_BACKEND_REGISTRY
 
 
 from aka.legacy.acceptance.policy import CONVERT_PERF_TOL
@@ -59,4 +59,4 @@ ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 
 
-AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
+AGENT_CLI_CHOICES = DEFAULT_BACKEND_REGISTRY.ids

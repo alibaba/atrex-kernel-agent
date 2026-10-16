@@ -1,13 +1,12 @@
 """Translate the historical optimization CLI before entering Bootstrap."""
 from __future__ import annotations
-import argparse, json, os, re, shutil, sys
+import argparse, json, os, re, sys
 from pathlib import Path
 from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S
 from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_TIMEOUT
 from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
-from aka.legacy.resources.plugins import PluginRegistry, PluginError
 from aka.legacy.agent.adapter import codex_settings_args, pi_settings_args
 from aka.legacy.workflow.invocation import WorkflowLaunch, encode_launch
 from .cli_problem import problem_request
@@ -285,10 +284,6 @@ def parse_arguments(argv):
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
-    try:
-        PluginRegistry()
-    except PluginError as exc:
-        ap.error(str(exc))
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
         args.workspace_suffix
     ):
@@ -378,17 +373,12 @@ def parse_arguments(argv):
                 ap.error(
                     "ATREX_SANDBOX_SSH_RUNTIME_BINDS must be a JSON array of strings"
                 )
-        for executable in ("ssh", "scp"):
-            if shutil.which(executable) is None:
-                ap.error(f"--sandbox-ssh requires {executable} on PATH")
     elif args.sandbox_ssh_runtime_bind:
         ap.error("--sandbox-ssh-runtime-bind requires --sandbox-ssh")
     elif args.sandbox_ssh_gpu is not None:
         ap.error("--sandbox-ssh-gpu requires --sandbox-ssh")
     if args.environment_poll_interval <= 0:
         ap.error("--environment-poll-interval must be positive")
-    if shutil.which(args.agent_cli) is None:
-        ap.error(f"--agent-cli executable not found on PATH: {args.agent_cli}")
     if args.agent_cli == "codex":
         codex_settings = (
             os.environ.get("ATREX_CODEX_SESSION_SETTINGS")
@@ -422,7 +412,6 @@ def parse_arguments(argv):
         # Campaign commands run from nested Git worktrees. Keeping a relative base here
         # makes evaluator paths get resolved a second time against the campaign workspace.
         args.workspace = str(Path(args.workspace).expanduser().resolve())
-        Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
 
     return args, raw_argv

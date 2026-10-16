@@ -2,9 +2,22 @@
   "api_version": 1,
   "entries": [
     {
+      "id": "execution",
+      "name": "aka.legacy.execution.plugin",
+      "required": true,
+      "config": {
+        "profile": "legacy"
+      }
+    },
+    {
       "id": "resources",
       "name": "aka.legacy.resources.plugin",
-      "required": true
+      "required": true,
+      "config": {
+        "plugins": [
+          "${aka:repo_root}/plugins/gpu-wiki"
+        ]
+      }
     },
     {
       "id": "problem",
