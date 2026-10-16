@@ -31,7 +31,10 @@ class SandboxExecutor:
         request = replace(
             self.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout,
-            environment={**self.request.environment, **command.environment},
+            environment={**self.request.environment, **command.environment,
+                         **{key: self.request.environment[key] for key in
+                            ("ATREX_SANDBOX_REQUIREMENTS_FILE", "ATREX_PRIVATE_REFERENCE_DIR")
+                            if key in self.request.environment}},
             hardware=command.hardware or self.request.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
@@ -60,8 +63,20 @@ class SandboxExecutor:
         return result
 
 
+def task_environment(worker_requirements):
+    """Translate an explicit Task dependency file into the transport environment."""
+    if worker_requirements is None:
+        raise ValueError("Task worker requirements are missing")
+    if worker_requirements.source is None:
+        raise ValueError("Task worker requirements must be frozen before execution")
+    path = worker_requirements.source
+    if not path.is_file():
+        raise FileNotFoundError(f"missing Task worker requirements: {path}")
+    return {"ATREX_SANDBOX_REQUIREMENTS_FILE": str(path), "AKA_GATEWAY_DEV_DEPENDENCIES": "[]"}
+
+
 def sandbox_executor(executor: Executor, *, hardware="", timeout=600, formal=False,
-                     private_reference_dir=None) -> SandboxExecutor:
+                     private_reference_dir=None, worker_requirements=None) -> SandboxExecutor:
     """Construct the host dependency; Experiment only sees Executor.run."""
     import os
     import sys
@@ -76,6 +91,10 @@ def sandbox_executor(executor: Executor, *, hardware="", timeout=600, formal=Fal
 
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
+    environment.pop("ATREX_SANDBOX_REQUIREMENTS_FILE", None)
+    environment.pop("AKA_GATEWAY_DEV_DEPENDENCIES", None)
+    if worker_requirements is not None:
+        environment.update(task_environment(worker_requirements))
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     from .configuration import legacy_settings

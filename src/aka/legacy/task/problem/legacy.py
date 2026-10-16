@@ -17,6 +17,8 @@ from .layout import (
 @dataclass(frozen=True)
 class LegacyProblemProvider:
     optimization_mode: str = "leaderboard"
+    native_harness: Path | None = None
+    worker_requirements: Path | None = None
 
     def load(self, directory: Path, *, optimization_mode=None, snapshot_directory: Path | None = None) -> LoadedProblem:
         """Preserve the original operator resolver's validation order and errors."""
@@ -67,6 +69,10 @@ class LegacyProblemProvider:
         public = tuple(item for item in files if item.path in public_names)
         initial = files if sol else (WorkspaceFile("kernel.py", source=ref, copy="cp"),)
         runtime = Path(atrex_bench_root) if atrex_bench_root else None
+        from .resources import selected_resources
+        harness, requirements = selected_resources(d, sol=sol, native=bool(runtime),
+                                                   native_harness=self.native_harness,
+                                                   worker_requirements=self.worker_requirements)
         problem = LoadedProblem(
             name=d.name, directory=d, reference=ref,
             bench_root=Path(atrex_bench_root) if atrex_bench_root else None,
@@ -75,7 +81,8 @@ class LegacyProblemProvider:
             agent=AgentProblem(public), initial_source=InitialSource("sol" if sol else "kernel", ref, initial),
             evaluation=EvaluationInput("legacy-sol-v1" if sol else ("legacy-native-v1" if runtime else "legacy-kernel-v1"),
                                        d, files, runtime, d if generalized else None,
-                                       tuple(str(x) for x in validate_private_shapes(shapes_path)) if generalized else ()),
+                                       tuple(str(x) for x in validate_private_shapes(shapes_path)) if generalized else (),
+                                       harness, requirements),
         )
         if snapshot_directory is not None:
             from .snapshot import capture
@@ -84,8 +91,41 @@ class LegacyProblemProvider:
 
     def content(self, problem: LoadedProblem, workspace: Path, *, generated_digest: str = "") -> ProblemContent:
         from .evaluation import LegacyEvaluationAdapter
+        from .resources import validate_resources
+        if problem.snapshot_directory is not None:
+            from .snapshot import inspect
+            problem, _ = inspect(problem.snapshot_directory)
+        validate_resources(problem.evaluation)
         if problem.evaluation is None or problem.agent is None:
             raise TypeError("Problem content requires explicit public and evaluation roles")
         return LegacyEvaluationAdapter(problem.evaluation.directory, workspace,
                                        "production" if problem.evaluation.private_reference_dir else self.optimization_mode,
                                        str(problem.evaluation.runtime_root or ""), generated_digest, problem)
+
+    def snapshot(self, problem):
+        from .snapshot import inspect
+        if problem.snapshot_directory is None:
+            raise ValueError("Problem must be frozen before obtaining its snapshot")
+        return inspect(problem.snapshot_directory)[1]
+
+    def export_snapshot(self, problem, destination):
+        from .snapshot import capture, copy_snapshot, inspect
+        if problem.snapshot_directory is None:
+            problem = capture(problem, destination, problem.directory, self.optimization_mode)
+            return inspect(problem.snapshot_directory)[1]
+        return copy_snapshot(self.snapshot(problem), destination)[1]
+
+    def validate_snapshot(self, snapshot, *, destination=None):
+        from .snapshot import inspect
+        problem = inspect(snapshot.directory, identity=snapshot.identity)[0]
+        if destination is not None:
+            target = Path(destination).absolute()
+            if target.resolve() != target:
+                raise ValueError("unsafe Problem snapshot destination")
+            if target.exists():
+                inspect(target, identity=snapshot.identity)
+        return problem
+
+    def restore_snapshot(self, snapshot, destination):
+        from .snapshot import copy_snapshot
+        return copy_snapshot(snapshot, destination)[0]

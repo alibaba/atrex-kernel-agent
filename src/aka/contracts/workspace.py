@@ -42,12 +42,40 @@ class CandidateHandle:
     path: Path
 
 
+@dataclass(frozen=True)
+class CandidateWorkspaceSnapshot:
+    """Opaque stopped Task workspace/Git checkpoint; only original paths restore."""
+    directory: Path
+    identity: str
+
+
+@dataclass(frozen=True)
+class CandidateCheckpointState:
+    workspace: Path
+    revision: str
+    candidates: tuple[CandidateHandle, ...] = ()
+    candidate_revisions: tuple[str, ...] = ()
+
+
 class CandidateWorkspace(Protocol):
+    def export_checkpoint(self, workspace: Path, destination: Path, *,
+                          candidates: tuple[CandidateHandle, ...] = ()) -> CandidateWorkspaceSnapshot: ...
+    def validate_checkpoint(self, snapshot: CandidateWorkspaceSnapshot, *,
+                            check_destinations: bool = False) -> CandidateCheckpointState:
+        """Read-only validation of stopped Git/worktree bytes and original path bindings."""
+        ...
+    def checkpoint_files(self, snapshot: CandidateWorkspaceSnapshot, paths: tuple[str, ...]) -> dict[str, bytes]:
+        """Read validated canonical workspace files; reject traversal, Git metadata and symlinks."""
+        ...
+    def restore_checkpoint(self, snapshot: CandidateWorkspaceSnapshot) -> CandidateCheckpointState:
+        """Restore only original paths after all modules pass the caller's validation phase."""
+        ...
     def install_files(self, workspace: Path, files: tuple[WorkspaceFile, ...]) -> SourceSnapshot: ...
     def initialize_kernel(self, reference_dir: Path, entry: str, arguments: list[str],
                           *, content: SourceContent, working_directory: Path | None = None) -> int: ...
     def prepare_sol(self, workspace: Path, content: SourceContent, *,
-                    problem_files: tuple[WorkspaceFile, ...], reference_dir: Path) -> str:
+                    problem_files: tuple[WorkspaceFile, ...], reference_dir: Path,
+                    harness: WorkspaceFile) -> str:
         """Install and commit V0, or validate unchanged V0 on measurement retry."""
         ...
     def install_runtime(self, workspace: Path, atrex_bench_root: Path | None = None, **options: Any) -> None: ...

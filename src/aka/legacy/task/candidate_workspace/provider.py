@@ -9,6 +9,22 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def export_checkpoint(self, workspace, destination, *, candidates=()):
+        from .checkpoint import export_checkpoint
+        return export_checkpoint(workspace, destination, candidates=candidates)
+
+    def validate_checkpoint(self, snapshot, *, check_destinations=False):
+        from .checkpoint import validate_checkpoint
+        return validate_checkpoint(snapshot, check_destinations=check_destinations)
+
+    def checkpoint_files(self, snapshot, paths):
+        from .checkpoint import checkpoint_files
+        return checkpoint_files(snapshot, paths)
+
+    def restore_checkpoint(self, snapshot):
+        from .checkpoint import restore_checkpoint
+        return restore_checkpoint(snapshot)
+
     def baseline_changes(self, workspace, baseline_commit):
         from .baseline import baseline_changes
         return baseline_changes(workspace, baseline_commit)
@@ -46,9 +62,9 @@ class GitCandidateWorkspace(GitSnapshots):
         return initialize_kernel(reference_dir, entry, arguments, content=content,
                                  working_directory=working_directory)
 
-    def prepare_sol(self, workspace, content, *, problem_files, reference_dir):
+    def prepare_sol(self, workspace, content, *, problem_files, reference_dir, harness):
         from .initial import prepare_sol
-        return prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir)
+        return prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir, harness=harness)
 
 
     def install_runtime(self, workspace, atrex_bench_root=None, **options):

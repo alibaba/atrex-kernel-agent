@@ -8,6 +8,7 @@ from typing import Any, Protocol, Sequence
 
 from .execution import CommandSpec, JobResult
 from .workspace import CandidateWorkspace
+from .problem import EvaluationInput
 
 
 @dataclass(frozen=True)
@@ -113,12 +114,6 @@ class EvaluationConfiguration:
     native: bool = False
 
 
-@dataclass(frozen=True)
-class EvaluationResources:
-    """Provider-owned immutable evaluator script installed in a candidate workspace."""
-    native_harness: Path | None = None
-
-
 class EvaluatorFactory(Protocol):
     """Create isolated measurement state for each configured experiment.
 
@@ -126,8 +121,6 @@ class EvaluatorFactory(Protocol):
     command preparation and interpretation; the host owns execution and retries.
     """
 
-    @property
-    def resources(self) -> EvaluationResources: ...
-
     def create(self, configuration: EvaluationConfiguration, *,
-               candidate_workspace: CandidateWorkspace) -> Evaluator: ...
+               candidate_workspace: CandidateWorkspace,
+               evaluation_input: EvaluationInput) -> Evaluator: ...

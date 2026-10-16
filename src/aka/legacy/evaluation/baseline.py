@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from aka.contracts.problem import LoadedProblem
+from aka.contracts.content import WorkspaceFile
 
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
 from .memory import read_memory
@@ -31,7 +32,7 @@ class BaselineInputs:
 
 @dataclass(frozen=True)
 class BaselineResources:
-    native_harness: Path
+    native_harness: WorkspaceFile | None
     profile_driver: Path
 
 
@@ -91,13 +92,12 @@ class BaselinePreparation:
 
     def install_native_evaluator(self) -> None:
         """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
-        if not self.inputs.native:
+        if self.resources.native_harness is None:
+            if self.inputs.native:
+                raise ValueError("Task has no native evaluator harness")
             return
-        if not self.resources.native_harness.is_file():
-            raise FileNotFoundError(f"missing {self.resources.native_harness}")
-        shutil.copy2(
-            self.resources.native_harness, self.inputs.workspace / "test_kernel.py"
-        )
+        from aka.legacy.task.candidate_workspace.content import install_files
+        install_files(self.inputs.workspace, (self.resources.native_harness,))
 
     def install_profile_driver(self) -> None:
         """Seed the immutable external profiling entry for every campaign layout.

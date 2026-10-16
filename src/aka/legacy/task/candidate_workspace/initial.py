@@ -40,7 +40,9 @@ def initialize_kernel(reference_dir, entry, arguments, *, content, working_direc
     return code
 
 
-def prepare_sol(ws, content, *, problem_files, reference_dir):
+def prepare_sol(ws, content, *, problem_files, reference_dir, harness):
+    if harness is None:
+        raise ValueError("SOL preparation requires the frozen Task harness")
     if (ws / ".git").exists():
         history = subprocess.run(["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
                                  cwd=ws, capture_output=True, text=True, check=True)
@@ -54,7 +56,7 @@ def prepare_sol(ws, content, *, problem_files, reference_dir):
                 committed = subprocess.check_output(["git", "show", f"HEAD:{name}"], cwd=ws)
                 if committed != original or not (ws / name).is_file() or (ws / name).read_bytes() != original:
                     raise ValueError(f"refusing to reseed changed V0 source: {name}")
-            for item in (*problem_files, *content.files):
+            for item in (*problem_files, *content.files, harness):
                 expected = item.source.read_bytes() if item.source is not None else item.text.encode("utf-8")
                 if (ws / item.path).read_bytes() != expected:
                     raise ValueError(f"V0 selected input or source changed: {item.path}")
@@ -76,7 +78,7 @@ def prepare_sol(ws, content, *, problem_files, reference_dir):
     install_files(ws, content.files)
 
     # 4) harness + constraints + docs (copied from reference/)
-    (ws / "test_kernel.py").write_text((reference_dir / "test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
+    install_files(ws, (harness,))
     (ws / "profile_driver.py").write_text(
         (reference_dir / "profile_driver.py").read_text(encoding="utf-8"), encoding="utf-8"
     )

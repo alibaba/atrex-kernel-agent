@@ -15,7 +15,6 @@ from aka.legacy.experiment.transport import ABBAExecutor, check_abba_result
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.legacy.execution.selection import execution_scope
 from aka.legacy.execution.binding import sandbox_executor
-from aka.contracts.evaluation import EvaluationResources
 
 
 class BorrowedExperiment:
@@ -93,13 +92,12 @@ class WorkflowServices:
                  workflow_observer=None):
         self.settings = settings
         self.campaign = campaign
+        self.problem_provider = campaign.problem_provider
         if evaluator_factory is None:
             from aka.legacy.evaluation.plugin import LegacyEvaluatorFactory
             evaluator_factory = LegacyEvaluatorFactory()
         if not callable(getattr(evaluator_factory, "create", None)):
             raise TypeError("provider does not implement EvaluatorFactory")
-        if not isinstance(getattr(evaluator_factory, "resources", None), EvaluationResources):
-            raise TypeError("factory resources must be EvaluationResources")
         self.evaluator_factory = evaluator_factory
         if workflow_observer is not None:
             try:
@@ -116,6 +114,14 @@ class WorkflowServices:
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
 
+    def evaluation_input(self):
+        """Acquire validated frozen Task roles for every evaluation route."""
+        return self.problem_provider.content(self.campaign.problem, self.campaign.workspace).evaluation
+
+    def task_environment(self):
+        from aka.legacy.execution.binding import task_environment
+        return task_environment(self.evaluation_input().worker_requirements)
+
     def create_evaluator(self):
         s = self.settings
         from aka.legacy.execution.configuration import selected_ssh
@@ -129,6 +135,7 @@ class WorkflowServices:
                 native=bool(self.campaign.atrex_bench_root),
             ),
             candidate_workspace=self.campaign.candidate_workspace,
+            evaluation_input=self.evaluation_input(),
         )
         if any(not callable(getattr(evaluator, method, None))
                for method in ("prepare", "record_step", "interpret")):
@@ -136,7 +143,7 @@ class WorkflowServices:
         return evaluator
 
     def preparation(self, include_problem=False):
-        from aka.legacy.resources.paths import ATREX_BENCH_HARNESS, PROFILE_DRIVER
+        from aka.legacy.resources.paths import PROFILE_DRIVER
 
         c = self.campaign
         native = bool(c.atrex_bench_root)
@@ -154,8 +161,7 @@ class WorkflowServices:
             target_util=c.target_util,
         )
         return BaselinePreparation(
-            inputs, BaselineResources(self.evaluator_factory.resources.native_harness
-                                      or ATREX_BENCH_HARNESS, PROFILE_DRIVER)
+            inputs, BaselineResources(self.evaluation_input().harness, PROFILE_DRIVER)
         )
 
     @contextmanager
@@ -169,6 +175,7 @@ class WorkflowServices:
                 hardware=s.hardware,
                 timeout=s.timeout, formal=formal,
                 private_reference_dir=self.campaign.private_reference_dir,
+                worker_requirements=self.evaluation_input().worker_requirements,
             )
             evaluator = self.create_evaluator()
             if not isinstance(evaluator, LegacyEvaluator):
@@ -203,7 +210,8 @@ class WorkflowServices:
             workspace,
             standard_correctness_passed=standard_correctness_passed,
             execute=self.numerical_command,
-            harness=self.evaluator_factory.resources.native_harness,
+            harness=(self.evaluation_input().harness.source
+                     if self.evaluation_input().harness is not None else None),
         )
 
     def numerical_command(self, command):

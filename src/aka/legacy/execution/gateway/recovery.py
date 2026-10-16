@@ -48,14 +48,14 @@ TYPED_DELAYS = (5, 15, 30)
 DEV_DELAYS = (10, 30, 60, 120, 240)
 
 def _patch_dev_command_script(command_path: Path, workspace: Path | None) -> None:
-    """Install FlyDSL in a dev worker before running the evaluator command.
-
-    ``agate dev`` is a raw command API and has no typed ``--requirements``
-    option. Numerical-safety validation uses this route, so the dependency is
-    installed in the worker command itself when the candidate needs it.
-    """
+    """Map the same Task requirements to dev's raw command transport."""
     import os, shlex
-    dependencies = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
+    requirements = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE")
+    if requirements:
+        dependencies = [line.strip() for line in Path(requirements).read_text(encoding="utf-8").splitlines()
+                        if line.strip() and not line.lstrip().startswith("#")]
+    else:
+        dependencies = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
     if not dependencies:
         return
     source = command_path.read_text(encoding="utf-8")

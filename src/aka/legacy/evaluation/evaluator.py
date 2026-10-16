@@ -24,6 +24,7 @@ from aka.contracts.evaluation import (
 )
 from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.workspace import CandidateWorkspace
+from aka.contracts.problem import EvaluationInput
 from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
 from .abba import (
     _merge_batch_payloads,
@@ -77,13 +78,24 @@ class LegacyEvaluator:
         *,
         candidate_workspace: CandidateWorkspace | None = None,
         abba_driver: Path | None = None,
+        evaluation_input: EvaluationInput | None = None,
     ):
         self.configuration = configuration
+        self.evaluation_input = evaluation_input
         self.candidate_workspace = candidate_workspace
         self.abba_driver = abba_driver or Path(remote_abba.__file__)
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         config = self.configuration
+        if self.evaluation_input is not None:
+            from aka.legacy.task.problem.resources import validate_resources
+            validate_resources(self.evaluation_input)
+            item = self.evaluation_input.harness
+            if item is not None:
+                expected = item.source.read_bytes() if item.source is not None else item.text.encode("utf-8")
+                installed = request.workspace / item.path
+                if not installed.is_file() or installed.read_bytes() != expected:
+                    raise ValueError("candidate evaluator harness differs from frozen Task content")
         if request.mode == "fast":
             return PreparedEvaluation((), 1, _Plan(request))
         if request.mode in {"v0", "framework"}:

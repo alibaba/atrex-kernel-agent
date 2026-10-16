@@ -34,6 +34,8 @@ class EvaluationInput:
     runtime_root: Path | None = None
     private_reference_dir: Path | None = None
     case_ids: tuple[str, ...] = ()
+    harness: WorkspaceFile | None = None
+    worker_requirements: WorkspaceFile | None = None
 
 
 @dataclass(frozen=True)
@@ -49,3 +51,10 @@ class LoadedProblem:
     evaluation: EvaluationInput | None = None
     snapshot_directory: Path | None = None
 
+
+
+@dataclass(frozen=True)
+class ProblemSnapshot:
+    """Opaque Task snapshot location and content identity, including authored input."""
+    directory: Path
+    identity: str
