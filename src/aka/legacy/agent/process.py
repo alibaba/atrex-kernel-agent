@@ -18,17 +18,6 @@ DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
-TRUSTED_SANDBOX_ENTRYPOINTS = frozenset()
-
-
-def register_sandbox_entrypoints(*paths: Path) -> None:
-    """Register supervisor-owned transport scripts before launching agents."""
-    global TRUSTED_SANDBOX_ENTRYPOINTS
-    if any(not path.is_absolute() for path in paths):
-        raise ValueError("sandbox entrypoints must be absolute paths")
-    TRUSTED_SANDBOX_ENTRYPOINTS |= frozenset(path.resolve() for path in paths)
-
-
 def _python_entrypoint(tokens: list[str]) -> tuple[str, str]:
     """Parse interpreter options without treating script arguments as Python code."""
     index = 1
@@ -122,7 +111,7 @@ def python_import_roots(code: str, *, _depth: int = 0) -> set[str]:
     return roots
 
 
-def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) -> str | None:
+def dependency_process_violation(argv: list[str]) -> str | None:
     """Describe a forbidden dependency build or host GPU action, if any."""
     if not argv:
         return None
@@ -297,11 +286,6 @@ def dependency_process_violation(argv: list[str], *, cwd: Path | None = None) ->
             return "GPU profiler executed directly on the host"
         if re.fullmatch(r"python[0-9.]*", executable):
             mode, entry = _python_entrypoint(tokens)
-            script = ((cwd or Path.cwd()) / entry).resolve() if mode == "script" and entry else None
-            if script in TRUSTED_SANDBOX_ENTRYPOINTS:
-                return None
-            if mode == "script" and Path(entry).name in {path.name for path in TRUSTED_SANDBOX_ENTRYPOINTS}:
-                return "unregistered sandbox transport executed on the host"
             if mode == "script" and Path(entry).name in {
                 "kernel.py",
                 "test_kernel.py",
@@ -448,16 +432,7 @@ def dependency_guard(
             signal_process_groups(process_groups, signal.SIGKILL)
             return
         for pid, argv in descendant_process_commands(proc.pid):
-            try:
-                cwd = Path(f"/proc/{pid}/cwd").resolve(strict=True)
-            except (FileNotFoundError, ProcessLookupError):
-                # A live child may have deleted its cwd; still check its argv.
-                if not Path(f"/proc/{pid}").exists():
-                    continue
-                cwd = None
-            except PermissionError:
-                cwd = None
-            reason = dependency_process_violation(argv, cwd=cwd)
+            reason = dependency_process_violation(argv)
             if reason is None:
                 continue
             rendered = " ".join(argv)

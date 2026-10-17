@@ -1,18 +1,17 @@
 # Run AKA through profile-selected startup
 
-AKA supports the existing optimization script and an installed command. Both use a
-launch profile to select a Startup service through Bootstrap and Core. The legacy
-adapter calls the original optimization body. Evaluation, sandbox, tools and recovery
-continue to use their existing implementations.
+AKA uses the installed `aka optimize` command. It converts the retained optimization arguments once,
+then uses a launch profile to select Workflow through Bootstrap and Core. Evaluation, Execution,
+Resources and recovery run from their installed owning modules.
 
-## Existing checkout interface
+## Checkout-backed installed interface
 
-Use Python 3.10 or later and the prerequisites in [Quick Start](quickstart.md). From a
-source checkout, no framework installation is required:
+Use Python 3.10 or later, install the matching distributions as described below, and keep the
+checkout resources available:
 
 ```sh
-python orchestrator/optimize.py --help
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- --help
+aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/problem --platform L20N --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
@@ -23,11 +22,10 @@ layout (`definition.json`, `reference.py`, `workload.jsonl`). See [problem
 preparation](quickstart.md) for the complete requirements. The AKA checkout path and the
 problem path are separate inputs.
 
-Existing optimization arguments and defaults retain their meanings. Profile-selected
-environment values and absence are captured for children and recovery. Direct execution,
-`python -m orchestrator.optimize`, and imports of `orchestrator.optimize.main` all
-dispatch through Core. The application body remains behind `_run_application`, including
-the original recovery wrapper. The default adapter never calls public `main` again.
+Existing optimization arguments and defaults retain their meanings after the mandatory `--`
+separator. Profile-selected environment values and absence are captured for children and recovery.
+The removed `orchestrator/optimize.py` shim is not a compatibility interface; automation must invoke
+the installed command.
 
 ## Installed command
 
@@ -39,13 +37,12 @@ python tools/build_distributions.py --output /tmp/aka-dist
 python -m pip install /tmp/aka-dist/*.whl
 ```
 
-The adapter packages require a **matching application checkout**, including its normal
-runtime files, required submodules and application dependencies. They do not contain the
-whole optimization application. Keep the packages and checkout from the same source
+The installed packages require a **matching resource checkout** for declared external resources.
+Keep the packages and checkout from the same source
 revision; the `0.1.0` package version alone does not identify an unreleased checkout.
-The legacy adapter validates checkout imports; launch reconstruction also checks the
-recorded implementation and explicitly declared resource identities. Initialize required
-submodules as described in Quick Start before exporting a checkout without Git metadata.
+Launch reconstruction checks the recorded implementation and explicitly declared resource
+identities. Normal startup does not initialize every submodule; initialize only selected resource
+submodules before exporting a checkout without Git metadata.
 
 The command can run from any working directory:
 
@@ -53,7 +50,7 @@ The command can run from any working directory:
 aka --help
 aka optimize --help
 aka optimize --repo-root /path/to/aka -- --help
-aka optimize --repo-root /path/to/aka --profile application -- \
+aka optimize --repo-root /path/to/aka -- \
   --op-dir /path/to/problem --platform L20N --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
@@ -64,18 +61,16 @@ AKA checkout and makes it importable during the call; it does not change the wor
 directory. `--op-dir` after the separator selects the problem. Without `--workspace`,
 the original current-directory workspace default applies.
 
-Framework options are `--repo-root`, `--profile`, `--profiles-dir`, and repeatable
-`--patch`. Relative paths resolve from the caller's working directory. A profile is a
-JSON file in the chosen profiles directory; the packaged default is `application`.
-Framework flags do not replace similarly named application flags, which belong after
-`--`.
+Framework options are `--repo-root`, optional `--execution-profile`, and repeatable
+`--execution-patch`. Relative paths resolve from the caller's working directory. Framework flags do
+not replace similarly named optimization flags, which belong after `--`.
 
 Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optimization
 contributes `optimize`, via the `aka.commands` package entry-point group. Help lists
 installed contributions without importing them; unknown or duplicate command names fail
 before loading a command. There is no implicit default command or Execution command in
-this version. Source-only use of `python -m aka` requires installed command metadata;
-use the original script for development without package installation.
+this version. Source-only use of `python -m aka` requires installed command metadata; there is no
+source-tree fallback script.
 
 ## Select a startup implementation
 
@@ -174,8 +169,8 @@ dispose the owned Core composition. Local disposal does not cancel detached or r
 jobs. Registered effects are cleaned up; arbitrary plugin side effects cannot be undone
 automatically.
 
-The default adapter checks that `orchestrator.optimize` belongs to the configured
-`repo_root` and reuses the existing direct-script module. It calls the original non-dispatching entry exactly once. Core freezes defaults/interpolation before setup.
+The compatibility adapter converts retained optimization arguments into a typed Workflow request
+exactly once. Core freezes defaults/interpolation before setup.
 Bootstrap captures the target, tokens, effective composition and identity of Core,
 Bootstrap, Contracts, plugins and declared resources. Post-setup verification rejects
 changes outside the frozen composition, including dynamic `Context.plugin()` children

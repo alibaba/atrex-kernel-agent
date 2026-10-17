@@ -6,6 +6,10 @@ from pathlib import Path
 from .content import install_files, selected_file_bytes
 
 GITIGNORE = '__pycache__/\n*.pyc\ntraces.jsonl\n.finalize_traces.jsonl\nsubmission.json\n*.ncu-rep\nprofiles/*/att/*.att\nprofiles/*/att/*.out\nprofiles/*/att/*.pftrace\nprofiles/*/att/*.otf2\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n'
+SOL_CONFIG = json.dumps(
+    {"seed": 200, "warmup_runs": 10, "iterations": 50, "benchmark_reference": True},
+    indent=2,
+) + "\n"
 
 
 def _validate_initial_files(workspace, source_commit, selected):
@@ -65,9 +69,8 @@ def prepare_sol(ws, content, *, problem_files, harness, runtime_files):
                                  cwd=ws, capture_output=True, text=True, check=True)
         if history.stdout.strip():
             source_commit = history.stdout.split()[0]
-            config = json.dumps({"seed": 200, "warmup_runs": 10, "iterations": 50, "benchmark_reference": True}, indent=2) + "\n"
             _validate_initial_files(ws, source_commit, {
-                **selected, "config.json": config.encode("utf-8"),
+                **selected, "config.json": SOL_CONFIG.encode("utf-8"),
             })
             return source_commit
 
@@ -78,10 +81,7 @@ def prepare_sol(ws, content, *, problem_files, harness, runtime_files):
     install_files(ws, problem_files)
 
     # 2) pinned eval config (matches a submission; stable across versions)
-    (ws / "config.json").write_text(
-        json.dumps({"seed": 200, "warmup_runs": 10, "iterations": 50, "benchmark_reference": True}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    (ws / "config.json").write_text(SOL_CONFIG, encoding="utf-8")
 
     # 3) V0 kernel + solution
     install_files(ws, content.files)

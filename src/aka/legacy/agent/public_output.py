@@ -1,7 +1,6 @@
 """Agent-owned durable normalized invocation facts, independent of CLI layout."""
 from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path

@@ -407,7 +407,6 @@ def parse_arguments(argv):
             file=sys.stderr,
             flush=True,
         )
-    sandbox_hardware = args.sandbox_hardware or args.platform
     if args.workspace:
         # Campaign commands run from nested Git worktrees. Keeping a relative base here
         # makes evaluator paths get resolved a second time against the campaign workspace.

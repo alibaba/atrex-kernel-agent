@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -12,7 +11,7 @@ import tempfile
 
 from aka.contracts.agent import AgentCheckpointSnapshot
 
-SCHEMA = 'aka.agent-checkpoint.v1'
+SCHEMA = 'aka.agent-checkpoint.v2'
 
 
 def _digest(data):
@@ -30,16 +29,19 @@ def capture_native_session(output, workspace, runtime, session_id, environment):
     files = []
     if runtime == 'codex':
         from .codex_ledger import CodexSessionLedgerObserver, codex_home
-        path = CodexSessionLedgerObserver(codex_home(environment))._find_rollout_path(session_id)
+        session_root = codex_home(environment).expanduser().resolve()
+        path = CodexSessionLedgerObserver(session_root)._find_rollout_path(session_id)
         files.append(path)
     else:
         home = Path(environment.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude').expanduser().resolve()
-        project = home / 'projects' / re.sub(r'[^a-zA-Z0-9]', '-', str(Path(workspace).resolve()))
-        path = project / (session_id + '.jsonl')
-        if not path.is_file():
+        projects = home / 'projects'
+        matches = sorted(projects.glob('*/' + session_id + '.jsonl')) if projects.is_dir() else []
+        if len(matches) != 1 or not matches[0].is_file():
             raise ValueError('closed Claude session ledger is missing')
+        path = matches[0]
+        session_root = path.parent.resolve()
         files.append(path)
-        family = project / session_id
+        family = session_root / session_id
         if family.is_dir():
             files.extend(p for p in family.rglob('*') if p.is_file())
     with tempfile.TemporaryDirectory(prefix='.agent-session-', dir=target.parent) as raw:
@@ -48,10 +50,13 @@ def capture_native_session(output, workspace, runtime, session_id, environment):
         for index, path in enumerate(sorted(files)):
             if path.is_symlink() or path.resolve() != path.absolute():
                 raise ValueError('native session path contains a symlink')
+            if path == session_root or not path.is_relative_to(session_root):
+                raise ValueError('native session path is outside its runtime root')
             content = path.read_bytes()
             name = str(index)
             (staging/name).write_bytes(content)
-            rows.append({'file': name, 'target': str(path), 'sha256': _digest(content),
+            rows.append({'file': name, 'target': str(path), 'root': str(session_root),
+                         'sha256': _digest(content),
                          'mode': stat.S_IMODE(path.stat().st_mode)})
         (staging/'session.json').write_text(json.dumps({'runtime':runtime, 'session_id':session_id,
                                                       'files':rows}, sort_keys=True)+'\n')
@@ -98,14 +103,31 @@ def validate_checkpoint(snapshot, *, check_destinations=False):
         raise ValueError('unsupported Agent checkpoint schema')
     expected = {'manifest.json'}
     destinations = set()
+    session_roots = {}
     for index, row in enumerate(value['files']):
         if row['file'] != str(index):
             raise ValueError('invalid Agent checkpoint content name')
         expected.add(row['file'])
         path = root/row['file']
         target = Path(row['target'])
-        if not target.is_absolute() or target.resolve() != target or target in destinations:
-            raise ValueError('unsafe or duplicate native session destination')
+        session_root = Path(row['root'])
+        session = (row['runtime'], row['session_id'])
+        if (row['runtime'] not in {'claude', 'codex'}
+                or not isinstance(row['session_id'], str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]+', row['session_id'])):
+            raise ValueError('invalid native session identity')
+        if (not session_root.is_absolute() or session_root.resolve() != session_root
+                or (session_root.exists() and not session_root.is_dir())):
+            raise ValueError('unsafe native session root')
+        if session in session_roots and session_roots[session] != session_root:
+            raise ValueError('native session declares multiple roots')
+        session_roots[session] = session_root
+        if (not target.is_absolute() or target.resolve() != target
+                or target == session_root or not target.is_relative_to(session_root)):
+            raise ValueError('native session destination is outside its runtime root')
+        if any(target == other or target.is_relative_to(other) or other.is_relative_to(target)
+               for other in destinations):
+            raise ValueError('duplicate or overlapping native session destination')
         if type(row['mode']) is not int or row['mode'] < 0 or row['mode'] > 0o777:
             raise ValueError('invalid native session file mode')
         if any(parent.exists() and not parent.is_dir() for parent in target.parents):

@@ -29,7 +29,7 @@ def selected_resources():
             raise ValueError("workspace resource selection must contain arrays")
         return (tuple(WorkspaceResourceContribution(**{**row, "source": Path(row["source"])}) for row in value["resources"]),
                 tuple(AgentSkill(**{**row, "source": Path(row["source"])}) for row in value["skills"]))
-    except (TypeError, KeyError) as exc:
+    except (TypeError, KeyError, ValueError) as exc:
         raise ValueError("invalid inherited workspace resource declaration") from exc
 
 

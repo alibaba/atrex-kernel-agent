@@ -109,14 +109,17 @@ class WorkflowServices:
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
         )
+        self._evaluation_input = self.problem_provider.content(
+            self.campaign.problem, self.campaign.workspace
+        ).evaluation
         self.evaluator = self.create_evaluator()
         self.records = records
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
 
     def evaluation_input(self):
-        """Acquire validated frozen Task roles for every evaluation route."""
-        return self.problem_provider.content(self.campaign.problem, self.campaign.workspace).evaluation
+        """Return the once-validated frozen Task roles for every evaluation route."""
+        return self._evaluation_input
 
     def task_environment(self):
         from aka.legacy.execution.binding import task_environment

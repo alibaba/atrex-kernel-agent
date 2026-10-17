@@ -665,6 +665,8 @@ def validate_accepted_ppu_evidence(
     """Verify that reusable conclusions bind to decision-grade artifacts."""
     errors: list[str] = []
     workspace = workspace.resolve()
+    validator_loaded = False
+    validator = None
     for index, row in enumerate(rows):
         error_count_before = len(errors)
         label = f"accepted_ppu_diagnostics[{index}].evidence"
@@ -730,7 +732,9 @@ def validate_accepted_ppu_evidence(
                     errors=errors,
                 )
             if len(errors) == error_count_before:
-                validator = _ppu_profile_validator()
+                if not validator_loaded:
+                    validator = _ppu_profile_validator()
+                    validator_loaded = True
                 if validator is None or not validator.is_file():
                     errors.append(f"{label} schema-specific validator is missing")
                 else:

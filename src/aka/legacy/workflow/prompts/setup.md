@@ -11,9 +11,8 @@ or replace its service or `screen` session; never delete/edit its configured sta
 gateway jobs directly. If the endpoint is unavailable, report an infrastructure failure and exit; do not
 attempt to repair the gateway from this coding session.
 
-The workspace already exists at your cwd (`{{WORKSPACE}}`) — it was created by the orchestrator
-(`workspace_init.sh` already ran: directory structure, git, and `kernel.py` are in place).
-**Do NOT re-run `workspace_init.sh`.**
+The workspace already exists at your cwd (`{{WORKSPACE}}`) — the orchestrator already created
+its directory structure and Git repository and installed `kernel.py`. Do not reinitialize it.
 Never delete or move Git-tracked workspace state (`memory/`, `roofline.json`, helpers, historical plans or
 profiles). Sandbox input filtering is owned by `python -m aka.legacy.execution.cli`; deleting campaign history to reduce a
 payload is forbidden.

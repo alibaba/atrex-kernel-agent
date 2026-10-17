@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import replace
 import hashlib
 import io
 import json

@@ -1,8 +1,9 @@
 # Quick Start
 
-AKA exposes one supported execution path: the unattended, budget-bounded orchestrator in
-`orchestrator/optimize.py`. For interactive use, the recommended launch method is to ask a coding
-agent in this repository to translate the task into that command and start the campaign.
+AKA exposes one supported execution path: the installed `aka optimize` command. It starts the
+unattended, budget-bounded Workflow selected by the packaged profile. For interactive use, the
+recommended launch method is to ask a coding agent in this checkout to translate the task into that
+command and start the campaign.
 
 ## Prerequisites
 
@@ -15,14 +16,16 @@ agent in this repository to translate the task into that command and start the c
   Bubblewrap (`bwrap`), unprivileged user namespaces, and accessible GPU device nodes on the remote
   host. Physical NVIDIA assignment also requires `nvidia-smi`. Authentication must be
   non-interactive for detached recovery.
-- NVIDIA workers: `ncu`, wrapped by `tools/profile_nvidia.sh`
-- AMD workers: `rocprofv3`, wrapped by `tools/profile_kernel.sh`
+- NVIDIA workers: `ncu`; selected campaigns install `profiling/nvidia/profile_nvidia.sh`
+- AMD workers: `rocprofv3`; selected campaigns install `profiling/amd/profile_kernel.sh`
 
-The orchestrator verifies required submodules before starting and initializes missing ones
-automatically; the large `reference-projects/` collection remains optional. On PPU hardware the
-t-head projects in that collection are the only PPU-specific implementation references available, and
-they clone over SSH (`git@github.com:t-head/...`), so initialize them with an SSH key that can reach
-that org. `reference-projects/README.md` indexes every project by vendor, DSL, and operator.
+Normal startup does not initialize or scan every repository submodule. Initialize the public GPU Wiki
+dependencies and any optional `reference-projects/` checkout you explicitly select before launch;
+their Git identities are then frozen with the selected resources. On PPU hardware the t-head projects
+are the available PPU-specific implementation references and clone over SSH
+(`git@github.com:t-head/...`). `reference-projects/README.md` indexes projects by vendor, DSL, and
+operator. NVIDIA report helpers are already vendored in the Execution package under
+`profiling/nvidia/ncu_helpers`; `3rdparty/ncu-report-skill` is not a runtime dependency.
 
 The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
 configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
@@ -43,6 +46,9 @@ episode's configured effort.
 ```bash
 git clone https://github.com/alibaba/atrex-kernel-agent.git
 cd atrex-kernel-agent
+python -m pip install build
+python tools/build_distributions.py --output /tmp/aka-dist
+python -m pip install /tmp/aka-dist/*.whl
 ```
 
 `--op-dir` supports two evaluator-owned layouts:
@@ -78,11 +84,12 @@ memory points to the stable source SHA. A setup Agent is retained only for deriv
 Open Claude Code, Codex, or Qoder in the repository and provide a concrete task prompt. For example:
 
 ```text
-Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+Use the installed `aka optimize` command with this checkout as `--repo-root` to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
-The coding agent should resolve the requested values into `orchestrator/optimize.py` arguments,
-verify the local prerequisites, and launch that command. This prompt-driven path is a convenience
+The coding agent should resolve the requested values into optimization arguments after the mandatory
+`aka optimize --repo-root /path/to/checkout --` boundary, verify the local prerequisites, and launch
+that command. This prompt-driven path is a convenience
 layer over the same orchestrator, not a separate optimization workflow.
 
 ### Run directly
@@ -90,7 +97,7 @@ layer over the same orchestrator, not a separate optimization workflow.
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
     --agent-cli qodercli \
@@ -105,7 +112,7 @@ to run `bwrap` and access only the intended GPU devices; do not attach cloud cre
 service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
@@ -152,7 +159,7 @@ is absent.
 When preflight or SSH transport fails (including scp upload/download timeout), or a failed GPU command is followed by a failed health probe, the sandbox
 writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
 active Agent/framework process groups without treating the failure as a bad candidate. It then starts
-`tools/monitor_optimize_tasks.py` detached. Recovery state is stored below
+`python -m aka.legacy.workflow.monitor_optimize_tasks` detached. Recovery state is stored below
 `<workspace>/.atrex_environment/<command-id>/`:
 
 - `failure.json`: the current failure stage and bounded diagnostic;
@@ -200,7 +207,7 @@ correctness, timeout (status 124), and even explicit status 255 do not trigger t
 independent health probe succeeds.
 
 To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
-`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --stop`) and require a zero exit status
+`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --stop`) and require a zero exit status
 before changing transport. Stop first publishes an immutable request; the live monitor observes it
 without signalling its diagnostic PID, or the stopper takes over through the advisory lock after the
 monitor exits. It terminates every identity-verified recovery process group, restores a
@@ -212,13 +219,13 @@ from `monitor.pid` directly. Preserve the private recovery directory for
 diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
 state and canonical memory are transport-independent and require no rollback. Run `STATE_DIR/recover.sh`
 to re-enable automatic recovery. To clear a recovered marker without restarting, run
-`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --resume --once --no-restart` after
 verifying any deferred remote cleanup.
 
 ### What happens after launch
 
-1. **Resolve and isolate the campaign.** The orchestrator validates the operator, initializes
-   required submodules, probes the runtime GPU architecture, and creates or resumes
+1. **Resolve and isolate the campaign.** The Workflow validates the operator and explicitly selected
+   resources, probes the runtime GPU architecture, and creates or resumes
    `kernel_opt_<name>_<framework>_<platform>/` below `--workspace` or the current directory.
 2. **Prepare production inputs.** Native production campaigns validate a supplied
    `agent_problem.json` or derive one in a clean preprocessing session, then keep detailed evaluator
@@ -242,7 +249,7 @@ verifying any deferred remote cleanup.
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-GPU evaluations and full-mode profiles run through `tools/sandbox.py` on `--sandbox-hardware`;
+GPU evaluations and full-mode profiles run through `python -m aka.legacy.execution.cli` on `--sandbox-hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
 
@@ -265,7 +272,7 @@ Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied thr
 To use Codex, pass `--agent-cli codex`:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli codex --max-iters 20 --token-budget 8000000
@@ -295,7 +302,7 @@ To use Pi, select it as the backend and optionally configure its provider and mo
 
 ```bash
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli pi --max-iters 20 --token-budget 8000000
@@ -311,7 +318,7 @@ leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --workspace /path/to/runs --max-iters 20
@@ -331,7 +338,7 @@ libraries and evidence-backed framework changes are allowed. Use production mode
 framework-pure implementation:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --optimization-mode production --framework Triton \
@@ -414,7 +421,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --arch ARCH                      Override runtime architecture detection
 ```
 
-Run `python orchestrator/optimize.py --help` for the complete current interface. Some Qoder models
+Run `aka optimize --repo-root "$PWD" -- --help` for the complete current interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 
@@ -429,10 +436,10 @@ it advances campaign state, including failed, pivoted, blocked, and interrupted 
 The sandbox boundary can also be used directly for validation and profiling:
 
 ```bash
-python tools/sandbox.py --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-python tools/sandbox.py --hardware REMOTE_GPU --sync profiles/v1 -- \
-  bash tools/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
-python tools/sandbox.py --hardware H20 --ssh user@gpu-host \
+python -m aka.legacy.execution.cli --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+python -m aka.legacy.execution.cli --hardware REMOTE_GPU --sync profiles/v1 -- \
+  bash profiling/nvidia/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
+python -m aka.legacy.execution.cli --hardware H20 --ssh user@gpu-host \
   --ssh-gpu 0 \
   --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
   --no-sync -- python test_kernel.py --no-memory

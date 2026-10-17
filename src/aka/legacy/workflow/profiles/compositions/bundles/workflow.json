@@ -22,7 +22,10 @@
     {
       "id": "problem",
       "name": "aka.legacy.task.problem.plugin",
-      "required": true
+      "required": true,
+      "config": {
+        "worker_requirements": "${env:ATREX_SANDBOX_REQUIREMENTS_FILE}"
+      }
     },
     {
       "id": "source",
