@@ -241,6 +241,8 @@ class WorkspaceReader:
             perf = obj(memory.get("performance"))
             shapes = obj(perf.get("latency_us_by_shape"))
             expected = integer(perf.get("expected_shape_count"))
+            # Observation v2 requires an explicit producer completeness claim;
+            # historical records with no status remain visible but uncertified.
             complete = (perf.get("measurement_status") == "complete"
                         and all(positive(v) is not None for v in shapes.values())
                         and (bool(shapes) or perf.get("performance_objective") != "shape_speedup_arithmetic_mean")

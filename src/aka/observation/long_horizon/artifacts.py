@@ -7,12 +7,16 @@ import subprocess
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from aka.contracts.observation import check_observation_version
+
 OUTPUTS = (('kernel', 'kernel.py', 'Kernel source', 'text/x-python'),
            ('solution', 'solution.json', 'Solution manifest', 'application/json'))
 SCOPE = 'Measured incumbent revision content captured with this observation; evaluator truth is excluded.'
 
 
 def capture_artifacts(workspace: Path, snapshot):
+    # Never publish snapshot-scoped artifact semantics under an older protocol.
+    check_observation_version(snapshot.get('observation_version'))
     contents, descriptions = {}, []
     report = {key: snapshot[key] for key in ('observation_version', 'name', 'framework',
               'platform', 'arch', 'updated_at', 'canonical', 'counts', 'tokens', 'progress', 'issues')}

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, Optional, Protocol, TypedDict, Union
 
-OBSERVATION_VERSION = 1
+OBSERVATION_VERSION = 2
 Measurement = Literal["exact", "partial", "unavailable"]
 
 
@@ -144,14 +144,19 @@ class EpisodeSummary(TypedDict):
     tokens: EpisodeTokens
 
 
-class _ArtifactIdentity(TypedDict, total=False):
+class _ArtifactIdentity(TypedDict):
     sha256: str
     snapshot_id: str
     visibility: Literal['public']
 
 
 class Artifact(_ArtifactIdentity):
-    """Opaque IDs use letters, digits, underscores and hyphens; names are basenames."""
+    """V2 IDs bind one logical output to a snapshot; names are basenames.
+
+    IDs use letters, digits, underscores and hyphens. ``snapshot_id`` identifies
+    the complete captured output set, while ``sha256`` identifies this artifact's
+    exact bytes. The same logical output in another snapshot has another ID.
+    """
 
     id: str
     label: str
@@ -230,12 +235,12 @@ class ObservationReader(Protocol):
 
 
 class ArtifactReader(Protocol):
-    """Optional v1 capability for readers declaring campaign.artifacts.
+    """Optional v2 capability for readers declaring campaign.artifacts.
 
     Only declared IDs may be downloaded. Missing or removed outputs raise
     KeyError; reading must not write workflow files. The source owns file access
     and packaging. Dashboard never accepts a client-supplied filesystem path.
-    Existing v1 readers may omit artifacts and this capability entirely.
+    Readers without public artifacts may omit this capability entirely.
     """
 
     def artifact(self, identifier: str, artifact_id: str) -> bytes: ...
