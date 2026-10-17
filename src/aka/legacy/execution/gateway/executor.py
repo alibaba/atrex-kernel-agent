@@ -13,6 +13,8 @@ from aka.legacy.execution.transport import check_transport
 class GatewayExecutor:
     def __init__(self, configuration=None):
         self.configuration = dict(configuration or {})
+        if "requirements_file" in self.configuration:
+            raise ValueError("worker requirements belong to Task, not gateway provider configuration")
     capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile")), True)
     resource_identity = ResourceIdentity("gateway")
 
@@ -27,6 +29,8 @@ class GatewayExecutor:
             argv += ["--sync", artifact]
         if not command.artifacts:
             argv += ["--no-sync"]
+        from aka.legacy.execution.legacy.runtime import current_transport_arguments
+        argv += current_transport_arguments()
         argv += ["--", *command.command]
         environment = dict(command.environment)
         if self.configuration.get("profile") or self.configuration.get("url"):
@@ -42,7 +46,7 @@ class GatewayExecutor:
         package_root = str(Path(__file__).resolve().parents[4])
         environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
             [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
-        mapping = {"url":"ATREX_SANDBOX_URL", "profile":"ATREX_SANDBOX_PROFILE", "requirements_file":"ATREX_SANDBOX_REQUIREMENTS_FILE",
+        mapping = {"url":"ATREX_SANDBOX_URL", "profile":"ATREX_SANDBOX_PROFILE",
                    "warmup_iters":"AKA_GATEWAY_WARMUP_ITERS", "retry_delays":"AKA_GATEWAY_RETRY_DELAYS",
                    "dev_dependencies":"AKA_GATEWAY_DEV_DEPENDENCIES"}
         for key, env in mapping.items():

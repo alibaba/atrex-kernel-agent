@@ -14,7 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
-from .runtime import ExecutionHooks, SandboxRequest, current_invocation
+from .runtime import ExecutionHooks, SandboxRequest, current_invocation, current_transport_arguments
 
 
 class LegacyExecutor:
@@ -78,6 +78,7 @@ class LegacyExecutor:
                 cmd += ["--sync", path]
         else:
             cmd.append("--no-sync")
+        cmd += current_transport_arguments()
         if preflight:
             cmd.append("--preflight")
         else:

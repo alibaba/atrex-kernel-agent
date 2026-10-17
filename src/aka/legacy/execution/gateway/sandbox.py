@@ -359,7 +359,7 @@ def _make_input_bundle(
     seen: set[str] = set()
     skipped: list[str] = []
     count = 0
-    selected_inputs = frozenset(input_paths)
+    selected_inputs = frozenset(_safe_relative(value) for value in input_paths)
 
     def add_file(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
         nonlocal count
@@ -371,14 +371,19 @@ def _make_input_bundle(
         ):
             return
         try:
-            size = path.stat().st_size
+            # Explicit Resources mounts may be leaf symlinks. Archive their
+            # declared bytes as regular files, never host absolute link targets.
+            source = path.resolve(strict=True)
+            if not source.is_file():
+                return
+            size = source.stat().st_size
         except OSError as exc:
             skipped.append(f"{arcname} ({exc})")
             return
         if size > max_file_bytes:
             skipped.append(f"{arcname} ({size} bytes > input limit)")
             return
-        tf.add(path, arcname=arcname, recursive=False)
+        tf.add(source, arcname=arcname, recursive=False)
         seen.add(arcname)
         count += 1
 
@@ -404,7 +409,7 @@ def _make_input_bundle(
         seen.add(arcname)
         count += 1
 
-    with tarfile.open(fileobj=archive, mode="w:gz") as tf:
+    with tarfile.open(fileobj=archive, mode="w:gz", dereference=True) as tf:
         # Evaluator-only inputs are added before the public workspace tree so a candidate-created
         # file with the same name cannot shadow the orchestrator-owned private test set.
         for arcname, path in (injected_inputs or {}).items():
