@@ -23,6 +23,11 @@ identity_packages = ('aka.legacy.workflow', 'aka.legacy.agent')
 Config = {'type': 'object', 'properties': {}, 'additionalProperties': False}
 Defaults = {}
 RUNTIME = '.atrex_long_horizon'
+MAX_WARNING_LEDGER_BYTES = 1024 * 1024
+MAX_WARNING_LEDGER_LINES = 10_000
+MAX_WARNING_LINE_BYTES = 8 * 1024
+MAX_EXPORTED_WARNINGS = 100
+WARNING_FIELDS = ('timestamp', 'severity', 'code', 'stop_reason', 'gate_failed')
 
 
 def document(path):
@@ -118,6 +123,61 @@ def _result(memory, attempt, expected):
 def _artifact(identifier, filename, role, content, content_type='application/json'):
     return ExportArtifact(identifier, filename, content_type, role,
                           hashlib.sha256(content).hexdigest(), 'public', content)
+
+
+def _warning_records(path):
+    if not path.is_file():
+        return ()
+    try:
+        with path.open('rb') as stream:
+            raw = stream.read(MAX_WARNING_LEDGER_BYTES + 1)
+    except FileNotFoundError:
+        return ()
+    if len(raw) > MAX_WARNING_LEDGER_BYTES:
+        raise ValueError('Workflow warning ledger exceeds the byte limit')
+    lines = raw.splitlines()
+    if len(lines) > MAX_WARNING_LEDGER_LINES:
+        raise ValueError('Workflow warning ledger exceeds the line limit')
+    warnings = []
+    corrupt_lines = []
+    string_fields = ('timestamp', 'severity', 'code', 'message', 'stop_reason')
+    for line_number, line in enumerate(lines, 1):
+        try:
+            if len(line) > MAX_WARNING_LINE_BYTES:
+                raise ValueError('warning record exceeds the byte limit')
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError('warning record must be an object')
+            if not isinstance(row.get('code'), str) or not row['code']:
+                raise ValueError('warning record has no code')
+            if any(key in row and row[key] is not None and not isinstance(row[key], str)
+                   for key in string_fields):
+                raise ValueError('warning record has an invalid string field')
+            if ('schema_version' in row
+                    and (type(row['schema_version']) is not int or row['schema_version'] < 1)):
+                raise ValueError('warning record has an invalid schema version')
+            if 'gate_failed' in row and type(row['gate_failed']) is not bool:
+                raise ValueError('warning record has an invalid gate flag')
+        except (UnicodeError, ValueError, TypeError):
+            corrupt_lines.append(line_number)
+            continue
+        warnings.append({key: row[key] for key in WARNING_FIELDS if key in row})
+    deduplicated = {}
+    for warning in warnings:
+        key = tuple(warning.items())
+        deduplicated.pop(key, None)
+        deduplicated[key] = warning
+    warnings = list(deduplicated.values())
+    if corrupt_lines:
+        warnings.append({
+            'severity': 'warning',
+            'code': 'warning_ledger_corrupt',
+            'gate_failed': False,
+            'first_corrupt_line': str(corrupt_lines[0]),
+            'corrupt_count': str(len(corrupt_lines)),
+            'ledger_sha256': hashlib.sha256(raw).hexdigest(),
+        })
+    return tuple(warnings[-MAX_EXPORTED_WARNINGS:])
 
 
 class RetainedWorkflowExport:
@@ -270,19 +330,7 @@ class RetainedWorkflowExport:
         progress = ProgressFact(str(phase or 'preparing'), _integer(active.get('episode')),
             _integer(active.get('memory_version')), _integer(state.get('episodes')),
             _integer(state.get('tokens')), updated, running)
-        warnings = []
-        p = runtime / 'warnings.jsonl'
-        if p.is_file():
-            for line in p.read_text().splitlines():
-                try:
-                    row = json.loads(line)
-                except ValueError as exc:
-                    raise ValueError('Workflow warning record is corrupt') from exc
-                if not isinstance(row, dict) or not isinstance(row.get('code'), str):
-                    raise ValueError('Workflow warning has no code')
-                if 'gate_failed' in row and type(row['gate_failed']) is not bool:
-                    raise ValueError('Workflow warning gate_failed must be boolean')
-                warnings.append({k: row[k] for k in ('timestamp', 'severity', 'code', 'stop_reason', 'gate_failed') if k in row})
+        warnings = _warning_records(runtime / 'warnings.jsonl')
         framework = str((document(workspace / '.orchestrator_mode.json') or {}).get('framework')
                         or (document(workspace / 'framework_baseline.json') or {}).get('framework') or '')
         baseline = next((c for c in candidates if c.version == 0), None)
@@ -290,7 +338,7 @@ class RetainedWorkflowExport:
                           and c.result.state == 'pass'), None)
         return WorkflowExportSnapshot(EXPORT_VERSION, self._reference(workspace), framework,
             tuple(candidates), baseline, incumbent, tuple(episodes), sessions, progress,
-            tuple(artifacts), tuple(warnings[-100:]),
+            tuple(artifacts), warnings,
             {key:str(value) for key,value in (terminal.get('hardware') or {}).items()
              if key in ('platform','arch','sandbox_hardware')})
 
