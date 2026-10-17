@@ -137,6 +137,12 @@ def generate(workspace):
     workspace=Path(workspace).resolve()
     with campaign_lease(workspace):
         stopped=document(workspace/'.atrex_long_horizon/writer-state.json')
+        # An idle lock does not turn a hard-crashed writer into a recorded clean stop.
+        if stopped and stopped.get('state') == 'running':
+            raise ValueError(
+                'checkpoint cannot use stale running writer state after an unclean stop; '
+                'resume the campaign and reach a recorded clean stop'
+            )
         if not stopped or stopped.get('state')!='stopped':
             raise ValueError('checkpoint requires a recorded clean stop at an episode boundary')
         if document(workspace/'.atrex_long_horizon/active_episode.json'):

@@ -3,9 +3,13 @@ from contextlib import contextmanager
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import uuid
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _lock_path(workspace):
@@ -22,6 +26,8 @@ def campaign_lease(workspace, *, writer=False):
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ValueError('campaign has an active writer or checkpoint operation') from exc
+        body_error = None
+        writer_started = False
         try:
             if writer:
                 root = Path(workspace) / '.atrex_long_horizon'
@@ -33,11 +39,24 @@ def campaign_lease(workspace, *, writer=False):
                     temporary.replace(identity)
                 (root / 'pause-requested').unlink(missing_ok=True)
                 (root / 'writer-state.json').write_text(json.dumps({'state':'running'})+'\n')
+                writer_started = True
             yield
+        except BaseException as exc:
+            body_error = exc
+            raise
         finally:
-            if writer:
-                (root / 'writer-state.json').write_text(json.dumps({'state':'stopped'})+'\n')
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            try:
+                if writer and writer_started:
+                    try:
+                        (root / 'writer-state.json').write_text(json.dumps({'state':'stopped'})+'\n')
+                    except OSError:
+                        if body_error is None:
+                            raise
+                        LOGGER.exception(
+                            'failed to record the campaign clean stop; preserving the original failure'
+                        )
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def writer_active(workspace):
