@@ -364,7 +364,14 @@ class LegacyEvaluator:
             )
             return VerificationResult("FAIL" if repairable else "ERROR", None, None, None,
                                       error=message, failure=failure)
-        if request.mode == "framework" and observation.transport_returncode != 0:
+        framework_transport_failed = (
+            request.mode == "framework" and observation.transport_returncode != 0
+        )
+        try:
+            result = result_from_stdout(observation.stdout)
+        except (RuntimeError, json.JSONDecodeError):
+            if not framework_transport_failed:
+                raise
             return VerificationResult(
                 "FAIL",
                 None,
@@ -372,7 +379,6 @@ class LegacyEvaluator:
                 None,
                 error=f"combined validation command failed (exit={observation.transport_returncode})",
             )
-        result = result_from_stdout(observation.stdout)
         run = VerificationRun("candidate", 0, observation.transport_returncode, result)
         evaluation_failure = result.get("evaluation_failure")
         if isinstance(evaluation_failure, dict):
@@ -390,6 +396,14 @@ class LegacyEvaluator:
                 runs=[run],
                 error=message,
                 failure=failure,
+            )
+        if framework_transport_failed:
+            return VerificationResult(
+                "FAIL",
+                None,
+                None,
+                None,
+                error=f"combined validation command failed (exit={observation.transport_returncode})",
             )
         if request.mode == "v0":
             error = (

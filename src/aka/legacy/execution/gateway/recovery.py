@@ -16,10 +16,6 @@ def _workspace_arg(argv):
         if value.startswith("--workspace="):
             return Path(value.split("=", 1)[1]).resolve()
     return None
-RESULT_PREFIX = "[test_kernel] RESULT_JSON="
-
-FAILURE_PREFIX = "[sandbox] gateway_protocol_failure="
-
 FAILURE_FILE = ".atrex_long_horizon/ci_gateway_failure.json"
 
 UPSTREAM_EVAL_RETRIES_EXHAUSTED = (
@@ -82,12 +78,6 @@ def _kind(argv: list[str]) -> str:
             return value.split("=", 1)[1]
     return "auto"
 
-def _has_result(process: subprocess.CompletedProcess[str]) -> bool:
-    return any(
-        line.startswith(RESULT_PREFIX)
-        for line in (process.stdout or "").splitlines()
-    )
-
 def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
     from .protocol import classify_gateway_outcome, terminal_cancellation
 
@@ -107,12 +97,6 @@ def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
     if diagnostic and diagnostic.get("failure_class") in {"request", "authentication", "cancelled"}:
         return False
     return any(marker in output for marker in TRANSIENT_MARKERS)
-
-def _last_protocol_failure(process: subprocess.CompletedProcess[str]) -> dict | None:
-    """Return the decisive diagnostic while keeping the legacy helper available."""
-    from .protocol import classify_gateway_outcome
-
-    return classify_gateway_outcome(process).failure_record()
 
 def _record_gateway_failure(argv: list[str], process: subprocess.CompletedProcess[str]) -> None:
     from .protocol import classify_gateway_outcome

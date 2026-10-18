@@ -196,6 +196,39 @@ def _matches_hardware(name: str, record: dict, hardware: str) -> bool:
     return False
 
 
+def _direct_trace_performance_values(payload: object) -> list[float]:
+    if isinstance(payload, dict):
+        values: list[float] = []
+        direct = _finite_number(payload.get("performance_us"))
+        if (
+            direct is not None
+            and direct > 0.0
+            and payload.get("direct_trace_shape") is True
+        ):
+            values.append(direct)
+        for value in payload.values():
+            values.extend(_direct_trace_performance_values(value))
+        return values
+    if isinstance(payload, list):
+        values: list[float] = []
+        for value in payload:
+            values.extend(_direct_trace_performance_values(value))
+        return values
+    return []
+
+
+def _trace_hardware_matches(shape: dict, metadata: dict, hardware: str) -> bool:
+    target = _hardware_key(hardware)
+    if not target:
+        return True
+    labels = [metadata.get("perf_gpu"), metadata.get("verify_gpu")]
+    target_gpus = shape.get("target_gpus")
+    if isinstance(target_gpus, list):
+        labels.extend(target_gpus)
+    keys = [_hardware_key(label) for label in labels if label]
+    return not keys or any(target in key or key in target for key in keys)
+
+
 def _metadata_shape_latency_us(
     metadata: object, shape_id: str, hardware: str = ""
 ) -> float | None:
@@ -208,6 +241,15 @@ def _metadata_shape_latency_us(
         return None
     production = shape.get("production_performance")
     if not isinstance(production, dict):
+        trace_values = (
+            _direct_trace_performance_values(
+                shape.get("trace_performance_baseline")
+            )
+            if _trace_hardware_matches(shape, metadata, hardware)
+            else []
+        )
+        if len(trace_values) == 1:
+            return trace_values[0]
         return None
     direct = _finite_number(production.get("performance_us"))
     if direct is not None and direct > 0.0:
